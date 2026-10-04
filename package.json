@@ -4,10 +4,28 @@
   "description": "Ñ — lenguaje de programación en español: verificador de tipos, VM de bytecode y JIT a JavaScript",
   "license": "Apache-2.0",
   "author": "Nicolás Stiven Jaimes Duarte",
+  "homepage": "https://github.com/diegovelandiabarajas1-lang/Espanol-Like#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/diegovelandiabarajas1-lang/Espanol-Like.git"
+  },
+  "bugs": {
+    "url": "https://github.com/diegovelandiabarajas1-lang/Espanol-Like/issues"
+  },
   "keywords": [
-    "lenguaje", "español", "spanish", "programming-language",
-    "interprete", "compilador", "bytecode", "vm", "jit",
-    "verificador-de-tipos", "type-checker", "edsl", "educativo"
+    "lenguaje",
+    "español",
+    "spanish",
+    "programming-language",
+    "interprete",
+    "compilador",
+    "bytecode",
+    "vm",
+    "jit",
+    "verificador-de-tipos",
+    "type-checker",
+    "edsl",
+    "educativo"
   ],
   "bin": {
     "n": "motor/util/n-node.js"
@@ -42,7 +60,7 @@
     "koffi": "^3.3.2"
   },
   "devDependencies": {
-    "playwright": "^1.50.0"
+    "playwright": "^1.63.0"
   },
   "comentario": [
     "koffi es opcional a propósito: solo hace falta para llamar a código nativo",
@@ -55,8 +73,8 @@
     "repositorio en vez de instalar el paquete. Lo que sí entra es el IDE ya",
     "construido —espanol-like-v4.html—, porque el argumento del proyecto es",
     "«abre este archivo y ya».",
-    "No hay «homepage» ni «repository» porque todavía no hay repositorio. Un",
-    "marcador de posición es peor que la ausencia: npm lo publicaría como si",
-    "fuera verdad. Cuando exista el repo se añaden los dos campos."
+    "El repositorio se llama «Espanol-Like» —el nombre viejo del proyecto— y el",
+    "paquete «n-lenguaje». Si el repo se renombra en GitHub, hay que cambiar",
+    "las tres URLs de arriba; GitHub redirige la antigua, pero npm no sabe eso."
   ]
 }
