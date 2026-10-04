@@ -1,0 +1,137 @@
+# ═══ Probar código que llama a otras cosas ═════════════════════════════════
+# El problema real de las pruebas: una función que manda un correo o cobra una
+# tarjeta no se puede probar llamándola de verdad. Un espía la envuelve y apunta
+# con qué se la llamó, SIN cambiar lo que hace.
+# eDSL: probar, formato
+
+usar probar, grupo, correrPruebas, resumenPruebas, espia, llamadasDe,
+     vecesLlamada, debeSer, debeSerCierto, debeSerFalso, debeTener,
+     debeContener, debeFallarCon, debeEstarVacio, noDebeFallar,
+     antesDeCada, soloFallos, afirmaciones de "probar"
+usar moneda, regla, enNegrita, enGris de "formato"
+
+# ── el código que se va a probar ────────────────────────────────────────────
+# Recibe sus dependencias como argumentos: eso es lo que lo hace probable. Si
+# «notificar» estuviera escrito dentro, no habría forma de espiarlo.
+fn procesarPedido(pedido: dic, cobrar: funcion, notificar: funcion, registrar: funcion): dic {
+    registrar("entra pedido " + pedido["id"])
+    si pedido["total"] <= 0 {
+        registrar("rechazado: total inválido")
+        lanzar error("el total tiene que ser mayor que cero", "validacion")
+    }
+    si pedido["total"] > 5000000 {
+        registrar("requiere aprobación")
+        notificar(pedido["cliente"], "Su pedido requiere aprobación manual")
+        devolver {"estado": "pendiente", "cobrado": 0}
+    }
+    fijo ok: bool = cobrar(pedido["cliente"], pedido["total"])
+    si no ok {
+        registrar("cobro rechazado")
+        notificar(pedido["cliente"], "No pudimos cobrar su pedido")
+        devolver {"estado": "fallido", "cobrado": 0}
+    }
+    registrar("cobrado " + texto(pedido["total"]))
+    notificar(pedido["cliente"], "Pedido confirmado")
+    devolver {"estado": "listo", "cobrado": pedido["total"]}
+}
+
+# ── las dependencias de mentira ─────────────────────────────────────────────
+var cobrosHechos: lista = []
+fn cobrarDeVerdad(cliente: texto, monto: entero): bool {
+    cobrosHechos = cobrosHechos + [[cliente, monto]]
+    devolver monto < 3000000      # por encima de eso, el banco lo rechaza
+}
+fn notificarDeVerdad(cliente: texto, mensaje: texto) { }
+fn registrarDeVerdad(linea1: texto) { }
+
+grupo("un pedido normal", fn() {
+    probar("cobra, avisa y queda listo", fn() {
+        fijo cobrar = espia(cobrarDeVerdad)
+        fijo avisar = espia(notificarDeVerdad)
+        fijo anotar = espia(registrarDeVerdad)
+
+        fijo r: dic = procesarPedido({"id": "P-1", "cliente": "Ana", "total": 150000},
+                                     cobrar, avisar, anotar)
+        debeSer(r["estado"], "listo")
+        debeSer(r["cobrado"], 150000)
+
+        # Lo que importa no es solo el resultado: es a quién se llamó y con qué
+        debeSer(vecesLlamada(cobrar), 1)
+        debeSer(llamadasDe(cobrar)[0], ["Ana", 150000])
+        debeSer(vecesLlamada(avisar), 1)
+        debeContener(llamadasDe(avisar)[0][1], "confirmado")
+        # Y el registro dejó rastro de los dos pasos
+        debeSer(vecesLlamada(anotar), 2)
+    })
+})
+
+grupo("un pedido que el banco rechaza", fn() {
+    probar("no queda listo, y avisa al cliente", fn() {
+        fijo cobrar = espia(cobrarDeVerdad)
+        fijo avisar = espia(notificarDeVerdad)
+        fijo anotar = espia(registrarDeVerdad)
+
+        fijo r: dic = procesarPedido({"id": "P-2", "cliente": "Luis", "total": 4000000},
+                                     cobrar, avisar, anotar)
+        debeSer(r["estado"], "fallido")
+        debeSer(r["cobrado"], 0)
+        debeSer(vecesLlamada(cobrar), 1)
+        debeContener(llamadasDe(avisar)[0][1], "No pudimos cobrar")
+    })
+})
+
+grupo("un pedido grande", fn() {
+    probar("NO se cobra: queda pendiente de aprobación", fn() {
+        fijo cobrar = espia(cobrarDeVerdad)
+        fijo avisar = espia(notificarDeVerdad)
+        fijo anotar = espia(registrarDeVerdad)
+
+        fijo r: dic = procesarPedido({"id": "P-3", "cliente": "Pedro", "total": 9000000},
+                                     cobrar, avisar, anotar)
+        debeSer(r["estado"], "pendiente")
+        # Esto es lo que un espía permite comprobar y de otra forma no se puede:
+        # que algo NO se llamó. Sin espía, la única prueba sería mirar el banco.
+        debeSer(vecesLlamada(cobrar), 0)
+        debeEstarVacio(llamadasDe(cobrar))
+        debeContener(llamadasDe(avisar)[0][1], "aprobación")
+    })
+})
+
+grupo("un pedido inválido", fn() {
+    probar("se queja y no toca nada", fn() {
+        fijo cobrar = espia(cobrarDeVerdad)
+        fijo avisar = espia(notificarDeVerdad)
+        fijo anotar = espia(registrarDeVerdad)
+
+        debeFallarCon(fn() {
+            procesarPedido({"id": "P-4", "cliente": "Marta", "total": 0}, cobrar, avisar, anotar)
+        }, "mayor que cero")
+
+        debeSer(vecesLlamada(cobrar), 0)
+        debeSer(vecesLlamada(avisar), 0)
+        # Pero sí quedó registrado el intento, que es lo correcto
+        debeSer(vecesLlamada(anotar), 2)
+    })
+})
+
+grupo("el espía no cambia lo que hace la función", fn() {
+    probar("devuelve lo mismo que la original", fn() {
+        cobrosHechos = []
+        fijo cobrar = espia(cobrarDeVerdad)
+        debeSerCierto(cobrar("Ana", 100000))
+        debeSerFalso(cobrar("Ana", 9000000))
+        # El efecto de verdad ocurrió: el espía envuelve, no reemplaza
+        debeTener(cobrosHechos, 2)
+    })
+})
+
+imprimir("")
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(regla(62))
+imprimir(resumenPruebas())
+imprimir(texto(afirmaciones()) + " afirmaciones comprobadas.")
+imprimir("")
+imprimir(enGris("Lo que hace probable este código no es el espía: es que"))
+imprimir(enGris("«procesarPedido» recibe sus dependencias como argumentos. Si"))
+imprimir(enGris("«cobrar» estuviera escrito dentro, no habría nada que espiar."))

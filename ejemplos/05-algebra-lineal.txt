@@ -1,0 +1,49 @@
+# ═══ Resolver un sistema de verdad ══════════════════════════════════════════
+# Tres productos, tres recetas, y cuánto material lleva cada una. Sabiendo el
+# material total gastado, ¿cuántos se produjeron de cada uno?
+# eDSL: numerico, formato
+
+usar arreglo, resolverA, inversaA, determinanteA, por, expandir, apretar,
+     aListaA, elemento, condicion, rangoMatriz, traza, identidadA,
+     transpuesta, esSimetrica, absoluto de "numerico"
+usar decimales, tablaTexto, regla, enAmarillo de "formato"
+
+# filas = materiales (acero, pintura, tornillos) · columnas = productos
+fijo receta = arreglo([
+    [2.0, 1.0, 3.0],
+    [0.5, 0.25, 1.0],
+    [8.0, 12.0, 20.0]
+])
+fijo gastado = arreglo([1250.0, 400.0, 8600.0])
+
+imprimir("CUÁNTO SE PRODUJO DE CADA COSA")
+imprimir(regla(52))
+imprimir("Material gastado: " + texto(aListaA(gastado)))
+
+fijo cuantos = resolverA(receta, gastado)
+fijo nombres: lista = ["mesa", "silla", "estante"]
+var filas: lista = []
+para i en rango(3) {
+    filas = filas + [{"producto": nombres[i], "unidades": decimales(elemento(cuantos, i), 1)}]
+}
+imprimir(tablaTexto(filas))
+
+# Comprobar: multiplicar la receta por la respuesta tiene que dar lo gastado.
+fijo comprobado = apretar(por(receta, expandir(cuantos, 1)))
+imprimir("Comprobación A·x: " + texto(aListaA(comprobado)))
+imprimir("Mayor diferencia: " + texto(maximo(absoluto(comprobado - gastado))))
+
+imprimir("")
+imprimir("Salud de la matriz:")
+imprimir("  determinante  " + decimales(determinanteA(receta), 3))
+imprimir("  rango         " + texto(rangoMatriz(receta)) + " de 3")
+imprimir("  traza         " + decimales(traza(receta), 2))
+imprimir("  condición     " + decimales(condicion(receta), 1))
+si condicion(receta) > 100.0 {
+    imprimir("  " + enAmarillo("aviso: mal condicionada, los errores se amplifican"))
+}
+
+# A·A⁻¹ tiene que ser la identidad.
+fijo id1 = por(receta, inversaA(receta))
+imprimir("")
+imprimir("A·A⁻¹ se aparta de la identidad en " + texto(maximo(absoluto(id1 - identidadA(3)))))

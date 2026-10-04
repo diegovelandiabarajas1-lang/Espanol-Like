@@ -1,0 +1,152 @@
+# «probar» probándose a sí mismo, en Ñ.
+#
+# Lo que de verdad hay que demostrar aquí no son las afirmaciones —esas son
+# fáciles— sino que una prueba que falla no se lleve el programa: que la
+# siguiente corra, que la pila quede entera y que un «lanzar» sin capturar se
+# apunte como un fallo en vez de tumbar todo.
+
+usar probar, grupo, saltar, correrPruebas, resumenPruebas, antesDeCada, despuesDeCada,
+     debeSer, noDebeSer, debeSerCierto, debeSerFalso, debeSerCerca,
+     debeSerMayor, debeSerMenor, debeSerAlMenos, debeSerComoMucho,
+     debeContener, noDebeContener, debeEmpezarCon, debeTerminarCon,
+     debeEstarVacio, debeTener, debeSerTipo,
+     debeFallar, noDebeFallar, debeFallarCon,
+     espia, llamadasDe, vecesLlamada, afirmaciones de "probar"
+
+var vueltas: entero = 0
+var cierres: entero = 0
+antesDeCada(fn() { vueltas = vueltas + 1 })
+despuesDeCada(fn() { cierres = cierres + 1 })
+
+grupo("las afirmaciones", fn() {
+    probar("debeSer compara en profundidad, como ==", fn() {
+        debeSer(2 + 2, 4)
+        debeSer([1, [2, 3]], [1, [2, 3]])
+        debeSer({"a": [1]}, {"a": [1]})
+        noDebeSer([1, 2], [2, 1])
+    })
+    probar("cierto y falso siguen la regla de «si»", fn() {
+        debeSerCierto(1)
+        debeSerCierto("algo")
+        debeSerFalso(0)
+        debeSerFalso([])
+        debeSerFalso(nulo)
+    })
+    probar("los decimales se comparan con tolerancia", fn() {
+        debeSerCerca(0.1 + 0.2, 0.3)
+        debeSerCerca(1.0, 1.05, 0.1)
+        debeFallar(fn() { debeSerCerca(1.0, 1.5) })
+    })
+    probar("el orden", fn() {
+        debeSerMayor(3, 2)
+        debeSerMenor(2, 3)
+        debeSerAlMenos(3, 3)
+        debeSerComoMucho(3, 3)
+        debeSerMayor("b", "a")
+    })
+    probar("contener vale en texto, lista y diccionario", fn() {
+        debeContener("hola mundo", "mundo")
+        debeContener([1, 2, 3], 2)
+        debeContener({"clave": 1}, "clave")
+        noDebeContener([1, 2], 9)
+    })
+    probar("empezar, terminar, vacío y longitud", fn() {
+        debeEmpezarCon("hola", "ho")
+        debeTerminarCon("hola", "la")
+        debeEstarVacio("")
+        debeEstarVacio([])
+        debeTener([1, 2, 3], 3)
+        debeTener("abc", 3)
+    })
+    probar("el tipo", fn() {
+        debeSerTipo(1, "entero")
+        debeSerTipo(1.5, "real")
+        debeSerTipo("a", "texto")
+        debeSerTipo([], "lista")
+        debeSerTipo(fn() { }, "funcion")
+    })
+    probar("una afirmación que falla dice qué esperaba", fn() {
+        var m: texto = debeFallar(fn() { debeSer(4, 5) })
+        debeContener(m, "se esperaba 5")
+        debeContener(m, "llegó 4")
+    })
+})
+
+grupo("los fallos no tumban el programa", fn() {
+    probar("un error del motor se recoge", fn() {
+        debeFallarCon(fn() { imprimir(1 // 0) }, "división entre cero")
+    })
+    probar("un «lanzar» sin capturar también", fn() {
+        var m: texto = debeFallar(fn() { lanzar "explotó" })
+        debeContener(m, "explotó")
+    })
+    probar("y lanzar un valor que no es texto", fn() {
+        debeFallar(fn() { lanzar {"codigo": 42} })
+    })
+    probar("noDebeFallar deja pasar lo que corre bien", fn() {
+        noDebeFallar(fn() { var x: entero = 1 + 1 })
+        debeFallar(fn() { noDebeFallar(fn() { lanzar "no" }) })
+    })
+    probar("debeFallarCon comprueba el mensaje", fn() {
+        debeFallarCon(fn() { lanzar "el archivo no está" }, "no está")
+        # y se queja si el mensaje no es el que se esperaba
+        debeFallar(fn() { debeFallarCon(fn() { lanzar "otra cosa" }, "no está") })
+    })
+    probar("un fallo a 30 marcos de hondo deja la pila entera", fn() {
+        debeFallar(fn() { hondo(30) })
+        # y justo después se puede seguir usando la pila con normalidad
+        debeSer(sumaHasta(100), 5050)
+    })
+    probar("un fallo dentro de un cierre que captura variables", fn() {
+        var visto: entero = 7
+        debeFallar(fn() { debeSer(visto, 8) })
+        debeSer(visto, 7)
+    })
+})
+
+fn hondo(n: entero): entero {
+    si n == 0 { lanzar "el fondo"  devolver 0 }
+    devolver hondo(n - 1)
+}
+fn sumaHasta(n: entero): entero {
+    var t: entero = 0
+    para i en rango(n + 1) { t = t + i }
+    devolver t
+}
+
+grupo("los espías", fn() {
+    probar("apuntan las llamadas sin cambiar lo que hace la función", fn() {
+        var doble: funcion = espia(fn(x: entero): entero { devolver x * 2 })
+        debeSer(doble(4), 8)
+        debeSer(doble(5), 10)
+        debeSer(vecesLlamada(doble), 2)
+        debeSer(llamadasDe(doble), [[4], [5]])
+    })
+    probar("un espía se puede pasar a donde esperen una función", fn() {
+        var f: funcion = espia(fn(x: entero): entero { devolver x + 1 })
+        debeSer(mapear([1, 2, 3], f), [2, 3, 4])
+        debeSer(vecesLlamada(f), 3)
+    })
+    probar("y lo que no es un espía se dice", fn() {
+        debeFallarCon(fn() { vecesLlamada(fn() { }) }, "no es un espía")
+    })
+})
+
+grupo("saltar y los ganchos", fn() {
+    probar("esta corre", fn() { debeSerCierto(cierto) })
+})
+saltar("esta no corre y sale contada aparte", fn() { debeSer(1, 2) })
+
+var antesDeCorrer: entero = afirmaciones()
+var r: dic = correrPruebas()
+
+imprimir("")
+imprimir(resumenPruebas())
+imprimir("")
+# Los ganchos corrieron una vez por prueba ejecutada, no por prueba registrada.
+imprimir("antesDeCada:", vueltas, "· despuesDeCada:", cierres, "· pruebas corridas:", r["pasan"] + r["fallan"])
+afirmar(vueltas == r["pasan"] + r["fallan"], "antesDeCada no corrió una vez por prueba")
+afirmar(cierres == vueltas, "despuesDeCada no corrió tantas veces como antesDeCada")
+afirmar(r["saltadas"] == 1, "la saltada no se contó")
+afirmar(afirmaciones() > antesDeCorrer, "no se contaron las afirmaciones")
+imprimir("los ganchos y la cuenta cuadran")

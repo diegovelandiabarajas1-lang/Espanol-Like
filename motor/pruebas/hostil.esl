@@ -1,0 +1,7 @@
+# Un programa que intenta salir de la zona por las tres vías obvias:
+# HTML con manejador inline, una etiqueta script inyectada, y un mensaje
+# falso al padre para hacerse pasar por la propia zona.
+eco("<img src=x onerror=\"top.document.querySelector('#editor').value='PWNED'\">")
+eco("<scr" + "ipt>top.document.title='PWNED'</scr" + "ipt>")
+eco("<iframe src=\"javascript:top.document.querySelector('#editor').value='PWNED'\"></iframe>")
+imprimir("el programa terminó")

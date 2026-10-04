@@ -1,0 +1,44 @@
+# ═══ Encontrar las frecuencias escondidas en una señal ══════════════════════
+# Una medición que parece ruido puede ser dos o tres ciclos sumados. La
+# transformada los separa, y «frecuencias» dice a qué hertz corresponde cada
+# pico — sin ella hay que adivinar el orden del espectro, y adivinarlo mal
+# desplaza todo medio ciclo.
+# eDSL: numerico, formato
+
+usar secuencia, seno, espectro, frecuencias, argMaximo, elemento, aListaA,
+     fourier, fourierInversa, parteReal, absoluto, suma,
+     arreglo, trozo, azarNormal, semilla de "numerico"
+usar decimales, minigrafico, regla, enVerde de "formato"
+
+semilla(7)
+fijo n: entero = 100          # 100 datos a 100 Hz → cada celda del espectro es 1 Hz
+                              # exacto, así que 5 y 12 Hz caen justos y no se reparten.
+                              # Y 100 no es potencia de dos: va por Bluestein, igual de rápido.
+fijo muestreo: real = 0.01          # un dato cada 10 ms → 100 Hz
+
+# Una señal con dos ciclos reales: 5 Hz fuerte y 12 Hz débil, más ruido.
+fijo t = secuencia(0.0, 100.0) * muestreo
+var señal = seno(t * (2.0 * |PI * 5.0)) * 3.0 + seno(t * (2.0 * |PI * 12.0))
+imprimir("SEÑAL MEDIDA (" + texto(n) + " datos a " + decimales(1.0 / muestreo, 0) + " Hz)")
+imprimir(minigrafico(aListaA(trozo(señal, 0, 0, 40))))
+imprimir(regla(60))
+
+fijo esp = espectro(señal)
+fijo frec = frecuencias(n, muestreo)
+
+# Solo la mitad de abajo tiene sentido físico: la de arriba es su espejo.
+imprimir("Picos del espectro:")
+para k en rango(50) {
+    si elemento(esp, k) > 10.0 {
+        imprimir("  " + decimales(elemento(frec, k), 1) + " Hz   fuerza " + decimales(elemento(esp, k), 0) + "   " + enVerde("◀ pico"))
+    }
+}
+
+imprimir("")
+imprimir("El pico más alto está en " + decimales(elemento(frec, argMaximo(trozo(esp, 0, 0, 50))), 1) + " Hz.")
+
+# La vuelta tiene que devolver la señal original: es la prueba de que la
+# transformada no se inventó nada.
+fijo vuelta = parteReal(fourierInversa(fourier(señal)))
+fijo error1: real = maximo(absoluto(vuelta - señal))      # «maximo» reduce; «maximoDe» es elemento a elemento
+imprimir("Ida y vuelta, mayor diferencia: " + texto(error1) + " (cero salvo redondeo)")

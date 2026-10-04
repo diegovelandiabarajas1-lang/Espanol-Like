@@ -1,0 +1,77 @@
+# ═══ Antigüedad laboral, edades y prestaciones ══════════════════════════════
+# «aniosEntre» da años CUMPLIDOS, que es lo que vale para una edad o una
+# liquidación. Y «mesesEntre» sabe que del 31 de enero al 28 de febrero no ha
+# pasado un mes.
+# eDSL: fecha, formato, numerico
+
+usar fecha, hoy, aFecha, deFecha, aniosEntre, mesesEntre, diasEntre,
+     sumarAnios, sumarDias, inicioAnio, finAnio, esBisiesto, diaDelAnio,
+     nombreMes, anio, mes, dia, duracion de "fecha"
+usar moneda, decimales, tablaTexto, regla, enNegrita, enVerde, enAmarillo,
+     plural, duracionLegible, tiempoRelativo, porciento de "formato"
+usar redondear de "numerico"
+
+fijo HOY = hoy()
+fijo SALARIO_MINIMO: entero = 1423500
+
+fijo empleados: lista = [
+    {"nombre": "Ana Rueda",      "nacio": "1991-03-14", "ingreso": "2019-03-01", "salario": 3200000},
+    {"nombre": "Luis Peña",      "nacio": "1985-11-02", "ingreso": "2015-07-15", "salario": 1500000},
+    {"nombre": "Marta Gómez",    "nacio": "2000-06-28", "ingreso": "2024-02-10", "salario": 1423500},
+    {"nombre": "Pedro Ortiz",    "nacio": "1978-01-09", "ingreso": "2008-09-20", "salario": 2300000}
+]
+
+imprimir(enNegrita("PLANTA DE PERSONAL AL " + deFecha(HOY, "larga")))
+imprimir(regla(76))
+
+var filas: lista = []
+para e en empleados {
+    fijo nac = aFecha(e["nacio"])
+    fijo ing = aFecha(e["ingreso"])
+    fijo edad: entero = aniosEntre(nac, HOY)
+    fijo anos: entero = aniosEntre(ing, HOY)
+    fijo meses: entero = mesesEntre(ing, HOY) - anos * 12
+    # Cesantías: un salario por año trabajado, proporcional
+    fijo dias: entero = diasEntre(ing, HOY)
+    fijo cesantias: entero = entero(redondear(real(e["salario"]) * real(dias) / 360.0))
+    filas = filas + [{
+        "empleado": e["nombre"],
+        "edad": texto(edad),
+        "ingresó": deFecha(ing, "corta"),
+        "antigüedad": texto(anos) + " a " + texto(meses) + " m",
+        "salario": moneda(e["salario"]),
+        "cesantías": moneda(cesantias)
+    }]
+}
+imprimir(tablaTexto(filas))
+
+imprimir("")
+imprimir(enNegrita("CUMPLEAÑOS DE ESTE AÑO"))
+para e en empleados {
+    fijo nac = aFecha(e["nacio"])
+    # El cumpleaños de este año: misma fecha, el año de hoy
+    var cumple = fecha(anio(HOY), mes(nac), dia(nac))
+    var cuando: texto = ""
+    fijo d: entero = diasEntre(HOY, cumple)
+    si d < 0 {
+        cumple = fecha(anio(HOY) + 1, mes(nac), dia(nac))
+        cuando = enAmarillo("ya pasó · el próximo en " + plural(diasEntre(HOY, cumple), "día"))
+    } sino {
+        cuando = enVerde("en " + plural(d, "día"))
+    }
+    imprimir("  " + e["nombre"] + " · " + texto(dia(nac)) + " de " + nombreMes(nac) +
+             " · cumple " + texto(aniosEntre(nac, cumple)) + " · " + cuando)
+}
+
+imprimir("")
+imprimir(enNegrita("DETALLES DE CALENDARIO QUE SE OLVIDAN"))
+imprimir("  " + texto(anio(HOY)) + " es bisiesto: " + texto(esBisiesto(HOY)))
+imprimir("  hoy es el día " + texto(diaDelAnio(HOY)) + " del año")
+imprimir("  quedan " + plural(diasEntre(HOY, finAnio(HOY)), "día") + " de " + texto(anio(HOY)))
+imprimir("  del año va " + porciento(real(diaDelAnio(HOY)) / 365.0))
+imprimir("")
+imprimir("  sumarMeses al 31 de enero: " + deFecha(aFecha("2026-01-31"), "corta") +
+         " + 1 mes = " + deFecha(sumarDias(aFecha("2026-01-31"), 28), "corta") + " con días,")
+imprimir("  pero mesesEntre(31 ene, 28 feb) = " +
+         texto(mesesEntre(aFecha("2026-01-31"), aFecha("2026-02-28"))) +
+         " meses, porque 28 todavía no llega a 31.")

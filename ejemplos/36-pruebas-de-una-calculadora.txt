@@ -1,0 +1,138 @@
+# ═══ Pruebas de verdad, con el eDSL «probar» ═══════════════════════════════
+# Las pruebas no son un adorno: son lo que deja cambiar código sin miedo. Y
+# aquí se ve el orden — «probar» registra, «correrPruebas» ejecuta — que es lo
+# que permite agrupar, saltar y barajar.
+# eDSL: probar, numerico
+
+usar probar, grupo, correrPruebas, resumenPruebas, antesDeTodo, antesDeCada,
+     despuesDeCada, debeSer, debeSerCerca, debeSerCierto, debeSerFalso,
+     debeFallar, debeFallarCon, debeTener, debeContener, noDebeContener,
+     debeSerMayor, debeSerMenor, debeSerTipo, debeEstarVacio, noDebeSer,
+     debeEmpezarCon, debeTerminarCon, saltar, afirmaciones de "probar"
+usar redondear, raiz, potencia, esPrimo, media de "numerico"
+usar enNegrita, regla de "formato"
+
+# La calculadora que se va a probar
+fn sumar(a: real, b: real): real { devolver a + b }
+fn dividir(a: real, b: real): real {
+    si b == 0.0 { lanzar error("no se puede dividir entre cero", "matematica") }
+    devolver a / b
+}
+fn promedioSeguro(xs: lista): real {
+    si longitud(xs) == 0 { lanzar error("la lista está vacía", "argumento") }
+    devolver media(xs)
+}
+fn factura(subtotal: real, iva: real): dic {
+    si iva < 0.0 o iva > 1.0 { lanzar error("el IVA va entre 0 y 1", "argumento") }
+    fijo impuesto: real = redondear(subtotal * iva)
+    devolver {"subtotal": subtotal, "iva": impuesto, "total": subtotal + impuesto}
+}
+
+var vecesPreparado: entero = 0
+
+antesDeTodo(fn() {
+    imprimir(enNegrita("Preparando la suite…"))
+})
+antesDeCada(fn() {
+    vecesPreparado = vecesPreparado + 1
+})
+
+grupo("sumar", fn() {
+    probar("suma dos positivos", fn() {
+        debeSer(sumar(2.0, 3.0), 5.0)
+    })
+    probar("suma con negativos", fn() {
+        debeSer(sumar(0.0 - 2.0, 3.0), 1.0)
+        debeSer(sumar(0.0 - 2.0, 0.0 - 3.0), 0.0 - 5.0)
+    })
+    probar("el cero no cambia nada", fn() {
+        debeSer(sumar(7.0, 0.0), 7.0)
+    })
+})
+
+grupo("dividir", fn() {
+    probar("divide bien", fn() {
+        debeSer(dividir(10.0, 4.0), 2.5)
+    })
+    probar("entre cero se queja, y DICE por qué", fn() {
+        # debeFallarCon comprueba el mensaje: que falle no basta, tiene que
+        # fallar por la razón correcta.
+        debeFallarCon(fn() { dividir(1.0, 0.0) }, "dividir entre cero")
+    })
+    probar("debeFallar devuelve el mensaje para mirarlo", fn() {
+        fijo m: texto = debeFallar(fn() { dividir(1.0, 0.0) })
+        debeContener(m, "cero")
+        noDebeContener(m, "éxito")
+    })
+})
+
+grupo("promedio", fn() {
+    probar("de una lista normal", fn() {
+        debeSerCerca(promedioSeguro([1.0, 2.0, 3.0]), 2.0)
+    })
+    probar("de decimales, con tolerancia", fn() {
+        # Los reales no se comparan con «igual»: 0,1 + 0,2 no es 0,3.
+        debeSerCerca(promedioSeguro([0.1, 0.2]), 0.15, 0.000001)
+    })
+    probar("una lista vacía se queja", fn() {
+        debeFallarCon(fn() { promedioSeguro([]) }, "vacía")
+    })
+})
+
+grupo("factura", fn() {
+    probar("devuelve las tres cifras", fn() {
+        fijo f: dic = factura(100000.0, 0.19)
+        debeSerTipo(f, "dic")
+        debeSer(f["subtotal"], 100000.0)
+        debeSer(f["iva"], 19000.0)
+        debeSer(f["total"], 119000.0)
+    })
+    probar("el total es siempre mayor que el subtotal cuando hay IVA", fn() {
+        fijo f: dic = factura(50000.0, 0.19)
+        debeSerMayor(f["total"], f["subtotal"])
+    })
+    probar("con IVA cero el total es el subtotal", fn() {
+        fijo f: dic = factura(50000.0, 0.0)
+        debeSer(f["total"], f["subtotal"])
+    })
+    probar("un IVA imposible se rechaza", fn() {
+        debeFallarCon(fn() { factura(100.0, 1.5) }, "entre 0 y 1")
+        debeFallarCon(fn() { factura(100.0, 0.0 - 0.1) }, "entre 0 y 1")
+    })
+})
+
+grupo("las afirmaciones que hay", fn() {
+    probar("de igualdad y de tipo", fn() {
+        debeSer([1, 2], [1, 2])                  # compara en profundidad
+        noDebeSer([1, 2], [2, 1])
+        debeSerTipo(3.5, "real")
+        debeSerTipo("hola", "texto")
+    })
+    probar("de verdad y de vacío", fn() {
+        debeSerCierto(esPrimo(97))
+        debeSerFalso(esPrimo(91))
+        debeEstarVacio([])
+        debeEstarVacio("")
+    })
+    probar("de orden", fn() {
+        debeSerMayor(raiz(26.0), 5.0)
+        debeSerMenor(raiz(24.0), 5.0)
+    })
+    probar("de contenido y de forma", fn() {
+        debeTener([1, 2, 3], 3)
+        debeContener("Bucaramanga", "ramanga")
+        debeEmpezarCon("DATAPRO", "DATA")
+        debeTerminarCon("informe.csv", ".csv")
+    })
+    saltar("esta no corre y sale contada aparte, no escondida", fn() {
+        debeSer(1, 2)
+    })
+})
+
+imprimir("")
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(regla(60))
+imprimir(resumenPruebas())
+imprimir("Afirmaciones comprobadas: " + texto(afirmaciones()))
+imprimir("«antesDeCada» corrió " + texto(vecesPreparado) + " veces, una por prueba.")

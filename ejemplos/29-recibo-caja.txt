@@ -1,0 +1,67 @@
+# ═══ Recibo de caja, listo para imprimir ════════════════════════════════════
+# Todo lo que tiene un documento: columnas que cuadran, totales, el valor en
+# letras y un marco. Es el ejemplo de para qué existe «formato».
+# eDSL: formato, fecha, numerico
+
+usar moneda, enLetras, numero, decimales, porciento, alinearIzq, alinearDer,
+     centrar, aAncho, regla, marco, enNegrita, mayusculaInicial, plural de "formato"
+usar hoy, deFecha, nombreDia de "fecha"
+usar redondear, suma de "numerico"
+
+fijo IVA: real = 0.19
+fijo ANCHO: entero = 46
+
+fijo items: lista = [
+    {"cant": 3,  "desc": "Tornillo 1/4 x 2\"",  "unit": 1500},
+    {"cant": 12, "desc": "Tuerca 1/4",           "unit": 800},
+    {"cant": 1,  "desc": "Taladro percutor 650W","unit": 289000},
+    {"cant": 2,  "desc": "Broca para concreto",  "unit": 12500}
+]
+
+fn linea(izq: texto, der: texto): texto {
+    devolver izq + alinearDer(der, ANCHO - longitud(izq))
+}
+
+var cuerpo: lista = []
+cuerpo = cuerpo + [centrar("FERRETERÍA EL TORNILLO", ANCHO)]
+cuerpo = cuerpo + [centrar("NIT 900.123.456-8", ANCHO)]
+cuerpo = cuerpo + [centrar("Carrera 27 # 34-18 · Bucaramanga", ANCHO)]
+cuerpo = cuerpo + [""]
+cuerpo = cuerpo + [linea("Recibo N.º", "RC-004471")]
+cuerpo = cuerpo + [linea("Fecha", mayusculaInicial(nombreDia(hoy())) + " " + deFecha(hoy(), "corta"))]
+cuerpo = cuerpo + [linea("Cliente", "Constructora Los Andes")]
+cuerpo = cuerpo + [regla(ANCHO)]
+cuerpo = cuerpo + [aAncho("CANT", 5) + aAncho("DESCRIPCIÓN", 25) + alinearDer("VALOR", 16)]
+cuerpo = cuerpo + [regla(ANCHO)]
+
+var subtotal: entero = 0
+para it en items {
+    fijo total1: entero = it["cant"] * it["unit"]
+    subtotal = subtotal + total1
+    cuerpo = cuerpo + [aAncho(texto(it["cant"]), 5) + aAncho(it["desc"], 25) + alinearDer(moneda(total1), 16)]
+    cuerpo = cuerpo + [aAncho("", 5) + aAncho("  a " + moneda(it["unit"]) + " c/u", 25) + alinearDer("", 16)]
+}
+
+fijo iva: entero = entero(redondear(real(subtotal) * IVA))
+fijo total: entero = subtotal + iva
+
+cuerpo = cuerpo + [regla(ANCHO)]
+cuerpo = cuerpo + [linea("Subtotal", moneda(subtotal))]
+cuerpo = cuerpo + [linea("IVA " + porciento(IVA, 0), moneda(iva))]
+cuerpo = cuerpo + [linea("TOTAL", moneda(total))]
+cuerpo = cuerpo + [regla(ANCHO)]
+cuerpo = cuerpo + [""]
+cuerpo = cuerpo + ["Suma de " + enLetras(total) + " pesos m/cte."]
+cuerpo = cuerpo + [""]
+cuerpo = cuerpo + [centrar(plural(longitud(items), "ítem") + " · gracias por su compra", ANCHO)]
+
+imprimir(marco(unirLineas(cuerpo), "RECIBO DE CAJA"))
+
+fn unirLineas(ls: lista): texto {
+    var s: texto = ""
+    para i en rango(longitud(ls)) {
+        si i > 0 { s = s + "\n" }
+        s = s + ls[i]
+    }
+    devolver s
+}

@@ -1,0 +1,61 @@
+# ═══ Etiquetas de envío, una por paquete ════════════════════════════════════
+# Lo que se pega en una caja: dirección, peso, un número de guía y columnas que
+# cuadran aunque los nombres sean de largos distintos.
+# eDSL: formato, texto, fecha
+
+usar marco, centrar, aAncho, alinearDer, regla, enNegrita, tamanoLegible,
+     numero, moneda, plural, enGris de "formato"
+usar mayusculas, titular, envolver, unir, lineas, aUrl, izquierda de "texto"
+usar hoy, sumarDias, deFecha, nombreDia de "fecha"
+
+fijo ANCHO: entero = 40
+
+fijo envios: lista = [
+    {"guia": 4471, "cliente": "constructora los andes s.a.s.",
+     "direccion": "Carrera 27 # 34-18 oficina 502, barrio La Aurora",
+     "ciudad": "Bucaramanga", "dpto": "Santander",
+     "peso": 12400, "valor": 3600000, "dias": 2},
+    {"guia": 4472, "cliente": "ferretería el tornillo",
+     "direccion": "Calle 9 # 11-45",
+     "ciudad": "Girón", "dpto": "Santander",
+     "peso": 850, "valor": 145000, "dias": 1},
+    {"guia": 4473, "cliente": "droguería salud total",
+     "direccion": "Avenida Caracas # 45-20 local 3",
+     "ciudad": "Bogotá", "dpto": "Cundinamarca",
+     "peso": 3200, "valor": 890000, "dias": 4}
+]
+
+para e en envios {
+    var ls: lista = []
+    ls = ls + [centrar(enNegrita("GUÍA N.º " + texto(e["guia"])), ANCHO)]
+    ls = ls + [centrar(enGris("DATAPRO ANALITICA SAS"), ANCHO)]
+    ls = ls + [regla(ANCHO)]
+    ls = ls + ["DESTINATARIO"]
+    # El nombre puede ser más largo que la etiqueta: se parte sin cortar palabras
+    para l en lineas(unir(envolver(titular(e["cliente"]), ANCHO - 2), "\n")) {
+        ls = ls + ["  " + l]
+    }
+    ls = ls + [""]
+    ls = ls + ["DIRECCIÓN"]
+    para l en lineas(unir(envolver(e["direccion"], ANCHO - 2), "\n")) {
+        ls = ls + ["  " + l]
+    }
+    ls = ls + ["  " + mayusculas(e["ciudad"]) + " · " + e["dpto"]]
+    ls = ls + [regla(ANCHO)]
+    ls = ls + ["Peso" + alinearDer(tamanoLegible(e["peso"] * 1000), ANCHO - 4)]
+    ls = ls + ["Declarado" + alinearDer(moneda(e["valor"]), ANCHO - 9)]
+    fijo entrega = sumarDias(hoy(), e["dias"])
+    ls = ls + ["Entrega" + alinearDer(nombreDia(entrega) + " " + deFecha(entrega, "corta"), ANCHO - 7)]
+    ls = ls + [regla(ANCHO)]
+    ls = ls + [centrar(enGris("dataprovia.co/" + aUrl(e["ciudad"]) + "/" + texto(e["guia"])), ANCHO)]
+
+    imprimir(marco(unir(ls, "\n")))
+    imprimir("")
+}
+
+imprimir(regla(ANCHO + 4))
+var peso: entero = 0
+var valor: entero = 0
+para e en envios { peso = peso + e["peso"]  valor = valor + e["valor"] }
+imprimir(plural(longitud(envios), "paquete") + " · " + tamanoLegible(peso * 1000) +
+         " · " + moneda(valor) + " declarados")

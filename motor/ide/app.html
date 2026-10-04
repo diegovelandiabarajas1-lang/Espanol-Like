@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>__TITULO__</title>
+<style>
+  :root{
+    color-scheme:light dark;
+    --bg:#F4F4F7; --panel:#FFFFFF; --panel-2:#ECECF2;
+    --ink:#16161D; --muted:#6D6D80; --line:#DDDDE7; --line-2:#C7C7D6;
+    --acc:#4F3FD4; --bad:#B62E24;
+    --ui:system-ui,-apple-system,"Segoe UI",sans-serif;
+    --mono:"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0F0F15; --panel:#17171F; --panel-2:#1E1E28;
+      --ink:#ECECF4; --muted:#8C8CA0; --line:#272733; --line-2:#363646;
+      --acc:#9B8CFF; --bad:#EC7C6E;
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0; min-height:100%}
+  body{background:var(--bg); color:var(--ink); font-family:var(--ui); font-size:15px; line-height:1.6}
+
+  .n-permiso{position:sticky; top:0; z-index:9999; display:flex; gap:12px; align-items:center;
+    flex-wrap:wrap; padding:10px 14px; background:var(--panel); color:var(--ink);
+    border-bottom:1px solid var(--line-2); box-shadow:0 2px 8px rgba(0,0,0,.10); font-size:13.5px}
+  .n-permiso-txt{flex:1 1 260px; min-width:0}
+  .n-permiso-sub{color:var(--muted); font-size:12px; margin-top:2px}
+  .n-permiso-bs{display:flex; gap:8px}
+  .n-permiso button{font:inherit; font-weight:600; padding:5px 12px; border-radius:6px; cursor:pointer;
+    border:1px solid var(--line-2); background:var(--panel-2); color:var(--ink)}
+  .n-permiso .n-si{border-color:var(--acc); background:var(--acc); color:#fff}
+#pagina{padding:16px; max-width:100%}
+  /* Los estilos base van dentro de «:where(...)» para que no cuenten como
+     selector de id: si no, «#pagina button» (0,1,0,1) le gana a la clase que
+     genera estilo() (0,0,1,0) y lo que escribe el programa no se ve. Es el
+     problema clásico de las hojas base, y :where() es lo que existe para eso. */
+:where(#pagina) h1,:where(#pagina) h2,:where(#pagina) h3{margin:.5em 0 .3em; line-height:1.25}
+:where(#pagina) button{font:inherit; font-weight:600; padding:6px 12px; border-radius:6px; border:1px solid var(--acc); background:var(--acc); color:#fff; cursor:pointer; margin:3px 6px 3px 0}
+:where(#pagina) input,:where(#pagina) textarea,:where(#pagina) select{font:inherit; padding:6px 9px; border-radius:6px; border:1px solid var(--line-2); background:var(--panel); color:var(--ink); margin:3px 6px 3px 0}
+:where(#pagina) textarea{min-height:4.5em; resize:vertical}
+:where(#pagina) input[type=checkbox]{margin:0; width:auto; accent-color:var(--acc)}
+:where(#pagina) .el-campo{display:inline-flex; align-items:center; gap:.45em; margin:3px 8px 3px 0}
+:where(#pagina) .el-campo>.el-rotulo{opacity:.85; white-space:nowrap}
+:where(#pagina) .el-campo>input,:where(#pagina) .el-campo>textarea,:where(#pagina) .el-campo>select{margin:0}
+:where(#pagina) .el-tabla{border-collapse:collapse; margin:8px 0}
+:where(#pagina) .el-tabla td,:where(#pagina) .el-tabla th{border:1px solid var(--line-2); padding:5px 10px; text-align:left}
+:where(#pagina) .el-tabla th{background:var(--panel-2)}
+
+  #cajaLienzo{padding:0 16px; display:flex; flex-direction:column; align-items:flex-start; gap:8px}
+  #cajaLienzo:empty{display:none}
+  canvas{border:1px solid var(--line-2); border-radius:6px; background:#fff; max-width:100%; height:auto}
+
+  /* La consola solo aparece si el programa escribe o si algo falla: una
+     aplicación no debería enseñar su consola sin motivo. */
+  #consola{font-family:var(--mono); font-size:12.5px; line-height:1.6; padding:12px 16px;
+           white-space:pre-wrap; word-break:break-word; border-top:1px solid var(--line);
+           background:var(--panel-2); color:var(--muted)}
+  #consola:empty{display:none}
+  #consola .err{color:var(--bad); font-weight:600}
+  @media print{ #consola{display:none} }
+</style>
+</head>
+<body>
+<div id="pagina"></div>
+<div id="cajaLienzo"></div>
+<div id="consola"></div>
+
+<script>/*__MOTOR__*/</script>
+<script>/*__ANFITRION__*/</script>
+<script>
+// El programa, tal cual se escribió. Va en base64 para que ni el analizador de
+// HTML ni la codificación puedan tocarlo: el código puede llevar dentro de un
+// texto la etiqueta que cierra un script, y acentos por todas partes.
+(function () {
+  'use strict';
+  const FUENTE = decodeURIComponent(escape(atob('__PROGRAMA__')));
+
+  const $ = s => document.querySelector(s);
+  function linea(txt, clase) {
+    const d = document.createElement('div');
+    d.className = 'l' + (clase ? ' ' + clase : '');
+    d.textContent = txt;
+    $('#consola').appendChild(d);
+  }
+
+  // Aquí no hay marco aislado, y es a propósito: el marco existe para proteger
+  // al editor del programa que se está editando. En una aplicación exportada no
+  // hay editor que proteger —el programa ES la aplicación— así que corre
+  // directo y, de paso, tiene un origen de verdad y localStorage propio.
+  const PREFIJO = 'n:app:';
+  const almacen = {
+    leer(k) { try { return localStorage.getItem(PREFIJO + k); } catch (_) { return null; } },
+    escribir(k, v) { try { localStorage.setItem(PREFIJO + k, v); } catch (_) {} },
+    borrar(k) { try { const h = localStorage.getItem(PREFIJO + k) !== null; localStorage.removeItem(PREFIJO + k); return h; } catch (_) { return false; } },
+    claves() {
+      const r = [];
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.indexOf(PREFIJO) === 0) r.push(k.slice(PREFIJO.length));
+        }
+      } catch (_) {}
+      return r;
+    },
+  };
+
+  // Aquí sí hay origen propio, así que los permisos de red se recuerdan entre
+  // visitas. Van bajo otro prefijo: el programa solo alcanza «n:app:».
+  const PERM = 'n:perm:';
+  const permisos = {
+    leer(k) { try { return localStorage.getItem(PERM + k); } catch (_) { return null; } },
+    escribir(k, v) { try { localStorage.setItem(PERM + k, v); } catch (_) {} },
+  };
+  const anf = crearAnfitrion({ linea, almacen, permisos });
+  const motor = globalThis.EspanolLike.crearMotor({
+    salida: s => linea(s),
+    host: { web: anf.web, grafico: anf.grafico, almacen, tiempo: anf.tiempo, red: anf.red },
+  });
+
+  const r = motor.ejecutar(FUENTE);
+  if (!r.ok) {
+    for (const e of (r.errores || [])) linea(e.formato ? e.formato() : String(e.message || e), 'err');
+  }
+  globalThis.__app = { motor, anf };
+})();
+</script>
+</body>
+</html>

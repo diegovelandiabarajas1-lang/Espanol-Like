@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Español-Like · zona aislada</title>
+<style>
+  :root{
+    --bg:#F4F4F7; --panel:#FFFFFF; --panel-2:#ECECF2; --panel-3:#E0E0EA;
+    --ink:#16161D; --ink-2:#3A3A48; --muted:#6D6D80;
+    --line:#DDDDE7; --line-2:#C7C7D6;
+    --acc:#4F3FD4; --ok:#177A48; --warn:#8A5800; --bad:#B62E24;
+    --ui:"Public Sans",system-ui,-apple-system,sans-serif;
+    --mono:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+  }
+  html[data-oscuro]{
+    color-scheme:dark;
+    --bg:#0F0F15; --panel:#17171F; --panel-2:#1E1E28; --panel-3:#262633;
+    --ink:#ECECF4; --ink-2:#C4C4D4; --muted:#8C8CA0;
+    --line:#272733; --line-2:#363646;
+    --acc:#9B8CFF; --ok:#5CC98B; --warn:#DCA744; --bad:#EC7C6E;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%; margin:0}
+  body{background:var(--bg); color:var(--ink); font-family:var(--ui); font-size:14px; overflow:hidden}
+  .vista{display:none; height:100%; overflow:auto}
+  .vista.on{display:block}
+
+  #consola{font-family:var(--mono); font-size:12.5px; line-height:1.6; padding:12px; white-space:pre-wrap; word-break:break-word}
+  #consola .l{padding:1px 0}
+  #consola .err{color:var(--bad)}
+  #consola .meta{color:var(--muted)}
+
+  #cajaLienzo{padding:12px; display:flex; flex-direction:column; align-items:flex-start; gap:8px}
+  canvas{border:1px solid var(--line-2); border-radius:6px; background:#fff; max-width:100%; height:auto}
+
+  .n-permiso{position:sticky; top:0; z-index:9999; display:flex; gap:12px; align-items:center;
+    flex-wrap:wrap; padding:10px 14px; background:var(--panel); color:var(--ink);
+    border-bottom:1px solid var(--line-2); box-shadow:0 2px 8px rgba(0,0,0,.10); font-size:13.5px}
+  .n-permiso-txt{flex:1 1 260px; min-width:0}
+  .n-permiso-sub{color:var(--muted); font-size:12px; margin-top:2px}
+  .n-permiso-bs{display:flex; gap:8px}
+  .n-permiso button{font:inherit; font-weight:600; padding:5px 12px; border-radius:6px; cursor:pointer;
+    border:1px solid var(--line-2); background:var(--panel-2); color:var(--ink)}
+  .n-permiso .n-si{border-color:var(--acc); background:var(--acc); color:#fff}
+#pagina{padding:14px; line-height:1.6}
+  /* Los estilos base van dentro de «:where(...)» para que no cuenten como
+     selector de id: si no, «#pagina button» (0,1,0,1) le gana a la clase que
+     genera estilo() (0,0,1,0) y lo que escribe el programa no se ve. Es el
+     problema clásico de las hojas base, y :where() es lo que existe para eso. */
+:where(#pagina) h1,:where(#pagina) h2,:where(#pagina) h3{margin:.5em 0 .3em}
+:where(#pagina) button{font:inherit; font-weight:600; padding:6px 12px; border-radius:6px; border:1px solid var(--acc); background:var(--acc); color:#fff; cursor:pointer; margin:3px 6px 3px 0}
+:where(html[data-oscuro] #pagina) button{color:#14121F}
+:where(#pagina) input,:where(#pagina) textarea,:where(#pagina) select{font:inherit; padding:6px 9px; border-radius:6px; border:1px solid var(--line-2); background:var(--panel); color:var(--ink); margin:3px 6px 3px 0}
+:where(#pagina) textarea{min-height:4.5em; resize:vertical}
+:where(#pagina) input[type=checkbox]{margin:0; width:auto; accent-color:var(--acc)}
+:where(#pagina) .el-campo{display:inline-flex; align-items:center; gap:.45em; margin:3px 8px 3px 0}
+:where(#pagina) .el-campo>.el-rotulo{opacity:.85; white-space:nowrap}
+:where(#pagina) .el-campo>input,:where(#pagina) .el-campo>textarea,:where(#pagina) .el-campo>select{margin:0}
+  .el-tabla{border-collapse:collapse; margin:8px 0; font-size:13px}
+  .el-tabla th,.el-tabla td{border:1px solid var(--line-2); padding:5px 10px; text-align:left}
+  .el-tabla th{background:var(--panel-2); font-weight:600}
+
+  .bench{border-collapse:collapse; margin:10px 0; font-size:12.5px; font-family:var(--mono)}
+  .bench th,.bench td{border:1px solid var(--line-2); padding:5px 11px; text-align:left; white-space:nowrap}
+  .bench th{background:var(--panel-2); font-weight:600; font-family:var(--ui)}
+  .bench td.n{text-align:right}
+  .bench td.g{color:var(--ok); font-weight:700}
+  .vacio{padding:26px 16px; color:var(--muted); font-size:13px; line-height:1.6; max-width:52ch}
+  .vacio code{font-family:var(--mono); font-size:12px; background:var(--panel-2); padding:1px 5px; border-radius:4px}
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-thumb{background:var(--line-2); border-radius:4px}
+</style>
+</head>
+<body>
+  <div class="vista on" id="v-consola"><div id="consola"></div></div>
+  <div class="vista" id="v-lienzo"><div id="cajaLienzo"></div></div>
+  <div class="vista" id="v-pagina"><div id="pagina"></div></div>
+
+<script id="motor">/*__MOTOR__*/</script>
+<script id="anfitrion">/*__ANFITRION__*/</script>
+<script>
+// ============================================================================
+//  Zona aislada. Aquí dentro vive el motor y todo lo que el programa del
+//  usuario puede tocar. Este documento corre en un iframe con sandbox y sin
+//  allow-same-origin: su origen es opaco, así que no puede leer nada del
+//  documento que lo contiene aunque el programa lo intente.
+//  La única salida es postMessage, y solo viajan datos, nunca funciones.
+// ============================================================================
+(function () {
+  'use strict';
+  const { crearMotor, desensamblar, aTexto } = globalThis.EspanolLike;
+  const $ = s => document.querySelector(s);
+  const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x !== undefined) n.textContent = x; return n; };
+  const aPadre = m => parent.postMessage(m, '*');
+
+  let motor = null, ultimoFn = null, pendientes = [];
+
+  // ─────────────────────────────────────────── vistas
+  function irA(cual) {
+    for (const v of document.querySelectorAll('.vista')) v.classList.toggle('on', v.id === 'v-' + cual);
+    aPadre({ t: 'vista', cual });
+  }
+
+
+
+  function linea(txt, clase) {
+    const d = el('div', 'l' + (clase ? ' ' + clase : ''), txt);
+    $('#consola').appendChild(d);
+    $('#v-consola').scrollTop = $('#v-consola').scrollHeight;
+  }
+
+  // ─────────────────────────────────────────── memoria entre ejecuciones
+  // Aquí dentro el origen es opaco y localStorage lanza SecurityError: no es un
+  // fallo, es el aislamiento funcionando. Así que el almacén de verdad vive en
+  // el padre y aquí queda un espejo en memoria. El programa lo ve síncrono; lo
+  // que cruza el puente es solo la copia que sobrevive a cerrar la página.
+  const espejo = new Map();
+  const MAX_CLAVES = 200;
+  const almacen = {
+    leer(k) { return espejo.has(k) ? espejo.get(k) : null; },
+    escribir(k, v) {
+      if (!espejo.has(k) && espejo.size >= MAX_CLAVES)
+        throw new Error(`no caben más de ${MAX_CLAVES} claves guardadas`);
+      espejo.set(k, v);
+      aPadre({ t: 'guardar', k, v });
+    },
+    borrar(k) { const habia = espejo.delete(k); if (habia) aPadre({ t: 'olvidar', k }); return habia; },
+    claves() { return [...espejo.keys()]; },
+  };
+
+  // El anfitrión —página, lienzo y tiempo— es el mismo código que usan las
+  // aplicaciones exportadas. Aquí solo se le dice cómo hablar con el IDE.
+  const anf = crearAnfitrion({
+    irA, linea,
+    traspintar: () => mandarPaneles(),
+    fmtErr: e => fmtErr(e),
+    almacen,
+    vacioLienzo: '<div class="vacio">Sin dibujo todavía. Llama a <code>lienzo(ancho, alto)</code> y luego a <code>graficar</code>, <code>barras</code>, <code>circulo</code>, <code>punto</code>…</div>',
+  });
+  const { web, grafico, tiempo, red, limpiarTodo, vaciarLienzo } = anf;
+
+  // ─────────────────────────────────────────── serialización de errores
+  // Los objetos de error no cruzan postMessage con sus métodos, así que se
+  // convierten en datos planos.
+  const aDato = e => ({
+    fase: e.fase || (e.esRuntime ? 'ejecución' : 'interno'),
+    msg: e.message || String(e),
+    linea: e.linea || 0, col: e.col || 0, pista: e.pista || null,
+    traza: (e.traza || []).map(t => ({ nombre: t.nombre, linea: t.linea })),
+  });
+  const fmtErr = e => (e.formato ? e.formato() : '[error interno] ' + (e.message || e));
+
+  // ─────────────────────────────────────────── paneles derivados
+  function recoger(fn, vistas) {
+    vistas = vistas || [];
+    if (!fn || vistas.includes(fn)) return vistas;
+    vistas.push(fn);
+    for (const c of fn.chunk.consts) if (c && c.chunk) recoger(c, vistas);
+    return vistas;
+  }
+  function datosPaneles() {
+    if (!motor || !ultimoFn) return null;
+    const fns = recoger(ultimoFn);
+    const bc = fns.map(f => ({
+      nombre: f.nombre, aridad: f.aridad, nConsts: f.chunk.consts.length,
+      instr: desensamblar(f).map(x => ({ linea: x.linea, texto: x.texto })),
+    }));
+    const jit = fns.filter(f => f.ast).map(f => ({
+      nombre: f.nombre, aridad: f.aridad, llamadas: f.llamadas, estado: f.jitEstado, src: f.jitSrc || null,
+    }));
+    const vm = motor.vm, porClase = {};
+    for (const o of vm.monton) porClase[o.clase] = (porClase[o.clase] || 0) + 1;
+    return {
+      bytecode: bc, jit, deDisco: !!ultimoFn.deDisco,
+      jitBloqueado: vm.jitBloqueado, motivoJIT: vm.motivoJIT,
+      stats: { ...vm.stats },
+      memoria: { vivos: vm.monton.length, umbral: vm.umbralGC, porClase },
+    };
+  }
+  const mandarPaneles = () => aPadre({ t: 'paneles', datos: datosPaneles() });
+
+  // ─────────────────────────────────────────── motor
+  function nuevoMotor(op) {
+    return crearMotor(Object.assign({
+      salida: s => linea(s),
+      host: { grafico, web, almacen, tiempo, red },
+      limiteInstr: 400e6,
+      umbralJIT: 8,
+    }, op || {}));
+  }
+
+  function analizar(id, src) {
+    const m = crearMotor({ salida: () => {}, host: {} });
+    const a = m.analizar(src);
+    aPadre({ t: 'analisis', id, errores: a.errores.map(aDato), avisos: a.avisos.map(aDato) });
+  }
+
+  function ejecutar(id, src) {
+    limpiarTodo();
+    irA('consola');
+    motor = nuevoMotor();
+    const r = motor.ejecutar(src);
+    ultimoFn = r.fn || null;
+    if (!r.ok) for (const e of r.errores) linea(fmtErr(e), 'err');
+    aPadre({
+      t: 'fin', id, ok: r.ok,
+      ms: r.ms === undefined ? 0 : r.ms,
+      instrucciones: motor.vm.instrucciones,
+      errores: (r.errores || []).map(aDato),
+      avisos: (r.avisos || []).map(aDato),
+      datos: datosPaneles(),
+    });
+  }
+
+  function medir(id, src) {
+    limpiarTodo(); irA('consola');
+    linea('Midiendo… se ejecuta dos veces: una con el JIT apagado y otra encendido.', 'meta');
+    const correr = jit => {
+      const salida = [];
+      const m = crearMotor({ salida: s => salida.push(s), host: {}, limiteInstr: 400e6, jit, umbralJIT: 4 });
+      const r = m.ejecutar(src);
+      return { r, salida, m };
+    };
+    const sin = correr(false), con = correr(true);
+    $('#consola').innerHTML = '';
+    if (!sin.r.ok || !con.r.ok) {
+      linea('No se pudo medir: el programa falla.', 'err');
+      for (const e of (sin.r.errores || con.r.errores)) linea(fmtErr(e), 'err');
+      aPadre({ t: 'medicion', id, ok: false });
+      return;
+    }
+    motor = con.m; ultimoFn = con.r.fn;
+    const mismo = sin.salida.join('\n') === con.salida.join('\n');
+    const mejora = sin.r.ms / Math.max(con.r.ms, 0.01);
+    const iSin = sin.m.vm.instrucciones, iCon = con.m.vm.instrucciones;
+    const t = el('div');
+    t.innerHTML = '<table class="bench">'
+      + '<tr><th>modo</th><th>tiempo</th><th>instrucciones</th><th>funciones JIT</th></tr>'
+      + `<tr><td>solo intérprete</td><td class="n">${sin.r.ms.toFixed(1)} ms</td><td class="n">${iSin.toLocaleString('es')}</td><td>—</td></tr>`
+      + `<tr><td>con JIT</td><td class="n">${con.r.ms.toFixed(1)} ms</td><td class="n">${iCon.toLocaleString('es')}</td><td class="n">${con.r.stats.jitCompiladas}</td></tr>`
+      + `<tr><td><b>mejora</b></td><td class="n g">×${mejora.toFixed(1)}</td><td class="n">${(100 - (iCon / Math.max(1, iSin)) * 100).toFixed(0)}% menos</td>`
+      + `<td>${mismo ? '<span style="color:var(--ok)">✓ mismo resultado</span>' : '<span style="color:var(--bad)">✗ resultados distintos</span>'}</td></tr></table>`;
+    $('#consola').appendChild(t);
+    linea(''); linea('Salida del programa:', 'meta');
+    for (const l of con.salida) linea(l);
+    aPadre({
+      t: 'medicion', id, ok: true, mejora, mismo,
+      ms: con.r.ms, jit: con.r.stats.jitCompiladas,
+      datos: datosPaneles(),
+    });
+  }
+
+  // ─────────────────────────────────────────── exportar como aplicación
+  // La aplicación se arma con las piezas que este documento ya tiene dentro:
+  // el motor y el anfitrión salen de sus propios <script>, leídos como texto.
+  // Así no hay una segunda copia del motor esperando en el padre por si algún
+  // día alguien exporta, y lo que se entrega es exactamente lo que acaba de
+  // correr aquí.
+  const PLANTILLA_APP = '/*__PLANTILLA_APP__*/';
+
+  function deB64(b64) { return decodeURIComponent(escape(atob(b64))); }
+  function aB64(txt) { return btoa(unescape(encodeURIComponent(txt))); }
+
+  function armarApp(src, titulo) {
+    const motorTxt = document.getElementById('motor').textContent;
+    const anfTxt = document.getElementById('anfitrion').textContent;
+    if (!motorTxt || !anfTxt) throw new Error('no encuentro el motor dentro del documento');
+    let html = deB64(PLANTILLA_APP);
+    // El título va escapado: es texto que escribió una persona y acaba dentro
+    // del documento entregado.
+    const t = String(titulo || 'Aplicación en Ñ').slice(0, 120)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    html = html.replace('__TITULO__', () => t);
+    html = html.replace('/*__MOTOR__*/', () => motorTxt);
+    html = html.replace('/*__ANFITRION__*/', () => anfTxt);
+    html = html.replace('__PROGRAMA__', () => aB64(src));
+    return html;
+  }
+
+  function exportarApp(id, src, titulo) {
+    // Se comprueba antes de entregar: exportar algo que no compila sería
+    // regalar un archivo roto.
+    const a = motor ? motor.analizar(src) : nuevoMotor().analizar(src);
+    if (!a.ok) { aPadre({ t: 'app', id, ok: false, errores: a.errores.map(aDato) }); return; }
+    const html = armarApp(src, titulo);
+    aPadre({ t: 'app', id, ok: true, html, tam: html.length, avisos: a.avisos.map(aDato) });
+  }
+
+  // ─────────────────────────────────────────── bytecode portable
+  // Compilar y cargar ocurren aquí dentro, como todo lo demás. El anfitrión
+  // solo maneja el archivo: recibe texto en base64 y devuelve texto en base64,
+  // y nunca interpreta su contenido.
+  function compilarABytecode(id, src) {
+    const m = crearMotor({ salida: () => {}, host: {} });
+    const r = m.serializar(src);
+    if (!r.ok) { aPadre({ t: 'bytecode', id, ok: false, errores: r.errores.map(aDato) }); return; }
+    aPadre({ t: 'bytecode', id, ok: true, b64: aTexto(r.bytes), tam: r.bytes.length });
+  }
+
+  function correrBytecode(id, b64) {
+    limpiarTodo();
+    irA('consola');
+    motor = nuevoMotor();
+    const r = motor.ejecutarBytecode(b64);
+    ultimoFn = r.fn || null;
+    if (!r.ok) for (const e of r.errores) linea(fmtErr(e), 'err');
+    aPadre({
+      t: 'fin', id, ok: r.ok, deDisco: true,
+      ms: r.ms === undefined ? 0 : r.ms,
+      instrucciones: motor.vm.instrucciones,
+      errores: (r.errores || []).map(aDato),
+      avisos: [],
+      datos: datosPaneles(),
+    });
+  }
+
+  // ─────────────────────────────────────────── puente
+  addEventListener('message', ev => {
+    const m = ev.data;
+    if (!m || typeof m !== 'object') return;
+    try {
+      switch (m.t) {
+        case 'tema':
+          if (m.oscuro) document.documentElement.setAttribute('data-oscuro', '');
+          else document.documentElement.removeAttribute('data-oscuro');
+          break;
+        case 'vista': {
+          for (const v of document.querySelectorAll('.vista')) v.classList.toggle('on', v.id === 'v-' + m.cual);
+          break;
+        }
+        case 'analizar': analizar(m.id, m.src); break;
+        case 'ejecutar': ejecutar(m.id, m.src); break;
+        case 'medir': medir(m.id, m.src); break;
+        case 'serializar': compilarABytecode(m.id, m.src); break;
+        case 'correrBytecode': correrBytecode(m.id, m.b64); break;
+        case 'exportarApp': exportarApp(m.id, m.src, m.titulo); break;
+        case 'limpiar': limpiarTodo(); irA('consola'); break;
+        case 'almacen': {
+          espejo.clear();
+          if (m.datos) for (const k in m.datos) espejo.set(k, m.datos[k]);
+          break;
+        }
+      }
+    } catch (e) {
+      aPadre({ t: 'interno', msg: (e && e.message) || String(e) });
+    }
+  });
+
+  vaciarLienzo();
+  aPadre({ t: 'listo' });
+})();
+</script>
+</body>
+</html>

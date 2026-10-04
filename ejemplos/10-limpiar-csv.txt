@@ -1,0 +1,64 @@
+# ═══ Limpiar un CSV que llegó de fuera ══════════════════════════════════════
+# Lo primero que se mira de un archivo ajeno NO son los datos: son los huecos
+# y los tipos. Un CSV no trae tipos, así que los adivina — y adivina mal.
+# eDSL: datos, formato, texto
+
+usar deCsv, tipos, vacios, describir, quitarVacios, rellenarVacios,
+     convertir, aplicarA, renombrar, sinColumna, soloColumnas, reordenar,
+     sinRepetir, donde, numerar, vistazo, columnas, aCsv de "datos"
+usar regla, enNegrita, enRojo, enVerde, tablaTexto de "formato"
+usar mayusculas, recortar de "texto"
+
+# Un CSV con todos los males de la vida real: espacios, huecos, una fila
+# repetida, números escritos como texto y un nombre de columna abreviado.
+fijo crudo1: texto = "nit;  nombre  ;ciudad;vtas;fecha
+900123;  Ferretería El Tornillo ;bucaramanga;12400000;2026-01-15
+900456;Panadería La Espiga;girón;;2026-01-18
+900789;Droguería Salud;floridablanca;19800000;2026-01-22
+900456;Panadería La Espiga;girón;;2026-01-18
+900321;;piedecuesta;5400000;2026-02-03
+900654;Café del Parque;girón;6100000;2026-02-07"
+
+var t = deCsv(crudo1, ";")
+imprimir(enNegrita("COMO LLEGÓ"))
+vistazo(t)
+
+imprimir("")
+imprimir(enNegrita("LO PRIMERO: ¿QUÉ TIPOS ADIVINÓ Y DÓNDE HAY HUECOS?"))
+imprimir("  tipos:  " + texto(tipos(t)))
+imprimir("  huecos: " + texto(vacios(t)))
+
+imprimir("")
+imprimir(enNegrita("UN RETRATO DE CADA COLUMNA"))
+vistazo(describir(t))
+
+imprimir("")
+imprimir(enNegrita("LIMPIEZA, PASO A PASO"))
+t = renombrar(t, "vtas", "ventas")
+imprimir("  1 · «vtas» → «ventas»")
+t = sinRepetir(t)
+imprimir("  2 · filas repetidas fuera")
+t = rellenarVacios(t, "ventas", 0)
+imprimir("  3 · los huecos de ventas a cero")
+t = aplicarA(t, "ciudad", mayusculas)
+imprimir("  4 · ciudad en mayúsculas")
+# El ORDEN importa, y esto lo descubre el motor en vez de dejarlo pasar: si
+# «recortar» se aplica antes de quitar las filas sin nombre, le llega un hueco
+# —un nulo— y se queja diciendo qué recibió. Primero se quitan, después se
+# limpia lo que queda.
+t = quitarVacios(t, ["nombre"])
+imprimir("  5 · fuera las filas sin nombre")
+t = aplicarA(t, "nombre", recortar)
+imprimir("  6 · espacios de los extremos del nombre")
+t = numerar(t, "n", 1)
+t = reordenar(t, ["n", "nit", "nombre", "ciudad", "ventas"])
+imprimir("  7 · numeradas y reordenadas")
+
+imprimir("")
+imprimir(enNegrita("COMO QUEDÓ"))
+vistazo(t)
+imprimir("")
+imprimir("  huecos que quedan: " + texto(vacios(t)))
+imprimir("")
+imprimir(enNegrita("Y DE VUELTA A CSV"))
+imprimir(aCsv(soloColumnas(t, ["nit", "nombre", "ventas"])))

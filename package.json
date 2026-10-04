@@ -1,0 +1,62 @@
+{
+  "name": "n-lenguaje",
+  "version": "4.0.0",
+  "description": "Ñ — lenguaje de programación en español: verificador de tipos, VM de bytecode y JIT a JavaScript",
+  "license": "Apache-2.0",
+  "author": "Nicolás Stiven Jaimes Duarte",
+  "keywords": [
+    "lenguaje", "español", "spanish", "programming-language",
+    "interprete", "compilador", "bytecode", "vm", "jit",
+    "verificador-de-tipos", "type-checker", "edsl", "educativo"
+  ],
+  "bin": {
+    "n": "motor/util/n-node.js"
+  },
+  "main": "motor/bundle.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "probar": "node motor/pruebas/todas.js",
+    "referencia": "node motor/util/referencia.js",
+    "contexto": "node motor/util/referencia.js --contexto",
+    "ejemplos": "node motor/util/correr-ejemplos.js ejemplos"
+  },
+  "files": [
+    "motor/src/",
+    "motor/util/",
+    "motor/archivo/",
+    "motor/bundle.js",
+    "motor/rutas.js",
+    "motor/ARQUITECTURA.md",
+    "motor/inventario.ñdatos",
+    "ejemplos/",
+    "espanol-like-v4.html",
+    "referencia-stdlib.html",
+    "referencia-contexto.txt",
+    "LEEME.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "optionalDependencies": {
+    "koffi": "^3.3.2"
+  },
+  "devDependencies": {
+    "playwright": "^1.50.0"
+  },
+  "comentario": [
+    "koffi es opcional a propósito: solo hace falta para llamar a código nativo",
+    "desde el intérprete de Node (motor/util/nativo-koffi.js). Si no está, todo",
+    "lo demás funciona igual y «nativa» dice que falta el anfitrión.",
+    "En Windows x64 npm baja un binario ya compilado: no hace falta compilador de C.",
+    "playwright es solo para las pruebas: «aislado.js» y «ejemplos-ide.js» abren el IDE en un Chromium de verdad. Sin él, las otras nueve suites corren igual.",
+    "«files» deja fuera motor/pruebas y motor/ide a propósito: son 600 KB que no",
+    "hacen falta para USAR Ñ, y quien quiera correr las pruebas clona el",
+    "repositorio en vez de instalar el paquete. Lo que sí entra es el IDE ya",
+    "construido —espanol-like-v4.html—, porque el argumento del proyecto es",
+    "«abre este archivo y ya».",
+    "No hay «homepage» ni «repository» porque todavía no hay repositorio. Un",
+    "marcador de posición es peor que la ausencia: npm lo publicaría como si",
+    "fuera verdad. Cuando exista el repo se añaden los dos campos."
+  ]
+}

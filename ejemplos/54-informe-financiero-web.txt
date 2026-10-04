@@ -1,0 +1,199 @@
+# ═══ Informe financiero en página: la conclusión sale del dato ══════════════
+# El original de esto decía, al final y en negrita: «desviación estándar: $X
+# (nivel moderado de variabilidad)». Lo de «moderado» estaba escrito a mano y
+# salía igual con cualquier cifra. Un informe que siempre concluye lo mismo no
+# está concluyendo: está decorando. Aquí el adjetivo sale del coeficiente de
+# variación, con los cortes a la vista, para que se pueda discutir el corte en
+# vez de discutir la palabra.
+#
+# Tres cosas más:
+#   · «utilidad» no se guarda: se calcula. Una columna derivada que se almacena
+#     es una columna que algún día no cuadra con las dos de las que salió.
+#   · «tabla(filas, encabezados)» ya existe en el núcleo y devuelve un nodo.
+#     Escribir thead, th, tbody, tr y td a mano son veinte líneas que ya están.
+#   · los atípicos por IQR se calculaban y no se enseñaban. Calcular algo y no
+#     mostrarlo es el mismo trabajo sin el beneficio.
+# núcleo: web · eDSL: numerico, formato, estilo
+
+usar media, mediana, desviacion, percentil, suma, regresion, redondear
+     de "numerico"
+usar moneda, porciento, decimales, signoMas de "formato"
+usar tema, estiloGlobal, reiniciar, estilo, color, espacio, radio, tipografia,
+     paleta, escalaTipo, enOscuro, enImpresion de "estilo"
+
+# ── la marca, en un sitio ─────────────────────────────────────────────────
+# Cambiar de marca es cambiar esta línea. En el original había diez bloques de
+# estilo con el hexadecimal metido dentro de cada uno.
+fijo MARCA: texto = "#1E5F74"
+
+fijo tonos: dic = paleta(MARCA)
+fijo escala: dic = escalaTipo(15)
+
+estiloGlobal(":root", reiniciar())
+estiloGlobal(":root", tema({
+    "color": {
+        "marca": tonos["5"], "marca-suave": tonos["1"], "marca-fuerte": tonos["7"],
+        "tinta": "#15202B", "tinta-suave": "#5A6B7A",
+        "fondo": "#F7F9FA", "panel": "#FFFFFF", "linea": "#E3E9ED",
+        "bien": "#1B7F4B", "mal": "#B3261E", "ojo": "#9A6700"
+    },
+    "espacio": { "mini": "4px", "corto": "8px", "medio": "16px",
+                 "largo": "24px", "enorme": "40px" },
+    "radio":   { "poco": "6px", "medio": "12px" },
+    "tipografia": { "cuerpo": "system-ui, -apple-system, 'Segoe UI', sans-serif",
+                    "cifra": "ui-monospace, 'Cascadia Code', monospace" }
+}))
+# El modo oscuro es volver a declarar SOLO lo que cambia. Ni una regla de abajo
+# se toca. Y en papel, fondo blanco y sin sombras: la tinta cuesta.
+estiloGlobal(":root", enOscuro(tema({
+    "color": { "tinta": "#E8EDF2", "tinta-suave": "#9BABB8",
+               "fondo": "#0E1419", "panel": "#161F26", "linea": "#2A3741",
+               "marca-suave": tonos["8"] }
+})))
+estiloGlobal(":root", enImpresion(tema({
+    "color": { "fondo": "#FFFFFF", "panel": "#FFFFFF" }
+})))
+
+fijo hoja = estilo({
+    "fuenteFamilia": tipografia("cuerpo"), "fondo": color("fondo"),
+    "color": color("tinta"), "margen": 0, "relleno": espacio("largo")
+})
+fijo caja = estilo({
+    "maxAncho": 940, "margen": "0 auto", "fondo": color("panel"),
+    "relleno": espacio("enorme"), "redondeo": radio("medio"),
+    "borde": "1px solid " + color("linea")
+})
+fijo h1 = estilo({
+    "tamano": escala["5"], "grosor": 700, "color": color("marca-fuerte"),
+    "margen": 0, "margenAbajo": espacio("mini")
+})
+fijo bajada = estilo({ "color": color("tinta-suave"), "margen": 0,
+                       "margenAbajo": espacio("largo") })
+fijo h2 = estilo({ "tamano": escala["3"], "grosor": 600, "color": color("tinta"),
+                   "margenArriba": espacio("enorme"), "margenAbajo": espacio("medio"),
+                   "bordeAbajo": "2px solid " + color("marca-suave"),
+                   "rellenoAbajo": espacio("corto") })
+fijo rejilla = estilo({ "display": "grid", "gap": espacio("medio"),
+                        "columnas": "repeat(auto-fit, minmax(170px, 1fr))" })
+fijo ficha = estilo({ "fondo": color("marca-suave"), "relleno": espacio("medio"),
+                      "redondeo": radio("poco") })
+fijo fichaRotulo = estilo({ "tamano": escala["1"], "color": color("tinta-suave"),
+                            "textoTransformar": "uppercase",
+                            "espaciadoLetra": "0.06em" })
+fijo fichaCifra = estilo({ "tamano": escala["4"], "grosor": 700,
+                           "fuenteFamilia": tipografia("cifra"),
+                           "color": color("marca-fuerte") })
+fijo parrafo = estilo({ "color": color("tinta"), "lineaAltura": 1.6,
+                        "margen": "0 0 " + espacio("corto") + " 0" })
+fijo marcaBien = estilo({ "color": color("bien"), "grosor": 600 })
+fijo marcaOjo  = estilo({ "color": color("ojo"), "grosor": 600 })
+fijo marcaMal  = estilo({ "color": color("mal"), "grosor": 600 })
+
+# ── los datos: solo lo que no se puede deducir ────────────────────────────
+# Ingresos y gastos. La utilidad NO va aquí.
+fijo meses: lista = [
+    {"periodo": "Abril",      "ingresos": 125000000.0, "gastos": 89000000.0},
+    {"periodo": "Mayo",       "ingresos": 138000000.0, "gastos": 92000000.0},
+    {"periodo": "Junio",      "ingresos": 115000000.0, "gastos": 87000000.0},
+    {"periodo": "Julio",      "ingresos": 142000000.0, "gastos": 95000000.0},
+    {"periodo": "Agosto",     "ingresos": 135000000.0, "gastos": 91000000.0},
+    {"periodo": "Septiembre", "ingresos": 198000000.0, "gastos": 98000000.0}
+]
+
+# La utilidad sale de los dos números de al lado, cada vez.
+fn utilidadDe(f: dic): real { devolver f["ingresos"] - f["gastos"] }
+
+fijo ingresos: lista = mapear(meses, fn(f: dic): real { devolver f["ingresos"] })
+fijo utilidades: lista = mapear(meses, utilidadDe)
+fijo indices: lista = mapear(rango(longitud(meses)), fn(i: entero): real {
+    devolver real(i)
+})
+
+fijo total: real = suma(ingresos)
+fijo prom: real = media(ingresos)
+fijo desv: real = desviacion(ingresos)
+fijo r: dic = regresion(indices, ingresos)
+
+# ── el adjetivo, derivado ─────────────────────────────────────────────────
+# Coeficiente de variación: la desviación como fracción del promedio. Es lo que
+# hace comparable la dispersión de dos series con magnitudes distintas, y es lo
+# que permite poner un corte que signifique algo.
+fijo cv: real = desv / prom
+var juicio: texto = "estable"
+var juicioEstilo = marcaBien
+si cv >= 0.10 y cv < 0.25 { juicio = "variable"  juicioEstilo = marcaOjo }
+si cv >= 0.25 { juicio = "muy variable"  juicioEstilo = marcaMal }
+
+# ── atípicos por IQR, y esta vez se enseñan ───────────────────────────────
+fijo p25: real = percentil(ingresos, 25)
+fijo p75: real = percentil(ingresos, 75)
+fijo iqr: real = p75 - p25
+fijo bajo: real = p25 - 1.5 * iqr
+fijo alto: real = p75 + 1.5 * iqr
+fijo atipicos: lista = filtrar(meses, fn(f: dic): bool {
+    devolver f["ingresos"] < bajo o f["ingresos"] > alto
+})
+
+# ── la página ─────────────────────────────────────────────────────────────
+# «si» es una SENTENCIA: no se puede meter dentro de la lista de argumentos de
+# «etiqueta». El nodo se arma antes, con una «var», y abajo solo se coloca.
+var bloqueAtipicos: nodo = etiqueta("p", parrafo, "Ninguno.")
+si longitud(atipicos) > 0 {
+    bloqueAtipicos = etiqueta("ul", mapear(atipicos, fn(f: dic): nodo {
+        devolver etiqueta("li", parrafo,
+            etiqueta("strong", f["periodo"]), ": ", moneda(f["ingresos"]),
+            " — ", porciento(f["ingresos"] / prom - 1.0), " frente al promedio")
+    }))
+}
+
+fn fichaDe(rotulo: texto, cifra: texto): nodo {
+    devolver etiqueta("div", ficha,
+        etiqueta("div", fichaRotulo, rotulo),
+        etiqueta("div", fichaCifra, cifra))
+}
+
+limpiarPagina()
+pintar(etiqueta("div", hoja, etiqueta("div", caja,
+    etiqueta("h1", h1, "Informe financiero · segundo semestre"),
+    etiqueta("p", bajada, "Seis meses de ingresos y gastos. La utilidad y todas " +
+        "las conclusiones de abajo se calculan; ninguna está escrita a mano."),
+
+    etiqueta("h2", h2, "Mes por mes"),
+    # «tabla» del núcleo: filas y encabezados, y devuelve el nodo hecho.
+    tabla(mapear(meses, fn(f: dic): lista {
+        devolver [f["periodo"], moneda(f["ingresos"]), moneda(f["gastos"]),
+                  moneda(utilidadDe(f)),
+                  porciento(utilidadDe(f) / f["ingresos"])]
+    }), ["periodo", "ingresos", "gastos", "utilidad", "margen"]),
+
+    etiqueta("h2", h2, "Resumen"),
+    etiqueta("div", rejilla,
+        fichaDe("ingresos", moneda(total)),
+        fichaDe("promedio mes", moneda(prom)),
+        fichaDe("mediana", moneda(mediana(ingresos))),
+        fichaDe("utilidad", moneda(suma(utilidades))),
+        fichaDe("margen medio", porciento(suma(utilidades) / total))),
+
+    etiqueta("h2", h2, "Qué dicen los números"),
+    etiqueta("p", parrafo,
+        "Dispersión de los ingresos: ", moneda(desv),
+        ", que es un coeficiente de variación de ", decimales(cv, 3), " → ",
+        etiqueta("span", juicioEstilo, juicio), "."),
+    etiqueta("p", parrafo, estilo({"color": color("tinta-suave"),
+                                   "tamano": escala["1"]}),
+        "Los cortes: por debajo de 0,10 estable; de 0,10 a 0,25 variable; " +
+        "por encima de 0,25 muy variable. Están escritos arriba en el programa, " +
+        "donde se pueden discutir."),
+    etiqueta("p", parrafo,
+        "Tendencia: ", signoMas(redondear(r["pendiente"] / 1000000.0, 1)),
+        " millones por mes, con un r² de ", decimales(r["r2"], 3),
+        ". El r² dice cuánta de la variación explica esa recta: ",
+        etiqueta("span", juicioEstilo, porciento(r["r2"])), " de ella."),
+
+    etiqueta("h2", h2, "Meses fuera de rango"),
+    etiqueta("p", parrafo, estilo({"color": color("tinta-suave"),
+                                   "tamano": escala["1"]}),
+        "Regla del rango intercuartílico: fuera de " + moneda(bajo) + " a " +
+        moneda(alto) + "."),
+    bloqueAtipicos
+)))

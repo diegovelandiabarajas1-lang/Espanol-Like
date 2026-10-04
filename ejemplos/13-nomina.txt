@@ -1,0 +1,76 @@
+# ═══ Nómina quincenal ══════════════════════════════════════════════════════
+# Las cuentas de una liquidación, con los porcentajes de Colombia. Todo sale de
+# columnas calculadas, así que cambiar una tarifa es cambiar un número.
+# eDSL: datos, formato, numerico
+
+usar deRegistros, conColumna, columna, vistazo, soloColumnas, resumir,
+     sumaCol, contarCol, agrupar, ordenarPor de "datos"
+usar moneda, porciento, tablaTexto, regla, enNegrita, enVerde, enRojo de "formato"
+usar redondear de "numerico"
+
+# «redondear» devuelve un real, no un entero: redondear(2.6) es 3.0, no 3. Para
+# pesos hace falta decirlo con entero(...), y el verificador lo exige en vez de
+# dejar pasar un 3.0 que luego aparece escrito «3,0» en un desprendible.
+
+fijo SALUD: real = 0.04
+fijo PENSION: real = 0.04
+fijo AUX_TRANSPORTE: entero = 200000
+fijo TOPE_AUXILIO: entero = 2600000
+
+var nomina = deRegistros([
+    {"cedula": 91234567, "nombre": "Ana Rueda",      "cargo": "analista",   "basico": 3200000, "diasTrabajados": 15},
+    {"cedula": 13456789, "nombre": "Luis Peña",      "cargo": "operario",   "basico": 1400000, "diasTrabajados": 15},
+    {"cedula": 63789012, "nombre": "Marta Gómez",    "cargo": "operario",   "basico": 1400000, "diasTrabajados": 12},
+    {"cedula": 91567890, "nombre": "Pedro Ortiz",    "cargo": "supervisor", "basico": 2300000, "diasTrabajados": 15},
+    {"cedula": 37890123, "nombre": "Sofía Cárdenas", "cargo": "analista",   "basico": 3200000, "diasTrabajados": 15}
+])
+
+nomina = conColumna(nomina, "devengado", fn(f: dic): entero {
+    devolver entero(redondear(real(f["basico"]) / 30.0 * real(f["diasTrabajados"])))
+})
+# El auxilio de transporte solo va si el básico no pasa del tope.
+nomina = conColumna(nomina, "auxilio", fn(f: dic): entero {
+    si f["basico"] > TOPE_AUXILIO { devolver 0 }
+    devolver entero(redondear(real(AUX_TRANSPORTE) / 30.0 * real(f["diasTrabajados"])))
+})
+nomina = conColumna(nomina, "salud", fn(f: dic): entero { devolver entero(redondear(real(f["devengado"]) * SALUD)) })
+nomina = conColumna(nomina, "pension", fn(f: dic): entero { devolver entero(redondear(real(f["devengado"]) * PENSION)) })
+nomina = conColumna(nomina, "neto", fn(f: dic): entero {
+    devolver f["devengado"] + f["auxilio"] - f["salud"] - f["pension"]
+})
+
+imprimir(enNegrita("NÓMINA — SEGUNDA QUINCENA"))
+imprimir("salud " + porciento(SALUD) + " · pensión " + porciento(PENSION) +
+         " · auxilio de transporte hasta " + moneda(TOPE_AUXILIO) + " de básico")
+imprimir(regla(78))
+
+var filas: lista = []
+para i en rango(longitud(columna(nomina, "cedula"))) {
+    filas = filas + [{
+        "empleado": columna(nomina, "nombre")[i],
+        "días": texto(columna(nomina, "diasTrabajados")[i]),
+        "devengado": moneda(columna(nomina, "devengado")[i]),
+        "auxilio": moneda(columna(nomina, "auxilio")[i]),
+        "deduce": moneda(columna(nomina, "salud")[i] + columna(nomina, "pension")[i]),
+        "NETO": moneda(columna(nomina, "neto")[i])
+    }]
+}
+imprimir(tablaTexto(filas))
+
+fijo tot = resumir(nomina, {
+    "devengado": sumaCol("devengado"), "auxilio": sumaCol("auxilio"),
+    "salud": sumaCol("salud"), "pension": sumaCol("pension"),
+    "neto": sumaCol("neto"), "personas": contarCol()
+})
+imprimir("")
+imprimir(enNegrita("TOTALES"))
+imprimir("  personas          " + texto(columna(tot, "personas")[0]))
+imprimir("  devengado         " + moneda(columna(tot, "devengado")[0]))
+imprimir("  auxilios          " + moneda(columna(tot, "auxilio")[0]))
+imprimir("  aporte a salud    " + enRojo(moneda(columna(tot, "salud")[0])))
+imprimir("  aporte a pensión  " + enRojo(moneda(columna(tot, "pension")[0])))
+imprimir("  " + enVerde("A PAGAR          " + moneda(columna(tot, "neto")[0])))
+
+imprimir("")
+imprimir(enNegrita("COSTO POR CARGO"))
+vistazo(ordenarPor(agrupar(nomina, ["cargo"], {"personas": contarCol(), "costo": sumaCol("neto")}), "costo", cierto))

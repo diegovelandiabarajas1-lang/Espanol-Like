@@ -1,0 +1,151 @@
+# ═══ Una cartera: el retorno NO es el promedio de los retornos ══════════════
+# Este ejemplo existe por un error que parece de estilo y es de fondo. Con cinco
+# activos de pesos distintos, el retorno de la cartera es la suma PONDERADA, no
+# «media(retornos)». Las dos cifras salen abajo juntas a propósito: se parecen
+# lo suficiente para que nadie note el cambiazo, y son cosas distintas.
+#
+# Y dos cosas más que enseña, las dos del mismo tipo:
+#   · «maximo» y «minimo» ya están en el núcleo. Escribirlos a mano con un bucle
+#     y un «si» funciona, pero son diez líneas que ya existen y que además
+#     reducen una lista VACÍA mal.
+#   · «regresion» devuelve el r² de verdad. Poner «r2 = 0.85» a mano en un
+#     informe es peor que no poner nada: nadie puede distinguir una cifra
+#     inventada de una calculada, y por eso se la cree.
+# eDSL: numerico, formato
+
+usar media, desviacion, mediana, percentil, suma, redondear, regresion,
+     correlacion de "numerico"
+usar porciento, decimales, tablaTexto, regla, enNegrita, enGris, enRojo,
+     enVerde, barraTexto, signoMas, alinearDer de "formato"
+
+# ── la cartera ────────────────────────────────────────────────────────────
+fijo cartera: lista = [
+    {"activo": "Ecopetrol",       "peso": 0.30, "retorno": 0.062},
+    {"activo": "Bancolombia",     "peso": 0.25, "retorno": 0.041},
+    {"activo": "ISA",             "peso": 0.20, "retorno": 0.038},
+    {"activo": "Grupo Sura",      "peso": 0.15, "retorno": 0.029},
+    {"activo": "Cementos Argos",  "peso": 0.10, "retorno": 0.084}
+]
+
+fijo pesos: lista = mapear(cartera, fn(f: dic): real { devolver f["peso"] })
+fijo retornos: lista = mapear(cartera, fn(f: dic): real { devolver f["retorno"] })
+
+imprimir(enNegrita("CARTERA"))
+imprimir(regla(62))
+imprimir(tablaTexto(mapear(cartera, fn(f: dic): dic {
+    devolver {
+        "activo": f["activo"],
+        "peso": porciento(f["peso"]),
+        "retorno": porciento(f["retorno"]),
+        "aporta": porciento(f["peso"] * f["retorno"])
+    }
+})))
+
+# La suma de los pesos tiene que dar 1. Si no, el retorno ponderado no significa
+# nada y conviene enterarse aquí y no tres pantallas más abajo.
+fijo totalPeso: real = suma(pesos)
+si totalPeso > 1.0001 o totalPeso < 0.9999 {
+    imprimir(enRojo("  los pesos suman " + porciento(totalPeso) + ", no 100 %"))
+}
+
+# ── el punto del ejemplo ──────────────────────────────────────────────────
+imprimir("")
+imprimir(enNegrita("EL RETORNO DE LA CARTERA"))
+imprimir(regla(62))
+
+# Ponderado: cada activo aporta su retorno por lo que pesa. Es la columna
+# «aporta» de la tabla de arriba, sumada.
+fijo ponderado: real = suma(mapear(cartera, fn(f: dic): real {
+    devolver f["peso"] * f["retorno"]
+}))
+# Sin ponderar: trata un activo que es el 10 % igual que uno que es el 30 %.
+fijo promedio: real = media(retornos)
+
+imprimir("  ponderado (el correcto)   " + alinearDer(porciento(ponderado), 9))
+imprimir("  promedio simple           " + alinearDer(porciento(promedio), 9) +
+         enGris("   ← trata el 10 % igual que el 30 %"))
+imprimir("  la diferencia             " + alinearDer(porciento(promedio - ponderado), 9))
+imprimir("")
+imprimir(enGris("  Parecidas, y por eso el error sobrevive. Con una cartera más"))
+imprimir(enGris("  desigual la diferencia se vuelve seria."))
+
+# ── dispersión y riesgo ───────────────────────────────────────────────────
+imprimir("")
+imprimir(enNegrita("CÓMO ESTÁ REPARTIDO"))
+imprimir(regla(62))
+# «maximo» y «minimo» son del núcleo: no hace falta ningún «usar».
+imprimir("  concentración  " + porciento(maximo(pesos)) + " en un solo activo" +
+         enGris("   (maximo, del núcleo)"))
+imprimir("  el más chico   " + porciento(minimo(pesos)))
+imprimir("  mediana de los retornos  " + porciento(mediana(retornos)))
+imprimir("  dispersión               " + porciento(desviacion(retornos)))
+
+para f en cartera {
+    imprimir("  " + alinearDer(f["activo"], 16) + "  " +
+             barraTexto(f["peso"], maximo(pesos), 22) + " " + porciento(f["peso"]))
+}
+
+# ── la serie mensual, que es donde la regresión significa algo ────────────
+# Una regresión necesita una serie con un orden. Sobre cinco activos sin orden
+# no hay nada que ajustar: la pendiente saldría de cómo están puestos en la lista.
+fijo meses: lista = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+fijo mensual: lista = [0.021, 0.014, 0.033, 0.028, 0.019, 0.042,
+                       0.037, 0.045, 0.031, 0.052, 0.048, 0.061]
+
+imprimir("")
+imprimir(enNegrita("DOCE MESES, Y LA TENDENCIA DE VERDAD"))
+imprimir(regla(62))
+fijo r: dic = regresion(mapear(meses, fn(m: entero): real { devolver real(m) }), mensual)
+imprimir("  pendiente   " + signoMas(redondear(r["pendiente"] * 10000.0, 1)) +
+         " puntos base por mes")
+imprimir("  intercepto  " + porciento(r["intercepto"]))
+imprimir("  r²          " + decimales(r["r2"], 4) +
+         enGris("   ← calculado, no escrito a mano"))
+
+# El r² dice cuánto de la variación explica la recta. Interpretarlo es parte del
+# informe: 0,7 y 0,2 son conclusiones distintas, no un número más.
+si r["r2"] > 0.7 {
+    imprimir("  " + enVerde("la tendencia explica la mayor parte del movimiento"))
+}
+si r["r2"] <= 0.7 {
+    imprimir("  " + enGris("la recta explica solo parte: el resto es ruido del mes"))
+}
+
+para i en rango(longitud(mensual)) {
+    imprimir("  mes " + alinearDer(texto(meses[i]), 2) + "  " +
+             barraTexto(mensual[i], maximo(mensual), 26) + " " +
+             porciento(mensual[i]))
+}
+
+# ── riesgo ────────────────────────────────────────────────────────────────
+imprimir("")
+imprimir(enNegrita("RIESGO"))
+imprimir(regla(62))
+# El VaR al 95 % es el percentil 5, no el 95: se pregunta por el lado MALO.
+# Confundir los dos lados es fácil y da justo la respuesta tranquilizadora.
+fijo var95: real = percentil(mensual, 5)
+fijo mejor95: real = percentil(mensual, 95)
+imprimir("  VaR 95 %  (percentil 5)   " + alinearDer(porciento(var95), 8) +
+         enGris("   el lado malo"))
+imprimir("  percentil 95              " + alinearDer(porciento(mejor95), 8) +
+         enGris("   el lado bueno: no es el VaR"))
+
+# Sharpe con el retorno PONDERADO, que es el de la cartera.
+fijo libreRiesgo: real = 0.02
+fijo sharpe: real = (ponderado - libreRiesgo) / desviacion(mensual)
+imprimir("  Sharpe                    " + alinearDer(decimales(sharpe, 2), 8))
+imprimir(enGris("  (con el retorno ponderado; con el promedio simple saldría " +
+         decimales((promedio - libreRiesgo) / desviacion(mensual), 2) + ")"))
+
+# ¿Los meses buenos de la cartera coinciden con subir el mes? Eso es correlación
+# con el tiempo, y es otra forma de ver la misma tendencia.
+imprimir("  correlación con el mes    " +
+         alinearDer(decimales(correlacion(mapear(meses, fn(m: entero): real {
+             devolver real(m) }), mensual), 2), 8))
+
+imprimir("")
+imprimir(regla(62))
+imprimir(enGris("Tres cifras de este informe habrían salido mal con el atajo:"))
+imprimir(enGris("el retorno, el Sharpe que se calcula con él, y un r² que no se"))
+imprimir(enGris("calculaba. Las dos primeras por usar «media» donde iba una suma"))
+imprimir(enGris("ponderada; la tercera por escribirla a mano."))

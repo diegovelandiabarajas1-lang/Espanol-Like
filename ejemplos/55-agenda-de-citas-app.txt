@@ -1,0 +1,245 @@
+# ═══ Agenda de citas: cancelar DE VERDAD ════════════════════════════════════
+# El original de esto tenía una función llamada «procesarCancelacion» que
+# buscaba la cita, armaba un diccionario diciendo «cita cancelada por el
+# usuario», escogía a alguien de la lista de espera y devolvía «se reprogramó
+# automáticamente». Y la lista de citas quedaba intacta. Informaba de una acción
+# que no había hecho.
+#
+# Es el peor fallo de los que se pueden escribir en una interfaz, porque la
+# pantalla dice que funcionó. La prueba de que aquí sí pasa algo es que el
+# contador de arriba cambia y la fila desaparece al pulsar.
+#
+# Dos cosas más que estaban en los datos sin usarse:
+#   · «diasHasta» venía guardado —2, 5, 1, 0, 10— junto a una fecha que era
+#     «hoy()» para todas. El dato se contradecía consigo mismo. Ahora sale de
+#     restar las fechas, cada vez.
+#   · «prioridad» estaba en cada cita y la reprogramación cogía «enEspera[0]»,
+#     o sea el primero de la lista. Ahora entra quien tiene más prioridad, que
+#     es para lo que existe el campo.
+# núcleo: web · eDSL: fecha, formato, estilo
+
+usar hoy, aFecha, deFecha, diasEntre, sumarDias, diaSemana de "fecha"
+usar moneda, plural, enNegrita, alinearDer de "formato"
+usar tema, estiloGlobal, reiniciar, estilo, color, espacio, radio, tipografia,
+     paleta, escalaTipo, alPasar, transicion, enOscuro de "estilo"
+
+# ── el corte, afuera ──────────────────────────────────────────────────────
+fijo HOY: fecha = aFecha("2026-10-05")
+
+# ── estilos ───────────────────────────────────────────────────────────────
+fijo tonos: dic = paleta("#2C5F8D")
+fijo escala: dic = escalaTipo(15)
+
+estiloGlobal(":root", reiniciar())
+estiloGlobal(":root", tema({
+    "color": { "marca": tonos["5"], "suave": tonos["1"], "fuerte": tonos["7"],
+               "tinta": "#16202A", "apagado": "#5B6B7B", "fondo": "#F6F8FA",
+               "panel": "#FFFFFF", "linea": "#E2E8ED",
+               "bien": "#1B7F4B", "espera": "#9A6700", "mal": "#B3261E" },
+    "espacio": { "mini": "4px", "corto": "8px", "medio": "16px", "largo": "24px" },
+    "radio": { "poco": "6px", "medio": "12px", "redondo": "999px" },
+    "tipografia": { "cuerpo": "system-ui, -apple-system, sans-serif" }
+}))
+estiloGlobal(":root", enOscuro(tema({
+    "color": { "tinta": "#E7EDF3", "apagado": "#9AAAB9", "fondo": "#0D1419",
+               "panel": "#151E26", "linea": "#293642", "suave": tonos["8"] }
+})))
+
+fijo hoja = estilo({ "fuenteFamilia": tipografia("cuerpo"), "fondo": color("fondo"),
+                     "color": color("tinta"), "margen": 0, "relleno": espacio("largo") })
+fijo caja = estilo({ "maxAncho": 820, "margen": "0 auto", "fondo": color("panel"),
+                     "relleno": espacio("largo"), "redondeo": radio("medio"),
+                     "borde": "1px solid " + color("linea") })
+fijo h1 = estilo({ "tamano": escala["5"], "grosor": 700, "margen": 0,
+                   "color": color("fuerte") })
+fijo bajada = estilo({ "color": color("apagado"), "margenAbajo": espacio("largo") })
+fijo rejilla = estilo({ "display": "grid", "gap": espacio("corto"),
+                        "columnas": "repeat(auto-fit, minmax(130px, 1fr))",
+                        "margenAbajo": espacio("largo") })
+fijo ficha = estilo({ "fondo": color("suave"), "relleno": espacio("medio"),
+                      "redondeo": radio("poco") })
+fijo fichaRotulo = estilo({ "tamano": escala["1"], "color": color("apagado"),
+                            "textoTransformar": "uppercase" })
+fijo fichaCifra = estilo({ "tamano": escala["4"], "grosor": 700,
+                           "color": color("fuerte") })
+fijo fila = estilo({ "display": "flex", "gap": espacio("medio"),
+                     "alinearItems": "center", "relleno": espacio("corto") + " 0",
+                     "bordeAbajo": "1px solid " + color("linea") })
+fijo nombre = estilo({ "grosor": 600, "flex": "1 1 auto" })
+fijo cuando = estilo({ "color": color("apagado"), "tamano": escala["1"],
+                       "minAncho": 150 })
+fijo sello = estilo({ "tamano": escala["0"], "grosor": 700, "relleno": "3px 10px",
+                      "redondeo": radio("redondo"), "textoTransformar": "uppercase" })
+fijo selloBien   = estilo(sello, { "fondo": color("bien"),   "color": "blanco" })
+fijo selloEspera = estilo(sello, { "fondo": color("espera"), "color": "blanco" })
+fijo selloIdo    = estilo(sello, { "fondo": color("linea"),  "color": color("apagado") })
+fijo botonRojo = estilo({ "fondo": "transparent", "color": color("mal"),
+                          "borde": "1px solid " + color("mal"),
+                          "relleno": "5px 12px", "redondeo": radio("poco"),
+                          "cursor": "pointer" },
+                        transicion("fondo", 120),
+                        alPasar({ "fondo": color("mal"), "color": "blanco" }))
+fijo bitacora = estilo({ "fondo": color("suave"), "relleno": espacio("medio"),
+                         "redondeo": radio("poco"), "margenArriba": espacio("largo"),
+                         "tamano": escala["1"] })
+
+# ── el estado ─────────────────────────────────────────────────────────────
+# Solo lo que no se puede deducir: la fecha y la hora están, «diasHasta» no.
+var citas: lista = [
+    {"id": 1, "paciente": "María García",     "fecha": "2026-10-07", "hora": "10:00", "tipo": "consulta", "prioridad": 2, "estado": "confirmada"},
+    {"id": 2, "paciente": "Juan Pérez",       "fecha": "2026-10-10", "hora": "11:30", "tipo": "consulta", "prioridad": 1, "estado": "confirmada"},
+    {"id": 3, "paciente": "Carlos Rodríguez", "fecha": "2026-10-06", "hora": "09:00", "tipo": "control",  "prioridad": 3, "estado": "confirmada"},
+    {"id": 4, "paciente": "Laura Martínez",   "fecha": "2026-10-05", "hora": "14:00", "tipo": "urgente",  "prioridad": 1, "estado": "confirmada"},
+    {"id": 5, "paciente": "Pedro Sánchez",    "fecha": "2026-10-15", "hora": "15:30", "tipo": "control",  "prioridad": 2, "estado": "espera"},
+    {"id": 6, "paciente": "Ana Quintero",     "fecha": "2026-10-16", "hora": "08:30", "tipo": "consulta", "prioridad": 3, "estado": "espera"}
+]
+var diario: lista = []
+
+# ── lo derivado, derivado ─────────────────────────────────────────────────
+fn diasHasta(c: dic): entero { devolver diasEntre(HOY, aFecha(c["fecha"])) }
+
+fn conEstado(e: texto): lista {
+    devolver filtrar(citas, fn(c: dic): bool { devolver c["estado"] == e })
+}
+
+# ── cancelar: esto SÍ cambia la lista ─────────────────────────────────────
+fn cancelar(id: entero) {
+    # Se construye una lista nueva. El estado es un valor, y así no hay que
+    # acordarse de quién tocó qué.
+    var nuevas: lista = []
+    var quien: texto = ""
+    var fechaLibre: texto = ""
+    var horaLibre: texto = ""
+    para c en citas {
+        si c["id"] == id {
+            quien = c["paciente"]
+            fechaLibre = c["fecha"]
+            horaLibre = c["hora"]
+            nuevas = nuevas + [{"id": c["id"], "paciente": c["paciente"],
+                                "fecha": c["fecha"], "hora": c["hora"],
+                                "tipo": c["tipo"], "prioridad": c["prioridad"],
+                                "estado": "cancelada"}]
+        } sino {
+            nuevas = nuevas + [c]
+        }
+    }
+    citas = nuevas
+    si quien == "" { devolver }
+    diario = diario + ["Cancelada la cita de " + quien + " (" + fechaLibre +
+                       " " + horaLibre + ")"]
+    ascenderDeEspera(fechaLibre, horaLibre)
+    repintar()
+}
+
+fn ascenderDeEspera(fechaLibre: texto, horaLibre: texto) {
+    fijo esperando: lista = conEstado("espera")
+    si longitud(esperando) == 0 {
+        diario = diario + ["El hueco de " + fechaLibre + " " + horaLibre +
+                           " queda libre: nadie en espera"]
+        devolver
+    }
+    # Por PRIORIDAD, que es para lo que existe el campo. 1 es la más alta, así
+    # que el orden natural de «ordenar» ya sirve.
+    fijo porPrioridad: lista = ordenar(esperando, fn(c: dic): real {
+        devolver real(c["prioridad"])
+    })
+    fijo elegido: dic = porPrioridad[0]
+    var nuevas: lista = []
+    para c en citas {
+        si c["id"] == elegido["id"] {
+            nuevas = nuevas + [{"id": c["id"], "paciente": c["paciente"],
+                                "fecha": fechaLibre, "hora": horaLibre,
+                                "tipo": c["tipo"], "prioridad": c["prioridad"],
+                                "estado": "confirmada"}]
+        } sino {
+            nuevas = nuevas + [c]
+        }
+    }
+    citas = nuevas
+    diario = diario + ["Entra " + elegido["paciente"] + " (prioridad " +
+                       texto(elegido["prioridad"]) + ") al hueco de " +
+                       fechaLibre + " " + horaLibre]
+}
+
+# ── pintar ────────────────────────────────────────────────────────────────
+fn selloDe(e: texto): nodo {
+    si e == "confirmada" { devolver etiqueta("span", selloBien, "confirmada") }
+    si e == "espera" { devolver etiqueta("span", selloEspera, "en espera") }
+    devolver etiqueta("span", selloIdo, "cancelada")
+}
+
+fn textoCuando(c: dic): texto {
+    fijo d: entero = diasHasta(c)
+    si d < 0 { devolver deFecha(aFecha(c["fecha"]), "corta") + " · pasó" }
+    si d == 0 { devolver deFecha(aFecha(c["fecha"]), "corta") + " · hoy" }
+    devolver deFecha(aFecha(c["fecha"]), "corta") + " · en " + plural(d, "día")
+}
+
+fn filaDe(c: dic): nodo {
+    fijo hijos: lista = [
+        etiqueta("span", nombre, c["paciente"]),
+        etiqueta("span", cuando, textoCuando(c) + " " + c["hora"]),
+        selloDe(c["estado"])
+    ]
+    si c["estado"] == "cancelada" {
+        devolver etiqueta("div", fila, hijos)
+    }
+    devolver etiqueta("div", fila, hijos + [
+        boton("Cancelar", botonRojo, fn() { cancelar(c["id"]) })
+    ])
+}
+
+fn repintar() {
+    limpiarPagina()
+    fijo confirmadas: lista = conEstado("confirmada")
+    fijo esperando: lista = conEstado("espera")
+    fijo canceladas: lista = conEstado("cancelada")
+
+    var hijos: lista = [
+        etiqueta("h1", h1, "Agenda de citas"),
+        etiqueta("p", bajada, "Corte del " + deFecha(HOY, "larga") +
+            ". Pulsa «Cancelar» y mira los contadores: cambian, porque la " +
+            "cancelación modifica la lista de verdad."),
+        etiqueta("div", rejilla,
+            ficha1("confirmadas", longitud(confirmadas)),
+            ficha1("en espera", longitud(esperando)),
+            ficha1("canceladas", longitud(canceladas)),
+            ficha1("próxima en", diasHasta(masProxima(confirmadas))))
+    ]
+    para c en ordenar(citas, fn(c2: dic): real { devolver real(diasHasta(c2)) }) {
+        hijos = hijos + [filaDe(c)]
+    }
+    si longitud(diario) > 0 {
+        var lineas: lista = [etiqueta("div", estilo({"grosor": 700,
+            "margenAbajo": espacio("corto")}), "Lo que ha pasado")]
+        para l en diario {
+            lineas = lineas + [etiqueta("div", estilo({"color": color("apagado")}), "· " + l)]
+        }
+        hijos = hijos + [etiqueta("div", bitacora, lineas)]
+    }
+    pintar(etiqueta("div", hoja, etiqueta("div", caja, hijos)))
+}
+
+fn ficha1(rotulo: texto, n: entero): nodo {
+    devolver etiqueta("div", ficha,
+        etiqueta("div", fichaRotulo, rotulo),
+        etiqueta("div", fichaCifra, texto(n)))
+}
+
+fn masProxima(cs: lista): dic {
+    si longitud(cs) == 0 { devolver {"fecha": deFecha(HOY, "iso")} }
+    devolver ordenar(cs, fn(c: dic): real { devolver real(diasHasta(c)) })[0]
+}
+
+repintar()
+
+# En la consola no hay página, pero el cambio de estado sí se puede comprobar:
+# se cancela la cita 4 y se mira qué quedó.
+imprimir(enNegrita("COMPROBACIÓN SIN PÁGINA"))
+imprimir("  antes:  " + texto(longitud(conEstado("confirmada"))) + " confirmadas, " +
+         texto(longitud(conEstado("espera"))) + " en espera")
+cancelar(4)
+imprimir("  después de cancelar la 4:  " +
+         texto(longitud(conEstado("confirmada"))) + " confirmadas, " +
+         texto(longitud(conEstado("espera"))) + " en espera")
+para l en diario { imprimir("  · " + l) }

@@ -1,0 +1,150 @@
+# ═══ Lista de tareas: una aplicación con interfaz y memoria ════════════════
+# Esta sí es una app: pinta controles, responde a clics y GUARDA lo que anotes
+# entre ejecuciones. En el IDE se ve y se usa; en la consola se comprueba que
+# la estructura se pintó y que el estado quedó guardado.
+# eDSL: estilo, formato, fecha · núcleo: web, almacén
+
+usar estilo, estiloGlobal, reiniciar, tema, color, espacio, radio, alPasar,
+     separado, enFila, enColumna, ultimo, transicion de "estilo"
+usar regla, enNegrita, enVerde, enGris, plural, porciento, barraTexto de "formato"
+usar hoy, deFecha de "fecha"
+
+# ── el estado, que vive entre ejecuciones ──────────────────────────────────
+# «recuperar» lee lo que quedó la última vez; el segundo argumento es lo que
+# vale la primera vez de todas, cuando no hay nada guardado.
+var tareas: lista = recuperar("tareas", [
+    {"que": "Terminar el informe de La Espiga", "hecha": falso},
+    {"que": "Llamar a cartera de Girón",     "hecha": cierto},
+    {"que": "Revisar el cruce de Siigo",     "hecha": falso}
+])
+
+fn guardarTodo() { guardar("tareas", tareas) }
+
+fn agregarTarea(que: texto) {
+    si longitud(que) == 0 { devolver }
+    tareas = tareas + [{"que": que, "hecha": falso}]
+    guardarTodo()
+    repintar()
+}
+
+fn alternar(i: entero) {
+    # Se construye una lista nueva en vez de modificar la de dentro: así el
+    # estado es un valor y no hay que acordarse de quién lo tocó.
+    var nuevas: lista = []
+    para j en rango(longitud(tareas)) {
+        si j == i {
+            nuevas = nuevas + [{"que": tareas[j]["que"], "hecha": no tareas[j]["hecha"]}]
+        } sino {
+            nuevas = nuevas + [tareas[j]]
+        }
+    }
+    tareas = nuevas
+    guardarTodo()
+    repintar()
+}
+
+fn borrarHechas() {
+    var nuevas: lista = []
+    para t en tareas { si no t["hecha"] { nuevas = nuevas + [t] } }
+    tareas = nuevas
+    guardarTodo()
+    repintar()
+}
+
+fn cuantasPendientes(): entero {
+    var n: entero = 0
+    para t en tareas { si no t["hecha"] { n = n + 1 } }
+    devolver n
+}
+
+# ── los estilos ───────────────────────────────────────────────────────────
+reiniciar()
+estiloGlobal(":root", tema({
+    "color": {"fondo": "#fafafa", "tarjeta": "#ffffff", "texto": "#1a1a1a",
+              "suave": "#888888", "marca": "#4f3fd4", "borde": "#e8e8e8"},
+    "espacio": {"corto": "8px", "medio": "16px", "largo": "24px"},
+    "radio": {"medio": "8px"}
+}))
+estiloGlobal("body", estilo({
+    "fondo": color("fondo"), "color": color("texto"),
+    "fuente": "system-ui, sans-serif", "relleno": espacio("largo")
+}))
+
+fijo tarjeta = estilo({
+    "fondo": color("tarjeta"), "radio": radio("medio"),
+    "relleno": espacio("largo"), "anchoMaximo": "520px",
+    "margen": "0 auto", "sombra": "0 1px 3px rgba(0,0,0,.08)"
+})
+fijo filaTarea = estilo(
+    {"relleno": espacio("corto") + " 0", "borde-abajo": "1px solid " + color("borde")},
+    separado(8),
+    alPasar({"fondo": "#fbfaff"}),
+    ultimo({"borde-abajo": "ninguno"}),
+    transicion("fondo", 120)
+)
+fijo tachado = estilo({"decoracion": "line-through", "color": color("suave")})
+
+# ── lo que se pinta ───────────────────────────────────────────────────────
+fn repintar() {
+    limpiarPagina()
+    var hijos: lista = []
+    hijos = hijos + [etiqueta("h2", {}, "Tareas")]
+    hijos = hijos + [etiqueta("p", {"estilo": estilo({"color": color("suave")})},
+                              plural(cuantasPendientes(), "pendiente") +
+                              " de " + plural(longitud(tareas), "tarea"))]
+
+    para i en rango(longitud(tareas)) {
+        fijo t: dic = tareas[i]
+        var est = estilo({})
+        si t["hecha"] { est = tachado }
+        # La casilla recibe la función que hay que correr al marcarla: así el
+        # único camino para que corra código es pasar una función de Ñ, nunca
+        # un atributo «onclick» escrito en texto.
+        hijos = hijos + [etiqueta("div", {"estilo": filaTarea},
+            casilla(t["que"], t["hecha"], fn() { alternar(i) }, est)
+        )]
+    }
+
+    hijos = hijos + [etiqueta("div", {"estilo": estilo(enFila(8), {"margenArriba": espacio("medio")})},
+        entrada("Nueva tarea", fn(d: dic) { agregarTarea(d["valor"]) }),
+        boton("Limpiar hechas", fn() { borrarHechas() })
+    )]
+
+    pintar(etiqueta("div", {"estilo": tarjeta}, hijos))
+}
+
+repintar()
+
+# ── y lo que se puede comprobar sin navegador ─────────────────────────────
+imprimir(enNegrita("LISTA DE TAREAS — " + deFecha(hoy(), "larga")))
+imprimir(regla(52))
+var hechas: entero = 0
+para t en tareas { si t["hecha"] { hechas = hechas + 1 } }
+para t en tareas {
+    var marca: texto = "☐"
+    var q: texto = t["que"]
+    si t["hecha"] { marca = enVerde("☑")  q = enGris(t["que"]) }
+    imprimir("  " + marca + " " + q)
+}
+imprimir(regla(52))
+imprimir("  " + barraTexto(hechas, longitud(tareas), 24) + " " +
+         texto(hechas) + " de " + texto(longitud(tareas)) + " · " +
+         porciento(real(hechas) / real(longitud(tareas))))
+
+# Y se comprueba que el estado SOBREVIVE: se agrega una, se marca, y se vuelve
+# a leer del almacén como lo haría la próxima ejecución.
+imprimir("")
+imprimir(enNegrita("LA MEMORIA ENTRE EJECUCIONES"))
+imprimir(regla(52))
+agregarTarea("Escribir los 50 ejemplos")
+alternar(longitud(tareas) - 1)
+fijo guardadas: lista = recuperar("tareas", [])
+imprimir("  guardadas: " + plural(longitud(guardadas), "tarea"))
+imprimir("  la última: " + guardadas[longitud(guardadas) - 1]["que"] +
+         " · hecha: " + texto(guardadas[longitud(guardadas) - 1]["hecha"]))
+imprimir("  claves en el almacén: " + texto(guardados()))
+
+imprimir("")
+imprimir(enGris("  Se pintó la interfaz y se guardó el estado. En el IDE esto se"))
+imprimir(enGris("  ve y se usa; «⤓ Exportar app» lo deja en UN archivo HTML que se"))
+imprimir(enGris("  abre en cualquier navegador y recuerda lo que anotes."))

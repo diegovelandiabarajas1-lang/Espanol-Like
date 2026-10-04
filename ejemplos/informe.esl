@@ -1,0 +1,52 @@
+# Un programa de línea de órdenes: lee un CSV, lo resume y escribe el resultado.
+#   node motor/util/n-node.js ejemplos/informe.esl ventas.csv
+#   qjs --std motor/util/n.js ejemplos/informe.esl ventas.csv
+
+usar dividir, recortar, unir de "texto"
+usar media, redondear, suma de "numerico"
+
+fijo args = argumentos()
+si longitud(args) == 0 {
+    imprimir("uso: informe.esl <archivo.csv>")
+    salir(2)
+}
+
+fijo ruta = args[0]
+si no existeArchivo(ruta) {
+    imprimir("no encuentro " + ruta)
+    salir(1)
+}
+
+fn columnas(linea: texto): lista<texto> {
+    devolver mapear(dividir(linea, ","), fn(c) { devolver recortar(c) })
+}
+
+fijo lineas = filtrar(dividir(leerTexto(ruta), "\n"), fn(l) { devolver recortar(l) != "" })
+si longitud(lineas) < 2 {
+    imprimir("el archivo no tiene datos")
+    salir(1)
+}
+
+fijo cabecera = columnas(lineas[0])
+fijo filas = mapear(rebanar(lineas, 1), columnas)
+
+# La última columna se trata como número; el resto, como texto.
+fijo iValor = longitud(cabecera) - 1
+fijo importes = mapear(filas, fn(f) { devolver real(f[iValor]) })
+
+imprimir("archivo:  " + ruta)
+imprimir("columnas: " + unir(cabecera, ", "))
+imprimir("filas:    " + texto(longitud(filas)))
+imprimir("total:    " + texto(suma(importes)))
+imprimir("media:    " + texto(redondear(media(importes), 2)))
+imprimir("máximo:   " + texto(maximo(importes)))
+
+fijo destino = ruta + ".informe.txt"
+escribirTexto(destino, unir([
+    "archivo: " + ruta,
+    "filas: " + texto(longitud(filas)),
+    "total: " + texto(suma(importes)),
+    "media: " + texto(redondear(media(importes), 2)),
+], "\n") + "\n")
+imprimir("")
+imprimir("escrito en " + destino + " (" + texto(tamanoArchivo(destino)) + " bytes)")

@@ -1,0 +1,80 @@
+# ═══ Sacar datos de un texto que no es una tabla ════════════════════════════
+# Un correo, un registro, un pegote del portapapeles. «entre», «antesDe» y
+# «despuesDe» sacan trozos sin escribir una expresión regular.
+# eDSL: texto, datos, formato
+
+usar entre, antesDe, despuesDe, lineas, dividir, recortar, indiceDe,
+     empiezaCon, terminaCon, cuantasVeces, quitarPrefijo, quitarSufijo,
+     minusculas, izquierda, esDigito, caracteres de "texto"
+usar deRegistros, vistazo, columna, agrupar, contarCol, sumaCol, ordenarPor de "datos"
+usar regla, enNegrita, enVerde, enRojo, enAmarillo, enGris, moneda, tablaTexto de "formato"
+
+# Un registro de servidor, de los de verdad
+fijo REGISTRO: texto = "2026-10-01 08:14:22 INFO  usuario=ana accion=ingreso ip=190.85.1.4
+2026-10-01 08:15:03 INFO  usuario=ana accion=consulta tabla=ventas filas=1240
+2026-10-01 08:19:45 ERROR usuario=luis accion=ingreso ip=190.85.1.9 motivo=clave_incorrecta
+2026-10-01 08:19:58 ERROR usuario=luis accion=ingreso ip=190.85.1.9 motivo=clave_incorrecta
+2026-10-01 08:20:11 WARN  usuario=luis accion=bloqueo intentos=3
+2026-10-01 09:02:33 INFO  usuario=marta accion=exporta archivo=informe.csv bytes=48201
+2026-10-01 09:14:07 ERROR usuario=ana accion=exporta motivo=sin_permiso"
+
+# Un campo «clave=valor» de una línea, sin expresiones regulares
+fn campo(linea1: texto, nombre: texto): texto {
+    fijo marca: texto = nombre + "="
+    si indiceDe(linea1, marca) < 0 { devolver "" }
+    fijo resto: texto = despuesDe(linea1, marca)
+    devolver antesDe(resto, " ")
+}
+
+imprimir(enNegrita("EL REGISTRO, LÍNEA POR LÍNEA"))
+imprimir(regla(74))
+var filas: lista = []
+para l en lineas(REGISTRO) {
+    fijo fecha1: texto = izquierda(l, 10)
+    fijo hora1: texto = recortar(entre(l, " ", " "))
+    fijo resto: texto = despuesDe(l, hora1 + " ")
+    fijo nivel: texto = recortar(antesDe(resto, " "))
+    var marca: texto = enGris(nivel)
+    si nivel == "ERROR" { marca = enRojo(nivel) }
+    si nivel == "WARN" { marca = enAmarillo(nivel) }
+    imprimir("  " + hora1 + "  " + marca + "  " + campo(l, "usuario") + " → " + campo(l, "accion"))
+    filas = filas + [{
+        "hora": hora1, "nivel": nivel,
+        "usuario": campo(l, "usuario"), "accion": campo(l, "accion"),
+        "motivo": campo(l, "motivo")
+    }]
+}
+
+fijo t = deRegistros(filas)
+imprimir("")
+imprimir(enNegrita("QUÉ PASÓ, EN TABLA"))
+vistazo(t)
+
+imprimir("")
+imprimir(enNegrita("POR USUARIO"))
+vistazo(ordenarPor(agrupar(t, ["usuario"], {"eventos": contarCol()}), "eventos", cierto))
+
+imprimir("")
+imprimir(enNegrita("POR NIVEL"))
+vistazo(agrupar(t, ["nivel"], {"cuantos": contarCol()}))
+
+imprimir("")
+imprimir(enNegrita("LOS ERRORES Y POR QUÉ"))
+para l en lineas(REGISTRO) {
+    si indiceDe(l, "ERROR") >= 0 {
+        imprimir("  " + enRojo(campo(l, "usuario")) + ": " + campo(l, "motivo"))
+    }
+}
+
+imprimir("")
+imprimir(enNegrita("UN CORREO DEL QUE HAY QUE SACAR DATOS"))
+fijo CORREO: texto = "De: compras@tornillo.com.co
+Asunto: Orden de compra OC-4471
+Favor despachar 240 unidades de la referencia T-100 por valor de $ 3.600.000 antes del 2026-10-15."
+imprimir("  remitente:  " + despuesDe(antesDe(CORREO, "\n"), "De: "))
+imprimir("  dominio:    " + despuesDe(despuesDe(antesDe(CORREO, "\n"), "De: "), "@"))
+imprimir("  orden:      " + entre(CORREO, "Asunto: Orden de compra ", "\n"))
+imprimir("  cantidad:   " + entre(CORREO, "despachar ", " unidades"))
+imprimir("  referencia: " + entre(CORREO, "referencia ", " por"))
+imprimir("  valor:      " + entre(CORREO, "valor de ", " antes"))
+imprimir("  vence:      " + quitarSufijo(despuesDe(CORREO, "antes del "), "."))

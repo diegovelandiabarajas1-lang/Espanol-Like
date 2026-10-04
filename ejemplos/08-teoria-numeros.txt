@@ -1,0 +1,47 @@
+# ═══ Juguete de teoría de números ═══════════════════════════════════════════
+# Primos, divisores, combinatoria y las dos cosas que todo el mundo confunde:
+# cuántos grupos hay si el orden importa y si no importa.
+# eDSL: numerico, formato
+
+usar esPrimo, primos, divisores, mcd, mcm, factorial, combinaciones,
+     permutaciones, raizN, log2, potencia de "numerico"
+usar numero, abreviar, enLetras, romano, listaLegible, regla, columnas de "formato"
+
+imprimir("PRIMOS HASTA 60")
+imprimir(regla(56))
+imprimir(listaLegible(mapear(primos(60), fn(p: entero): texto { devolver texto(p) })))
+imprimir("")
+
+imprimir("¿SON PRIMOS?")
+para n en [1, 2, 91, 97, 2026, 7919] {
+    var s: texto = "no"
+    si esPrimo(n) { s = "SÍ" }
+    imprimir("  " + texto(n) + " → " + s)
+}
+imprimir("")
+
+imprimir("DIVISORES")
+para n en [12, 36, 100, 2026] {
+    imprimir("  " + texto(n) + ": " + listaLegible(mapear(divisores(n), fn(d: entero): texto { devolver texto(d) })))
+}
+imprimir("")
+
+imprimir("MÁXIMO COMÚN DIVISOR Y MÍNIMO COMÚN MÚLTIPLO")
+imprimir("  mcd(84, 126, 210) = " + texto(mcd(84, 126, 210)))
+imprimir("  mcm(4, 6, 10)     = " + texto(mcm(4, 6, 10)))
+imprimir("")
+
+imprimir("COMBINATORIA — la diferencia que todo el mundo confunde")
+imprimir("  Baloto: elegir 6 de 45 sin importar el orden")
+imprimir("    combinaciones(45, 6) = " + numero(combinaciones(45, 6)) + "  (" + abreviar(combinaciones(45, 6)) + ")")
+imprimir("  Podio: elegir 3 de 10 y SÍ importa el orden")
+imprimir("    permutaciones(10, 3) = " + numero(permutaciones(10, 3)))
+imprimir("  10! = " + numero(factorial(10)))
+imprimir("")
+
+imprimir("CURIOSIDADES DEL AÑO " + texto(2026))
+imprimir("  en romano: " + romano(2026))
+imprimir("  en letras: " + enLetras(2026))
+imprimir("  sus divisores: " + listaLegible(mapear(divisores(2026), fn(d: entero): texto { devolver texto(d) })))
+imprimir("  raíz cúbica: " + texto(raizN(2026.0, 3)))
+imprimir("  bits que hacen falta: " + texto(entero(log2(2026.0)) + 1))

@@ -1,0 +1,61 @@
+# ═══ Conciliar dos sistemas que no cuadran ══════════════════════════════════
+# El trabajo más común de un analista: dos listas de lo mismo que no coinciden.
+# «cruzar» da lo que está en las dos, «diferencia» lo que falta en una.
+# eDSL: datos, formato
+
+usar deRegistros, cruzar, diferencia, donde, conColumna, columna, vistazo,
+     sumaCol, resumir, ordenarPor, numerar, sinColumna de "datos"
+usar moneda, regla, enNegrita, enRojo, enVerde, enAmarillo, signoMas de "formato"
+
+# Lo que dice el sistema contable
+fijo contable = deRegistros([
+    {"factura": "FV-1001", "nit": 900123, "valor": 12400000},
+    {"factura": "FV-1002", "nit": 900456, "valor": 5400000},
+    {"factura": "FV-1003", "nit": 900789, "valor": 19800000},
+    {"factura": "FV-1004", "nit": 900321, "valor": 7200000},
+    {"factura": "FV-1006", "nit": 900654, "valor": 3100000}
+])
+# Lo que dice el banco
+fijo banco = deRegistros([
+    {"factura": "FV-1001", "recibido": 12400000},
+    {"factura": "FV-1002", "recibido": 5400000},
+    {"factura": "FV-1003", "recibido": 19000000},
+    {"factura": "FV-1005", "recibido": 4500000},
+    {"factura": "FV-1006", "recibido": 3100000}
+])
+
+imprimir(enNegrita("EN LOS DOS SISTEMAS"))
+var cruce = cruzar(contable, banco, "factura")
+cruce = conColumna(cruce, "diferencia", fn(f: dic): entero { devolver f["valor"] - f["recibido"] })
+vistazo(cruce)
+
+imprimir("")
+imprimir(enNegrita("DONDE NO CUADRA"))
+fijo descuadres = donde(cruce, fn(f: dic): bool { devolver f["diferencia"] != 0 })
+si longitud(columna(descuadres, "factura")) == 0 {
+    imprimir("  " + enVerde("todo cuadra"))
+} sino {
+    para i en rango(longitud(columna(descuadres, "factura"))) {
+        fijo d: entero = columna(descuadres, "diferencia")[i]
+        imprimir("  " + enRojo(columna(descuadres, "factura")[i]) +
+                 "  facturado " + moneda(columna(descuadres, "valor")[i]) +
+                 "  recibido " + moneda(columna(descuadres, "recibido")[i]) +
+                 "  falta " + moneda(d))
+    }
+}
+
+imprimir("")
+imprimir(enNegrita("FACTURADAS Y NO PAGADAS"))
+fijo sinPagar = diferencia(contable, banco, "factura")
+vistazo(sinPagar)
+imprimir("  pendiente: " + enAmarillo(moneda(columna(resumir(sinPagar, {"t": sumaCol("valor")}), "t")[0])))
+
+imprimir("")
+imprimir(enNegrita("PAGOS SIN FACTURA — esto es lo que asusta"))
+fijo sinFactura = diferencia(banco, contable, "factura")
+vistazo(sinFactura)
+
+imprimir("")
+imprimir(regla(56))
+imprimir("Facturado: " + moneda(columna(resumir(contable, {"t": sumaCol("valor")}), "t")[0]))
+imprimir("Recibido:  " + moneda(columna(resumir(banco, {"t": sumaCol("recibido")}), "t")[0]))

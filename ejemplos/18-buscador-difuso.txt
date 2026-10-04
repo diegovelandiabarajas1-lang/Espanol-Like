@@ -1,0 +1,57 @@
+# ═══ Buscador que aguanta que escribas mal ══════════════════════════════════
+# Nadie escribe bien el nombre de un cliente. «parecido» da un número de 0 a 1
+# sin tildes ni mayúsculas, y con eso se ordena por cercanía en vez de pedir
+# que la búsqueda sea exacta.
+# eDSL: texto, formato
+
+usar parecido, igualSinAcentos, minusculas, sinAcentos, distancia,
+     indiceDe, recortar de "texto"
+usar porciento, regla, enNegrita, enVerde, enAmarillo, enGris, barraTexto de "formato"
+
+fijo clientes: lista = [
+    "Ferretería El Tornillo",
+    "Panadería La Espiga",
+    "Droguería Salud Total",
+    "Café del Parque",
+    "Almacén González Hermanos",
+    "Distribuidora Peña y Cía",
+    "Supermercado La Canasta",
+    "Taller Mecánico Martínez"
+]
+
+fn buscar(que: texto, donde: lista, umbral: real): lista {
+    var hallados: lista = []
+    para c en donde {
+        # Dos formas de acertar: que el trozo esté dentro, o que se parezca.
+        fijo contiene1: bool = indiceDe(minusculas(sinAcentos(c)), minusculas(sinAcentos(que))) >= 0
+        fijo cerca: real = parecido(que, c)
+        si contiene1 o cerca >= umbral {
+            var puntos: real = cerca
+            si contiene1 { puntos = 1.0 }
+            hallados = hallados + [{"nombre": c, "puntos": puntos}]
+        }
+    }
+    devolver ordenar(hallados, fn(h: dic): real { devolver 0.0 - h["puntos"] })
+}
+
+para consulta en ["ferreteria", "gonzales", "panaderia la espiga", "martines", "cafe", "zzz"] {
+    imprimir(enNegrita("Buscando: «" + consulta + "»"))
+    fijo r: lista = buscar(consulta, clientes, 0.55)
+    si longitud(r) == 0 {
+        imprimir("  " + enGris("nada se parece lo suficiente"))
+    } sino {
+        para h en r {
+            var marca: texto = enAmarillo("~")
+            si h["puntos"] >= 0.99 { marca = enVerde("✓") }
+            imprimir("  " + marca + " " + h["nombre"] + "   " +
+                     barraTexto(h["puntos"], 1.0, 12) + " " + porciento(h["puntos"]))
+        }
+    }
+    imprimir("")
+}
+
+imprimir(regla(60))
+imprimir("Cuántos cambios de una letra hacen falta (distancia de edición):")
+para par en [["gonzales", "González"], ["martines", "Martínez"], ["cafe", "Café"]] {
+    imprimir("  " + par[0] + " → " + par[1] + ": " + texto(distancia(par[0], par[1])) + " cambios")
+}

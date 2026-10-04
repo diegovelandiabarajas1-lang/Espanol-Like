@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Auditoría técnica del motor Español-Like v4: hallazgos reproducidos ejecutando el código, cómo lo resuelven Lua, CPython y la JVM, y plan priorizado. Fase 0 ejecutada.">
+<meta name="generator" content="Claude · 28 de septiembre de 2026">
+<style>
+  html,body{margin:0}
+  img{max-width:100%}
+  [hidden]{display:none!important}
+</style>
+<title>Auditoría del Motor Español-Like</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#F5F6F8; --surface:#FFFFFF; --surface-2:#EDEFF3; --surface-3:#E1E5EC;
+    --ink:#14181F; --ink-2:#3B434F; --muted:#68717F;
+    --line:#DCE0E7; --line-2:#C5CCD6;
+    --acc:#1F5FA8; --acc-2:#2B78CC; --acc-soft:#E4EDF8;
+    --crit:#8E1B14; --crit-soft:#F8E3E1;
+    --alta:#B3401F; --alta-soft:#FAEAE2;
+    --media:#8A6000; --media-soft:#F8F0DA;
+    --baja:#3F6B52; --baja-soft:#E6F0EA;
+    --info:#4A5568; --info-soft:#EAEDF2;
+    --ok:#1E6B45; --ok-soft:#E2F0E9;
+    --code-bg:#181C24; --code-ink:#DDE3EC;
+    --disp:"Spectral",Georgia,serif;
+    --ui:"Atkinson Hyperlegible",system-ui,sans-serif;
+    --mono:"IBM Plex Mono","SF Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0E1116; --surface:#161A21; --surface-2:#1D222B; --surface-3:#262C37;
+    --ink:#E8ECF2; --ink-2:#C2C9D4; --muted:#8E97A5;
+    --line:#252B35; --line-2:#333B48;
+    --acc:#6FA8E8; --acc-2:#8FBDF0; --acc-soft:#16263B;
+    --crit:#F08379; --crit-soft:#2E1614;
+    --alta:#EE9268; --alta-soft:#2C1A11;
+    --media:#DEAE4A; --media-soft:#2A2312;
+    --baja:#79C39B; --baja-soft:#13261C;
+    --info:#9AA5B5; --info-soft:#1D222B;
+    --ok:#69C495; --ok-soft:#12271C;
+    --code-bg:#11141A; --code-ink:#DDE3EC;
+  }}
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --bg:#0E1116; --surface:#161A21; --surface-2:#1D222B; --surface-3:#262C37;
+    --ink:#E8ECF2; --ink-2:#C2C9D4; --muted:#8E97A5;
+    --line:#252B35; --line-2:#333B48;
+    --acc:#6FA8E8; --acc-2:#8FBDF0; --acc-soft:#16263B;
+    --crit:#F08379; --crit-soft:#2E1614;
+    --alta:#EE9268; --alta-soft:#2C1A11;
+    --media:#DEAE4A; --media-soft:#2A2312;
+    --baja:#79C39B; --baja-soft:#13261C;
+    --info:#9AA5B5; --info-soft:#1D222B;
+    --ok:#69C495; --ok-soft:#12271C;
+    --code-bg:#11141A; --code-ink:#DDE3EC;
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--bg); color:var(--ink); font-family:var(--ui); font-size:15px; line-height:1.62;
+       padding-block:0 64px; padding-left:20px; padding-right:20px; -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1120px; margin:0 auto}
+  .prose{max-width:68ch}
+
+  header.mast{padding-block:50px 28px; border-bottom:1px solid var(--line-2); display:flex; flex-direction:column; gap:15px}
+  .kicker{font-family:var(--mono); font-size:11.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--acc); font-weight:600}
+  h1{font-family:var(--disp); font-weight:500; font-size:clamp(2rem,5.6vw,3.2rem); line-height:1.06; letter-spacing:-.015em; margin:0; text-wrap:balance}
+  h1 em{font-style:italic; color:var(--acc)}
+  .standfirst{font-family:var(--disp); font-size:clamp(1.02rem,2.4vw,1.18rem); line-height:1.5; color:var(--ink-2); max-width:60ch; margin:0}
+  .byline{font-family:var(--mono); font-size:11.5px; color:var(--muted); display:flex; flex-wrap:wrap; gap:6px 18px}
+
+  section{padding-block:42px; border-bottom:1px solid var(--line)}
+  section:last-of-type{border-bottom:none}
+  .sec-head{display:flex; align-items:baseline; gap:14px; margin-bottom:10px}
+  .sec-num{font-family:var(--mono); font-size:12px; font-weight:600; color:var(--acc); flex:0 0 auto; padding-top:6px}
+  h2{font-family:var(--disp); font-weight:500; font-size:clamp(1.5rem,4vw,2rem); line-height:1.14; margin:0; text-wrap:balance}
+  h3{font-weight:700; font-size:1rem; margin:30px 0 10px}
+  p{margin:0 0 14px}
+  a{color:var(--acc); text-decoration:underline; text-underline-offset:2px}
+  a:hover{color:var(--acc-2)}
+  :focus-visible{outline:2px solid var(--acc); outline-offset:2px}
+  strong{font-weight:700}
+  code,.m{font-family:var(--mono); font-size:.86em; background:var(--surface-2); padding:1px 5px; border-radius:3px}
+
+  .panel{background:var(--surface); border:1px solid var(--line); border-left:3px solid var(--acc); padding:20px 22px; margin:26px 0 0}
+  .panel h3{margin-top:0}
+  .panel ul{margin:0; padding-left:20px} .panel li{margin-bottom:9px} .panel li:last-child{margin-bottom:0}
+
+  .tarjetas{display:grid; grid-template-columns:repeat(auto-fit,minmax(142px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); margin:22px 0 0}
+  .tj{background:var(--surface); padding:13px 15px}
+  .tj .n{font-family:var(--mono); font-size:1.5rem; font-weight:600; color:var(--acc); line-height:1.05; font-variant-numeric:tabular-nums; display:block}
+  .tj .e{font-size:12px; color:var(--muted); margin-top:4px; line-height:1.35; display:block}
+
+  /* ── diagrama de la tubería, en CSS puro ── */
+  .diag{margin:24px 0 8px; background:var(--surface); border:1px solid var(--line); padding:22px 18px; overflow-x:auto}
+  .tuberia{display:grid; grid-template-columns:1fr auto 1fr; gap:0 14px; align-items:center; min-width:540px; max-width:780px; margin:0 auto}
+  .et{
+    grid-column:2; background:var(--surface-2); border:1px solid var(--line-2); border-radius:6px;
+    padding:9px 16px; text-align:center; min-width:230px;
+  }
+  .et b{display:block; font-size:13.5px; font-weight:700; line-height:1.3}
+  .et span{display:block; font-family:var(--mono); font-size:10.5px; color:var(--muted); margin-top:2px; line-height:1.35}
+  .et.dest{background:var(--acc-soft); border-color:var(--acc)}
+  .flecha{grid-column:2; width:1px; height:20px; background:var(--line-2); justify-self:center; position:relative}
+  .flecha::after{content:""; position:absolute; bottom:-1px; left:-3.5px; border:4px solid transparent; border-top-color:var(--line-2); border-bottom:0}
+  .flecha em{
+    position:absolute; left:10px; top:2px; font-style:normal; font-family:var(--mono);
+    font-size:10px; color:var(--muted); white-space:nowrap;
+  }
+  .lado{padding:8px 13px; border:1px dashed var(--line-2); border-radius:6px; text-align:center; align-self:center; background:var(--surface)}
+  .lado b{display:block; font-size:12.5px; font-weight:700; line-height:1.3}
+  .lado span{display:block; font-family:var(--mono); font-size:10px; color:var(--muted); margin-top:2px}
+  .lado.izq{grid-column:1; justify-self:end}
+  .lado.der{grid-column:3; justify-self:start}
+  .lado.alto{border-color:var(--alta); background:var(--alta-soft)}
+  .lado.alto b{color:var(--alta)}
+  .lado .conector{font-family:var(--mono); font-size:10px; color:var(--muted); display:block; margin-top:5px}
+  .diag-pie{font-size:12px; color:var(--muted); margin:16px auto 0; max-width:640px; text-align:center; line-height:1.55}
+  @media (max-width:640px){
+    .diag{padding:16px 12px}
+    .tuberia{grid-template-columns:1fr; min-width:0; gap:0}
+    .et,.lado{grid-column:1; min-width:0; justify-self:stretch; width:100%}
+    .lado{margin:6px 0}
+    .flecha{grid-column:1}
+    .flecha em{position:static; display:block; text-align:center; margin-top:22px}
+  }
+
+  .scroller{overflow-x:auto; margin:22px 0 8px; border:1px solid var(--line); background:var(--surface); max-width:100%}
+  table{border-collapse:collapse; width:100%; font-size:13.5px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.45}
+  thead th{background:var(--surface-2); font-family:var(--mono); font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; font-weight:600; color:var(--ink-2); border-bottom:1px solid var(--line-2); white-space:nowrap}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover td{background:var(--surface-2)}
+  td.name,th.name{font-weight:700; white-space:nowrap}
+  .num{font-variant-numeric:tabular-nums; font-family:var(--mono); font-size:12.5px}
+  table.riesgo{min-width:760px}
+  table.cmp{min-width:1000px}
+  table.cmp th.crit,table.cmp td.crit{min-width:210px; max-width:210px; white-space:normal; background:var(--surface-2); font-weight:700; border-right:1px solid var(--line-2)}
+  table.cmp td{min-width:118px; font-size:12.5px; text-align:center}
+  table.cmp .sc{font-family:var(--mono); font-weight:600; font-size:14px}
+  tr.total td{background:var(--acc-soft); border-top:2px solid var(--acc); font-weight:700; border-bottom:none}
+  tr.total .pt{font-family:var(--mono); font-size:15px; color:var(--acc)}
+  caption{caption-side:bottom; text-align:left; padding:10px 12px; font-size:11.8px; color:var(--muted); border-top:1px solid var(--line); background:var(--surface-2)}
+
+  .sev{display:inline-block; font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.05em; padding:2px 8px; border:1px solid; white-space:nowrap; text-transform:uppercase}
+  .s-crit{color:var(--crit); background:var(--crit-soft); border-color:var(--crit)}
+  .s-alta{color:var(--alta); background:var(--alta-soft); border-color:var(--alta)}
+  .s-media{color:var(--media); background:var(--media-soft); border-color:var(--media)}
+  .s-baja{color:var(--baja); background:var(--baja-soft); border-color:var(--baja)}
+  .s-info{color:var(--info); background:var(--info-soft); border-color:var(--info)}
+  .s-ok{color:var(--ok); background:var(--ok-soft); border-color:var(--ok)}
+
+  .hallazgo{background:var(--surface); border:1px solid var(--line); margin:16px 0; border-left:3px solid var(--line-2)}
+  .hallazgo.alta{border-left-color:var(--alta)}
+  .hallazgo.media{border-left-color:var(--media)}
+  .hallazgo.baja{border-left-color:var(--baja)}
+  .h-cab{display:flex; gap:10px; align-items:baseline; padding:14px 18px 8px; flex-wrap:wrap}
+  .h-cab .id{font-family:var(--mono); font-size:12px; font-weight:600; color:var(--muted)}
+  .h-cab .tit{font-weight:700; font-size:15px; flex:1; min-width:220px}
+  .h-cuerpo{padding:0 18px 16px; font-size:13.8px; color:var(--ink-2)}
+  .h-cuerpo p{margin:0 0 10px}
+  .h-cuerpo p:last-child{margin-bottom:0}
+  .ubic{font-family:var(--mono); font-size:11.5px; color:var(--muted); padding:0 18px 8px}
+  .ubic b{color:var(--ink-2); font-weight:600}
+  pre.ev{background:var(--code-bg); color:var(--code-ink); font-family:var(--mono); font-size:12px; line-height:1.6;
+         margin:10px 0; padding:12px 14px; overflow-x:auto; border-radius:5px}
+  pre.ev .c{color:#8B94A5}
+  pre.ev .r{color:#F08379}
+  pre.ev .g{color:#79C39B}
+  .rec{background:var(--ok-soft); border-left:3px solid var(--ok); padding:10px 14px; margin-top:10px; font-size:13.2px}
+  .rec b{color:var(--ok)}
+
+  .finds{display:grid; grid-template-columns:repeat(auto-fit,minmax(276px,1fr)); gap:15px; margin:22px 0 8px}
+  .find{background:var(--surface); border:1px solid var(--line); padding:16px 18px}
+  .find .ft{font-weight:700; font-size:13.5px; margin-bottom:6px; line-height:1.35}
+  .find p{font-size:13px; color:var(--ink-2); margin:0 0 8px}
+  .find p:last-child{margin-bottom:0}
+  .find .src{font-family:var(--mono); font-size:10.5px; color:var(--muted)}
+
+  .chart{margin:24px 0 6px; background:var(--surface); border:1px solid var(--line); padding:20px 20px 14px}
+  .chart-title{font-weight:700; font-size:13.5px; margin-bottom:2px}
+  .chart-sub{font-size:12px; color:var(--muted); margin-bottom:18px}
+  .bars{display:flex; flex-direction:column; gap:10px}
+  .bar-row{display:grid; grid-template-columns:200px 1fr 42px; align-items:center; gap:12px}
+  .bar-lab{font-size:12.5px; text-align:right; color:var(--ink-2); line-height:1.25}
+  .bar-track{position:relative; height:15px; background:var(--surface-3); border-radius:2px}
+  .bar-fill{position:absolute; left:0; top:0; bottom:0; background:var(--acc); border-radius:2px 4px 4px 2px}
+  .bar-fill.win{background:var(--acc-2)}
+  .bar-val{font-family:var(--mono); font-size:12.5px; font-variant-numeric:tabular-nums; font-weight:600}
+  .chart-axis{display:grid; grid-template-columns:200px 1fr 42px; gap:12px; margin-top:11px; padding-top:8px; border-top:1px solid var(--line)}
+  .axis-marks{display:flex; justify-content:space-between; font-family:var(--mono); font-size:10.5px; color:var(--muted)}
+
+  .fases{display:grid; gap:14px; margin:22px 0 0}
+  .fase{background:var(--surface); border:1px solid var(--line); padding:16px 18px; display:grid; grid-template-columns:106px 1fr; gap:16px}
+  .fase .et{font-family:var(--mono); font-size:11.5px; color:var(--acc); font-weight:600; line-height:1.5}
+  .fase .et b{display:block; font-size:14px; color:var(--ink); font-family:var(--ui)}
+  .fase ul{margin:6px 0 0; padding-left:19px; font-size:13.5px}
+  .fase li{margin-bottom:6px}
+  .fase .tot{font-family:var(--mono); font-size:11.5px; color:var(--muted); margin-top:9px; display:block}
+
+  ul.tight{margin:0 0 14px; padding-left:20px} ul.tight li{margin-bottom:8px}
+  .srcgrid{display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:18px 26px; margin-top:18px}
+  .srcgrid h3{margin:0 0 8px; font-size:12px; font-family:var(--mono); letter-spacing:.07em; text-transform:uppercase; color:var(--acc)}
+  .srcgrid ul{margin:0; padding-left:16px; font-size:12.5px}
+  .srcgrid li{margin-bottom:5px; overflow-wrap:anywhere}
+  footer{padding-top:32px; font-size:12.5px; color:var(--muted)}
+
+  @media (max-width:600px){
+    body{padding-left:16px; padding-right:16px}
+    .bar-row,.chart-axis{grid-template-columns:118px 1fr 38px; gap:9px}
+    .bar-lab{font-size:11.5px}
+    .fase{grid-template-columns:1fr; gap:6px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="mast">
+  <span class="kicker">Auditoría técnica · 28 septiembre 2026</span>
+  <h1>El motor por dentro,<br>y qué <em>construir después</em></h1>
+  <p class="standfirst">Tres defectos reales que reproduje ejecutando el código, no leyéndolo. Después: cómo resuelven estos mismos problemas Lua, CPython, la JVM y V8, y una comparación ponderada de qué merece las próximas tardes.</p>
+  <div class="byline">
+    <span>2.239 líneas auditadas</span>
+    <span>7 sondas ejecutadas</span>
+    <span>12 hallazgos</span>
+    <span>~45 fuentes primarias</span>
+  </div>
+</header>
+
+<section>
+  <div class="sec-head"><span class="sec-num">00</span><h2>Resumen ejecutivo</h2></div>
+  <div class="prose">
+    <p>El motor está sano en lo estructural: cero dependencias, compilación reproducible, 120 pruebas en verde y una separación de etapas que aguanta. Los problemas no están en la arquitectura, están en los bordes — y tres de ellos los encuentra un estudiante curioso en su primera tarde.</p>
+  </div>
+
+  <div class="tarjetas">
+    <div class="tj"><span class="n">0</span><span class="e">hallazgos críticos</span></div>
+    <div class="tj"><span class="n">3</span><span class="e">de severidad alta</span></div>
+    <div class="tj"><span class="n">6</span><span class="e">de severidad media</span></div>
+    <div class="tj"><span class="n">3</span><span class="e">bajas e informativos</span></div>
+    <div class="tj"><span class="n">120</span><span class="e">pruebas, 0 fallos</span></div>
+    <div class="tj"><span class="n">0</span><span class="e">dependencias externas</span></div>
+  </div>
+
+  <div class="panel">
+    <h3>Lo tres que importan</h3>
+    <ul>
+      <li><strong>Comparar dos listas cíclicas tumba el motor</strong> con un error en inglés que se salta todo el manejo de errores del lenguaje. Cuatro líneas de programa bastan. <span class="sev s-alta">alta</span></li>
+      <li><strong>El límite de instrucciones no protege contra las funciones nativas.</strong> Verificado: <span class="m">multMatriz</span> de 220×220 corrió entero con un tope de mil instrucciones. Una matriz grande congela la pestaña. <span class="sev s-alta">alta</span></li>
+      <li><strong>El JIT se apaga en silencio si la página tiene una política de seguridad estricta.</strong> El programa sigue funcionando, pero la cualidad estrella del proyecto desaparece sin que nadie se entere — y eso incluye a la versión que publiqué como artefacto. <span class="sev s-alta">alta</span></li>
+    </ul>
+  </div>
+
+  <div class="panel" style="border-left-color:var(--ok); background:var(--ok-soft); margin-top:22px">
+    <h3 style="color:var(--ok)">Estado: fase 0 ejecutada el 28-sep-2026</h3>
+    <p style="margin-bottom:10px">Los tres hallazgos altos y los dos medios baratos están corregidos y con pruebas de regresión. La batería pasó de 120 a <strong>135 casos, todos en verde</strong>, y el rendimiento del JIT no cambió (×8,6 a ×33,9).</p>
+    <p style="margin-bottom:0">Las secciones 03 y 04 se conservan tal cual —son el diagnóstico que motivó los arreglos— con el estado de cada hallazgo marcado. Las mediciones nuevas están junto a las viejas.</p>
+  </div>
+
+  <div class="prose">
+    <p style="margin-top:22px">Y una conclusión de la parte de investigación que cambia el orden de prioridades: <strong>mientras exista el JIT, sanear la salida HTML no compra seguridad.</strong> Un programa que puede llegar al JIT ya ejecuta JavaScript arbitrario; filtrar <span class="m">eco()</span> a su lado es teatro. La frontera real, si algún día se comparten programas, es el origen — no el filtrado.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">01</span><h2>Reconocimiento</h2></div>
+
+  <div class="scroller">
+    <table>
+      <caption>Medido sobre el árbol de fuentes en <span class="m">D:\ProyectosJS\motor</span> el 28-sep-2026.</caption>
+      <thead><tr><th class="name">Aspecto</th><th>Qué hay</th></tr></thead>
+      <tbody>
+        <tr><td class="name">Lenguaje y destino</td><td>JavaScript ES2020, sin transpilar. Navegador y Node ≥18. Un solo ámbito global (<span class="m">globalThis.EspanolLike</span>)</td></tr>
+        <tr><td class="name">Dependencias</td><td><span class="sev s-ok">ninguna</span> Ni de ejecución ni de compilación. Nada que auditar, nada que se rompa solo</td></tr>
+        <tr><td class="name">Estructura</td><td>4 módulos en <span class="m">src/</span>, 2.239 líneas · front 490 · checker+compilador 616 · VM+JIT 688 · biblioteca 445</td></tr>
+        <tr><td class="name">Puntos de entrada</td><td><span class="m">crearMotor()</span> → <span class="m">.analizar(src)</span> y <span class="m">.ejecutar(src)</span>. La interfaz consume solo esos dos</td></tr>
+        <tr><td class="name">Compilación</td><td><span class="m">build.js</span> concatena en un IIFE · <span class="m">build-ide.js</span> lo inyecta en el HTML. <strong>Reproducible</strong>: mismo hash en dos corridas (<span class="m">c85987ac…</span>)</td></tr>
+        <tr><td class="name">Pruebas</td><td>120 casos en <span class="m">test.js</span>, script propio sin framework. Cubren léxico, tipos, control, cierres, biblioteca, GC y JIT</td></tr>
+        <tr><td class="name">Integración continua</td><td><span class="sev s-baja">ausente</span> Sin CI, sin linter, sin <span class="m">package.json</span>, sin licencia</td></tr>
+        <tr><td class="name">Documentación</td><td><span class="m">LEEME.md</span> con reconstrucción, API y límites. Comentarios en el código: <strong>3,8 %</strong> de las líneas</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">02</span><h2>Arquitectura</h2></div>
+  <div class="prose">
+    <p>El patrón es una tubería de compilación clásica con dos back-ends: el bytecode que siempre existe, y el JavaScript que aparece solo cuando una función se calienta. La dependencia va siempre hacia adelante — ninguna etapa conoce a la siguiente — salvo en un punto: el JIT vuelve al AST, que guardó el compilador.</p>
+  </div>
+
+<div class="diag">
+  <div class="tuberia">
+    <div class="et"><b>código fuente</b><span>en español</span></div>
+    <div class="flecha"></div>
+    <div class="et"><b>lexer</b><span>tokens · interpolación</span></div>
+    <div class="flecha"></div>
+    <div class="et"><b>parser</b><span>árbol de sintaxis</span></div>
+    <div class="flecha"></div>
+    <div class="et dest"><b>verificador de tipos</b><span>gradual · antes de ejecutar</span></div>
+    <div class="lado der alto"><b>se detiene</b><span>sin ejecutar nada</span><span class="conector">← si hay errores</span></div>
+    <div class="flecha"><em>todo bien</em></div>
+    <div class="et"><b>compilador</b><span>43 instrucciones</span></div>
+    <div class="lado der"><b>guarda el AST</b><span>para el JIT ↓</span></div>
+    <div class="flecha"></div>
+    <div class="et"><b>bytecode</b><span>chunk · constantes · líneas</span></div>
+    <div class="flecha"></div>
+    <div class="lado izq"><b>recolector</b><span>marcado y barrido</span><span class="conector">⇄</span></div>
+    <div class="et dest"><b>máquina virtual</b><span>pila · marcos · upvalues</span></div>
+    <div class="lado der"><b>JIT</b><span>AST → JavaScript</span><span class="conector">← función caliente<br>código nativo →</span></div>
+    <div class="flecha"></div>
+    <div class="et"><b>biblioteca</b><span>90+ funciones nativas</span></div>
+    <div class="flecha"></div>
+    <div class="et"><b>anfitrión</b><span>consola · lienzo · DOM</span></div>
+  </div>
+  <p class="diag-pie">Las dependencias van siempre hacia abajo. La única flecha que vuelve atrás es la del JIT, que lee el AST que guardó el compilador — y de ahí salen los dos caminos de ejecución.</p>
+</div>
+
+  <div class="prose">
+    <p><strong>Lo que el diagrama revela y conviene nombrar:</strong> el JIT no consume el bytecode, consume el AST. Eso fue una decisión deliberada — genera JavaScript mucho mejor — pero significa que hay <em>dos caminos de ejecución independientes desde la misma fuente</em>. Cada vez que cambie la semántica del lenguaje hay que tocarla en los dos sitios, y si divergen, el programa da resultados distintos según cuántas veces se haya llamado a una función. Las pruebas cubren esto (hay casos con y sin JIT), y es la razón por la que deben seguir cubriéndolo.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">03</span><h2>Hallazgos</h2></div>
+  <div class="prose">
+    <p>Cada uno reproducido ejecutando el código. La evidencia es salida real de las sondas, no lectura.</p>
+  </div>
+
+  <div class="hallazgo alta">
+    <div class="h-cab"><span class="id">A-1</span><span class="tit">Comparar estructuras cíclicas desborda la pila de JavaScript</span><span class="sev s-ok">resuelto</span></div>
+    <div class="ubic"><b>03-vm-jit.js:96–110</b> · función <span class="m">iguales()</span></div>
+    <div class="h-cuerpo">
+      <p><span class="m">iguales()</span> recorre listas y diccionarios recursivamente sin llevar registro de lo ya visitado. Con dos estructuras que se contienen a sí mismas, la recursión no termina.</p>
+      <pre class="ev"><span class="c">// programa de cuatro líneas</span>
+var a = [1]
+var b = [1]
+a[0] = a
+b[0] = b
+imprimir(a == b)
+
+<span class="c">// salida real de la sonda</span>
+<span class="r">ERROR: Maximum call stack size exceeded</span>   <span class="c">(en 3 ms)</span></pre>
+      <p>Lo grave no es el cuelgue, es la forma: el mensaje sale en inglés, sin línea, sin traza, y esquiva por completo el sistema de errores en español que es una de las mejores cualidades del motor. Para un alumno, el lenguaje simplemente se rompió. Nótese que <span class="m">repr()</span> sí está protegida — corta a profundidad 4 e imprime <span class="m">[[[[[[…]]]]]]</span> — así que el patrón defensivo ya existe en el archivo, solo que no se aplicó aquí.</p>
+      <div class="rec"><b>Resuelto:</b> <span class="m">iguales()</span> lleva un <span class="m">Set</span> de los pares que ya está comparando; al reencontrar uno, corta y lo da por igual. La misma sonda que antes reventaba en 3 ms ahora responde <span class="m">cierto</span> en 2 ms. Es la semántica de Python para ciclos. Cinco pruebas nuevas cubren ciclos directos, indirectos, diccionarios y ciclos con contenido distinto.</div>
+    </div>
+  </div>
+
+  <div class="hallazgo alta">
+    <div class="h-cab"><span class="id">A-2</span><span class="tit">El presupuesto de instrucciones no acota a las funciones nativas</span><span class="sev s-ok">resuelto</span></div>
+    <div class="ubic"><b>03-vm-jit.js:277</b> (el contador) · <b>04-stdlib.js:255–300</b> (<span class="m">multMatriz</span>, <span class="m">determinante</span>, <span class="m">resolverSistema</span>, <span class="m">ordenar</span>)</div>
+    <div class="h-cuerpo">
+      <p>El bucle de despacho incrementa <span class="m">this.instrucciones</span> y aborta al superar <span class="m">limiteInstr</span>. Pero una llamada a una nativa es <em>una</em> instrucción, haga lo que haga por dentro. <span class="m">rango()</span> tiene un tope propio de 5 millones; las operaciones con matrices no tienen ninguno.</p>
+      <pre class="ev"><span class="c">// sonda: límite de 1000 instrucciones</span>
+var A = matriz(220, 220, 1.5)
+imprimir(longitud(multMatriz(A, A)))
+
+<span class="c">// resultado</span>
+<span class="r">COMPLETÓ</span> en 49 ms   <span class="c">← 10,6 millones de multiplicaciones bajo un tope de mil</span></pre>
+      <p>Con 220×220 son 49 ms y no se nota. Con 2.000×2.000 son ocho mil millones de operaciones y la pestaña se congela sin posibilidad de interrumpir, porque todo ocurre dentro de una sola llamada síncrona. En un editor donde el usuario escribe y ejecuta libremente, ese es el camino más corto a perder el trabajo.</p>
+      <div class="rec"><b>Resuelto:</b> nuevo método <span class="m">vm.cobrar(n)</span> que suma al contador y comprueba el tope <em>antes</em> de trabajar. Lo usan <span class="m">matriz</span> (f×c), <span class="m">multMatriz</span>, <span class="m">determinante</span> y <span class="m">resolverSistema</span> (n³), <span class="m">transponer</span> (n×m) y <span class="m">ordenar</span> (n·log n). La misma sonda ahora responde <span class="m">detenido en 15 ms</span>. Tres pruebas nuevas comprueban que se detienen, y una cuarta que con presupuesto suficiente siguen funcionando igual.</div>
+    </div>
+  </div>
+
+  <div class="hallazgo alta">
+    <div class="h-cab"><span class="id">A-3</span><span class="tit">El JIT se desactiva en silencio bajo una política de seguridad estricta</span><span class="sev s-ok">resuelto</span></div>
+    <div class="ubic"><b>03-vm-jit.js:485–500</b> · <span class="m">intentarJIT()</span>, el <span class="m">catch</span> que marca «rechazada»</div>
+    <div class="h-cuerpo">
+      <p>El JIT compila con <span class="m">new&nbsp;Function(...)</span>. La especificación CSP Nivel 3 (§4.4.1) obliga a lanzar <span class="m">EvalError</span> cuando la página no declara <span class="m">unsafe-eval</span>, y MDN lista el constructor <span class="m">Function</span> entre los bloqueados. El <span class="m">try/catch</span> lo atrapa y degrada al intérprete — que es lo correcto — pero no lo dice en ningún sitio.</p>
+      <pre class="ev"><span class="c">// sonda: se sustituye Function por uno que lanza EvalError</span>
+programa:        <span class="g">SIGUE FUNCIONANDO ✓</span>  salida = 4999950000
+jit compiladas:  0   ·  fallidas: 1
+<span class="r">→ ninguna advertencia al usuario; el panel JIT solo dice «rechazada»</span></pre>
+      <p>Consecuencia directa y comprobable: <strong>si el entorno donde publiqué el artefacto aplica CSP sin <span class="m">unsafe-eval</span>, la versión que estás viendo corre siempre en el intérprete</strong> y las mejoras de ×7 a ×34 no existen ahí. No pude verificarlo — Anthropic no documenta públicamente la política de sus artefactos — pero el propio motor puede responderlo en una línea.</p>
+      <div class="rec"><b>Resuelto:</b> canario al arrancar, comprobado una sola vez por sesión. Si falla, la máquina expone <span class="m">jitBloqueado</span> y <span class="m">motivoJIT</span>, la barra de estado muestra «JIT no disponible aquí» y el panel JIT explica por qué y que los resultados no cambian.
+      <br><br><strong>Verificado sirviendo el IDE bajo una CSP sin <span class="m">unsafe-eval</span>:</strong> el mismo programa tardó <span class="m">1.102 ms</span> en vez de los ~50 ms con JIT, terminó correctamente, y lo dijo. Antes esa diferencia de veinte veces era invisible.</div>
+    </div>
+  </div>
+
+  <h3>Severidad media</h3>
+
+  <div class="hallazgo media">
+    <div class="h-cab"><span class="id">M-1</span><span class="tit">La salida HTML del programa llega al DOM sin filtrar</span><span class="sev s-media">media</span></div>
+    <div class="ubic"><b>04-stdlib.js:370</b> (<span class="m">eco</span>) → <b>ide.html:651</b> (<span class="m">insertAdjacentHTML</span>)</div>
+    <div class="h-cuerpo">
+      <p>Confirmado con una sonda: el texto pasa íntegro. MDN documenta que <span class="m">insertAdjacentHTML</span> «no realiza ninguna sanitización» y que, aunque los <span class="m">&lt;script&gt;</span> insertados no se ejecutan, los atributos <span class="m">onerror</span> sí.</p>
+      <pre class="ev">eco("&lt;img src=x onerror='robarTodo()'&gt;")
+<span class="c">→ llega al DOM tal cual</span></pre>
+      <p><strong>Por qué es media y no alta:</strong> hoy el programa es del propio usuario, que se inyecta a sí mismo en su propia pestaña — no hay frontera que cruzar. Y mientras el JIT exista, esta vía no añade ninguna capacidad que <span class="m">new Function</span> no dé ya. Se vuelve real el día que se compartan programas, y solo entonces.</p>
+      <div class="rec"><b>Recomendación:</b> no sanear todavía. Anotarlo como bloqueante <em>de la función de compartir</em>, y cuando llegue ese día resolverlo por origen (iframe aislado), no por filtrado — que es lo que hicieron CodePen y TurboWarp.</div>
+    </div>
+  </div>
+
+  <div class="hallazgo media">
+    <div class="h-cab"><span class="id">M-2</span><span class="tit">La tabla de constantes se busca linealmente</span><span class="sev s-ok">resuelto</span></div>
+    <div class="ubic"><b>02-check-compile.js:34–40</b> · <span class="m">Chunk.cte()</span></div>
+    <div class="h-cuerpo">
+      <p>Cada constante nueva recorre todas las anteriores buscando un duplicado. El coste de compilar crece más que linealmente:</p>
+      <pre class="ev"><span class="c">constantes    tiempo de análisis</span>
+   500            11,5 ms
+ 1.000            22,0 ms
+ 2.000            65,2 ms
+ 4.000           126,8 ms      <span class="c">← 8× las constantes, 11× el tiempo</span></pre>
+      <p>Irrelevante para los programas de ejemplo. Relevante si CodeBlocks Pro genera código con muchos literales, y sobre todo porque la interfaz reanaliza en cada pulsación de tecla.</p>
+      <div class="rec"><b>Resuelto:</b> un <span class="m">Map</span> de valor→índice junto al array. Sus claves usan SameValueZero, así que los primitivos iguales comparten entrada y las funciones anidadas se distinguen por identidad — que es justo lo que hacía falta. Medición nueva: <strong>4.000 constantes pasaron de 126,8 ms a 33,7 ms</strong>, y la curva quedó plana (1.000 → 19,6 ms · 4.000 → 33,7 ms).</div>
+    </div>
+  </div>
+
+  <div class="hallazgo media">
+    <div class="h-cab"><span class="id">M-3</span><span class="tit">Los objetos que pasan por una nativa se escapan del registro del recolector</span><span class="sev s-media">media</span></div>
+    <div class="ubic"><b>03-vm-jit.js:210–240</b> (<span class="m">invocar</span>) y <b>:130–160</b> (<span class="m">recolectar</span>)</div>
+    <div class="h-cuerpo">
+      <p>Cuando <span class="m">mapear</span> construye resultados, estos viven en un array de JavaScript que no es raíz del recolector. Si una recolección salta a mitad, se barren del registro.</p>
+      <p><strong>Verifiqué que no corrompe nada:</strong> 20.000 elementos, 9 recolecciones, cero elementos dañados — porque JavaScript sigue sujetando los objetos por su cuenta. No es un fallo de corrección, es de contabilidad: esos objetos dejan de estar vigilados para siempre y el panel de Memoria cuenta de menos. En un motor cuya gestión de memoria es una cualidad anunciada, el medidor debería medir.</p>
+      <div class="rec"><b>Recomendación:</b> una pila de raíces temporales que las nativas empujen mientras construyen. Unas 25 líneas. Alternativa barata: documentar la limitación en el panel.</div>
+    </div>
+  </div>
+
+  <div class="hallazgo media">
+    <div class="h-cab"><span class="id">M-4</span><span class="tit">La verificación de tipos monta una máquina virtual completa por cada tecla</span><span class="sev s-media">media</span></div>
+    <div class="ubic"><b>ide.html:718</b> · <span class="m">chequear()</span> llama a <span class="m">crearMotor()</span></div>
+    <div class="h-cuerpo">
+      <p><span class="m">analizar()</span> no ejecuta nada, pero <span class="m">crearMotor()</span> reserva un array de 65.536 posiciones e instala las 90 funciones nativas. Medido: 0,45 ms y medio megabyte por instancia, doscientas instancias en 90 ms.</p>
+      <p>Con el antirrebote de 220 ms no se nota en una máquina normal. En un equipo modesto, y con el coste superlineal de M-2 encima, el editor se vuelve pegajoso justo cuando el programa crece.</p>
+      <div class="rec"><b>Recomendación:</b> reutilizar un único motor de análisis, o separar <span class="m">analizar()</span> para que no necesite VM. La tabla de tipos globales ya está aparte en <span class="m">tiposGlobales()</span>, así que el corte es limpio.</div>
+    </div>
+  </div>
+
+  <div class="hallazgo media">
+    <div class="h-cab"><span class="id">M-5</span><span class="tit">El lenguaje no tiene manejo de excepciones</span><span class="sev s-media">media</span></div>
+    <div class="ubic">Ausente en <b>01-front.js</b> (sin palabras clave) y <b>02-check-compile.js</b> (sin opcodes)</div>
+    <div class="h-cuerpo">
+      <p>Un error en ejecución aborta el programa entero. No hay forma de que un programa se recupere de nada. Y el diccionario de la versión 3 ya incluía <span class="m">intentar</span>, <span class="m">atrapar</span> y <span class="m">finalmente</span>: la reescritura retiró una capacidad que el vocabulario prometía.</p>
+      <div class="rec"><b>Recomendación:</b> es la opción A de la comparación final. La sección 05 tiene el camino exacto que siguió CPython para no rehacer el compilador.</div>
+    </div>
+  </div>
+
+  <div class="hallazgo media">
+    <div class="h-cab"><span class="id">M-6</span><span class="tit">Los tipos se pierden al entrar en un diccionario</span><span class="sev s-ok">resuelto</span></div>
+    <div class="ubic"><b>02-check-compile.js:252</b> · <span class="m">case 'Propiedad'</span> devuelve siempre <span class="m">cualquiera</span></div>
+    <div class="h-cuerpo">
+      <p><span class="m">regresionLineal()</span> declara devolver <span class="m">dic&lt;texto,real&gt;</span>, pero <span class="m">r.pendiente</span> se verifica como <span class="m">cualquiera</span>. El sistema de tipos —la cualidad que reemplaza a TypeScript— se apaga justo donde el programa organiza sus datos. Es una limitación de diseño consciente, no un descuido, pero conviene que esté escrita.</p>
+      <div class="rec"><b>Resuelto:</b> <span class="m">Propiedad</span> devuelve el tipo valor cuando el objeto es <span class="m">dic&lt;K,V&gt;</span>. Ahora <span class="m">var s: texto = r.pendiente</span> sobre el resultado de <span class="m">regresionLineal</span> se detecta antes de ejecutar. Los registros con campos tipados siguen siendo otro proyecto.</div>
+    </div>
+  </div>
+
+  <h3>Bajas e informativos</h3>
+  <div class="scroller">
+    <table>
+      <thead><tr><th class="name">Id</th><th>Hallazgo</th><th>Ubicación</th><th>Severidad</th></tr></thead>
+      <tbody>
+        <tr><td class="name">B-1</td><td>Densidad de comentarios del 3,8 % en un compilador. Las decisiones no obvias (por qué el JIT rechaza cierres, por qué <span class="m">y</span> se desambigua por línea) están explicadas; el resto no</td><td class="num">los 4 módulos</td><td><span class="sev s-baja">baja</span></td></tr>
+        <tr><td class="name">B-2</td><td>Sin <span class="m">package.json</span>, <span class="m">LICENSE</span>, <span class="m">.gitignore</span> ni CI. Nada bloquea hoy, pero sin licencia el código no es legalmente reutilizable por nadie más</td><td class="num">raíz del proyecto</td><td><span class="sev s-baja">baja</span></td></tr>
+        <tr><td class="name">B-3</td><td>El salto sin parchear usa el centinela <span class="m">0xffff</span>; si un parcheo se olvidara, el error sería un salto silencioso a un sitio absurdo en vez de un fallo ruidoso</td><td class="num">02-check-compile.js:310</td><td><span class="sev s-baja">baja</span></td></tr>
+        <tr><td class="name">I-1</td><td><strong>La compilación es reproducible</strong>: dos corridas de <span class="m">build.js</span> dan el mismo hash. Poco común y vale la pena no perderlo</td><td class="num">build.js</td><td><span class="sev s-info">info</span></td></tr>
+        <tr><td class="name">I-2</td><td>Las pruebas ya ejercitan el JIT y el intérprete por separado y comparan resultados. Es exactamente la defensa que pide una arquitectura de dos back-ends</td><td class="num">test.js §11, §14</td><td><span class="sev s-info">info</span></td></tr>
+        <tr><td class="name">I-3</td><td>Los límites de recursos existen y funcionan: 880 niveles de recursión y tope de instrucciones, con el mismo comportamiento con y sin JIT</td><td class="num">03-vm-jit.js:80</td><td><span class="sev s-info">info</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">04</span><h2>Matriz de riesgos</h2></div>
+  <div class="scroller">
+    <table class="riesgo">
+      <caption>Probabilidad estimada para el uso previsto: una persona programando, y más adelante alumnos dentro de CodeBlocks Pro.</caption>
+      <thead><tr><th class="name">Riesgo</th><th>Impacto</th><th>Probabilidad</th><th>Exposición</th><th>Mitigación</th></tr></thead>
+      <tbody>
+        <tr><td class="name">A-2 · Congelar la pestaña con una nativa</td><td>Alto — se pierde el trabajo sin guardar</td><td>Media — basta una matriz grande por descuido</td><td><span class="sev s-alta">alta</span></td><td>Cobrar instrucciones por trabajo real</td></tr>
+        <tr><td class="name">A-1 · Cuelgue por estructura cíclica</td><td>Medio — rompe la confianza en el lenguaje</td><td>Media — sale explorando listas</td><td><span class="sev s-alta">alta</span></td><td>Registro de visitados en <span class="m">iguales()</span></td></tr>
+        <tr><td class="name">A-3 · JIT apagado sin avisar</td><td>Medio — la cualidad principal desaparece</td><td>Alta — ya puede estar pasando en el artefacto</td><td><span class="sev s-alta">alta</span></td><td>Canario al arrancar + aviso visible</td></tr>
+        <tr><td class="name">M-1 · Inyección al compartir programas</td><td>Alto — ejecución en el navegador de otro</td><td>Nula hoy · alta si se añade compartir</td><td><span class="sev s-media">media</span></td><td>Aislar por origen antes de compartir, no filtrar</td></tr>
+        <tr><td class="name">Divergencia intérprete ↔ JIT</td><td>Alto — resultados distintos según el calor</td><td>Baja — las pruebas la vigilan</td><td><span class="sev s-media">media</span></td><td>Mantener casos pareados en cada cambio</td></tr>
+        <tr><td class="name">M-2 + M-4 · Editor pegajoso</td><td>Bajo — molesto, no destructivo</td><td>Media en equipos modestos</td><td><span class="sev s-baja">baja</span></td><td>Map de constantes + un solo motor de análisis</td></tr>
+        <tr><td class="name">Abandono del formato de bytecode</td><td>Medio — rompe lo ya guardado</td><td>Alta si se serializa sin versionar</td><td><span class="sev s-media">media</span></td><td>Número de versión que el cargador rechace</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">05</span><h2>Cómo lo resuelven las VMs de verdad</h2></div>
+  <div class="prose">
+    <p>Para decidir qué construir hace falta saber lo que cuesta. Esto sale de leer el código de Lua, CPython y HotSpot, la especificación de la JVM y el survey canónico de OSR.</p>
+  </div>
+
+  <h3>Excepciones: pila de manejadores o tabla de rangos</h3>
+  <div class="finds">
+    <div class="find">
+      <div class="ft">Lua no tiene try/catch, tiene llamadas protegidas</div>
+      <p>Cero estructura de excepciones en el bytecode: ni tabla, ni opcode. <span class="m">pcall</span> es una función de biblioteca que envuelve la llamada en un <span class="m">setjmp</span>. Solo paga quien la usa. Todo el bloque de recuperación son ~135 líneas de C.</p>
+      <p><strong>Traducido a JavaScript es casi gratis</strong>, porque el host ya tiene <span class="m">try/catch</span>: guardar número de marcos y tope de pila, y restaurarlos en el <span class="m">catch</span>. <strong>30–40 líneas.</strong></p>
+      <p class="src">ldo.c · Lua 5.4.6</p>
+    </div>
+    <div class="find">
+      <div class="ft">CPython pasó de pila a tabla, y dejó el camino marcado</div>
+      <p>Hasta 3.10: pila de bloques por marco, <span class="m">240 bytes reservados siempre</span> y usados casi nunca — ~60 líneas de C. Desde 3.11: tabla de rangos consultada solo al fallar.</p>
+      <p><strong>Y aquí está la pieza más útil:</strong> el compilador <em>sigue emitiendo</em> <span class="m">SETUP_FINALLY</span>/<span class="m">POP_BLOCK</span> como pseudo-instrucciones, y un pase posterior las convierte en tabla. La migración es aditiva: se hace la pila primero y la tabla después, sin rehacer el compilador.</p>
+      <p class="src">InternalDocs/exception_handling.md · gh-84403</p>
+    </div>
+    <div class="find">
+      <div class="ft">La JVM busca linealmente, y el orden lo pone el compilador</div>
+      <p>Ocho bytes por entrada: inicio, fin, manejador, tipo. La especificación (§2.10) dice que busca «en el orden en que aparecen en la tabla», sin bisección — porque §3.12 garantiza que el compilador puede ordenarlas siempre de más interna a más externa. El anidamiento se codifica <em>solo</em> con rangos solapados.</p>
+      <p class="src">JVMS SE21 §2.10, §3.12 · HotSpot constMethod.hpp</p>
+    </div>
+    <div class="find">
+      <div class="ft">Crafting Interpreters: cero precedente</div>
+      <p>La palabra «exception» aparece <strong>0 veces</strong> en los capítulos de clases, métodos, herencia, cierres y optimización. Lox no tiene try/catch; clox imprime la traza y resetea la pila. En esta pieza no hay libro que seguir.</p>
+      <p class="src">munificent/craftinginterpreters, carpeta book/</p>
+    </div>
+    <div class="find">
+      <div class="ft">Qué decide entre las dos, y no es el rendimiento</div>
+      <p>En C, los 240 bytes por marco son memoria real. En JavaScript el despacho del <span class="m">switch</span> domina por órdenes de magnitud y un push/pop más no se nota.</p>
+      <p><strong>Lo que decide es el JIT:</strong> con una tabla de rangos, el generador puede emitir <span class="m">try/catch</span> nativo de JavaScript, porque sabe qué instrucciones cubre cada manejador. Con una pila en tiempo de ejecución, el código compilado tiene que replicar el push/pop y pierde el <span class="m">try</span> del anfitrión.</p>
+      <p class="src">análisis propio sobre las fuentes citadas</p>
+    </div>
+    <div class="find">
+      <div class="ft">El bug que costará tiempo no es la tabla</div>
+      <p>Es qué hacer con los upvalues abiertos al desenrollar. Lua le dedica un bucle entero (<span class="m">luaD_closeprotected</span>) porque <em>cerrar puede volver a fallar</em>. El motor ya tiene <span class="m">cerrarUpvalues()</span>, pero nunca ha tenido que ejecutarse a mitad de un salto.</p>
+      <p class="src">ldo.c · luaD_pcall</p>
+    </div>
+  </div>
+
+  <h3>Serialización del bytecode</h3>
+  <div class="finds">
+    <div class="find">
+      <div class="ft">La decisión con mejor relación coste-beneficio: copiar a Lua, no a CPython</div>
+      <p>CPython mete las funciones anidadas en las constantes, y por eso necesita tabla de referencias y resolución de ciclos (el <span class="m">FLAG_REF</span> de marshal) — el 40 % de la complejidad. <strong>Lua las saca a un array aparte de prototipos</strong>, el grafo queda siendo un árbol, y no hace falta nada de eso.</p>
+      <p>Resultado: <span class="m">ldump.c</span> son 230 líneas y <span class="m">lundump.c</span> 335.</p>
+      <p class="src">ldump.c · marshal.c</p>
+    </div>
+    <div class="find">
+      <div class="ft">El presupuesto real, medido en un caso casi idéntico</div>
+      <p><strong>Fengari</strong> es Lua 5.3 completo en JavaScript puro, y portó los dos lados del formato binario: <span class="m">lundump.js</span> 292 líneas + <span class="m">ldump.js</span> 198 = <strong>~490 líneas</strong> para un formato con cabecera, chequeos, prototipos anidados e información de depuración.</p>
+      <p>En JSON, con el grafo en árbol y sin validación, la estimación baja a <strong>200–300 líneas</strong>.</p>
+      <p class="src">fengari-lua/fengari</p>
+    </div>
+    <div class="find">
+      <div class="ft">Versionar y rechazar, no migrar</div>
+      <p>El bytecode de Hermes va por la versión <strong>96</strong>. Noventa y seis formatos incompatibles en producción. Es la mejor evidencia disponible de cuánto se mueve un formato de bytecode, y la razón de que el número de versión deba ser lo primero que lea el cargador y de que deba <em>rechazar</em> en vez de intentar adaptarse.</p>
+      <p class="src">facebook/hermes · BYTECODE_VERSION</p>
+    </div>
+    <div class="find">
+      <div class="ft">Cargar bytecode ajeno no es seguro en ningún lenguaje</div>
+      <p>Lua: <span class="m">#define luai_verifycode(L,f)</span> está <em>vacío</em> en una compilación normal. CPython lo dice en su documentación: «nunca deserialices datos de una fuente no confiable». Solo la JVM puede, y le cuesta un verificador completo con <span class="m">StackMapTable</span>.</p>
+      <p><strong>Matiz que baja el riesgo en tu caso:</strong> en JavaScript un índice fuera de rango devuelve <span class="m">undefined</span>, no lee memoria ajena. El peor caso no es ejecución de código como en Lua, sino cuelgue o lógica corrupta.</p>
+      <p class="src">lundump.c · doc de marshal · Pwning Lua through 'load'</p>
+    </div>
+    <div class="find">
+      <div class="ft">Firmar sale más barato que verificar</div>
+      <p>Validar todo lo que el intérprete asume —cada índice de constante, cada slot, cada destino de salto, para <em>cada</em> opcode— son 150–250 líneas y es fácil dejarlo incompleto. Un HMAC con <span class="m">crypto.subtle</span> son ~10 líneas y resuelve el problema entero mientras el bytecode solo viaje de tu compilador a tu motor.</p>
+      <p class="src">análisis propio</p>
+    </div>
+    <div class="find">
+      <div class="ft">Las tres trampas de JSON</div>
+      <p><span class="m">NaN</span>, <span class="m">Infinity</span> y <span class="m">-0</span> no son representables: <span class="m">JSON.stringify(NaN)</span> da <span class="m">"null"</span> y <span class="m">-0</span> se convierte en <span class="m">0</span>. Si alguna constante puede serlo, hace falta envoltura. Es el único detalle no mecánico de toda esta pieza.</p>
+      <p class="src">ECMA-404</p>
+    </div>
+  </div>
+
+  <h3>OSR — por qué queda descartado</h3>
+  <div class="prose">
+    <p>El survey canónico (D'Elia &amp; Demetrescu, PLDI 2018) define el mecanismo y da el número que zanja la discusión: <strong>en menos del 10 % de los puntos de OSR el código de compensación está vacío.</strong> En el caso general siempre hay que traducir el estado entre los dos formatos de marco.</p>
+    <p>CPython 3.13 consigue hacerlo en unas 20 líneas, y LuaJIT casi gratis — pero por la misma razón en ambos casos: <strong>un único formato de marco compartido entre intérprete y código compilado</strong>. Ese es justo el supuesto que este motor no cumple: el JIT genera JavaScript con variables locales de JavaScript, un formato que no se parece en nada a la pila de la máquina virtual. Aquí toca la versión difícil, la de V8 y SpiderMonkey — y conviene saber que <em>ni V8 hace OSR de más de un marco</em>, y que un <span class="m">IonScript</span> de SpiderMonkey tiene exactamente un punto de entrada de OSR por función.</p>
+    <p>La alternativa barata ya está implementada: compilar la función entera en su primera llamada cuando contiene un bucle. Cubre el caso que importa —una función costosa llamada una vez— y deja fuera solo los bucles de nivel superior, que se resuelven metiendo el trabajo en una función.</p>
+  </div>
+
+  <h3>La conclusión de seguridad que reordena todo</h3>
+  <div class="panel" style="border-left-color:var(--alta)">
+    <p style="margin-bottom:10px"><strong>El JIT y la inyección de HTML no son dos agujeros, son el mismo.</strong> Un programa que alcanza el JIT ya ejecuta JavaScript arbitrario en el origen de la página, por diseño. Filtrar <span class="m">eco()</span> mientras el JIT sigue ahí no reduce la superficie de ataque.</p>
+    <p style="margin-bottom:10px">Contra <span class="m">new Function</span> <em>no existe mitigación de contenido</em>: la función de un JIT es convertir texto en código. Las dos únicas salidas reales son desactivar el JIT para programas de origen externo, o mover la ejecución a un iframe aislado de origen cruzado. Manifest V3 de Chrome, que prohíbe <span class="m">eval</span> por completo, hace una excepción explícita: «eval y new Function siguen soportados en iframes sandbox». El patrón aceptado es exactamente ese.</p>
+    <p style="margin-bottom:0"><strong>Y el precedente que más enseña es Scratch</strong>, que tiene millones de proyectos compartidos sin inyección entre usuarios — no porque tenga un buen sanitizador, sino porque <em>no tiene sumidero de HTML</em>: el proyecto compartido es un grafo de opcodes en JSON, no código, y se dibuja con WebGL, no con DOM. Aun así, en 2024 le encontraron ejecución de código arbitraria por <em>otra</em> capa de parseo del mismo archivo compartido: los SVG de los disfraces. La lección para cuando llegue el momento de compartir: revisar todo lo que del archivo pase por un parser, no solo lo que parezca código.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">06</span><h2>Qué construir ahora</h2></div>
+  <div class="prose">
+    <p>Seis opciones que compiten por las mismas tardes. Los pesos suponen que la integración con CodeBlocks Pro es el destino declarado, que trabajas solo, y que lo que ya funciona no debe romperse.</p>
+  </div>
+
+  <div class="scroller">
+    <table class="cmp">
+      <caption>Puntajes de 1 a 5. Pesos: integración 20 % · esfuerzo 20 % · valor para quien aprende 18 % · deuda 15 % · riesgo 15 % · precedente 12 %. Total normalizado a 100, calculado programáticamente. En «esfuerzo» y «riesgo», 5 significa barato y seguro.</caption>
+      <thead>
+        <tr><th class="crit">Criterio · peso</th>
+          <th>F · Corregir<br>los 3 altos</th><th>B · Serializar<br>el bytecode</th><th>A · Excepciones</th>
+          <th>E · Módulos</th><th>C · Clases</th><th>D · OSR</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="crit">Desbloquea la integración con Bloques · 20 %</td>
+          <td><span class="sc">3</span></td><td><span class="sc">5</span></td><td><span class="sc">3</span></td><td><span class="sc">3</span></td><td><span class="sc">2</span></td><td><span class="sc">1</span></td></tr>
+        <tr><td class="crit">Esfuerzo · 20 %</td>
+          <td><span class="sc">5</span><br><small>~80 líneas</small></td><td><span class="sc">4</span><br><small>200–300</small></td><td><span class="sc">3</span><br><small>120 + 150</small></td><td><span class="sc">3</span></td><td><span class="sc">2</span><br><small>3 capítulos</small></td><td><span class="sc">1</span></td></tr>
+        <tr><td class="crit">Valor para quien aprende · 18 %</td>
+          <td><span class="sc">3</span></td><td><span class="sc">2</span></td><td><span class="sc">5</span></td><td><span class="sc">2</span></td><td><span class="sc">4</span></td><td><span class="sc">1</span></td></tr>
+        <tr><td class="crit">Cierra deuda identificada · 15 %</td>
+          <td><span class="sc">5</span></td><td><span class="sc">4</span></td><td><span class="sc">4</span></td><td><span class="sc">2</span></td><td><span class="sc">2</span></td><td><span class="sc">2</span></td></tr>
+        <tr><td class="crit">Riesgo de romper lo que anda · 15 %</td>
+          <td><span class="sc">5</span></td><td><span class="sc">5</span><br><small>aditivo</small></td><td><span class="sc">3</span><br><small>toca el desenrollado</small></td><td><span class="sc">4</span></td><td><span class="sc">2</span><br><small>los 3 a la vez</small></td><td><span class="sc">1</span></td></tr>
+        <tr><td class="crit">Precedente que copiar · 12 %</td>
+          <td><span class="sc">5</span></td><td><span class="sc">5</span><br><small>Fengari</small></td><td><span class="sc">5</span><br><small>CPython</small></td><td><span class="sc">4</span></td><td><span class="sc">5</span><br><small>clox</small></td><td><span class="sc">2</span></td></tr>
+        <tr class="total"><td class="crit">Total · /100</td>
+          <td class="pt">85</td><td class="pt">82</td><td class="pt">75</td><td class="pt">59</td><td class="pt">54</td><td class="pt">25</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="chart">
+    <div class="chart-title">Total ponderado</div>
+    <div class="chart-sub">Las tres primeras no compiten entre sí: son un orden, no una elección.</div>
+    <div class="bars">
+      <div class="bar-row"><span class="bar-lab">F · Corregir los 3 altos</span><div class="bar-track"><div class="bar-fill win" style="width:85%"></div></div><span class="bar-val">85</span></div>
+      <div class="bar-row"><span class="bar-lab">B · Serializar el bytecode</span><div class="bar-track"><div class="bar-fill" style="width:82%"></div></div><span class="bar-val">82</span></div>
+      <div class="bar-row"><span class="bar-lab">A · Excepciones</span><div class="bar-track"><div class="bar-fill" style="width:75%"></div></div><span class="bar-val">75</span></div>
+      <div class="bar-row"><span class="bar-lab">E · Módulos</span><div class="bar-track"><div class="bar-fill" style="width:59%"></div></div><span class="bar-val">59</span></div>
+      <div class="bar-row"><span class="bar-lab">C · Clases y objetos</span><div class="bar-track"><div class="bar-fill" style="width:54%"></div></div><span class="bar-val">54</span></div>
+      <div class="bar-row"><span class="bar-lab">D · OSR en bucles</span><div class="bar-track"><div class="bar-fill" style="width:25%"></div></div><span class="bar-val">25</span></div>
+    </div>
+    <div class="chart-axis"><span></span><div class="axis-marks"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div><span></span></div>
+  </div>
+
+  <div class="panel">
+    <h3>Veredicto</h3>
+    <p><strong>Corrige los tres altos primero, y no porque sean urgentes en abstracto.</strong> Son ~80 líneas repartidas en tres sitios, con pruebas que las cubren, y una de ellas —el canario del JIT— puede estar afectando ahora mismo al artefacto publicado. Es la única partida donde el esfuerzo es despreciable y el retorno inmediato.</p>
+    <p><strong>Después la serialización</strong>, aunque puntúe por debajo en valor pedagógico. Es lo único de la lista que desbloquea la integración con Bloques —precompilar los niveles en vez de recompilarlos en cada carga— y de paso convierte en verdad la afirmación sobre portabilidad que te señalé que no se sostenía. Es aditiva: no toca una línea del motor. Y el presupuesto está medido en un caso casi idéntico: Fengari gastó 490 líneas para el formato binario completo de Lua; en JSON, con los prototipos en árbol, son 200–300.</p>
+    <p style="margin-bottom:0"><strong>Las excepciones en tercer lugar</strong>, que es donde más duele el orden. Tienen el mayor valor para quien aprende —manejar errores es currículo, y tu propio vocabulario de la v3 ya las prometía— pero también el mayor riesgo de las tres: tocan el desenrollado de pila y los upvalues abiertos, que es exactamente donde Lua dedica un bucle entero porque cerrar puede volver a fallar. Hazlas cuando las dos anteriores estén asentadas, y hazlas en dos pasos como CPython: pila de manejadores primero, tabla después.</p>
+  </div>
+
+  <h3>Cuándo elegiría cada otra opción</h3>
+  <div class="prose">
+    <ul class="tight">
+      <li><strong>Módulos (59)</strong> — si Bloques acaba necesitando una biblioteca de niveles compartida. Hoy no hay quien pida el problema que resuelven.</li>
+      <li><strong>Clases (54)</strong> — si el currículo de Bloques llega a POO. Puntúa bajo por riesgo, no por valor: tocan compilador, máquina y JIT a la vez, que es el único cambio de la lista capaz de desestabilizar las tres etapas de golpe. Los diccionarios cubren buena parte del caso mientras tanto.</li>
+      <li><strong>OSR (25)</strong> — no lo haría. Es la versión difícil, la de V8, porque tu JIT no comparte formato de marco con el intérprete. Y la alternativa barata ya está puesta.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">07</span><h2>Roadmap</h2></div>
+  <div class="fases">
+    <div class="fase">
+      <div class="et"><b>Fase 0</b><span style="color:var(--ok)">✓ hecha</span><br>28-sep-2026</div>
+      <div>
+        <strong>Cerrar los tres altos</strong>
+        <ul>
+          <li><span class="m">A-1</span> Registro de visitados en <span class="m">iguales()</span> · ~10 líneas · caso cíclico a las pruebas</li>
+          <li><span class="m">A-2</span> Presupuesto de instrucciones en las nativas costosas · ~20 líneas · el patrón ya está en <span class="m">rango()</span></li>
+          <li><span class="m">A-3</span> Canario de <span class="m">new Function</span> al arrancar y aviso en la barra de estado · ~10 líneas</li>
+          <li>De regalo, por ser baratos: <span class="m">M-2</span> el Map de constantes (5 líneas) y <span class="m">M-6</span> propagar el tipo valor de los diccionarios (8 líneas)</li>
+        </ul>
+        <span class="tot" style="color:var(--ok)">✓ ejecutada · 135 pruebas en verde · JIT sin cambios (×8,6 a ×33,9) · artefacto republicado</span>
+      </div>
+    </div>
+    <div class="fase">
+      <div class="et"><b>Fase 1</b>Una o dos semanas</div>
+      <div>
+        <strong>Serializar el bytecode</strong>
+        <ul>
+          <li>Formato JSON con <span class="m">magic</span> y <span class="m">version</span>; el cargador <strong>rechaza</strong> versiones que no conozca, no intenta migrar</li>
+          <li>Prototipos anidados en un array <span class="m">protos[]</span> aparte, no en las constantes — el grafo queda en árbol y desaparece la necesidad de tabla de referencias</li>
+          <li>Envoltura para <span class="m">NaN</span>, <span class="m">Infinity</span> y <span class="m">-0</span></li>
+          <li>Prueba de ida y vuelta: compilar → serializar → cargar → ejecutar, y comparar con la ejecución directa en los 120 casos</li>
+          <li>Sin verificador. Si algún día se cargan archivos ajenos, HMAC antes que validación exhaustiva</li>
+        </ul>
+        <span class="tot">≈ 250 líneas · referencia: Fengari, 490 para el formato binario de Lua</span>
+      </div>
+    </div>
+    <div class="fase">
+      <div class="et"><b>Fase 2</b>Dos o tres semanas</div>
+      <div>
+        <strong>Excepciones, en dos pasos</strong>
+        <ul>
+          <li>Paso 1: <span class="m">intentar</span> / <span class="m">atrapar</span> / <span class="m">finalmente</span> con pila de manejadores. Dos pseudo-instrucciones. Funciona enseguida</li>
+          <li>Paso 2: pase de ensamblado que las convierte en tabla de rangos, sin tocar el compilador — la ruta exacta de CPython</li>
+          <li>Con la tabla, el JIT puede emitir <span class="m">try/catch</span> nativo. Ese es el motivo real de la tabla, no los nanosegundos</li>
+          <li>Atención al desenrollado con upvalues abiertos: es donde estará el fallo difícil</li>
+          <li>Casos pareados con y sin JIT desde el primer commit</li>
+        </ul>
+        <span class="tot">≈ 270 líneas · requiere profundidad de pila estática en el punto del <span class="m">intentar</span></span>
+      </div>
+    </div>
+    <div class="fase">
+      <div class="et"><b>Fase 3</b>Cuando Bloques lo pida</div>
+      <div>
+        <strong>Integración, y solo entonces lo demás</strong>
+        <ul>
+          <li>La prueba corta que ya acordamos: un nivel de la tortuga visible en bloques, en español y en bytecode, que ejecute</li>
+          <li>Módulos y clases entran aquí si el currículo los reclama, no antes</li>
+          <li>Si se añade compartir programas: aislar por origen <em>antes</em> de publicar la función, nunca después</li>
+        </ul>
+        <span class="tot">fuera de alcance hasta que la fase 1 esté cerrada</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="prose">
+    <p style="margin-top:26px"><strong>Lo que no haría en ningún momento:</strong> reescribir. La arquitectura aguanta, las etapas están separadas, la compilación es reproducible y las pruebas vigilan la divergencia entre los dos back-ends. Todo lo de este informe son adiciones y correcciones locales.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">08</span><h2>Fuentes</h2></div>
+  <div class="prose">
+    <p>Los hallazgos de las secciones 03 y 04 salen de ejecutar el código, no de leerlo; las sondas están en <span class="m">motor/sondas.js</span>. La sección 05 sale de código fuente y especificaciones normativas.</p>
+  </div>
+  <div class="srcgrid">
+    <div>
+      <h3>Excepciones</h3>
+      <ul>
+        <li><a href="https://github.com/python/cpython/blob/main/InternalDocs/exception_handling.md">CPython — exception_handling.md</a></li>
+        <li><a href="https://github.com/python/cpython/issues/84403">gh-84403 — excepciones de coste cero</a></li>
+        <li><a href="https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-2.html">JVMS SE21 §2.10</a> · <a href="https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-3.html">§3.12</a></li>
+        <li><a href="https://www.lua.org/source/5.4/ldo.c.html">Lua — ldo.c</a></li>
+        <li><a href="https://craftinginterpreters.com/">Crafting Interpreters</a></li>
+      </ul>
+    </div>
+    <div>
+      <h3>Serialización</h3>
+      <ul>
+        <li><a href="https://peps.python.org/pep-0552/">PEP 552 — .pyc determinista</a></li>
+        <li><a href="https://github.com/python/cpython/blob/main/Python/marshal.c">CPython — marshal.c</a></li>
+        <li><a href="https://www.lua.org/source/5.4/ldump.c.html">Lua — ldump.c</a> · <a href="https://www.lua.org/source/5.4/lundump.c.html">lundump.c</a></li>
+        <li><a href="https://github.com/fengari-lua/fengari">Fengari — Lua en JavaScript</a></li>
+        <li><a href="https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-4.html">JVMS §4.4 — constant pool</a></li>
+        <li><a href="https://github.com/facebook/hermes">Hermes — BYTECODE_VERSION</a></li>
+      </ul>
+    </div>
+    <div>
+      <h3>JIT y OSR</h3>
+      <ul>
+        <li><a href="https://dl.acm.org/doi/10.1145/3192366.3192396">D'Elia &amp; Demetrescu — OSR, Distilled (PLDI 2018)</a></li>
+        <li><a href="https://github.com/v8/v8/blob/main/src/compiler/osr.cc">V8 — osr.cc</a></li>
+        <li><a href="https://searchfox.org/mozilla-central/source/js/src/jit/BaselineJIT.cpp">SpiderMonkey — BaselineJIT.cpp</a></li>
+        <li><a href="https://github.com/python/cpython/blob/main/Python/bytecodes.c">CPython 3.13 — tier 2</a></li>
+      </ul>
+    </div>
+    <div>
+      <h3>Seguridad</h3>
+      <ul>
+        <li><a href="https://www.w3.org/TR/CSP3/">W3C CSP Level 3 §4.4.1 — EvalError</a></li>
+        <li><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/script-src">MDN — script-src y unsafe-eval</a></li>
+        <li><a href="https://developer.mozilla.org/en-US/docs/Web/API/Element/insertAdjacentHTML">MDN — insertAdjacentHTML</a></li>
+        <li><a href="https://developer.chrome.com/docs/extensions/develop/migrate/improve-security">Chrome MV3 — eval en iframes sandbox</a></li>
+        <li><a href="https://blog.codepen.io/2019/10/03/changed-domains-for-iframe-previews/">CodePen — separar el origen</a></li>
+        <li><a href="https://muffin.ink/blog/scratch-vulnerability-disclosure/">Ejecución de código en Scratch vía disfraces</a></li>
+        <li><a href="https://docs.turbowarp.org/development/extensions/sandbox">TurboWarp — el coste del aislamiento</a></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Auditoría del 28 de septiembre de 2026 sobre el árbol de fuentes en <span class="m">D:\ProyectosJS\motor</span> (2.239 líneas, compilación <span class="m">c85987ac</span>). Los números de línea corresponden a esa versión. Las mediciones de rendimiento se tomaron en Node 22 dentro de un contenedor, no en la máquina de destino: sirven para comparar entre sí, no como cifras absolutas. Las estimaciones de esfuerzo son juicio sobre precedentes citados, no medición.
+</footer>
+
+</div>
+</body>
+</html>

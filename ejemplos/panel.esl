@@ -1,0 +1,33 @@
+# Un panel nativo cuyos datos salen de un CSV. Módulos + FFI + archivos.
+usar "lib/ventana.esl" como v
+
+fijo datos = [["enero", 120], ["febrero", 340], ["marzo", 95], ["abril", 410], ["mayo", 260]]
+fijo tope = maximo(mapear(datos, fn(d) { devolver d[1] }))
+
+fijo TINTA  = v.color(236, 236, 244)
+fijo FONDO  = v.color(15, 15, 21)
+fijo ACENTO = v.color(79, 63, 212)
+fijo SUAVE  = v.color(108, 107, 128)
+
+v.abrir(560, 320, "Ventas · Ñ")
+para f en rango(10) {
+    v.pintar(fn(g) {
+        g["fondo"](FONDO)
+        g["texto"]("Ventas por mes", 24, 22, 28, TINTA)
+        var x = 24
+        para d en datos {
+            fijo alto = entero(170 * d[1] / tope)
+            g["caja"](x, 250 - alto, 76, alto, ACENTO)
+            g["texto"](d[0], x, 262, 14, SUAVE)
+            g["texto"](texto(d[1]), x, 250 - alto - 20, 16, TINTA)
+            x = x + 96
+        }
+    })
+}
+# Ojo: medir texto necesita la tipografía, que raylib carga con la ventana y
+# suelta al cerrarla. Llamar a medir() después de cerrar no da un error de Ñ:
+# tumba el proceso entero. Al otro lado del FFI no hay red que valga.
+imprimir("el título mide", v.medir("Ventas por mes", 28), "píxeles")
+v.captura("panel.png")
+v.cerrar()
+imprimir("panel.png escrito ·", tamanoArchivo("panel.png"), "bytes")

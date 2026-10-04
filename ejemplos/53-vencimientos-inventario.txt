@@ -1,0 +1,149 @@
+# ═══ Inventario que vence: la fecha de corte es un DATO ═════════════════════
+# Un informe de vencimientos escrito con «hoy()» por dentro no se puede volver a
+# correr. Mañana da otra cosa, y cuando alguien pregunta «¿y qué decía el informe
+# del lunes?» no hay forma de reconstruirlo. La fecha de corte entra por arriba,
+# en una sola línea, y así el mismo programa sirve para hoy, para el cierre del
+# mes pasado y para una prueba con un número que no se mueve.
+#
+# Y la otra cosa que enseña: calcular UNA vez. El camino natural es escribir
+# «estaVencido(f)», «proximoAVencer(f)» y «categoriaDe(f)», y que cada una
+# vuelva a convertir el texto en fecha y vuelva a restar. Son cinco conversiones
+# por fila para un dato que no cambia. Se calcula una vez, se guarda en una
+# columna, y lo demás pregunta por esa columna.
+# núcleo: — · eDSL: fecha, datos, formato
+
+usar aFecha, deFecha, diasEntre, sumarDias, hoy de "fecha"
+usar suma de "numerico"
+usar subtexto de "texto"
+usar deRegistros, conColumna, agrupar, contarCol, sumaCol, ordenarPor, columna,
+     donde, vistazo, aRegistros de "datos"
+usar moneda, tablaTexto, regla, enNegrita, enRojo, enVerde, enAmarillo, enGris,
+     plural, porciento, barraTexto, alinearDer, alinearIzq de "formato"
+
+# ── la única línea que decide de qué día habla el informe ─────────────────
+# Para el informe de verdad: CORTE = hoy(). Aquí va fija para que la salida sea
+# la misma cada vez que alguien lo corra, que es lo que hace un ejemplo útil.
+fijo CORTE: fecha = aFecha("2026-10-03")
+
+fijo lotes: lista = [
+    {"lote": "L-1001", "producto": "Leche entera 1L",   "cantidad": 240, "precio":  4200.0, "vence": "2026-10-01"},
+    {"lote": "L-1002", "producto": "Yogur griego 150g",  "cantidad": 180, "precio":  3100.0, "vence": "2026-10-05"},
+    {"lote": "L-1003", "producto": "Queso campesino",    "cantidad":  60, "precio": 14500.0, "vence": "2026-10-09"},
+    {"lote": "L-1004", "producto": "Arequipe 250g",      "cantidad": 320, "precio":  8900.0, "vence": "2026-11-15"},
+    {"lote": "L-1005", "producto": "Mantequilla 125g",   "cantidad": 150, "precio":  6400.0, "vence": "2026-12-20"},
+    {"lote": "L-1006", "producto": "Crema de leche",     "cantidad":  90, "precio":  7300.0, "vence": "2026-09-28"},
+    {"lote": "L-1007", "producto": "Leche en polvo 400g","cantidad": 110, "precio": 21000.0, "vence": "2027-06-30"},
+    {"lote": "L-1008", "producto": "Kumis 1L",           "cantidad": 200, "precio":  5100.0, "vence": "2026-10-04"}
+]
+
+# ── calcular una vez, en columnas ─────────────────────────────────────────
+var t = deRegistros(lotes)
+# «diasEntre(corte, vence)» una sola vez por fila. De aquí en adelante nadie
+# vuelve a tocar «aFecha».
+t = conColumna(t, "dias", fn(f: dic): entero {
+    devolver diasEntre(CORTE, aFecha(f["vence"]))
+})
+t = conColumna(t, "valor", fn(f: dic): real {
+    devolver real(f["cantidad"]) * f["precio"]
+})
+# La categoría sale de la columna «dias», no de volver a restar fechas.
+t = conColumna(t, "estado", fn(f: dic): texto {
+    si f["dias"] < 0 { devolver "1 vencido" }
+    si f["dias"] <= 7 { devolver "2 esta semana" }
+    si f["dias"] <= 30 { devolver "3 este mes" }
+    si f["dias"] <= 90 { devolver "4 vigilar" }
+    devolver "5 tranquilo"
+})
+
+imprimir(enNegrita("INVENTARIO AL CORTE DEL " + deFecha(CORTE, "larga")))
+imprimir(regla(76))
+imprimir(enGris("  El corte es un dato de arriba, no «hoy()»: este informe se puede"))
+imprimir(enGris("  volver a sacar igual la semana que viene, o para un lunes pasado."))
+imprimir("")
+
+fijo valorTotal: real = suma(columna(t, "valor"))
+imprimir("  " + plural(longitud(lotes), "lote") + " · " + moneda(valorTotal) + " en total")
+
+# ── el resumen por estado, con «agrupar» y no con un diccionario a mano ──
+imprimir("")
+imprimir(enNegrita("POR ESTADO"))
+imprimir(regla(76))
+fijo porEstado = ordenarPor(agrupar(t, ["estado"], {
+    "lotes": contarCol(), "valor": sumaCol("valor")
+}), "estado")
+para i en rango(longitud(columna(porEstado, "estado"))) {
+    fijo e: texto = columna(porEstado, "estado")[i]
+    fijo n: entero = columna(porEstado, "lotes")[i]
+    fijo v: real = columna(porEstado, "valor")[i]
+    # El número del principio es para que ordene por gravedad y no alfabéticamente;
+    # se le quita para enseñarlo.
+    fijo nombre: texto = subtexto(e, 2, longitud(e))
+    var pinta: texto = enGris(nombre)
+    si e == "1 vencido" { pinta = enRojo(nombre) }
+    si e == "2 esta semana" { pinta = enAmarillo(nombre) }
+    si e == "5 tranquilo" { pinta = enVerde(nombre) }
+    imprimir("  " + alinearDer(texto(n), 2) + "  " + alinearIzq(pinta, 24) +
+             barraTexto(v, valorTotal, 20) + " " + alinearDer(moneda(v), 14) +
+             "  " + porciento(v / valorTotal))
+}
+
+# ── lo que hay que mirar hoy ──────────────────────────────────────────────
+imprimir("")
+imprimir(enNegrita("LO QUE PIDE DECISIÓN"))
+imprimir(regla(76))
+fijo urgentes = ordenarPor(donde(t, fn(f: dic): bool { devolver f["dias"] <= 7 }), "dias")
+si longitud(columna(urgentes, "lote")) == 0 {
+    imprimir("  " + enVerde("nada vence en los próximos siete días"))
+}
+imprimir(tablaTexto(mapear(aRegistros(urgentes), fn(f: dic): dic {
+    var cuando: texto = "en " + plural(f["dias"], "día")
+    si f["dias"] < 0 { cuando = "venció hace " + plural(-f["dias"], "día") }
+    si f["dias"] == 0 { cuando = "vence hoy" }
+    devolver {
+        "lote": f["lote"],
+        "producto": f["producto"],
+        "vence": f["vence"],
+        "cuándo": cuando,
+        "unidades": f["cantidad"],
+        "valor": moneda(f["valor"])
+    }
+})))
+
+fijo perdido: real = suma(columna(donde(t, fn(f: dic): bool {
+    devolver f["dias"] < 0
+}), "valor"))
+imprimir("")
+imprimir("  ya perdido:   " + enRojo(moneda(perdido)) + "  (" +
+         porciento(perdido / valorTotal) + " del inventario)")
+fijo enRiesgo: real = suma(columna(donde(t, fn(f: dic): bool {
+    devolver f["dias"] >= 0 y f["dias"] <= 7
+}), "valor"))
+imprimir("  en riesgo:    " + enAmarillo(moneda(enRiesgo)) + "  (" +
+         porciento(enRiesgo / valorTotal) + ")")
+
+# ── y la prueba de que el corte es un dato ────────────────────────────────
+# El mismo cálculo, con el corte movido una semana. Si el corte estuviera metido
+# dentro de las funciones, esto no se podría escribir.
+imprimir("")
+imprimir(enNegrita("EL MISMO INVENTARIO, UNA SEMANA DESPUÉS"))
+imprimir(regla(76))
+fijo CORTE2: fecha = sumarDias(CORTE, 7)
+var t2 = conColumna(deRegistros(lotes), "dias", fn(f: dic): entero {
+    devolver diasEntre(CORTE2, aFecha(f["vence"]))
+})
+t2 = conColumna(t2, "valor", fn(f: dic): real {
+    devolver real(f["cantidad"]) * f["precio"]
+})
+fijo perdido2: real = suma(columna(donde(t2, fn(f: dic): bool {
+    devolver f["dias"] < 0
+}), "valor"))
+imprimir("  corte " + deFecha(CORTE, "iso") + "  →  perdido " + moneda(perdido))
+imprimir("  corte " + deFecha(CORTE2, "iso") + "  →  perdido " + moneda(perdido2))
+imprimir("  se deterioran " + moneda(perdido2 - perdido) + " en siete días")
+
+imprimir("")
+imprimir(regla(76))
+imprimir(enGris("Un informe con «hoy()» dentro da una cifra distinta cada día y"))
+imprimir(enGris("ninguna se puede comprobar. Con el corte afuera, la comparación"))
+imprimir(enGris("de arriba son cuatro líneas, y la prueba del programa puede fijar"))
+imprimir(enGris("una fecha y esperar un número exacto."))

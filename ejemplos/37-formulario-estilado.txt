@@ -1,0 +1,114 @@
+# ═══ Un formulario con sus estados de validación ═══════════════════════════
+# El estilo de un campo inválido, deshabilitado o enfocado, y el texto de la
+# pista. Todo declarado junto al campo, no en otro archivo.
+# eDSL: estilo
+
+usar estilo, alEnfocar, alPasar, siInvalido, siDeshabilitado, pista,
+     seleccion, antes, despues, cuando, dentro, hermanoSiguiente,
+     transicion, enColumna, enFila, separado, estiloGlobal, reiniciar,
+     tema, color, espacio, radio, aparecer, deslizar, fotogramas, animar de "estilo"
+usar regla, enNegrita, enGris de "formato"
+
+reiniciar()
+estiloGlobal(":root", tema({
+    "color": {"marca": "#4f3fd4", "error": "#c62828", "borde": "#d0d0d0",
+              "texto": "#1a1a1a", "suave": "#888888", "fondo": "#ffffff"},
+    "espacio": {"corto": "8px", "medio": "16px"},
+    "radio": {"medio": "6px"}
+}))
+
+imprimir(enNegrita("EL CAMPO DE TEXTO, CON TODOS SUS ESTADOS"))
+imprimir(regla(66))
+
+fijo campo = estilo(
+    {
+        "ancho": "100%",
+        "relleno": espacio("corto") + " " + espacio("medio"),
+        "borde": "1px solid " + color("borde"),
+        "radio": radio("medio"),
+        "tamano": "15px",
+        "color": color("texto"),
+        "fondo": color("fondo")
+    },
+    transicion(["borde-color", "sombra"], 150),
+    alEnfocar({
+        "borde-color": color("marca"),
+        "sombra": "0 0 0 3px rgba(79,63,212,.15)",
+        "contorno": "ninguno"
+    }),
+    # El navegador marca inválido un campo que no cumple el patrón: aquí se
+    # aprovecha eso en vez de escribir JavaScript para pintarlo de rojo.
+    siInvalido({"borde-color": color("error")}),
+    siDeshabilitado({"fondo": "#f5f5f5", "color": color("suave"), "cursor": "no-permitido"}),
+    # El texto de la pista, que es un pseudoelemento
+    pista({"color": color("suave"), "estilo-fuente": "italica"}),
+    seleccion({"fondo": "rgba(79,63,212,.2)"})
+)
+imprimir("  campo: " + texto(campo))
+
+imprimir("")
+imprimir(enNegrita("LA ETIQUETA, Y EL ASTERISCO DE OBLIGATORIO"))
+imprimir(regla(66))
+fijo etiqueta1 = estilo(
+    {"tamano": "13px", "peso": "600", "color": color("texto"), "margenAbajo": "4px"},
+    # El asterisco sale de «despues», no de escribirlo en el HTML: así no se
+    # puede olvidar en un campo y poner en otro.
+    cuando(".obligatorio", despues({"contenido": "' *'", "color": color("error")}))
+)
+imprimir("  etiqueta: " + texto(etiqueta1))
+
+imprimir("")
+imprimir(enNegrita("EL MENSAJE DE ERROR, QUE APARECE DESLIZÁNDOSE"))
+imprimir(regla(66))
+fijo mensajeError = estilo(
+    {"tamano": "13px", "color": color("error"), "margenArriba": "4px"},
+    antes({"contenido": "'⚠ '"}),
+    deslizar("arriba", 200)
+)
+imprimir("  error: " + texto(mensajeError))
+
+imprimir("")
+imprimir(enNegrita("EL BOTÓN DE ENVIAR"))
+imprimir(regla(66))
+fijo enviar = estilo(
+    {
+        "fondo": color("marca"), "color": "blanco", "borde": "ninguno",
+        "relleno": "10px 20px", "radio": radio("medio"),
+        "peso": "600", "cursor": "puntero"
+    },
+    transicion("fondo", 150),
+    alPasar({"fondo": "#3f32aa"}),
+    siDeshabilitado({"fondo": "#cccccc", "cursor": "no-permitido"}),
+    # El girito de «cargando», declarado aquí mismo
+    # «animar» NO devuelve un texto: devuelve un estilo con la propiedad
+    # «animacion» ya puesta. Así que se compone como cualquier otro estilo, en
+    # vez de pegarlo a mano dentro de una propiedad.
+    cuando(".cargando", antes(
+        {
+            "contenido": "''",
+            "ancho": "12px", "alto": "12px",
+            "borde": "2px solid rgba(255,255,255,.4)",
+            "borde-arriba-color": "blanco",
+            "radio": "50%",
+            "mostrar": "en-linea-bloque",
+            "margenDerecha": "8px"
+        },
+        animar(fotogramas({
+            "0%": estilo({"transformar": "rotate(0deg)"}),
+            "100%": estilo({"transformar": "rotate(360deg)"})
+        }), 700)
+    ))
+)
+imprimir("  enviar: " + texto(enviar))
+
+imprimir("")
+imprimir(enNegrita("LA FILA DE CAMPOS, Y LA BARRA DE BOTONES"))
+imprimir(regla(66))
+imprimir("  campo en columna  " + texto(estilo(enColumna(4))))
+imprimir("  dos campos a la par " + texto(estilo(enFila(16))))
+imprimir("  barra de botones  " + texto(estilo(separado(8))))
+
+imprimir("")
+imprimir(enGris("  Todo esto sale como CSS con clases locales. El «*» del obligatorio,"))
+imprimir(enGris("  el ⚠ del error y el girito del botón no están en el HTML: están en el"))
+imprimir(enGris("  estilo, así que no se pueden olvidar en un sitio y poner en otro."))

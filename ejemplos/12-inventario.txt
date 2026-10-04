@@ -1,0 +1,58 @@
+# ═══ Inventario: qué reponer y qué está parado ══════════════════════════════
+# Una columna calculada —la rotación— convierte una lista de existencias en una
+# decisión. «conColumna» recibe cada FILA como diccionario.
+# eDSL: datos, formato
+
+usar deRegistros, conColumna, donde, ordenarPor, columna, vistazo, soloColumnas,
+     agrupar, sumaCol, contarCol, promedioCol, resumir, primeras de "datos"
+usar moneda, decimales, tablaTexto, regla, enRojo, enAmarillo, enVerde,
+     enNegrita, barraTexto, plural de "formato"
+
+var inv = deRegistros([
+    {"codigo": "T-100", "producto": "Tornillo 1/4",   "categoria": "ferretería", "existencia": 1200, "vendidoMes": 400, "costo": 150},
+    {"codigo": "T-200", "producto": "Tuerca 1/4",     "categoria": "ferretería", "existencia": 80,   "vendidoMes": 350, "costo": 120},
+    {"codigo": "P-010", "producto": "Pintura blanca", "categoria": "pinturas",   "existencia": 45,   "vendidoMes": 30,  "costo": 38000},
+    {"codigo": "P-020", "producto": "Pintura azul",   "categoria": "pinturas",   "existencia": 90,   "vendidoMes": 4,   "costo": 42000},
+    {"codigo": "H-001", "producto": "Martillo",       "categoria": "herramienta","existencia": 12,   "vendidoMes": 9,   "costo": 28000},
+    {"codigo": "H-002", "producto": "Serrucho",       "categoria": "herramienta","existencia": 60,   "vendidoMes": 2,   "costo": 35000}
+])
+
+# Dos columnas calculadas: meses de cobertura y plata parada.
+inv = conColumna(inv, "meses", fn(f: dic): real {
+    si f["vendidoMes"] == 0 { devolver 99.0 }
+    devolver real(f["existencia"]) / real(f["vendidoMes"])
+})
+inv = conColumna(inv, "parado", fn(f: dic): entero { devolver f["existencia"] * f["costo"] })
+
+imprimir(enNegrita("INVENTARIO CON COBERTURA"))
+vistazo(soloColumnas(inv, ["codigo", "producto", "existencia", "vendidoMes", "meses", "parado"]))
+
+imprimir("")
+imprimir(enNegrita("HAY QUE REPONER — menos de un mes de cobertura"))
+fijo reponer = ordenarPor(donde(inv, fn(f: dic): bool { devolver f["meses"] < 1.0 }), "meses")
+para i en rango(longitud(columna(reponer, "codigo"))) {
+    imprimir("  " + enRojo(columna(reponer, "codigo")[i]) + "  " + columna(reponer, "producto")[i] +
+             "  quedan " + decimales(columna(reponer, "meses")[i], 1) + " meses")
+}
+
+imprimir("")
+imprimir(enNegrita("PLATA PARADA — más de 6 meses de cobertura"))
+fijo parado = ordenarPor(donde(inv, fn(f: dic): bool { devolver f["meses"] > 6.0 }), "parado", cierto)
+para i en rango(longitud(columna(parado, "codigo"))) {
+    imprimir("  " + enAmarillo(columna(parado, "codigo")[i]) + "  " + columna(parado, "producto")[i] +
+             "  " + moneda(columna(parado, "parado")[i]) + " quietos")
+}
+
+imprimir("")
+imprimir(enNegrita("POR CATEGORÍA"))
+vistazo(ordenarPor(agrupar(inv, ["categoria"], {
+    "referencias": contarCol(),
+    "invertido": sumaCol("parado"),
+    "cobertura": promedioCol("meses")
+}), "invertido", cierto))
+
+imprimir("")
+fijo tot: entero = columna(resumir(inv, {"t": sumaCol("parado")}), "t")[0]
+imprimir(regla(54))
+imprimir("Invertido en inventario: " + moneda(tot))
+imprimir(plural(longitud(columna(inv, "codigo")), "referencia") + " en total")

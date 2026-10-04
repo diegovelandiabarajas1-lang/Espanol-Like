@@ -1,0 +1,242 @@
+═══════════════════════════════════════════════════════════════════════════════
+  58 APLICACIONES EN Ñ — ÍNDICE
+  Bucaramanga, 3 de octubre de 2026 · base de la biblioteca: 569 nombres
+═══════════════════════════════════════════════════════════════════════════════
+
+Los 58 programas de esta carpeta CORREN. Están verificados uno por uno con:
+
+    node motor/util/correr-ejemplos.js ejemplos
+
+que los ejecuta con un anfitrión completo de mentira —página, lienzo, almacén,
+archivos, sistema y red— y falla si alguno no compila, revienta, o corre pero
+no imprime ni pinta nada. Un ejemplo que no corre enseña algo que no funciona,
+y eso es peor que no tenerlo.
+
+Están en .txt a propósito, para leerlos y pasárselos a quien sea. Para correr
+uno, se renombra a .esl o se le pasa la ruta tal cual:
+
+    node motor/util/n-node.js ejemplos/01-resumen-estadistico.txt
+
+Los que pintan interfaz o dibujan también corren en la consola, pero ahí no hay
+dónde pintar: la parte visual se ve en el IDE, y con «⤓ Exportar app» queda en
+un solo archivo HTML que se abre en cualquier navegador.
+
+
+───────────────────────────────────────────────────────────── numerico (8)
+01  resumen-estadistico    media, mediana, moda, cuartiles, percentiles y
+                           puntuaciones z para ver qué día se salió de lo normal
+02  ajuste-y-tendencia     ajustar una recta por dos caminos —covarianza y
+                           mínimos cuadrados— y comprobar que coinciden
+03  prestamo               tabla de amortización, tasa efectiva, y el saldo
+                           final que tiene que cerrar en cero
+04  analisis-senal         encontrar las frecuencias escondidas de una señal
+                           con la transformada de Fourier y «frecuencias»
+05  algebra-lineal         resolver un sistema de verdad, inversa,
+                           determinante, rango y condición de la matriz
+06  montecarlo             estimar π a puntazos y el riesgo de un proyecto,
+                           con semilla para que la simulación sea repetible
+07  notas-curso            boletín con percentiles e histograma: una nota sola
+                           no dice nada, lo que dice es dónde está del grupo
+08  teoria-numeros         primos, divisores, mcd, mcm y la diferencia entre
+                           combinaciones y permutaciones
+
+───────────────────────────────────────────────────────────────── datos (8)
+09  ventas-por-ciudad      agrupar, resumir y pivotar — las tres cosas que se
+                           le hacen a una tabla antes de poder decir nada
+10  limpiar-csv            un CSV con todos los males de la vida real, limpiado
+                           paso a paso; y por qué el ORDEN de la limpieza importa
+11  conciliar-facturas     dos sistemas que no cuadran: cruzar, diferenciar, y
+                           los pagos sin factura, que son los que asustan
+12  inventario             columnas calculadas que convierten existencias en
+                           una decisión: qué reponer y qué está parado
+13  nomina                 liquidación quincenal con los porcentajes de
+                           Colombia; y por qué «redondear» no da un entero
+14  encuesta               despivotar y pivotar: las respuestas llegan por
+                           persona y hay que leerlas por pregunta
+15  cruce-clientes         un informe que junta tres fuentes por el NIT, como
+                           siempre llegan: en tres archivos distintos
+16  informe-desde-archivo  el ciclo completo: leer el CSV del disco, limpiarlo,
+                           resumirlo y escribir el resultado
+
+───────────────────────────────────────────────────────────────── texto (6)
+17  normalizar-nombres     «GONZALEZ», «González» y «gonzalez» son la misma
+                           persona; y la Ñ no es una N con sombrero
+18  buscador-difuso        un buscador que aguanta que escribas mal, ordenando
+                           por cercanía en vez de exigir coincidencia exacta
+19  plantilla-cartas       cartas en serie; y la diferencia entre la
+                           interpolación del lenguaje y «plantilla»
+20  contador-palabras      frecuencias de un texto quitando las palabras que
+                           no dicen nada
+21  validar-documentos     el dígito de verificación del NIT se CALCULA, más
+                           teléfonos y correos
+22  extraer-de-texto       sacar datos de un registro y de un correo sin
+                           escribir una expresión regular
+
+───────────────────────────────────────────────────────────────── fecha (6)
+23  agenda-citas           qué viene, qué se pasó y qué cae en fin de semana
+24  antiguedad-y-edad      años cumplidos para edades y liquidaciones; y por
+                           qué del 31 de enero al 28 de febrero no pasó un mes
+25  calendario-mes         un calendario dibujado: con qué día empieza el mes
+                           y cuántos días tiene
+26  vencimientos-cartera   cartera por edades, con los tramos saliendo de
+                           restar fechas y no de un campo que alguien mantiene
+27  turnos-y-horas         horas trabajadas, nocturnas y dominicales, con un
+                           turno que cruza la medianoche
+28  dias-habiles           festivos de Colombia —incluida la ley Emiliani, que
+                           los corre al lunes— y plazos en días hábiles
+
+─────────────────────────────────────────────────────────────── formato (5)
+29  recibo-caja            un recibo listo para imprimir: columnas que cuadran,
+                           totales y el valor en letras
+30  tablero-consola        un panel de indicadores sin navegador: barras,
+                           minigráficos y semáforos
+31  cheque-y-letras        números escritos como se dicen: en letras, romanos,
+                           ordinales y los plurales raros del español
+32  informe-color          semáforos en la terminal, y «sinColor» para el mismo
+                           informe escrito a un archivo
+33  etiquetas-envio        etiquetas de envío con el nombre partido sin cortar
+                           palabras
+
+──────────────────────────────────────────────────────────────── estilo (5)
+34  tema-de-marca          los tokens de diseño: de un color sale una paleta y
+                           cambiar la marca es cambiar una línea
+35  tarjeta-producto       una tarjeta con TODOS sus estados declarados en el
+                           mismo sitio, no en otro selector a treinta líneas
+36  pruebas-de-una-calculadora   (ver «probar»)
+37  formulario-estilado    los estados de validación de un campo, y el
+                           asterisco de obligatorio que sale del estilo
+38  modo-oscuro-y-medios   oscuro, impresión, táctil, y la consulta que casi
+                           nadie escribe: «prefers-reduced-motion»
+
+──────────────────────────────────────────────────────────────── probar (4)
+36  pruebas-de-una-calculadora   las afirmaciones que hay, y por qué
+                           «debeFallarCon» comprueba el mensaje y no solo que falle
+39  pruebas-con-espias     probar código que cobra o manda correos: un espía
+                           apunta con qué se le llamó, sin cambiar lo que hace
+40  pruebas-de-datos       lo que se prueba de un informe no son los números,
+                           son las INVARIANTES: ninguna prueba escribe un
+                           número esperado a mano
+41  pruebas-de-fechas      con fechas FIJAS, nunca con hoy(): una prueba que
+                           depende del día en que corre falla sola algún martes
+42  pruebas-de-texto       la mitad comprueban cosas que una biblioteca hecha
+                           para inglés haría mal
+
+───────────────────────────────── interfaz: web, almacén, lienzo (5)
+43  lista-de-tareas        una app de verdad: pinta controles, responde a clics
+                           y recuerda lo anotado entre ejecuciones
+44  formulario-web         valida al ESCRIBIR, no al enviar, que es lo que
+                           evita el formulario que se pierde
+45  tabla-filtrable        el filtro y el orden viven en el estado, no en el
+                           DOM: repintar siempre da lo mismo
+46  contador-y-temporizador  «luego» y «cada», y por qué guardar el id del
+                           temporizador no es una formalidad
+47  panel-con-graficas     barras, dispersión y una serie, más un medidor
+                           dibujado a mano con rect y linea
+
+─────────────────────────────────────────── archivos y sistema (2) + todo (1)
+48  organizador-de-archivos  leer una carpeta, clasificarla y dejarla ordenada
+                           SIN borrar nada: copia y deja el original
+49  registro-de-eventos    un log que se puede CONSULTAR, porque se escribe en
+                           un formato que vuelve a leerse como tabla
+50  todo-junto             LOS SIETE eDSL en un programa: lee un CSV, lo
+                           limpia, lo resume, le hace estadística, lo formatea,
+                           lo prueba y lo escribe
+
+
+──────────────────────────────── los ocho sobre cifras que se calculan mal (8)
+Estos ocho llegaron después, reescritos a partir de programas que CORRÍAN y
+daban cifras equivocadas. No son errores de sintaxis: son fórmulas plausibles
+que no son la que va, conclusiones escritas a mano, y datos derivados guardados
+en vez de calculados. Cada uno enseña la cifra buena y la mala, juntas.
+
+51  cartera-de-inversion   el retorno de una cartera es la suma PONDERADA, no
+                           «media(retornos)»; y un r² se calcula, no se escribe
+52  sentimiento-resenas    un puntaje dividido entre TODAS las palabras mide el
+                           largo, no el tono; y «parecido» ya estaba hecho
+53  vencimientos-inventario  la fecha de corte es un dato de arriba, no «hoy()»
+                           por dentro: si no, el informe no se puede repetir
+54  informe-financiero-web  «nivel moderado de variabilidad» escrito a mano sale
+                           igual con cualquier cifra; aquí sale del coeficiente
+55  agenda-de-citas-app    la función que informaba de una cancelación que no
+                           hacía; y la prioridad que estaba ahí y no se usaba
+56  carrito-y-iva          el IVA no es uno: 19 %, 5 % y excluido; cobrar 19 % a
+                           todo se equivoca hacia arriba, que es la que molesta
+57  monitoreo-de-sensores  el promedio es la operación que DISUELVE al que se
+                           salió: 23,7 °C «normal» con dos de cuatro zonas rotas
+58  tablero-de-cartera     el rendimiento se divide entre el COSTO, no entre el
+                           valor de hoy; y una alerta dice cuánto, no «parte»
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  LAS TRAMPAS QUE ESTOS EJEMPLOS DESCUBRIERON
+═══════════════════════════════════════════════════════════════════════════════
+
+Escribirlos sirvió para encontrar cosas, y van aquí porque son justo lo que
+una IA —o alguien que empieza— va a tropezar:
+
+· «si» es una SENTENCIA, no una expresión: no hay operador ternario.
+      var s: texto = "bajo"
+      si x > 0.0 { s = "alto" }
+
+· «+» no convierte: "n = " + texto(n), nunca "n = " + n.
+
+· El bucle sobre una lista es «para x en lista», no «repetir con».
+
+· «veces» es palabra del lenguaje (de «repetir N veces») y no vale como nombre.
+
+· Las constantes llevan sigilo y SIN cerrar: |PI, |E, |INFINITO.
+
+· «capturar» lleva paréntesis: capturar (e) { … }
+
+· Un «fn» es FIJO: no se puede reasignar. Lo que se reasigna es una «var».
+
+· Los índices van sueltos: elemento(a, i, j), no elemento(a, [i, j]).
+
+· «maximo» reduce una lista; «maximoDe» es elemento a elemento entre dos.
+  Confundirlas da un arreglo donde se esperaba un número.
+
+· «aListaA» de un arreglo de 2 dimensiones devuelve listas ANIDADAS. Para
+  plano: aListaA(aplanarA(a)).
+
+· «redondear» devuelve un real: redondear(2.6) es 3.0, no 3. Para pesos,
+  entero(redondear(x)).
+
+· «envolver» devuelve la LISTA de trozos, no un texto con saltos: hay que
+  unir(envolver(t, 60), "\n").
+
+· «cuartiles» devuelve un diccionario {minimo, q1, mediana, q3, maximo}, no
+  una lista. Igual «regresion» → {pendiente, intercepto, r2}.
+
+· «tablaTexto» recibe una lista de DICCIONARIOS; las claves son los títulos.
+
+· «dividir» parte por cada separador y deja huecos vacíos; «palabras» los
+  aplasta. No es un fallo: son dos funciones distintas.
+
+· El hueco de las disposiciones es un NÚMERO de píxeles: rejillaDe(3, 16),
+  no rejillaDe(3, "16px").
+
+· «animar» devuelve un ESTILO con la propiedad puesta; se compone, no se pega
+  dentro de otra propiedad.
+
+· «paleta» y «escalaTipo» devuelven diccionarios con claves "1", "2", "3"…,
+  hechos para meterse enteros dentro de «tema».
+
+· Las llaves dentro de un texto del programa son la interpolación del
+  lenguaje. Para que «plantilla» las vea como caracteres, se escapan: \{x\}.
+
+· «ahora()» del núcleo da MILISEGUNDOS (un número, que se puede guardar); la
+  «ahora» del eDSL «fecha» da una fecha, y «guardar» no guarda fechas. El
+  camino de vuelta es desdeMarca(ese número).
+
+· Un mismo nombre puede existir en el núcleo y en un eDSL —«color», «pares»,
+  «tabla», «ahora»— y el «usar» tapa al del núcleo. Importar solo lo que se
+  usa evita la sorpresa.
+
+· No se puede importar dos veces el mismo nombre en un archivo.
+
+· Dos fallos del motor que aparecieron escribiendo esto, ya arreglados:
+  «tablaTexto» y compañía medían el ancho contando los códigos de color
+  invisibles, así que una celda con color desalineaba la tabla; y «marco» con
+  título no cerraba, porque la línea de arriba salía un carácter más corta.
+  Se arreglaron y quedaron 31 pruebas nuevas en motor/pruebas/en-n/formato.esl,
+  que era el único eDSL sin pruebas en Ñ.

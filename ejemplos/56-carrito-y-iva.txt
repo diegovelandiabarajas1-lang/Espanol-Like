@@ -1,0 +1,299 @@
+# ═══ Carrito de compras: el IVA por producto y el precio congelado ══════════
+# Dos cosas que una tienda de ejemplo suele saltarse y que en Colombia deciden
+# la cifra final.
+#
+# 1 · El IVA no es uno. Es 19 % general, 5 % para algunos alimentos, y hay
+#     productos excluidos que pagan 0. Un total calculado con «precio * 1.19»
+#     para todo está mal en la mayoría de los carritos de una tienda de barrio,
+#     y está mal hacia arriba, que es la dirección que molesta al cliente.
+#
+# 2 · El carrito guarda el precio del momento en que se añadió, no una
+#     referencia al catálogo. Eso es una DECISIÓN —es el precio que se le
+#     mostró a quien lo puso— y por eso el programa la enseña: hay un botón que
+#     sube el precio del café y el carrito mantiene el suyo, avisando. El error
+#     no es congelar el precio: es congelarlo sin querer y que nadie se entere.
+# núcleo: web · eDSL: numerico, formato, estilo
+
+usar suma, redondear de "numerico"
+usar moneda, porciento, plural, enNegrita, regla, alinearDer, tablaTexto,
+     enGris, enVerde, enAmarillo de "formato"
+usar tema, estiloGlobal, reiniciar, estilo, color, espacio, radio, tipografia,
+     paleta, escalaTipo, alPasar, transicion, enOscuro de "estilo"
+
+# ── las tres tarifas, en un sitio ─────────────────────────────────────────
+fijo IVA: dic = {"general": 0.19, "alimento": 0.05, "excluido": 0.0}
+
+# ── estilos ───────────────────────────────────────────────────────────────
+fijo tonos: dic = paleta("#2E7D52")
+fijo escala: dic = escalaTipo(15)
+
+estiloGlobal(":root", reiniciar())
+estiloGlobal(":root", tema({
+    "color": { "marca": tonos["5"], "suave": tonos["1"], "fuerte": tonos["7"],
+               "tinta": "#1A2420", "apagado": "#5E6E68", "fondo": "#F5F8F6",
+               "panel": "#FFFFFF", "linea": "#E0E8E4", "aviso": "#9A6700" },
+    "espacio": { "mini": "4px", "corto": "8px", "medio": "16px", "largo": "24px" },
+    "radio": { "poco": "6px", "medio": "12px", "redondo": "999px" },
+    "tipografia": { "cuerpo": "system-ui, -apple-system, sans-serif",
+                    "cifra": "ui-monospace, monospace" }
+}))
+estiloGlobal(":root", enOscuro(tema({
+    "color": { "tinta": "#E6EDE9", "apagado": "#9AAAA3", "fondo": "#0D1411",
+               "panel": "#141E19", "linea": "#273530", "suave": tonos["8"] }
+})))
+
+fijo hoja = estilo({ "fuenteFamilia": tipografia("cuerpo"), "fondo": color("fondo"),
+                     "color": color("tinta"), "margen": 0, "relleno": espacio("largo") })
+fijo caja = estilo({ "maxAncho": 940, "margen": "0 auto", "display": "grid",
+                     "gap": espacio("largo"), "columnas": "1fr 340px" })
+fijo panel = estilo({ "fondo": color("panel"), "relleno": espacio("largo"),
+                      "redondeo": radio("medio"),
+                      "borde": "1px solid " + color("linea") })
+fijo h1 = estilo({ "tamano": escala["4"], "grosor": 700, "margen": 0,
+                   "margenAbajo": espacio("medio"), "color": color("fuerte") })
+fijo rejilla = estilo({ "display": "grid", "gap": espacio("corto"),
+                        "columnas": "repeat(auto-fill, minmax(150px, 1fr))" })
+fijo tarjeta = estilo({ "borde": "1px solid " + color("linea"),
+                        "redondeo": radio("poco"), "relleno": espacio("medio"),
+                        "cursor": "pointer", "textoAlinear": "left" },
+                      transicion("borde", 120),
+                      alPasar({ "borde": "1px solid " + color("marca"),
+                                "fondo": color("suave") }))
+fijo nombreP = estilo({ "grosor": 600, "tamano": escala["1"],
+                        "margenAbajo": espacio("mini") })
+fijo precioP = estilo({ "fuenteFamilia": tipografia("cifra"), "grosor": 700,
+                        "color": color("fuerte") })
+fijo etiq = estilo({ "tamano": escala["0"], "color": color("apagado"),
+                     "textoTransformar": "uppercase" })
+fijo filaL = estilo({ "display": "flex", "gap": espacio("corto"),
+                      "alinearItems": "center", "relleno": "6px 0",
+                      "bordeAbajo": "1px solid " + color("linea"),
+                      "tamano": escala["1"] })
+fijo creciente = estilo({ "flex": "1 1 auto" })
+fijo cifra = estilo({ "fuenteFamilia": tipografia("cifra") })
+fijo botonChico = estilo({ "fondo": color("suave"), "color": color("fuerte"),
+                           "borde": "1px solid " + color("linea"),
+                           "relleno": "2px 8px", "redondeo": radio("poco"),
+                           "cursor": "pointer" })
+fijo totalFila = estilo({ "display": "flex", "justificar": "space-between",
+                          "relleno": "4px 0" })
+fijo granTotal = estilo({ "display": "flex", "justificar": "space-between",
+                          "margenArriba": espacio("corto"),
+                          "rellenoArriba": espacio("corto"),
+                          "bordeArriba": "2px solid " + color("marca"),
+                          "grosor": 700, "tamano": escala["3"] })
+fijo avisoCaja = estilo({ "fondo": "#FFF8E1", "color": "#6B4E00",
+                          "borde": "1px solid " + color("aviso"),
+                          "relleno": espacio("corto"), "redondeo": radio("poco"),
+                          "tamano": escala["0"], "margenArriba": espacio("corto") })
+
+# ── el catálogo ───────────────────────────────────────────────────────────
+var catalogo: lista = [
+    {"id": 1, "nombre": "Arroz 1 kg",            "iva": "excluido", "precio":  4200.0},
+    {"id": 2, "nombre": "Leche entera 1 L",      "iva": "excluido", "precio":  4500.0},
+    {"id": 3, "nombre": "Huevos AA x30",         "iva": "excluido", "precio": 18900.0},
+    {"id": 4, "nombre": "Café molido 500 g",     "iva": "alimento", "precio": 23500.0},
+    {"id": 5, "nombre": "Chocolate de mesa",     "iva": "alimento", "precio":  9800.0},
+    {"id": 6, "nombre": "Aceite de oliva 500 ml","iva": "general",  "precio": 38900.0},
+    {"id": 7, "nombre": "Detergente 3 L",        "iva": "general",  "precio": 26400.0},
+    {"id": 8, "nombre": "Jabón de manos",        "iva": "general",  "precio":  7300.0}
+]
+
+# ── el carrito ────────────────────────────────────────────────────────────
+# Guarda el precio y la tarifa DEL MOMENTO. A propósito, y por eso están aquí
+# dentro y no se vuelven a leer del catálogo.
+var carrito: lista = []
+var avisos: lista = []
+
+fn productoPorId(id: entero): dic {
+    para p en catalogo { si p["id"] == id { devolver p } }
+    devolver {"id": -1, "nombre": "?", "iva": "general", "precio": 0.0}
+}
+
+fn enCarrito(id: entero): entero {
+    para i en rango(longitud(carrito)) { si carrito[i]["id"] == id { devolver i } }
+    devolver -1
+}
+
+fn anadir(id: entero) {
+    fijo p: dic = productoPorId(id)
+    fijo i: entero = enCarrito(id)
+    var nuevo: lista = []
+    si i < 0 {
+        nuevo = carrito + [{"id": id, "nombre": p["nombre"], "iva": p["iva"],
+                            "precio": p["precio"], "cantidad": 1}]
+    } sino {
+        para j en rango(longitud(carrito)) {
+            fijo l: dic = carrito[j]
+            si j == i {
+                nuevo = nuevo + [{"id": l["id"], "nombre": l["nombre"],
+                                  "iva": l["iva"], "precio": l["precio"],
+                                  "cantidad": l["cantidad"] + 1}]
+            } sino { nuevo = nuevo + [l] }
+        }
+    }
+    carrito = nuevo
+    revisarPrecios()
+    repintar()
+}
+
+fn quitar(id: entero) {
+    fijo i: entero = enCarrito(id)
+    si i < 0 { devolver }
+    var nuevo: lista = []
+    para j en rango(longitud(carrito)) {
+        fijo l: dic = carrito[j]
+        si j != i { nuevo = nuevo + [l] }
+        si j == i y l["cantidad"] > 1 {
+            nuevo = nuevo + [{"id": l["id"], "nombre": l["nombre"], "iva": l["iva"],
+                              "precio": l["precio"], "cantidad": l["cantidad"] - 1}]
+        }
+    }
+    carrito = nuevo
+    revisarPrecios()
+    repintar()
+}
+
+# Esto es lo que convierte el precio congelado en una decisión en vez de un
+# descuido: si el catálogo cambió, el carrito lo dice.
+fn revisarPrecios() {
+    var nuevos: lista = []
+    para l en carrito {
+        fijo p: dic = productoPorId(l["id"])
+        si p["precio"] != l["precio"] {
+            nuevos = nuevos + [l["nombre"] + ": en el carrito " +
+                moneda(l["precio"]) + ", ahora en tienda " + moneda(p["precio"])]
+        }
+    }
+    avisos = nuevos
+}
+
+fn subirCafe() {
+    var nuevo: lista = []
+    para p en catalogo {
+        si p["id"] == 4 {
+            nuevo = nuevo + [{"id": p["id"], "nombre": p["nombre"],
+                              # El peso no tiene centavos: se redondea al subir,
+                              # o el aviso sale con dos decimales que no existen.
+                              "iva": p["iva"],
+                              "precio": redondear(p["precio"] * 1.15, 0)}]
+        } sino { nuevo = nuevo + [p] }
+    }
+    catalogo = nuevo
+    revisarPrecios()
+    repintar()
+}
+
+# ── las cuentas ───────────────────────────────────────────────────────────
+fn baseDe(l: dic): real { devolver l["precio"] * real(l["cantidad"]) }
+fn ivaDe(l: dic): real { devolver baseDe(l) * IVA[l["iva"]] }
+
+fn baseConTarifa(t: texto): real {
+    devolver suma(mapear(filtrar(carrito, fn(l: dic): bool {
+        devolver l["iva"] == t
+    }), baseDe) + [0.0])
+}
+
+# ── pintar ────────────────────────────────────────────────────────────────
+# «boton» recibe una ETIQUETA y una función, no nodos hijos: el orden es
+# boton(texto, funcion, estilo). Así que la tarjeta es un div con un botón
+# dentro, que además se usa mejor que una tarjeta entera pulsable.
+fn tarjetaDe(p: dic): nodo {
+    devolver etiqueta("div", tarjeta,
+        etiqueta("div", nombreP, p["nombre"]),
+        etiqueta("div", precioP, moneda(p["precio"])),
+        etiqueta("div", etiq, "IVA " + porciento(IVA[p["iva"]])),
+        boton("Añadir", fn() { anadir(p["id"]) }, botonChico))
+}
+
+fn lineaDe(l: dic): nodo {
+    devolver etiqueta("div", filaL,
+        etiqueta("span", creciente, texto(l["cantidad"]) + " × " + l["nombre"]),
+        etiqueta("span", cifra, moneda(baseDe(l))),
+        boton("−", fn() { quitar(l["id"]) }, botonChico),
+        boton("+", fn() { anadir(l["id"]) }, botonChico))
+}
+
+fn repintar() {
+    limpiarPagina()
+    fijo base: real = suma(mapear(carrito, baseDe) + [0.0])
+    fijo ivaTotal: real = suma(mapear(carrito, ivaDe) + [0.0])
+
+    var dentro: lista = [etiqueta("h1", h1, "Carrito")]
+    si longitud(carrito) == 0 {
+        dentro = dentro + [etiqueta("p", etiq, "Toca un producto para añadirlo")]
+    }
+    para l en carrito { dentro = dentro + [lineaDe(l)] }
+    dentro = dentro + [
+        etiqueta("div", estilo({"margenArriba": espacio("medio")}),
+            etiqueta("div", totalFila, etiqueta("span", "subtotal"),
+                     etiqueta("span", cifra, moneda(base))),
+            etiqueta("div", totalFila,
+                     etiqueta("span", "excluido de IVA · base"),
+                     etiqueta("span", cifra, moneda(baseConTarifa("excluido")))),
+            etiqueta("div", totalFila,
+                     etiqueta("span", "IVA 5 % · base " + moneda(baseConTarifa("alimento"))),
+                     etiqueta("span", cifra, moneda(baseConTarifa("alimento") * 0.05))),
+            etiqueta("div", totalFila,
+                     etiqueta("span", "IVA 19 % · base " + moneda(baseConTarifa("general"))),
+                     etiqueta("span", cifra, moneda(baseConTarifa("general") * 0.19))),
+            etiqueta("div", granTotal, etiqueta("span", "total"),
+                     etiqueta("span", cifra, moneda(base + ivaTotal))),
+            etiqueta("div", etiq, "IVA efectivo sobre el subtotal: " +
+                     porcientoSeguro(ivaTotal, base) +
+                     ", no 19 %"))
+    ]
+    para a en avisos { dentro = dentro + [etiqueta("div", avisoCaja, "⚠ " + a)] }
+
+    pintar(etiqueta("div", hoja, etiqueta("div", caja,
+        etiqueta("div", panel,
+            etiqueta("h1", h1, "Tienda"),
+            etiqueta("div", rejilla, mapear(catalogo, tarjetaDe)),
+            etiqueta("div", estilo({"margenArriba": espacio("medio")}),
+                boton("Subir 15 % el precio del café",
+                      fn() { subirCafe() }, botonChico))),
+        etiqueta("div", panel, dentro))))
+}
+
+fn porcientoSeguro(parte: real, total: real): texto {
+    si total == 0.0 { devolver "—" }
+    devolver porciento(parte / total)
+}
+
+anadir(1)
+anadir(4)
+anadir(4)
+anadir(6)
+repintar()
+
+# ── y la comprobación en consola ──────────────────────────────────────────
+imprimir(enNegrita("EL IVA ÚNICO CONTRA EL IVA POR PRODUCTO"))
+imprimir(regla(68))
+imprimir(tablaTexto(mapear(carrito, fn(l: dic): dic {
+    devolver {
+        "producto": l["nombre"],
+        "cant": l["cantidad"],
+        "base": moneda(baseDe(l)),
+        "tarifa": porciento(IVA[l["iva"]]),
+        "iva": moneda(ivaDe(l))
+    }
+})))
+fijo base: real = suma(mapear(carrito, baseDe))
+fijo ivaReal: real = suma(mapear(carrito, ivaDe))
+imprimir("")
+imprimir("  base                    " + alinearDer(moneda(base), 14))
+imprimir("  IVA por producto        " + alinearDer(moneda(ivaReal), 14) +
+         enGris("   (" + porciento(ivaReal / base) + " efectivo)"))
+imprimir("  IVA al 19 % para todo   " + alinearDer(moneda(base * 0.19), 14))
+imprimir("  " + enAmarillo("de más al cliente:     " +
+         alinearDer(moneda(base * 0.19 - ivaReal), 14)))
+imprimir("")
+imprimir("  total correcto          " + alinearDer(moneda(base + ivaReal), 14))
+
+subirCafe()
+imprimir("")
+imprimir(enNegrita("Y SI SUBE EL PRECIO EN TIENDA"))
+imprimir(regla(68))
+para a en avisos { imprimir("  " + enAmarillo("⚠ " + a)) }
+imprimir("  total del carrito       " + alinearDer(moneda(base + ivaReal), 14) +
+         enGris("   el mismo: es el precio que se le mostró"))

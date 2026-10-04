@@ -1,0 +1,72 @@
+# Dependencias: se bajan con «npm install», no se suben.
+node_modules/
+
+# El motor como ejecutable: se construye con «node motor/util/construir-binario.js»
+# y es distinto en cada sistema operativo.
+/n
+/n.exe
+motor/n-completo.js
+
+# Bibliotecas nativas que baja el usuario para los ejemplos (raylib).
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Lo que dejan los ejemplos al correr.
+*.informe.txt
+panel.png
+mi-ventana.png
+*.elb
+*.elb.txt
+
+# Basura de los sistemas y los editores.
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
+
+# Nota: «motor/bundle.js», «espanol-like-v4.html» y «referencia-stdlib.html» SÍ
+# van al repositorio aunque se generen. El argumento del proyecto es «abre este
+# archivo y ya»; si hubiera que construirlos primero, eso deja de ser verdad.
+
+# Los dos pasos intermedios de la construcción: lo que se publica es la versión
+# de la raíz —«espanol-like-v4.html» y «referencia-stdlib.html»—, que es la misma
+# página con su <!DOCTYPE> y su <head>. Estos son el cuerpo sin envolver, y los
+# escribe la misma orden que escribe los buenos. Son 1,35 MB duplicados: la
+# cuarta parte del repositorio, cambiando en cada construcción.
+motor/publicar-ide.html
+motor/publicar-referencia.html
+
+# Lo que escriben los ejemplos al correr de verdad (48 y 49 crean «salida/»).
+salida/
+ejemplos/salida/
+
+# Entregas de sesiones anteriores y empaquetados sueltos: copias, no fuentes.
+Claude outputs/
+*.zip
+
+# Las apps construidas a partir de un ejemplo: «construir-app.js» mete el motor
+# entero dentro de un solo HTML, así que cada una pesa medio mega. Son salida,
+# no fuente: el fuente es el .esl de al lado.
+ejemplos/*.html
+
+# El intérprete de la época en que esto transpilaba a Python. Fuera por dos
+# razones: está dos arquitecturas atrás, y un «index.html» en la raíz es lo que
+# sirve GitHub Pages — la cara pública del proyecto sería el transpilador
+# obsoleto. Si algún día se activa Pages, ese index.html debe ser una copia de
+# «espanol-like-v4.html», no esto.
+/index.html
+
+# Borra los archivos de UNA reorganización concreta, la de este disco: en un
+# clon nuevo esas rutas no existen. Y es un script que borra archivos, así que
+# no es algo para repartir.
+/limpiar.cmd
+
+# Las auditorías viven en «docs/» con la fecha en el nombre. Estas dos de la
+# raíz son las copias viejas, sin fecha.
+/auditoria-motor.html
+/auditoria-web.html

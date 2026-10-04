@@ -1,0 +1,100 @@
+# Una ventana gráfica nativa, abierta desde Ñ. Sin navegador.
+#
+#   node motor/util/n-node.js ejemplos/ventana.esl raylib.dll
+#   node motor/util/n-node.js ejemplos/ventana.esl ./libraylib.so 120
+#
+# El primer argumento es la biblioteca de raylib: en Windows «raylib.dll» (la
+# del zip win64_msvc16, al lado de este proyecto o con su ruta entera), en Linux
+# «./libraylib.so». El segundo, si se pone, es cuántos fotogramas pintar antes
+# de cerrar sola; sin él, la ventana se queda abierta hasta que la cierres o
+# pulses Escape.
+#
+# Hace falta: el intérprete de Node y «npm install koffi». No hace falta ningún
+# compilador de C: koffi trae su binario ya hecho y raylib también.
+
+fijo args = argumentos()
+si longitud(args) == 0 {
+    imprimir("uso: ventana.esl <raylib.dll | ./libraylib.so> [fotogramas]")
+    salir(2)
+}
+fijo RL = args[0]
+
+si no hayNativo() {
+    imprimir("este anfitrión no puede llamar a código nativo.")
+    imprimir("hace falta el intérprete de Node con koffi: npm install koffi")
+    salir(1)
+}
+
+intentar {
+    cargarNativa(RL)
+} capturar (e) {
+    imprimir("no pude abrir " + RL + ": " + e.mensaje)
+    imprimir("baja raylib de github.com/raysan5/raylib/releases y deja la biblioteca aquí al lado")
+    salir(1)
+}
+
+# Un Color de raylib son cuatro bytes, y se pasa por valor. Declarada una vez,
+# se usa como cualquier otro tipo en las firmas de abajo.
+estructuraNativa("Color", {"r": "natural8", "g": "natural8", "b": "natural8", "a": "natural8"})
+
+fn color(r: entero, g: entero, b: entero): dic {
+    devolver {"r": r, "g": g, "b": b, "a": 255}
+}
+
+# La firma de cada función, una vez. A partir de aquí son funciones de Ñ.
+fijo nivelDeAviso   = nativa(RL, "SetTraceLogLevel", "nulo", ["entero"])
+fijo abrirVentana   = nativa(RL, "InitWindow", "nulo", ["entero", "entero", "texto"])
+fijo cerrarVentana  = nativa(RL, "CloseWindow", "nulo", [])
+fijo hayQueCerrar   = nativa(RL, "WindowShouldClose", "log", [])
+fijo objetivoFPS     = nativa(RL, "SetTargetFPS", "nulo", ["entero"])
+fijo empezarDibujo  = nativa(RL, "BeginDrawing", "nulo", [])
+fijo acabarDibujo   = nativa(RL, "EndDrawing", "nulo", [])
+fijo limpiarFondo   = nativa(RL, "ClearBackground", "nulo", ["Color"])
+fijo dibujarTexto   = nativa(RL, "DrawText", "nulo", ["texto", "entero", "entero", "entero", "Color"])
+fijo dibujarRect    = nativa(RL, "DrawRectangle", "nulo", ["entero", "entero", "entero", "entero", "Color"])
+fijo dibujarCirculo = nativa(RL, "DrawCircle", "nulo", ["entero", "entero", "real32", "Color"])
+fijo medirTexto     = nativa(RL, "MeasureText", "entero", ["texto", "entero"])
+fijo ratonX         = nativa(RL, "GetMouseX", "entero", [])
+fijo ratonY         = nativa(RL, "GetMouseY", "entero", [])
+fijo anchoPantalla  = nativa(RL, "GetScreenWidth", "entero", [])
+
+fijo ANCHO = 640
+fijo ALTO = 400
+fijo fondo = color(24, 22, 37)
+fijo tinta = color(240, 240, 245)
+fijo morado = color(79, 63, 212)
+fijo verde = color(80, 200, 140)
+
+nivelDeAviso(4)                      # 4 = LOG_WARNING: menos ruido en la consola
+abrirVentana(ANCHO, ALTO, "Ñ hablando con raylib")
+objetivoFPS(60)
+
+# Que esto conteste el ancho de verdad es la prueba de que la ventana existe:
+# antes de InitWindow devolvía 0.
+imprimir("ventana abierta · ancho según raylib: " + texto(anchoPantalla()))
+
+fijo titular = "Hola desde Ñ"
+fijo tamTitular = 40
+fijo anchoTitular = medirTexto(titular, tamTitular)
+imprimir("raylib mide «" + titular + "» en " + texto(anchoTitular) + " píxeles")
+
+var limite = 0
+si longitud(args) > 1 { limite = entero(args[1]) }
+var n = 0
+mientras no hayQueCerrar() {
+    n = n + 1
+    si limite > 0 y n > limite { romper }
+
+    empezarDibujo()
+    limpiarFondo(fondo)
+    dibujarRect(0, 0, ANCHO, 64, morado)
+    dibujarTexto(titular, (ANCHO - anchoTitular) / 2, 120, tamTitular, tinta)
+    dibujarTexto("fotograma " + texto(n), 24, 22, 20, tinta)
+    dibujarTexto("ratón: " + texto(ratonX()) + ", " + texto(ratonY()), 24, 200, 20, tinta)
+    dibujarTexto("Escape para salir", 24, ALTO - 40, 20, verde)
+    dibujarCirculo(ratonX(), ratonY(), 12.0, verde)
+    acabarDibujo()
+}
+
+cerrarVentana()
+imprimir("ventana cerrada tras " + texto(n) + " fotogramas")

@@ -1,0 +1,145 @@
+# ═══ Temporizadores: lo que pasa solo, cada tanto ══════════════════════════
+# «luego» corre una vez pasado un tiempo y «cada» se repite. Los dos devuelven
+# un número, y ese número es lo único con lo que se pueden DETENER — guardarlo
+# no es una formalidad: sin él el temporizador queda dando vueltas para siempre.
+# eDSL: formato, fecha · núcleo: web, temporizadores, almacén
+
+usar estilo, estiloGlobal, reiniciar, tema, color, espacio, radio,
+     centrado, enColumna, enFila, separado, alPasar de "estilo"
+usar regla, enNegrita, enVerde, enRojo, enGris, enAmarillo, moneda,
+     tiempoReloj, duracionLegible, barraTexto, plural, decimales de "formato"
+usar hoy, deFecha de "fecha"
+
+# ── el estado ─────────────────────────────────────────────────────────────
+var cuenta: entero = recuperar("cuenta", 0)
+var segundos: entero = 0
+var corriendo: bool = falso
+var idReloj: entero = 0
+var sucesos: lista = []
+
+fn anotar(que: texto) {
+    sucesos = sucesos + [que]
+}
+
+fn sumar(cuanto: entero) {
+    cuenta = cuenta + cuanto
+    guardar("cuenta", cuenta)
+    anotar("cuenta → " + texto(cuenta))
+    repintar()
+}
+
+fn tic() {
+    segundos = segundos + 1
+    anotar("tic " + tiempoReloj(segundos * 1000))
+    repintar()
+}
+
+fn arrancar() {
+    si corriendo { devolver }
+    corriendo = cierto
+    # El número que devuelve «cada» es lo único que permite pararlo después
+    idReloj = cada(1000, fn() { tic() })
+    anotar("arrancó el reloj, id " + texto(idReloj))
+    repintar()
+}
+
+fn parar() {
+    si no corriendo { devolver }
+    fijo pudo: bool = detener(idReloj)
+    corriendo = falso
+    anotar("paró el reloj (detener dijo " + texto(pudo) + ")")
+    repintar()
+}
+
+fn reiniciarTodo() {
+    si corriendo { parar() }
+    segundos = 0
+    cuenta = 0
+    guardar("cuenta", 0)
+    anotar("todo a cero")
+    repintar()
+}
+
+# ── los estilos ───────────────────────────────────────────────────────────
+reiniciar()
+estiloGlobal(":root", tema({
+    "color": {"marca": "#4f3fd4", "texto": "#1a1a1a", "suave": "#888888",
+              "fondo": "#ffffff", "borde": "#e5e5e5"},
+    "espacio": {"corto": "8px", "medio": "16px", "largo": "24px"},
+    "radio": {"medio": "8px"}
+}))
+fijo numeroGrande = estilo({
+    "tamano": "56px", "peso": "700", "color": color("marca"),
+    "fuente": "ui-monospace, monospace", "alineacion": "centro"
+})
+fijo panel = estilo(
+    {"fondo": color("fondo"), "radio": radio("medio"), "relleno": espacio("largo"),
+     "borde": "1px solid " + color("borde"), "anchoMaximo": "420px", "margen": "0 auto"},
+    enColumna(16)
+)
+
+fn repintar() {
+    limpiarPagina()
+    var estado: texto = "detenido"
+    si corriendo { estado = "corriendo" }
+    pintar(etiqueta("div", {"estilo": panel},
+        etiqueta("div", {"estilo": numeroGrande}, texto(cuenta)),
+        etiqueta("div", {"estilo": estilo(separado(8))},
+            boton("−5", fn() { sumar(0 - 5) }),
+            boton("−1", fn() { sumar(0 - 1) }),
+            boton("+1", fn() { sumar(1) }),
+            boton("+5", fn() { sumar(5) })
+        ),
+        etiqueta("hr", {}),
+        etiqueta("div", {"estilo": estilo({"alineacion": "centro", "fuente": "ui-monospace, monospace",
+                                           "tamano": "24px"})}, tiempoReloj(segundos * 1000)),
+        etiqueta("div", {"estilo": estilo(separado(8))},
+            boton("Arrancar", fn() { arrancar() }),
+            boton("Parar", fn() { parar() }),
+            boton("A cero", fn() { reiniciarTodo() })
+        ),
+        etiqueta("p", {"estilo": estilo({"color": color("suave"), "tamano": "13px",
+                                         "alineacion": "centro"})}, "reloj " + estado)
+    ))
+}
+
+repintar()
+
+# ── y la comprobación sin navegador ───────────────────────────────────────
+# El anfitrión de prueba corre los temporizadores EN EL ACTO, una vez: así un
+# ejemplo con «cada» enseña su efecto en vez de quedarse esperando.
+imprimir(enNegrita("CONTADOR Y CRONÓMETRO"))
+imprimir(regla(56))
+
+sumar(5)
+sumar(5)
+sumar(0 - 1)
+imprimir("Después de +5, +5 y −1: la cuenta va en " + enNegrita(texto(cuenta)))
+imprimir("Y quedó guardada: recuperar(\"cuenta\") = " + texto(recuperar("cuenta", 0)))
+
+imprimir("")
+arrancar()
+imprimir("Reloj arrancado. Lleva " + tiempoReloj(segundos * 1000) +
+         " (" + plural(segundos, "tic") + ")")
+parar()
+imprimir("Reloj parado.")
+
+imprimir("")
+imprimir(enNegrita("UNA SOLA VEZ, CON «luego»"))
+imprimir(regla(56))
+fijo id1: entero = luego(2000, fn() { imprimir("  ← esto corrió desde «luego»") })
+imprimir("  luego() devolvió el id " + texto(id1))
+# Detener uno que ya corrió devuelve cierto si el id existió; detener un id
+# inventado, falso. Eso permite saber si se está deteniendo algo real.
+imprimir("  detener(" + texto(id1) + ") → " + texto(detener(id1)))
+imprimir("  detener(9999) → " + texto(detener(9999)) + enGris("   ← un id que nunca existió"))
+
+imprimir("")
+imprimir(enNegrita("TODO LO QUE PASÓ, EN ORDEN"))
+imprimir(regla(56))
+para s en sucesos { imprimir("  · " + s) }
+
+imprimir("")
+imprimir(enAmarillo("El id del temporizador no es un detalle: es lo único que"))
+imprimir(enAmarillo("permite pararlo. Un «cada» cuyo id se perdió sigue corriendo"))
+imprimir(enAmarillo("hasta que se cierre la página, y nadie sabe de dónde salió."))

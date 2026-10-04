@@ -1,0 +1,58 @@
+# ═══ Normalizar nombres que llegaron escritos de cualquier manera ═══════════
+# El problema de todos los días en Colombia: «GONZALEZ», «González» y
+# «gonzalez» son la misma persona, y una base de datos cree que son tres.
+# eDSL: texto, formato, datos
+
+usar titular, mayusculas, minusculas, sinAcentos, igualSinAcentos, parecido,
+     recortar, palabras, unir, aIdentificador, aUrl, ordenAlfabetico,
+     capitalizar, reemplazar, distancia de "texto"
+usar tablaTexto, regla, enNegrita, enVerde, enRojo, porciento, decimales de "formato"
+
+fijo sucios: lista = [
+    "  JUAN CARLOS GONZALEZ  ",
+    "maría  josé  RESTREPO",
+    "pedro de la cruz peña",
+    "ANA MARÍA RUEDA ÁLVAREZ",
+    "luis   Ángel  MARTINEZ"
+]
+
+imprimir(enNegrita("DE COMO LLEGÓ A COMO SE ESCRIBE"))
+imprimir(regla(72))
+var filas: lista = []
+para s en sucios {
+    # recortar quita los extremos; palabras+unir aplasta los espacios de dentro
+    fijo limpio: texto = unir(palabras(s), " ")
+    filas = filas + [{
+        "como llegó": "«" + s + "»",
+        "normalizado": titular(limpio),
+        "para un id": aIdentificador(titular(limpio)),
+        "para una url": aUrl(limpio)
+    }]
+}
+imprimir(tablaTexto(filas))
+
+# «titular» sabe que «de», «la» y «del» van en minúscula: es la regla del
+# español, no la del inglés, donde todas las palabras se capitalizan.
+imprimir("")
+imprimir(enNegrita("LA REGLA DEL ESPAÑOL"))
+imprimir("  titular(\"pedro de la cruz\") → " + titular("pedro de la cruz"))
+imprimir("  capitalizar solo toca la primera → " + capitalizar("pEDRO DE LA CRUZ"))
+
+imprimir("")
+imprimir(enNegrita("LA Ñ NO ES UNA N CON SOMBRERO"))
+imprimir("  sinAcentos(\"Martín Peña\") → " + sinAcentos("Martín Peña") + "   ← la ñ se queda")
+imprimir("  aUrl(\"Camión Año 2026\")   → " + aUrl("Camión Año 2026") + "   ← aquí sí pasa a n, que una url no admite ñ")
+
+imprimir("")
+imprimir(enNegrita("BUSCAR SIN PELEARSE CON LAS TILDES"))
+para par en [["Martín", "martin"], ["Peña", "pena"], ["Gómez", "Gomez"], ["Gómez", "Gonzalez"]] {
+    var r: texto = enRojo("distintos")
+    si igualSinAcentos(par[0], par[1]) { r = enVerde("el mismo") }
+    imprimir("  " + par[0] + " / " + par[1] + "  →  " + r +
+             "   parecido " + porciento(parecido(par[0], par[1])) +
+             "   cambios " + texto(distancia(par[0], par[1])))
+}
+
+imprimir("")
+imprimir(enNegrita("ORDEN ALFABÉTICO DEL ESPAÑOL — la ñ va entre la n y la o"))
+imprimir("  " + texto(ordenAlfabetico(["ñandú", "nube", "ópera", "ñu", "naranja", "él", "el"])))

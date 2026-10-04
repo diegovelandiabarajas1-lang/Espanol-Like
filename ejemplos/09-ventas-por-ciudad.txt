@@ -1,0 +1,60 @@
+# ═══ Ventas por ciudad y por mes ════════════════════════════════════════════
+# Agrupar, resumir y pivotar: las tres cosas que se le hacen a una tabla de
+# ventas antes de poder decir nada sobre ella.
+# eDSL: datos, formato
+
+usar deRegistros, agrupar, sumaCol, promedioCol, contarCol, maxCol,
+     ordenarPor, pivotar, resumir, vistazo, columna, unicas, contarPor de "datos"
+usar moneda, tablaTexto, regla, barraTexto, enNegrita de "formato"
+
+fijo ventas = deRegistros([
+    {"ciudad": "Bucaramanga",   "mes": "enero",   "vendedor": "Ana",    "monto": 12400000},
+    {"ciudad": "Bucaramanga",   "mes": "febrero", "vendedor": "Ana",    "monto": 15100000},
+    {"ciudad": "Bucaramanga",   "mes": "enero",   "vendedor": "Luis",   "monto": 8900000},
+    {"ciudad": "Bucaramanga",   "mes": "febrero", "vendedor": "Luis",   "monto": 9600000},
+    {"ciudad": "Girón",         "mes": "enero",   "vendedor": "Marta",  "monto": 5400000},
+    {"ciudad": "Girón",         "mes": "febrero", "vendedor": "Marta",  "monto": 6100000},
+    {"ciudad": "Floridablanca", "mes": "enero",   "vendedor": "Pedro",  "monto": 19800000},
+    {"ciudad": "Floridablanca", "mes": "febrero", "vendedor": "Pedro",  "monto": 17200000},
+    {"ciudad": "Floridablanca", "mes": "enero",   "vendedor": "Sofía",  "monto": 11300000},
+    {"ciudad": "Floridablanca", "mes": "febrero", "vendedor": "Sofía",  "monto": 13700000}
+])
+
+imprimir(enNegrita("LAS FILAS TAL CUAL"))
+vistazo(ventas)
+
+imprimir("")
+imprimir(enNegrita("TOTAL POR CIUDAD"))
+fijo porCiudad = ordenarPor(agrupar(ventas, ["ciudad"], {
+    "total": sumaCol("monto"),
+    "promedio": promedioCol("monto"),
+    "mejor": maxCol("monto"),
+    "facturas": contarCol()
+}), "total", cierto)
+vistazo(porCiudad)
+
+imprimir("")
+imprimir(enNegrita("CADA CIUDAD SOBRE EL TOTAL"))
+fijo total: entero = 0
+fijo todos: lista = columna(ventas, "monto")
+var suma1: entero = 0
+para m en todos { suma1 = suma1 + m }
+para i en rango(longitud(columna(porCiudad, "ciudad"))) {
+    fijo c: texto = columna(porCiudad, "ciudad")[i]
+    fijo t: real = real(columna(porCiudad, "total")[i])
+    imprimir("  " + c + ": " + moneda(t))
+    imprimir("    " + barraTexto(t, real(suma1), 36))
+}
+
+imprimir("")
+imprimir(enNegrita("CIUDAD CONTRA MES — una columna pasa a ser varias"))
+vistazo(pivotar(ventas, "ciudad", "mes", {"monto": sumaCol("monto")}))
+
+imprimir("")
+imprimir(enNegrita("LA TABLA ENTERA EN UNA FILA"))
+vistazo(resumir(ventas, {"total": sumaCol("monto"), "facturas": contarCol()}))
+
+imprimir("")
+imprimir("Ciudades distintas: " + texto(unicas(ventas, "ciudad")))
+imprimir("Facturas por vendedor:")
+vistazo(contarPor(ventas, "vendedor"))

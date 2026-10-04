@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auditoría Web de Ñ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --papel:#F3F2F7; --tarjeta:#FFFFFF; --hundido:#ECEBF3;
+  --tinta:#17161F; --tinta-2:#434254; --suave:#6C6B80;
+  --linea:#E1E0EB; --linea-2:#CFCEDD;
+  --acento:#4F3FD4; --acento-suave:#EEEBFF;
+  --critica:#A8201A; --critica-fondo:#FBEBEA;
+  --alta:#8A5800;    --alta-fondo:#FBF1E0;
+  --media:#1D5E8C;   --media-fondo:#E8F1F8;
+  --baja:#4A4A5E;    --baja-fondo:#EEEDF3;
+  --ok:#15704A;      --ok-fondo:#E9F5EE;
+  --codigo-fondo:#1A1926; --codigo-tinta:#E6E4F2; --codigo-suave:#9A97B8;
+  --ui:"Public Sans", system-ui, -apple-system, sans-serif;
+  --disp:"Fraunces", Georgia, serif;
+  --mono:"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --papel:#0E0E14; --tarjeta:#16161F; --hundido:#1D1D28;
+    --tinta:#EDECF5; --tinta-2:#C2C1D4; --suave:#8B8AA2;
+    --linea:#25252F; --linea-2:#343444;
+    --acento:#A093FF; --acento-suave:#221E3D;
+    --critica:#F2857D; --critica-fondo:#2E1614;
+    --alta:#DCA744;    --alta-fondo:#2B2113;
+    --media:#74B4DC;   --media-fondo:#12222D;
+    --baja:#9A99AE;    --baja-fondo:#1D1D28;
+    --ok:#63CC91;      --ok-fondo:#122A1E;
+    --codigo-fondo:#101019; --codigo-tinta:#E6E4F2; --codigo-suave:#807EA0;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --papel:#0E0E14; --tarjeta:#16161F; --hundido:#1D1D28;
+  --tinta:#EDECF5; --tinta-2:#C2C1D4; --suave:#8B8AA2;
+  --linea:#25252F; --linea-2:#343444;
+  --acento:#A093FF; --acento-suave:#221E3D;
+  --critica:#F2857D; --critica-fondo:#2E1614;
+  --alta:#DCA744;    --alta-fondo:#2B2113;
+  --media:#74B4DC;   --media-fondo:#12222D;
+  --baja:#9A99AE;    --baja-fondo:#1D1D28;
+  --ok:#63CC91;      --ok-fondo:#122A1E;
+  --codigo-fondo:#101019; --codigo-tinta:#E6E4F2; --codigo-suave:#807EA0;
+}
+*{box-sizing:border-box}
+body{margin:0; background:var(--papel); color:var(--tinta); font-family:var(--ui);
+  font-size:15px; line-height:1.6; -webkit-font-smoothing:antialiased}
+.envoltura{max-width:960px; margin:0 auto; padding-inline:20px; padding-block:0 72px}
+
+header.portada{padding-block:56px 28px; border-bottom:2px solid var(--tinta); margin-bottom:34px}
+.sello{font-family:var(--mono); font-size:11.5px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--acento); font-weight:700; margin:0 0 14px}
+h1{font-family:var(--disp); font-variation-settings:"opsz" 120; font-weight:600;
+  font-size:clamp(32px, 6.5vw, 54px); line-height:1.04; letter-spacing:-.02em; margin:0 0 16px; text-wrap:balance}
+.bajada{font-size:17px; color:var(--tinta-2); max-width:62ch; margin:0 0 24px}
+.cifras{display:flex; flex-wrap:wrap; gap:26px; font-family:var(--mono); font-size:12px; color:var(--suave)}
+.cifras b{display:block; font-size:23px; color:var(--tinta); font-weight:700; font-variant-numeric:tabular-nums}
+.cifras .rojo{color:var(--critica)}
+
+h2{font-family:var(--disp); font-variation-settings:"opsz" 40; font-weight:600; font-size:27px;
+  margin:46px 0 6px; letter-spacing:-.01em; border-bottom:1px solid var(--tinta); padding-bottom:7px}
+h2:first-of-type{margin-top:0}
+.intro{color:var(--suave); font-size:14px; margin:10px 0 22px; max-width:68ch}
+p{max-width:72ch}
+code{font-family:var(--mono); font-size:.87em; background:var(--hundido); padding:1.5px 5px; border-radius:4px}
+pre{background:var(--codigo-fondo); color:var(--codigo-tinta); padding:13px 15px; border-radius:9px;
+  overflow-x:auto; margin:12px 0; max-width:100%}
+pre code{font-family:var(--mono); font-size:12.5px; background:none; padding:0; line-height:1.6; white-space:pre}
+.com{color:var(--codigo-suave)}
+
+.h{border:1px solid var(--linea-2); border-radius:11px; margin:18px 0; overflow:hidden; background:var(--tarjeta)}
+.h-cab{display:flex; align-items:baseline; gap:11px; padding:13px 16px; flex-wrap:wrap}
+.sev{font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase;
+  font-weight:700; padding:3px 9px; border-radius:999px; flex:none}
+.critica .sev{background:var(--critica-fondo); color:var(--critica)}
+.alta .sev{background:var(--alta-fondo); color:var(--alta)}
+.media .sev{background:var(--media-fondo); color:var(--media)}
+.baja .sev{background:var(--baja-fondo); color:var(--baja)}
+.h-cab h3{margin:0; font-size:16.5px; font-weight:700; flex:1; min-width:200px}
+.donde{font-family:var(--mono); font-size:11.5px; color:var(--suave)}
+.h-cuerpo{padding:0 16px 16px}
+.h-cuerpo p{margin:0 0 10px}
+.etq{font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--suave); font-weight:700; margin:14px 0 5px}
+.arreglado{background:var(--ok-fondo); border-top:1px solid var(--linea-2); padding:11px 16px;
+  font-size:14px; color:var(--ok); font-weight:600}
+.prueba{background:var(--hundido); border-radius:8px; padding:11px 13px; font-family:var(--mono);
+  font-size:12.5px; white-space:pre-wrap; margin:6px 0 0; color:var(--tinta-2)}
+
+table{border-collapse:collapse; width:100%; margin:14px 0; font-size:14px}
+th,td{border:1px solid var(--linea-2); padding:8px 11px; text-align:left; vertical-align:top}
+th{background:var(--hundido); font-weight:700; font-size:13px}
+td.n{text-align:center; font-family:var(--mono); font-variant-numeric:tabular-nums}
+.tabla-envoltura{overflow-x:auto}
+
+.fase{border-left:3px solid var(--acento); padding:2px 0 2px 16px; margin:20px 0}
+.fase h3{margin:0 0 4px; font-size:16.5px}
+.fase .coste{font-family:var(--mono); font-size:11.5px; color:var(--suave)}
+.fase ul{margin:8px 0 0; padding-left:20px}
+.fase li{margin:4px 0}
+.fase.hecha{border-left-color:var(--ok)}
+.fase.hecha h3::after{content:" ✓"; color:var(--ok)}
+
+.bien{background:var(--ok-fondo); border:1px solid var(--ok); border-radius:11px; padding:16px 18px; margin:18px 0}
+.bien h3{margin:0 0 8px; font-size:16px; color:var(--ok)}
+.bien ul{margin:0; padding-left:20px}
+.bien li{margin:5px 0}
+
+.diagrama{margin:18px 0; overflow-x:auto}
+.diagrama svg{display:block; width:100%; min-width:560px; max-width:740px; margin:0 auto; height:auto}
+.caja{fill:var(--tarjeta); stroke:var(--linea-2); stroke-width:1.5}
+.caja.acento{fill:var(--acento-suave); stroke:var(--acento)}
+.caja.fondo{fill:var(--hundido); stroke:var(--linea-2)}
+.et{font-family:var(--ui); font-size:13px; fill:var(--tinta); text-anchor:middle}
+.et.fuerte{font-weight:700}
+.et.menor{font-size:11px; fill:var(--suave)}
+.et.micro{font-size:10.5px; fill:var(--suave); font-family:var(--mono)}
+.et.dest{text-anchor:end; fill:var(--acento)}
+.et .mono, text.mono{font-family:var(--mono)}
+.f{fill:none; stroke:var(--linea-2); stroke-width:1.8}
+.d{fill:none; stroke:var(--acento); stroke-width:1.8; stroke-dasharray:6 5}
+.f-relleno{fill:var(--linea-2)}
+.f-punteado{fill:var(--acento)}
+.pie{margin-top:52px; padding-top:20px; border-top:1px solid var(--linea); font-size:13px; color:var(--suave)}
+@media (max-width:620px){ header.portada{padding-block:36px 22px} .cifras{gap:18px} }
+@media (prefers-reduced-motion:reduce){*{transition:none!important; animation:none!important}}
+</style>
+</head>
+<body>
+
+
+<div class="envoltura">
+<header class="portada">
+  <p class="sello">Ñ · auditoría del lado web</p>
+  <h1>La página que Ñ construye</h1>
+  <p class="bajada">Revisión del árbol de nodos, el sistema de estilo, el anfitrión de la zona
+    aislada y el modelo de interacción. Todo lo que sigue se reprodujo <strong>ejecutando</strong>
+    el motor y midiendo en un navegador de verdad, no leyendo el código.</p>
+  <div class="cifras">
+    <div><b class="rojo">1</b>crítica</div>
+    <div><b>7</b>altas</div>
+    <div><b>5</b>medias</div>
+    <div><b>2</b>bajas</div>
+    <div><b>2.762</b>líneas revisadas</div>
+    <div><b>390</b>pruebas en verde</div>
+  </div>
+</header>
+
+<h2>Resumen</h2>
+<p>El lado web de Ñ tiene una base buena: el árbol de nodos es coherente, el estilo es composable
+y la frontera de seguridad aguanta. Lo que le falta no es pulido, es <strong>el modelo de
+interacción</strong>. Hoy la única forma de actualizar la página es repintarla entera, y eso
+—medido en Chrome— <strong>borra lo que el usuario estaba escribiendo</strong> y pierde el
+desplazamiento. Sobre esa base no se puede construir un formulario.</p>
+
+<p>Y buscando fallos del DSL apareció uno que no era del DSL: <strong>el JIT daba resultados
+distintos al intérprete</strong> en cuanto un operando dejaba de ser un número. Estaba
+silenciosamente corrompiendo programas a partir de la novena llamada a una función. Ya está
+arreglado, con cuatro regresiones.</p>
+
+<h2>Qué se auditó</h2>
+<div class="tabla-envoltura">
+<table>
+  <tr><th>Pieza</th><th>Archivo</th><th>Líneas</th><th>Qué hace</th></tr>
+  <tr><td>Árbol de nodos</td><td><code>src/04-stdlib.js</code></td><td class="n">331–504</td><td>8 constructores; solo <code>pintar</code> toca la página</td></tr>
+  <tr><td>Sistema de estilo</td><td><code>src/04-stdlib.js</code></td><td class="n">505–721</td><td>17 funciones; clases locales por contenido</td></tr>
+  <tr><td>Anfitrión</td><td><code>ide/hijo.html</code></td><td class="n">432</td><td>pila de inserción, hoja de clases, controles</td></tr>
+  <tr><td>Puente</td><td><code>ide/padre.html</code></td><td class="n">1.069</td><td>editor, paneles, <code>postMessage</code></td></tr>
+  <tr><td>Pruebas</td><td><code>pruebas/web.js</code> · <code>estilos.js</code></td><td class="n">402</td><td>83 pruebas</td></tr>
+</table>
+</div>
+
+<h2>Cómo está montado</h2>
+<div class="diagrama">
+<svg viewBox="0 0 740 470" role="img" aria-label="Del programa en Ñ al DOM de la zona aislada, con el lazo de interacción que vuelve por un repintado completo">
+  <defs>
+    <marker id="pf" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 4 L0 8 z" class="f-relleno"/>
+    </marker>
+    <marker id="pd" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 4 L0 8 z" class="f-punteado"/>
+    </marker>
+  </defs>
+
+  <rect class="caja acento" x="270" y="8" width="200" height="42" rx="9"/>
+  <text class="et fuerte" x="370" y="34">Programa en Ñ</text>
+
+  <rect class="caja" x="40" y="104" width="250" height="52" rx="9"/>
+  <text class="et fuerte" x="165" y="126">Árbol de nodos</text>
+  <text class="et menor" x="165" y="144">ObjNodo</text>
+
+  <rect class="caja" x="450" y="104" width="250" height="52" rx="9"/>
+  <text class="et fuerte" x="575" y="126">Árbol de estilo</text>
+  <text class="et menor" x="575" y="144">ObjEstilo</text>
+
+  <rect class="caja" x="450" y="190" width="250" height="46" rx="9"/>
+  <text class="et" x="575" y="209">clase local <tspan class="mono">.sXXXX</tspan></text>
+  <text class="et menor" x="575" y="226">nombre = huella del contenido</text>
+
+  <rect class="caja acento" x="270" y="264" width="200" height="44" rx="9"/>
+  <text class="et fuerte" x="370" y="291"><tspan class="mono">pintar()</tspan></text>
+
+  <rect class="caja" x="230" y="344" width="280" height="46" rx="9"/>
+  <text class="et fuerte" x="370" y="363">Anfitrión</text>
+  <text class="et menor" x="370" y="381">pila de inserción · hoja de clases</text>
+
+  <rect class="caja fondo" x="270" y="418" width="200" height="42" rx="9"/>
+  <text class="et fuerte" x="370" y="444">DOM de la zona aislada</text>
+
+  <path class="f" d="M330 50 L 200 98" marker-end="url(#pf)"/>
+  <text class="et micro" x="222" y="82">etiqueta, boton</text>
+  <path class="f" d="M410 50 L 540 98" marker-end="url(#pf)"/>
+  <text class="et micro" x="524" y="82">estilo, alPasar</text>
+
+  <path class="f" d="M575 156 L 575 184" marker-end="url(#pf)"/>
+  <path class="f" d="M165 156 C 165 230, 250 250, 266 274" marker-end="url(#pf)"/>
+  <path class="f" d="M575 236 C 575 258, 492 262, 474 276" marker-end="url(#pf)"/>
+  <path class="f" d="M370 308 L 370 338" marker-end="url(#pf)"/>
+  <path class="f" d="M370 390 L 370 412" marker-end="url(#pf)"/>
+
+  <path class="d" d="M470 439 H 690 Q 716 439 716 413 V 312 Q 716 286 690 286 H 478" marker-end="url(#pd)"/>
+  <text class="et micro dest" x="704" y="352">pulsar o cambiar →</text>
+  <text class="et micro dest" x="704" y="368">repintado completo</text>
+</svg>
+</div>
+<p class="intro">La flecha de puntos es el problema: la única vuelta desde la interacción al
+programa termina en un repintado completo, y ahí es donde se pierde el estado del usuario.</p>
+
+<h2>Hallazgos</h2>
+
+<div class="h critica">
+  <div class="h-cab"><span class="sev">Crítica</span><h3>C-1 · El JIT y el intérprete daban resultados distintos</h3>
+    <span class="donde">src/03-vm-jit.js:828, 833, 842, 844</span></div>
+  <div class="h-cuerpo">
+    <p>Los operadores binarios compilados prueban los tipos <em>dentro</em> del <code>&amp;&amp;</code>,
+    y el cortocircuito se salta la evaluación del segundo operando en cuanto el primero no es un
+    número. El camino lento recibía <code>undefined</code>.</p>
+    <pre><code><span class="com">// generado por el JIT para:  devolver "x" + texto(i)</span>
+((typeof (_r$0="x") === 'number' &amp;&amp; typeof (_r$1=rt.call(rt.g("texto"),[_v$i])) === 'number')
+  ? _r$0 + _r$1 : rt.add(_r$0, _r$1))
+<span class="com">//        ↑ falso, así que _r$1 nunca se asigna → rt.add("x", undefined)</span></code></pre>
+    <p class="etq">Tres formas de fallar, todas medidas</p>
+    <div class="prueba">concatenar textos     intérprete: a11      ·  JIT: ERROR «no se puede sumar texto y nulo»
+comparar textos       intérprete: cierto   ·  JIT: ERROR «no se pueden comparar texto y nulo»
+igualdad de listas    intérprete: cierto   ·  JIT: <b>falso</b>   ← equivocado y sin avisar
+efectos del 2.º op.   intérprete: 12/12    ·  JIT: 0/12   ← la función nunca se llamó</div>
+    <p style="margin-top:12px">Y solo aparece <strong>a partir de la novena llamada</strong>, que es
+    cuando entra el JIT: un programa funciona durante las pruebas y se rompe con datos reales.
+    Golpea de lleno al lado web, porque construir HTML es concatenar texto.</p>
+    <p class="etq">Arreglo</p>
+    <p>Evaluar los dos operandos antes de mirar sus tipos, con el operador coma:
+    <code>((x=A, y=B, typeof x === 'number' &amp;&amp; typeof y === 'number') ? … : …)</code>.
+    Cuatro sitios, una línea cada uno.</p>
+  </div>
+  <div class="arreglado">Ya aplicado y verificado · 4 regresiones nuevas en <code>pruebas/motor.js</code> (141 pruebas)</div>
+</div>
+
+<div class="h alta">
+  <div class="h-cab"><span class="sev">Alta</span><h3>A-1 · Repintar borra lo que el usuario estaba escribiendo</h3>
+    <span class="donde">src/04-stdlib.js:497 · ide/hijo.html (limpiar)</span></div>
+  <div class="h-cuerpo">
+    <p>El único camino de actualización es <code>limpiarPagina()</code> y volver a pintar. El DOM se
+    destruye y se reconstruye, así que el foco, la selección, el texto a medio escribir y el
+    desplazamiento desaparecen.</p>
+    <div class="prueba">antes de pulsar   foco: INPUT · valor: "hola que tal" · cursor: 12
+después           foco: BODY  · valor: ""              ← se perdió
+desplazamiento    1500 px → 0 px</div>
+    <p style="margin-top:12px">Con esto no se puede escribir un formulario: cualquier botón que
+    actualice un contador vacía las cajas de texto de al lado.</p>
+    <p class="etq">Recomendación, en tres escalones</p>
+    <p><strong>1.</strong> Preservar foco, selección y valores en el anfitrión: anotarlos antes de
+    <code>limpiar()</code> y restaurarlos después. ~40 líneas y quita el 80 % del dolor.
+    <strong>2.</strong> Dar identidad a los nodos (<code>boton</code>/<code>entrada</code> con
+    clave opcional) y reutilizar el elemento existente en vez de recrearlo.
+    <strong>3.</strong> Solo si hace falta, reconciliación con comparación de árboles.</p>
+  </div>
+</div>
+
+<div class="h alta">
+  <div class="h-cab"><span class="sev">Alta</span><h3>A-2 · Los botones y las entradas son lo único que no se puede estilar</h3>
+    <span class="donde">src/04-stdlib.js:424, 432</span></div>
+  <div class="h-cuerpo">
+    <p><code>boton</code> tiene aridad fija 2 y no acepta un <code>estilo</code>; <code>entrada</code>
+    tampoco lo recoge. Envolverlos en un <code>span</code> estiliza el envoltorio, no el control.</p>
+    <div class="prueba">pintar(boton("Aceptar", nulo, estilo({"fondo": "azul"})))
+→ «boton» espera 2 argumento(s) y recibió 3</div>
+    <p style="margin-top:12px">Justo los dos elementos que el usuario toca, y que más necesitan
+    estados <code>alPasar</code> y <code>alEnfocar</code>.</p>
+    <p class="etq">Recomendación</p>
+    <p>Pasar los dos a aridad variable y recoger <code>estilo</code> y atributos como hace
+    <code>etiqueta</code>. Es el mismo bucle de argumentos, extraído a una función común.</p>
+  </div>
+</div>
+
+<div class="h alta">
+  <div class="h-cab"><span class="sev">Alta</span><h3>A-3 · Una entrada no tiene valor inicial ni se puede leer</h3>
+    <span class="donde">src/04-stdlib.js:432</span></div>
+  <div class="h-cuerpo">
+    <p><code>entrada(rotulo, funcion)</code> solo avisa cuando el usuario cambia algo. No se le puede
+    dar un valor de partida ni consultarlo desde el programa, así que no se puede editar un dato que
+    ya existe: solo capturar uno nuevo.</p>
+    <p class="etq">Recomendación</p>
+    <p><code>entrada(rotulo, funcion, valor?)</code> y un tipo de nodo para área de texto,
+    desplegable y casilla. Encaja con A-2: un solo bucle de argumentos para todos los controles.</p>
+  </div>
+</div>
+
+<div class="h alta">
+  <div class="h-cab"><span class="sev">Alta</span><h3>A-4 · Los eventos son dos</h3>
+    <span class="donde">ide/hijo.html (boton, entrada)</span></div>
+  <div class="h-cuerpo">
+    <p>Pulsar un botón y cambiar una entrada. No hay teclado, ratón, envío de formulario, foco,
+    desplazamiento ni eventos sobre el lienzo. Una tecla Escape o un Enter para enviar no se pueden
+    escribir.</p>
+    <p class="etq">Recomendación</p>
+    <p>Un <code>alEvento(nodo, "tecla", funcion)</code> con una lista corta y explícita de eventos
+    permitidos, y un valor de tipo <code>dic</code> con lo que el manejador necesita. Lista blanca,
+    no paso directo del objeto del navegador: eso último rompería la frontera de datos que el resto
+    del DSL mantiene.</p>
+  </div>
+</div>
+
+<div class="h alta">
+  <div class="h-cab"><span class="sev">Alta</span><h3>A-5 · Un segundo diccionario se convierte en texto visible</h3>
+    <span class="donde">src/04-stdlib.js:375–399</span></div>
+  <div class="h-cuerpo">
+    <p><code>etiqueta</code> toma el primer diccionario como atributos; el segundo cae al camino de
+    los hijos y se pinta como texto, sin error.</p>
+    <div class="prueba">pintar(etiqueta("div", {"id": "a"}, {"class": "b"}, "hola"))
+→ &lt;div id="a"&gt;{class: "b"}hola&lt;/div&gt;</div>
+    <p style="margin-top:12px">Es fácil de escribir por descuido y el resultado se ve raro sin decir
+    por qué.</p>
+    <p class="etq">Recomendación</p>
+    <p>Fusionar los diccionarios sucesivos como atributos, o rechazar el segundo con un mensaje.
+    Fusionar es más útil y coherente con cómo se fusionan los estilos.</p>
+  </div>
+</div>
+
+<div class="h alta">
+  <div class="h-cab"><span class="sev">Alta</span><h3>A-6 · Una animación se queda sin definición al limpiar la página</h3>
+    <span class="donde">src/04-stdlib.js:701 · ide/hijo.html (limpiar)</span></div>
+  <div class="h-cuerpo">
+    <p><code>fotogramas</code> emite su <code>@keyframes</code> en el momento de construirse;
+    <code>limpiarPagina()</code> borra la hoja entera. Después, las clases se vuelven a emitir al
+    pintar, pero los fotogramas no: la regla <code>animation</code> apunta a un nombre que ya no
+    existe.</p>
+    <div class="prueba">fijo latir = fotogramas({…})   ← emite @keyframes
+limpiarPagina()                 ← lo borra
+pintar(… animacion: latir …)    ← la clase vuelve, los fotogramas no</div>
+    <p style="margin-top:12px">Y el patrón normal de una aplicación es exactamente ese:
+    <code>limpiarPagina()</code> al principio de cada repintado.</p>
+    <p class="etq">Recomendación</p>
+    <p>Guardar los fotogramas en una lista del motor y reemitirlos junto a las clases en cada
+    pintado, en vez de emitirlos al construir.</p>
+  </div>
+</div>
+
+<div class="h alta">
+  <div class="h-cab"><span class="sev">Alta</span><h3>A-7 · No hay dónde guardar nada, ni reloj</h3>
+    <span class="donde">consecuencia del aislamiento</span></div>
+  <div class="h-cuerpo">
+    <p>Medido dentro de la zona: <code>localStorage</code> lanza <code>SecurityError</code>, porque
+    el marco tiene origen opaco. Y no existe ningún temporizador. Una aplicación no puede recordar
+    nada entre recargas, ni animar, ni esperar, ni reintentar.</p>
+    <p class="etq">Recomendación</p>
+    <p>El almacenamiento tiene que salir por el puente: el padre sí puede usar
+    <code>localStorage</code>, así que <code>guardar(clave, valor)</code> y <code>recuperar(clave)</code>
+    viajan por <code>postMessage</code> con un espacio de nombres propio. Es la misma frontera que ya
+    existe, usada a propósito. Los temporizadores son del anfitrión y no tocan el motor.</p>
+  </div>
+</div>
+
+<div class="h media">
+  <div class="h-cab"><span class="sev">Media</span><h3>M-1 · Los valores de atributo pasan por la representación de texto</h3>
+    <span class="donde">src/04-stdlib.js:401–415</span></div>
+  <div class="h-cuerpo">
+    <div class="prueba">etiqueta("input", {"disabled": verdadero, "value": nulo})
+→ &lt;input disabled="cierto" value="nulo"&gt;</div>
+    <p style="margin-top:12px"><code>nulo</code> debería quitar el atributo, no escribir la palabra
+    «nulo»; <code>verdadero</code> y <code>falso</code> deberían ponerlo o quitarlo, que es como
+    funcionan los atributos booleanos de HTML.</p>
+  </div>
+</div>
+
+<div class="h media">
+  <div class="h-cab"><span class="sev">Media</span><h3>M-2 · Las consultas de medios solo miran la anchura</h3>
+    <span class="donde">src/04-stdlib.js:633</span></div>
+  <div class="h-cuerpo">
+    <p><code>enPantalla</code> genera <code>min-width</code> y <code>max-width</code> y nada más. No
+    hay <code>prefers-color-scheme</code> —y el propio IDE tiene tema oscuro, así que una página de Ñ
+    no puede seguirlo—, ni orientación, ni impresión, ni <code>prefers-reduced-motion</code>.
+    <code>dentro</code> rechaza los selectores con <code>@</code>, así que tampoco hay puerta de atrás.</p>
+    <p class="etq">Recomendación</p>
+    <p><code>enTemaOscuro(…)</code>, <code>alImprimir(…)</code>, <code>sinMovimiento(…)</code> como
+    funciones hermanas, y una <code>enMedios("consulta", …)</code> validada para el resto.</p>
+  </div>
+</div>
+
+<div class="h media">
+  <div class="h-cab"><span class="sev">Media</span><h3>M-3 · Un estilo calculado genera una clase por valor</h3>
+    <span class="donde">src/04-stdlib.js:692 (cssDe)</span></div>
+  <div class="h-cuerpo">
+    <div class="prueba">300 estilos con una anchura distinta cada uno
+→ 300 clases · 6.625 bytes de hoja de estilos</div>
+    <p style="margin-top:12px">El nombre sale del contenido, así que dos estilos iguales comparten
+    clase —eso funciona— pero un valor que venga de los datos rompe la deduplicación y la hoja crece
+    sin techo. Es la debilidad conocida de este modelo.</p>
+    <p class="etq">Recomendación</p>
+    <p>Lo dinámico va en variables de CSS, no en clases nuevas: la clase fija usa
+    <code>var(--ancho)</code> y el valor se pone como atributo <code>style</code> del nodo. Hace
+    falta que <code>etiqueta</code> acepte variables por nodo.</p>
+  </div>
+</div>
+
+<div class="h media">
+  <div class="h-cab"><span class="sev">Media</span><h3>M-4 · Lo que se genera no es accesible</h3>
+    <span class="donde">ide/hijo.html (boton, entrada)</span></div>
+  <div class="h-cuerpo">
+    <div class="prueba">&lt;button&gt;Repintar&lt;/button&gt;          sin type → dentro de un form, envía
+&lt;input placeholder="Nombre"&gt;      el marcador de posición no es una etiqueta</div>
+    <p style="margin-top:12px">Un lector de pantalla no anuncia el campo, y el marcador desaparece
+    al escribir, así que el usuario pierde la referencia.</p>
+    <p class="etq">Recomendación</p>
+    <p><code>type="button"</code> por defecto, y que <code>entrada</code> genere un
+    <code>&lt;label&gt;</code> asociado con el rótulo, con el marcador de posición como extra
+    opcional.</p>
+  </div>
+</div>
+
+<div class="h media">
+  <div class="h-cab"><span class="sev">Media</span><h3>M-5 · Una función puede tapar una nativa sin avisar</h3>
+    <span class="donde">src/02-check-compile.js (declaración de globales)</span></div>
+  <div class="h-cuerpo">
+    <div class="prueba">fn imprimir(x: entero) -> entero { devolver x }    → aceptado, en silencio
+var media = 5                                      → «media» ya estaba declarada</div>
+    <p style="margin-top:12px">Las funciones tapan; las variables no. La inconsistencia es confusa y
+    el modo silencioso produce fallos difíciles de leer: redefinir <code>imprimir</code> apaga la
+    salida del programa sin una sola señal.</p>
+    <p class="etq">Recomendación</p>
+    <p>Un aviso —no un error— cuando una declaración tapa un nombre de la biblioteca. El verificador
+    ya tiene canal de avisos y los pinta en el panel de problemas.</p>
+  </div>
+</div>
+
+<div class="h baja">
+  <div class="h-cab"><span class="sev">Baja</span><h3>B-1 · crudo() con etiquetas sin cerrar se reequilibra solo</h3>
+    <span class="donde">ide/hijo.html (eco)</span></div>
+  <div class="h-cuerpo">
+    <p><code>insertAdjacentHTML</code> cierra lo que quede abierto, así que un
+    <code>crudo("&lt;b&gt;texto")</code> no se traga a sus hermanos, pero el resultado tampoco es el
+    que el programa escribió. Conviene documentarlo junto a <code>crudo</code>.</p>
+  </div>
+</div>
+
+<div class="h baja">
+  <div class="h-cab"><span class="sev">Baja</span><h3>B-2 · La suite no cubría el JIT con operandos que no son números</h3>
+    <span class="donde">pruebas/motor.js</span></div>
+  <div class="h-cuerpo">
+    <p>C-1 sobrevivió a 137 pruebas porque todas las que ejercitan el JIT usan aritmética. Ya hay
+    cuatro regresiones, pero la lección es más general: <strong>cada camino rápido del JIT necesita
+    una pareja intérprete/JIT que compare resultados</strong>, no solo un caso que pase.</p>
+  </div>
+</div>
+
+<h2>Matriz de riesgo</h2>
+<div class="tabla-envoltura">
+<table>
+  <tr><th>Hallazgo</th><th>Impacto</th><th>Probabilidad</th><th>Esfuerzo</th><th>Cuándo</th></tr>
+  <tr><td><b>C-1</b> divergencia del JIT</td><td>Corrupción silenciosa</td><td>Alta</td><td>Mínimo</td><td>Hecho</td></tr>
+  <tr><td><b>A-1</b> repintado destructivo</td><td>Inutiliza los formularios</td><td>Certeza</td><td>Medio</td><td>Ya</td></tr>
+  <tr><td><b>A-2</b> controles sin estilo</td><td>Aspecto y estados</td><td>Certeza</td><td>Bajo</td><td>Ya</td></tr>
+  <tr><td><b>A-3</b> entrada sin valor</td><td>No se puede editar</td><td>Certeza</td><td>Bajo</td><td>Ya</td></tr>
+  <tr><td><b>A-4</b> dos eventos</td><td>Techo de lo que se puede hacer</td><td>Alta</td><td>Medio</td><td>Después</td></tr>
+  <tr><td><b>A-5</b> segundo diccionario</td><td>Salida rara sin error</td><td>Media</td><td>Mínimo</td><td>Ya</td></tr>
+  <tr><td><b>A-6</b> fotogramas perdidos</td><td>Animación rota</td><td>Alta</td><td>Bajo</td><td>Después</td></tr>
+  <tr><td><b>A-7</b> sin guardar ni reloj</td><td>No hay estado entre sesiones</td><td>Certeza</td><td>Medio</td><td>Después</td></tr>
+  <tr><td><b>M-1…M-5</b></td><td>Corrección y pulido</td><td>Media</td><td>Bajo</td><td>Backlog</td></tr>
+</table>
+</div>
+
+<h2>Plan por fases</h2>
+
+<div class="fase hecha">
+  <h3>Fase 0 — Que el JIT y el intérprete digan lo mismo</h3>
+  <p class="coste">4 líneas · 4 regresiones · aplicado</p>
+  <ul><li><b>C-1.</b> Evaluar los dos operandos antes de probar sus tipos.</li></ul>
+</div>
+
+<div class="fase">
+  <h3>Fase 1 — Que una aplicación no pierda lo que el usuario escribe</h3>
+  <p class="coste">Una sesión · sin tocar el motor</p>
+  <ul>
+    <li><b>A-1.</b> Preservar foco, selección, valores y desplazamiento alrededor del repintado.</li>
+    <li><b>A-2.</b> <code>boton</code> y <code>entrada</code> con aridad variable, aceptando estilo y atributos.</li>
+    <li><b>A-3.</b> Valor inicial en <code>entrada</code>, más área de texto, desplegable y casilla.</li>
+    <li><b>A-5.</b> Fusionar los diccionarios de atributos.</li>
+  </ul>
+</div>
+
+<div class="fase">
+  <h3>Fase 2 — Completar el modelo de interacción</h3>
+  <p class="coste">Una sesión · toca el anfitrión y la biblioteca</p>
+  <ul>
+    <li><b>A-4.</b> <code>alEvento</code> con lista blanca de eventos y un diccionario de datos.</li>
+    <li><b>M-1.</b> Atributos: <code>nulo</code> quita, los booleanos ponen o quitan.</li>
+    <li><b>M-4.</b> <code>type="button"</code> y etiquetas asociadas.</li>
+    <li>Identidad de nodo, que es lo que abre la puerta a la reconciliación si algún día hace falta.</li>
+  </ul>
+</div>
+
+<div class="fase">
+  <h3>Fase 3 — Memoria y tiempo</h3>
+  <p class="coste">Una sesión · usa el puente que ya existe</p>
+  <ul>
+    <li><b>A-7.</b> <code>guardar</code> y <code>recuperar</code> por <code>postMessage</code>, con espacio de nombres.</li>
+    <li><b>A-7.</b> <code>despues(ms, funcion)</code> y <code>cada(ms, funcion)</code> en el anfitrión.</li>
+    <li><b>A-6.</b> Reemitir los fotogramas en cada pintado.</li>
+  </ul>
+</div>
+
+<div class="fase">
+  <h3>Fase 4 — Pulido</h3>
+  <p class="coste">Backlog</p>
+  <ul>
+    <li><b>M-2.</b> Tema oscuro, impresión y movimiento reducido en el sistema de estilo.</li>
+    <li><b>M-3.</b> Variables de CSS por nodo para los valores que vienen de los datos.</li>
+    <li><b>M-5.</b> Aviso al tapar un nombre de la biblioteca.</li>
+    <li><b>B-1.</b> Documentar el reequilibrado de <code>crudo</code>.</li>
+  </ul>
+</div>
+
+<h2>Lo que está bien</h2>
+<div class="bien">
+  <h3>No tocar</h3>
+  <ul>
+    <li><b>La frontera de datos.</b> El texto entra como nodo de texto y los atributos por
+      <code>setAttribute</code>; los valores de estilo con <code>{</code>, <code>}</code>,
+      <code>;</code> o <code>&lt;/</code> se rechazan al construir. Un dato no puede volverse marcado
+      ni en HTML ni en CSS, y las dos puertas de atrás —<code>crudo</code> y <code>cssCrudo</code>—
+      se leen a simple vista.</li>
+    <li><b>El aislamiento.</b> Origen opaco verificado: el programa no alcanza el editor, ni el DOM
+      del anfitrión, ni el almacenamiento. El precio es A-7, y es un precio justo.</li>
+    <li><b>Las clases por contenido.</b> Dos estilos iguales comparten clase y el nombre no se
+      escribe nunca en dos sitios. Resuelve de raíz el problema que motiva a CSS Modules.</li>
+    <li><b>La composición sin cascada.</b> Gana el de la derecha, resuelto al fusionar. Ninguna
+      sorpresa de especificidad.</li>
+    <li><b>La pila de inserción.</b> Con el cierre en <code>finally</code>, un error a media pintada
+      no deja el árbol abierto. Hay prueba.</li>
+  </ul>
+</div>
+
+<p class="pie">Auditoría del 28 de septiembre de 2026 sobre el árbol en <code>D:\ProyectosJS</code>.
+Cada hallazgo se reprodujo ejecutando el motor o midiendo en Chromium; las trazas que aparecen en
+las cajas grises son salida real, no ejemplos inventados. Las siete suites quedan en verde con
+390 pruebas.</p>
+</div>
+
+</body>
+</html>

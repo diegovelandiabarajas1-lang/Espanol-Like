@@ -1,0 +1,252 @@
+# ═══ Monitoreo: el promedio esconde justo lo que se está buscando ═══════════
+# Un tablero de sensores que enseña «temperatura promedio: 25 °C · NORMAL»
+# puede estar tapando dos invernaderos rotos: uno a 40 y otro a 10 promedian 25.
+# El promedio es la estadística equivocada para vigilar, porque vigilar es
+# buscar el que se salió, y promediar es exactamente la operación que lo
+# disuelve. Lo que hay que mirar son los extremos, la amplitud y cada zona.
+# Los datos de abajo están puestos a propósito para que el promedio global
+# quede en rango mientras dos zonas están fuera.
+#
+# Y otras dos del original:
+#   · «calcularPromedioTemperatura» y «calcularPromedioHumedad» eran dos
+#     funciones de quince líneas cada una haciendo lo que hace «media».
+#   · había un indicador llamado «eficiencia» que era 100 menos el porcentaje
+#     de lecturas fuera de rango. Eso no es la eficiencia de nada: es el
+#     porcentaje de lecturas en rango, y llamarlo eficiencia hace que alguien
+#     lo lleve a una reunión como si midiera la producción.
+# núcleo: web · eDSL: numerico, datos, formato, estilo
+
+usar media, mediana, desviacion, suma de "numerico"
+usar deRegistros, conColumna, ordenarPor, columna, donde, aRegistros de "datos"
+usar decimales, porciento, plural, enNegrita, regla, enRojo, enVerde,
+     enAmarillo, enGris, alinearDer, alinearIzq, tablaTexto,
+     minigrafico de "formato"
+usar tema, estiloGlobal, reiniciar, estilo, color, espacio, radio, tipografia,
+     paleta, escalaTipo, enOscuro de "estilo"
+
+# ── los límites, en un sitio y con nombre ─────────────────────────────────
+fijo TEMP_MIN: real = 18.0
+fijo TEMP_MAX: real = 28.0
+fijo HUM_MIN: real = 55.0
+fijo HUM_MAX: real = 80.0
+
+# ── estilos ───────────────────────────────────────────────────────────────
+fijo tonos: dic = paleta("#1F6F8B")
+fijo escala: dic = escalaTipo(15)
+
+estiloGlobal(":root", reiniciar())
+estiloGlobal(":root", tema({
+    "color": { "marca": tonos["5"], "suave": tonos["1"], "fuerte": tonos["7"],
+               "tinta": "#131E24", "apagado": "#5A6B74", "fondo": "#F4F7F9",
+               "panel": "#FFFFFF", "linea": "#DFE7EB",
+               "bien": "#1B7F4B", "ojo": "#9A6700", "mal": "#B3261E" },
+    "espacio": { "mini": "4px", "corto": "8px", "medio": "16px", "largo": "24px" },
+    "radio": { "poco": "6px", "medio": "12px", "redondo": "999px" },
+    "tipografia": { "cuerpo": "system-ui, -apple-system, sans-serif",
+                    "cifra": "ui-monospace, monospace" }
+}))
+estiloGlobal(":root", enOscuro(tema({
+    "color": { "tinta": "#E4ECF0", "apagado": "#94A6B0", "fondo": "#0C1316",
+               "panel": "#131D21", "linea": "#25343A", "suave": tonos["8"] }
+})))
+
+fijo hoja = estilo({ "fuenteFamilia": tipografia("cuerpo"), "fondo": color("fondo"),
+                     "color": color("tinta"), "margen": 0, "relleno": espacio("largo") })
+fijo caja = estilo({ "maxAncho": 960, "margen": "0 auto" })
+fijo panel = estilo({ "fondo": color("panel"), "relleno": espacio("largo"),
+                      "redondeo": radio("medio"), "margenAbajo": espacio("medio"),
+                      "borde": "1px solid " + color("linea") })
+fijo h1 = estilo({ "tamano": escala["5"], "grosor": 700, "margen": 0,
+                   "color": color("fuerte") })
+fijo h2 = estilo({ "tamano": escala["2"], "grosor": 600, "margen": 0,
+                   "margenAbajo": espacio("medio") })
+fijo bajada = estilo({ "color": color("apagado"), "margenAbajo": espacio("largo") })
+fijo rejilla = estilo({ "display": "grid", "gap": espacio("medio"),
+                        "columnas": "repeat(auto-fit, minmax(160px, 1fr))" })
+fijo ficha = estilo({ "fondo": color("suave"), "relleno": espacio("medio"),
+                      "redondeo": radio("poco") })
+fijo rotulo = estilo({ "tamano": escala["0"], "color": color("apagado"),
+                       "textoTransformar": "uppercase" })
+fijo cifra = estilo({ "tamano": escala["4"], "grosor": 700,
+                      "fuenteFamilia": tipografia("cifra") })
+fijo detalle = estilo({ "tamano": escala["0"], "color": color("apagado") })
+fijo filaZ = estilo({ "display": "flex", "gap": espacio("medio"),
+                      "alinearItems": "center", "relleno": "6px 0",
+                      "bordeAbajo": "1px solid " + color("linea") })
+fijo sello = estilo({ "tamano": escala["0"], "grosor": 700, "relleno": "2px 10px",
+                      "redondeo": radio("redondo"), "color": "blanco" })
+fijo trampa = estilo({ "fondo": "#FFF8E1", "color": "#6B4E00",
+                       "borde": "1px solid " + color("ojo"),
+                       "relleno": espacio("medio"), "redondeo": radio("poco"),
+                       "margenAbajo": espacio("medio") })
+
+# ── las lecturas ──────────────────────────────────────────────────────────
+# Cuatro zonas. Dos en rango, una congelada y una recalentada. Mira el promedio
+# global de la primera ficha y luego mira las zonas.
+fijo lecturas: lista = [
+    {"zona": "Invernadero A", "hora": "06:00", "temp": 21.4, "hum": 68.0},
+    {"zona": "Invernadero A", "hora": "10:00", "temp": 23.9, "hum": 65.0},
+    {"zona": "Invernadero A", "hora": "14:00", "temp": 26.1, "hum": 61.0},
+    {"zona": "Invernadero A", "hora": "18:00", "temp": 22.8, "hum": 70.0},
+    {"zona": "Invernadero B", "hora": "06:00", "temp": 19.8, "hum": 72.0},
+    {"zona": "Invernadero B", "hora": "10:00", "temp": 22.2, "hum": 69.0},
+    {"zona": "Invernadero B", "hora": "14:00", "temp": 24.5, "hum": 64.0},
+    {"zona": "Invernadero B", "hora": "18:00", "temp": 21.0, "hum": 71.0},
+    {"zona": "Silo Secado",   "hora": "06:00", "temp": 38.9, "hum": 22.0},
+    {"zona": "Silo Secado",   "hora": "10:00", "temp": 41.2, "hum": 19.0},
+    {"zona": "Silo Secado",   "hora": "14:00", "temp": 43.7, "hum": 17.0},
+    {"zona": "Silo Secado",   "hora": "18:00", "temp": 40.1, "hum": 21.0},
+    {"zona": "Cuarto Frío",   "hora": "06:00", "temp":  8.2, "hum": 88.0},
+    {"zona": "Cuarto Frío",   "hora": "10:00", "temp":  7.4, "hum": 90.0},
+    {"zona": "Cuarto Frío",   "hora": "14:00", "temp":  9.1, "hum": 86.0},
+    {"zona": "Cuarto Frío",   "hora": "18:00", "temp":  8.6, "hum": 89.0}
+]
+
+# ── el estado, calculado UNA vez por lectura ──────────────────────────────
+fn estadoDe(t: real, h: real): texto {
+    si t < TEMP_MIN - 5.0 o t > TEMP_MAX + 5.0 { devolver "1 crítico" }
+    si t < TEMP_MIN o t > TEMP_MAX { devolver "2 alerta" }
+    si h < HUM_MIN o h > HUM_MAX { devolver "2 alerta" }
+    devolver "3 en rango"
+}
+
+var t = deRegistros(lecturas)
+t = conColumna(t, "estado", fn(f: dic): texto {
+    devolver estadoDe(f["temp"], f["hum"])
+})
+
+fijo temps: lista = columna(t, "temp")
+fijo hums: lista = columna(t, "hum")
+fijo zonas: lista = ["Invernadero A", "Invernadero B", "Silo Secado", "Cuarto Frío"]
+
+fn deZona(z: texto): lista {
+    devolver aRegistros(donde(t, fn(f: dic): bool { devolver f["zona"] == z }))
+}
+fn cuantas(e: texto): entero {
+    devolver longitud(columna(donde(t, fn(f: dic): bool {
+        devolver f["estado"] == e
+    }), "zona"))
+}
+fijo enRango: entero = cuantas("3 en rango")
+
+# ── la página ─────────────────────────────────────────────────────────────
+fn fichaDe(rot: texto, c: texto, det: texto): nodo {
+    devolver etiqueta("div", ficha,
+        etiqueta("div", rotulo, rot),
+        etiqueta("div", cifra, c),
+        etiqueta("div", detalle, det))
+}
+
+fn selloZona(z: texto): nodo {
+    fijo filas: lista = deZona(z)
+    var peor: texto = "3 en rango"
+    para f en filas { si f["estado"] < peor { peor = f["estado"] } }
+    si peor == "1 crítico" {
+        devolver etiqueta("span", estilo(sello, {"fondo": color("mal")}), "crítico")
+    }
+    si peor == "2 alerta" {
+        devolver etiqueta("span", estilo(sello, {"fondo": color("ojo")}), "alerta")
+    }
+    devolver etiqueta("span", estilo(sello, {"fondo": color("bien")}), "en rango")
+}
+
+fn filaZona(z: texto): nodo {
+    fijo filas: lista = deZona(z)
+    fijo ts: lista = mapear(filas, fn(f: dic): real { devolver f["temp"] })
+    devolver etiqueta("div", filaZ,
+        etiqueta("span", estilo({"flex": "1 1 auto", "grosor": 600}), z),
+        etiqueta("span", estilo(detalle, {"minAncho": 110}),
+                 decimales(minimo(ts), 1) + " – " + decimales(maximo(ts), 1) + " °C"),
+        etiqueta("span", estilo(detalle, {"minAncho": 90}),
+                 "media " + decimales(media(ts), 1)),
+        selloZona(z))
+}
+
+limpiarPagina()
+pintar(etiqueta("div", hoja, etiqueta("div", caja,
+    etiqueta("div", panel,
+        etiqueta("h1", h1, "Monitoreo de zonas"),
+        etiqueta("p", bajada, plural(longitud(lecturas), "lectura") +
+            " de cuatro zonas, cada cuatro horas.")),
+
+    etiqueta("div", trampa,
+        etiqueta("strong", "La trampa de esta pantalla: "),
+        "la temperatura promedio de todas las zonas es ",
+        decimales(media(temps), 1), " °C, que está dentro del rango de ",
+        decimales(TEMP_MIN, 0), " a ", decimales(TEMP_MAX, 0),
+        ". Y dos de las cuatro zonas están fuera. El promedio no está mal " +
+        "calculado: está mal elegido, porque promediar es justo la operación " +
+        "que disuelve al que se salió."),
+
+    etiqueta("div", panel,
+        etiqueta("h2", h2, "Lo que sí hay que mirar"),
+        etiqueta("div", rejilla,
+            fichaDe("amplitud", decimales(maximo(temps) - minimo(temps), 1) + " °C",
+                    "de " + decimales(minimo(temps), 1) + " a " +
+                    decimales(maximo(temps), 1)),
+            fichaDe("dispersión", decimales(desviacion(temps), 1) + " °C",
+                    "con una media de " + decimales(media(temps), 1)),
+            fichaDe("fuera de rango", texto(longitud(lecturas) - enRango),
+                    "de " + texto(longitud(lecturas)) + " lecturas"),
+            fichaDe("lecturas en rango", porciento(real(enRango) /
+                    real(longitud(lecturas))),
+                    "no es «eficiencia»: es esto y nada más"))),
+
+    etiqueta("div", panel,
+        etiqueta("h2", h2, "Zona por zona"),
+        mapear(zonas, filaZona))
+)))
+
+# ── y en consola ──────────────────────────────────────────────────────────
+imprimir(enNegrita("EL PROMEDIO GLOBAL"))
+imprimir(regla(70))
+imprimir("  temperatura media de todo   " + decimales(media(temps), 1) + " °C   " +
+         enVerde("dentro del rango " + decimales(TEMP_MIN, 0) + "–" +
+                 decimales(TEMP_MAX, 0)))
+imprimir("  humedad media de todo       " + decimales(media(hums), 1) + " %")
+imprimir("")
+imprimir("  " + enAmarillo("Y sin embargo:"))
+imprimir("")
+
+imprimir(enNegrita("ZONA POR ZONA"))
+imprimir(regla(70))
+imprimir(tablaTexto(mapear(zonas, fn(z: texto): dic {
+    fijo filas: lista = deZona(z)
+    fijo ts: lista = mapear(filas, fn(f: dic): real { devolver f["temp"] })
+    var peor: texto = "3 en rango"
+    para f en filas { si f["estado"] < peor { peor = f["estado"] } }
+    devolver {
+        "zona": z,
+        "mín": decimales(minimo(ts), 1),
+        "media": decimales(media(ts), 1),
+        "máx": decimales(maximo(ts), 1),
+        "perfil": minigrafico(ts),
+        "estado": nombreEstado(peor)
+    }
+})))
+
+fn nombreEstado(e: texto): texto {
+    si e == "1 crítico" { devolver "CRÍTICO" }
+    si e == "2 alerta" { devolver "alerta" }
+    devolver "en rango"
+}
+
+imprimir("")
+imprimir(enNegrita("LAS QUE SE SALIERON"))
+imprimir(regla(70))
+fijo malas = ordenarPor(donde(t, fn(f: dic): bool {
+    devolver f["estado"] != "3 en rango"
+}), "estado")
+para f en aRegistros(malas) {
+    var marca: texto = enAmarillo("!")
+    si f["estado"] == "1 crítico" { marca = enRojo("✗") }
+    imprimir("  " + marca + " " + alinearIzq(f["zona"], 16) + " " + f["hora"] +
+             "   " + alinearDer(decimales(f["temp"], 1) + " °C", 8) +
+             "   " + alinearDer(decimales(f["hum"], 0) + " %", 6))
+}
+
+imprimir("")
+imprimir(regla(70))
+imprimir(enGris("Las cuatro cifras de arriba —amplitud, dispersión, cuántas"))
+imprimir(enGris("fuera, y cada zona— dicen lo que el promedio no podía decir."))
+imprimir(enGris("Y la última se llama «lecturas en rango», que es lo que mide."))

@@ -1,0 +1,94 @@
+# ═══ Una tarjeta de producto, con sus estados ══════════════════════════════
+# Lo que distingue a este eDSL de escribir CSS a mano: los estados —pasar el
+# ratón, enfocar, el primero de la lista— se declaran DENTRO del estilo, no en
+# otro selector a treinta líneas de distancia.
+# eDSL: estilo
+
+usar estilo, alPasar, alEnfocar, alActivar, primero, ultimo, pares,
+     cuando, dentro, hijoDirecto, hermanoSiguiente, antes, despues,
+     transicion, enColumna, enFila, separado, centrado, envuelto,
+     rejillaDe, enPantalla, enOscuro, pegadoArriba, estiloGlobal, reiniciar de "estilo"
+usar regla, enNegrita, enGris de "formato"
+
+# Nota de forma: el HUECO de estas disposiciones es un NÚMERO de píxeles, no un
+# texto como "16px". Con texto se quejan, porque un hueco escrito a mano es por
+# donde se cuelan los "16 px" y los "1rem" mezclados en el mismo diseño.
+
+reiniciar()
+
+imprimir(enNegrita("UNA TARJETA Y TODOS SUS ESTADOS EN UN SOLO SITIO"))
+imprimir(regla(68))
+
+fijo tarjeta = estilo(
+    {
+        "fondo": "blanco",
+        "radio": "8px",
+        "relleno": "16px",
+        "borde": "1px solid #e0e0e0",
+        "sombra": "0 1px 2px rgba(0,0,0,.06)"
+    },
+    # Lo que pasa al pasar el ratón, aquí mismo
+    alPasar({"sombra": "0 4px 16px rgba(0,0,0,.12)", "transformar": "translateY(-2px)"}),
+    # Y al enfocar con el teclado, que es lo que casi nadie escribe
+    alEnfocar({"contorno": "2px solid #4f3fd4", "contornoDesplazado": "2px"}),
+    alActivar({"transformar": "translateY(0)"}),
+    # La transición: sin esto el cambio es un salto
+    transicion(["sombra", "transformar"], 180),
+    # El precio es un hijo, y se estila desde aquí
+    dentro(".precio", {"tamano": "24px", "peso": "700", "color": "#1a1a1a"}),
+    dentro(".agotado", {"color": "#c62828", "tamano": "13px"}),
+    # El primero de la rejilla se destaca
+    primero({"borde": "2px solid #4f3fd4"}),
+    # En pantalla pequeña, menos relleno
+    enPantalla(0, 600, {"relleno": "12px", "radio": "6px"})
+)
+imprimir("  tarjeta: " + texto(tarjeta))
+
+imprimir("")
+imprimir(enNegrita("LA REJILLA QUE LAS CONTIENE"))
+imprimir(regla(68))
+# «rejillaDe» en una línea hace lo que en CSS son cuatro propiedades
+fijo galeria = estilo(
+    rejillaDe(3, 16),
+    enPantalla(0, 900, rejillaDe(2, 12)),
+    enPantalla(0, 600, rejillaDe(1, 12))
+)
+imprimir("  galería: " + texto(galeria) + "  (3 columnas, 2 en tableta, 1 en móvil)")
+
+imprimir("")
+imprimir(enNegrita("LAS DISPOSICIONES QUE SE USAN TODOS LOS DÍAS"))
+imprimir(regla(68))
+imprimir("  enFila(8)         " + texto(estilo(enFila(8))))
+imprimir("  enColumna(4)      " + texto(estilo(enColumna(4))))
+imprimir("  separado(8)       " + texto(estilo(separado(8))) + enGris("  ← la barra de arriba"))
+imprimir("  centrado()         " + texto(estilo(centrado())))
+imprimir("  envuelto(8)       " + texto(estilo(envuelto(8))) + enGris("  ← las etiquetas que pasan de línea"))
+imprimir("  pegadoArriba(0)    " + texto(estilo(pegadoArriba(0))))
+
+imprimir("")
+imprimir(enNegrita("LOS SELECTORES, SIN ESCRIBIR UN SELECTOR"))
+imprimir(regla(68))
+imprimir("  alPasar          → &:hover")
+imprimir("  alEnfocar        → &:focus")
+imprimir("  primero / ultimo → &:first-child / &:last-child")
+imprimir("  pares            → &:nth-child(even)")
+imprimir("  cuando(\".sel\")   → &.sel        " + enGris("sin espacio: el MISMO elemento"))
+imprimir("  dentro(\".sel\")   → & .sel       " + enGris("con espacio: un descendiente"))
+imprimir("  hijoDirecto      → & > .sel")
+imprimir("  hermanoSiguiente → & + .sel")
+imprimir("  antes / despues  → &::before / &::after")
+
+imprimir("")
+imprimir(enNegrita("LA FILA DE UNA TABLA, con sus alternancias"))
+imprimir(regla(68))
+fijo fila = estilo(
+    {"relleno": "8px 12px", "borde-abajo": "1px solid #eee"},
+    pares({"fondo": "#fafafa"}),
+    alPasar({"fondo": "#f0eefb"}),
+    ultimo({"borde-abajo": "ninguno"}),
+    cuando(".seleccionada", {"fondo": "#e8e4fb", "peso": "600"})
+)
+imprimir("  fila: " + texto(fila))
+imprimir("")
+imprimir(enGris("  Todo lo de arriba sale como CSS con clases locales: dos componentes"))
+imprimir(enGris("  pueden llamar «.precio» a cosas distintas y no se pisan."))

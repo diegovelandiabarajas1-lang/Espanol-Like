@@ -1,0 +1,58 @@
+# ═══ Simulación de Montecarlo ═══════════════════════════════════════════════
+# Cuando la cuenta exacta no sale, se tira el dado muchas veces. Con «semilla»
+# la simulación es REPETIBLE, que es lo que la separa de un juguete: dos
+# ejecuciones dan lo mismo y el resultado se puede revisar.
+# eDSL: numerico, formato
+
+usar semilla, azar, azarNormal, azarEntre, uniformes, normales, media,
+     desviacion, percentil, contarCiertos, mayorQue, suma, aListaA,
+     arreglo, raiz, elegir de "numerico"
+usar porciento, decimales, moneda, barraTexto, regla, minigrafico de "formato"
+
+semilla(42)
+
+# 1 · estimar π tirando puntos en un cuadrado
+imprimir("ESTIMAR π A PUNTAZOS")
+imprimir(regla(54))
+para tiros en [100, 1000, 10000, 100000] {
+    var dentro: entero = 0
+    repetir tiros {
+        fijo x: real = azar()
+        fijo y: real = azar()
+        si x * x + y * y <= 1.0 { dentro = dentro + 1 }
+    }
+    fijo pi: real = 4.0 * real(dentro) / real(tiros)
+    imprimir("  " + texto(tiros) + " tiros → π ≈ " + decimales(pi, 4) + "   error " + decimales(absolutoDe(pi - |PI), 4))
+}
+
+fn absolutoDe(x: real): real {
+    si x < 0.0 { devolver 0.0 - x }
+    devolver x
+}
+
+# 2 · riesgo de un proyecto: la duración de cada tarea no se sabe exacta
+imprimir("")
+imprimir("¿CUÁNTO VA A DURAR EL PROYECTO?")
+imprimir(regla(54))
+fijo tareas: lista = [
+    {"nombre": "diseño",    "media": 10.0, "desv": 2.0},
+    {"nombre": "desarrollo","media": 30.0, "desv": 7.0},
+    {"nombre": "pruebas",   "media": 12.0, "desv": 4.0},
+    {"nombre": "despliegue","media": 3.0,  "desv": 1.0}
+]
+var totales: lista = []
+repetir 20000 {
+    var dias: real = 0.0
+    para t en tareas { dias = dias + azarNormal(t["media"], t["desv"]) }
+    totales = totales + [dias]
+}
+imprimir("  media         " + decimales(media(totales), 1) + " días")
+imprimir("  desviación    " + decimales(desviacion(totales), 1) + " días")
+imprimir("  optimista (p10)  " + decimales(percentil(totales, 10), 1) + " días")
+imprimir("  realista  (p50)  " + decimales(percentil(totales, 50), 1) + " días")
+imprimir("  pesimista (p90)  " + decimales(percentil(totales, 90), 1) + " días")
+fijo arr = arreglo(totales)
+fijo tarde: entero = contarCiertos(mayorQue(arr, 60.0))
+imprimir("")
+imprimir("  Pasarse de 60 días: " + porciento(real(tarde) / 20000.0) + " de las simulaciones")
+imprimir("  " + barraTexto(tarde, 20000))

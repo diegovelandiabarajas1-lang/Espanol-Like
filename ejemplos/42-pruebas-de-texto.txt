@@ -1,0 +1,165 @@
+# ═══ Probar lo que toca el español ═════════════════════════════════════════
+# La ñ, las tildes, el orden alfabético y el «de» que no se capitaliza. Es
+# donde una biblioteca hecha pensando en inglés se equivoca, y por tanto donde
+# más falta hacen las pruebas.
+# eDSL: probar, texto, formato
+
+usar probar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCierto,
+     debeSerFalso, debeContener, noDebeContener, debeTener, debeSerMayor,
+     debeEmpezarCon, debeTerminarCon de "probar"
+usar mayusculas, minusculas, sinAcentos, aUrl, aIdentificador, titular,
+     capitalizar, ordenAlfabetico, igualSinAcentos, parecido, distancia,
+     esLetra, esVocal, esDigito, caracteres, palabras, lineas, dividir, unir,
+     entre, antesDe, despuesDe, envolver, invertirTexto,
+     subtexto, izquierda, derecha, indiceDe, cuantasVeces,
+     plantilla, escaparCsv, escaparHtml de "texto"
+usar regla, enNegrita, enGris de "formato"
+
+grupo("la ñ y las tildes", fn() {
+    probar("mayúsculas y minúsculas respetan los acentos", fn() {
+        debeSer(mayusculas("camión año"), "CAMIÓN AÑO")
+        debeSer(minusculas("CAMIÓN AÑO"), "camión año")
+    })
+    probar("sinAcentos deja la Ñ: en español es una letra, no una n con sombrero", fn() {
+        debeSer(sinAcentos("Martín"), "Martin")
+        debeSer(sinAcentos("Año"), "Año")
+        debeSer(sinAcentos("ñandú"), "ñandu")
+    })
+    probar("aUrl sí la pasa a n, porque una url no admite ñ", fn() {
+        debeSer(aUrl("Camión Año 2026"), "camion-ano-2026")
+        debeSer(aUrl("Ñandú"), "nandu")
+    })
+    probar("aIdentificador la deja, porque Ñ sí admite ñ en los nombres", fn() {
+        debeContener(aIdentificador("Total año 2026"), "año")
+    })
+    probar("la ñ y las tildes cuentan como letras", fn() {
+        debeSerCierto(esLetra("ñ"))
+        debeSerCierto(esLetra("Á"))
+        debeSerCierto(esVocal("í"))
+        debeSerFalso(esLetra("3"))
+        debeSerCierto(esDigito("3"))
+    })
+    probar("caracteres cuenta por letras, no por bytes", fn() {
+        # «camión» son 6 letras aunque la ó ocupe dos bytes en el archivo
+        debeTener(caracteres("camión"), 6)
+        debeSer(longitud("camión"), 6)
+    })
+})
+
+grupo("el orden alfabético del español", fn() {
+    probar("la ñ va entre la n y la o", fn() {
+        debeSer(ordenAlfabetico(["ñu", "nube", "ópera"]), ["nube", "ñu", "ópera"])
+    })
+    probar("«él» va después de «el»", fn() {
+        debeSer(ordenAlfabetico(["él", "el"]), ["el", "él"])
+    })
+})
+
+grupo("buscar sin pelearse con cómo lo escribieron", fn() {
+    probar("igualSinAcentos no mira tildes ni mayúsculas", fn() {
+        debeSerCierto(igualSinAcentos("Martín", "martin"))
+        debeSerCierto(igualSinAcentos("GONZÁLEZ", "gonzalez"))
+    })
+    probar("parecido da de 0 a 1, y 1 cuando solo cambia la tilde", fn() {
+        debeSer(parecido("González", "Gonzalez"), 1.0)
+        debeSerMayor(parecido("Martines", "Martínez"), 0.8)
+        debeSerCierto(parecido("Pedro", "Zapato") < 0.5)
+    })
+    probar("distancia cuenta cambios de una letra", fn() {
+        debeSer(distancia("casa", "caso"), 1)
+        debeSer(distancia("casa", "casa"), 0)
+        debeSer(distancia("", "abc"), 3)
+    })
+})
+
+grupo("titular sigue la regla del español, no la del inglés", fn() {
+    probar("«de», «la» y «del» se quedan en minúscula", fn() {
+        debeSer(titular("juan de la cruz"), "Juan de la Cruz")
+        debeSer(titular("maría del pilar"), "María del Pilar")
+    })
+    probar("capitalizar toca solo la primera letra", fn() {
+        debeSer(capitalizar("hOLA mUNDO"), "Hola mundo")
+    })
+})
+
+grupo("cortar y pegar texto", fn() {
+    probar("entre saca lo del medio, y vacío si falta una marca", fn() {
+        debeSer(entre("nombre: Ana;", ": ", ";"), "Ana")
+        debeSer(entre("sin marcas", ": ", ";"), "")
+    })
+    probar("antesDe devuelve TODO si la marca no está; despuesDe, vacío", fn() {
+        debeSer(antesDe("a=1", "="), "a")
+        debeSer(antesDe("sin igual", "="), "sin igual")
+        debeSer(despuesDe("a=1", "="), "1")
+        debeSer(despuesDe("sin igual", "="), "")
+    })
+    probar("dividir y unir son el camino de ida y vuelta", fn() {
+        debeSer(unir(dividir("a,b,c", ","), ","), "a,b,c")
+        # Ojo: «dividir» parte por CADA separador, así que dos espacios seguidos
+        # dejan un trozo vacío en medio. No es un fallo: es la diferencia con
+        # «palabras», que es la que aplasta los huecos.
+        debeSer(dividir("a b  c"), ["a", "b", "", "c"])
+    })
+    probar("palabras no deja huecos vacíos; dividir sí puede", fn() {
+        debeTener(palabras("a  b   c"), 3)
+        debeSerMayor(longitud(dividir("a  b   c", " ")), 3)
+    })
+    probar("lineas entiende los saltos de Windows", fn() {
+        debeTener(lineas("a\nb"), 2)
+        debeTener(lineas("a\r\nb"), 2)
+    })
+    probar("envolver devuelve la LISTA de trozos, no un texto con saltos", fn() {
+        fijo t: lista = envolver("una frase bastante larga para partir", 12)
+        debeSerMayor(longitud(t), 1)
+        # Y ninguna palabra quedó cortada
+        para trozo en t { debeSerCierto(longitud(trozo) <= 12) }
+    })
+    probar("izquierda, derecha y subtexto", fn() {
+        debeSer(izquierda("Bucaramanga", 4), "Buca")
+        debeSer(derecha("Bucaramanga", 5), "manga")
+        debeSer(subtexto("Bucaramanga", 4, 7), "ram")
+    })
+    probar("indiceDe da −1 cuando no está, no cero", fn() {
+        debeSer(indiceDe("hola", "la"), 2)
+        debeSer(indiceDe("hola", "z"), 0 - 1)
+    })
+    probar("cuantasVeces no cuenta las solapadas", fn() {
+        debeSer(cuantasVeces("aaaa", "aa"), 2)
+    })
+    probar("invertirTexto es para texto; «invertir» del núcleo, para listas", fn() {
+        debeSer(invertirTexto("abc"), "cba")
+        debeSer(invertirTexto("camión"), "nóimac")
+    })
+})
+
+grupo("escapar para otros formatos", fn() {
+    probar("escaparCsv pone comillas solo si hacen falta", fn() {
+        debeSer(escaparCsv("simple"), "simple")
+        debeContener(escaparCsv("con,coma"), "\"")
+    })
+    probar("escaparHtml quita los caracteres peligrosos", fn() {
+        noDebeContener(escaparHtml("<script>alerta(1)</script>"), "<script>")
+        debeContener(escaparHtml("<b>"), "&lt;")
+    })
+})
+
+grupo("plantilla rellena en ejecución", fn() {
+    probar("cambia las llaves por los valores", fn() {
+        # Las llaves van escapadas: en un texto del programa serían la
+        # interpolación del lenguaje, no caracteres para «plantilla».
+        debeSer(plantilla("Hola \{nombre\}", {"nombre": "Ana"}), "Hola Ana")
+    })
+    probar("rellena varias de una vez", fn() {
+        debeSer(plantilla("\{a\}-\{b\}", {"a": "1", "b": "2"}), "1-2")
+    })
+})
+
+imprimir("")
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(regla(64))
+imprimir(resumenPruebas())
+imprimir("")
+imprimir(enGris("La mitad de estas pruebas comprueban cosas que una biblioteca"))
+imprimir(enGris("hecha para inglés haría mal: la ñ que no es una n, el «de» que"))
+imprimir(enGris("no se capitaliza, y el orden en que «él» va después de «el»."))

@@ -1,0 +1,58 @@
+# ═══ Leer un CSV del disco y sacar el informe ═══════════════════════════════
+# El ciclo completo: leer el archivo, limpiarlo, resumirlo y escribir el
+# resultado. Es lo que hace un programa de verdad, de principio a fin.
+# eDSL: datos, formato · núcleo: archivos
+
+usar deCsv, aCsv, aDatos, agrupar, sumaCol, promedioCol, contarCol,
+     ordenarPor, columna, vistazo, pivotar, resumir, tipos de "datos"
+usar moneda, decimales, regla, enNegrita, enVerde, barraTexto, tablaTexto de "formato"
+
+fijo ENTRADA: texto = "datos/ventas.csv"
+fijo SALIDA: texto = "salida/informe-ventas.csv"
+
+si no existeArchivo(ENTRADA) {
+    imprimir("No encuentro " + ENTRADA)
+    salir(1)
+}
+
+imprimir(enNegrita("1 · LEER"))
+fijo crudo1: texto = leerTexto(ENTRADA)
+imprimir("  " + ENTRADA + " · " + texto(tamanoArchivo(ENTRADA)) + " bytes")
+fijo t = deCsv(crudo1)
+imprimir("  " + texto(longitud(columna(t, "ciudad"))) + " filas · tipos " + texto(tipos(t)))
+
+imprimir("")
+imprimir(enNegrita("2 · MIRAR"))
+vistazo(t)
+
+imprimir("")
+imprimir(enNegrita("3 · RESUMIR"))
+fijo porCiudad = ordenarPor(agrupar(t, ["ciudad"], {
+    "total": sumaCol("ventas"), "promedio": promedioCol("ventas"), "meses": contarCol()
+}), "total", cierto)
+vistazo(porCiudad)
+
+imprimir("")
+imprimir(enNegrita("4 · PINTARLO EN LA CONSOLA"))
+fijo mayor: real = real(columna(porCiudad, "total")[0])
+para i en rango(longitud(columna(porCiudad, "ciudad"))) {
+    fijo c: texto = columna(porCiudad, "ciudad")[i]
+    fijo v: real = real(columna(porCiudad, "total")[i])
+    imprimir("  " + c)
+    imprimir("    " + barraTexto(v, mayor, 40) + " " + moneda(v))
+}
+
+imprimir("")
+imprimir(enNegrita("5 · CIUDAD CONTRA MES"))
+vistazo(pivotar(t, "ciudad", "mes", {"ventas": sumaCol("ventas")}))
+
+imprimir("")
+imprimir(enNegrita("6 · ESCRIBIR EL RESULTADO"))
+crearCarpeta("salida")
+escribirTexto(SALIDA, aCsv(porCiudad))
+imprimir("  " + enVerde("escrito ") + SALIDA + " · " + texto(tamanoArchivo(SALIDA)) + " bytes")
+# .ñdatos conserva los tipos; el CSV los pierde, y por eso existen los dos.
+escribirTexto("salida/informe-ventas.ñdatos", aDatos(porCiudad))
+imprimir("  " + enVerde("escrito ") + "salida/informe-ventas.ñdatos (con los tipos dentro)")
+imprimir("")
+imprimir("Lo que quedó en salida/: " + texto(listar("salida")))

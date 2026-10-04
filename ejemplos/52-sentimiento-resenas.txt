@@ -1,0 +1,166 @@
+# ═══ Reseñas: puntuar el tono y pillar las copiadas ═════════════════════════
+# Dos trampas, y las dos salen de no mirar qué trae ya la biblioteca.
+#
+# La primera es de método: si el puntaje se divide entre TODAS las palabras, una
+# reseña larga puntúa más floja que una corta aunque diga lo mismo con más
+# detalle. Lo que mide es el largo, no el tono. El divisor son las palabras que
+# CUENTAN —las que están en el diccionario— y abajo salen las dos cifras juntas.
+#
+# La segunda es de herramienta: «parecido» ya está en el eDSL «texto», devuelve
+# de 0 a 1 y está bien hecho. Escribirlo a mano contando palabras comunes sobre
+# la suma de los dos largos da como mucho 0,5 para dos textos idénticos, así que
+# el umbral «más de 0,8 es copia» nunca dispara. Un parecido mal medido no
+# avisa: calla.
+# eDSL: texto, numerico, formato
+
+usar palabras, minusculas, sinAcentos, caracteres, esLetra, esEspacio, unir,
+     parecido, distancia de "texto"
+usar media, redondear de "numerico"
+usar porciento, decimales, tablaTexto, regla, enNegrita, enVerde, enRojo,
+     enAmarillo, enGris, barraTexto, alinearDer, plural, acortar de "formato"
+
+# ── normalizar ────────────────────────────────────────────────────────────
+# Quitar la puntuación carácter a carácter con «esLetra» en vez de encadenar un
+# «reemplazar» por signo: así entran también los que no se listaron —«;», «…»,
+# los paréntesis— y no hay que acordarse de ninguno.
+fn limpiar(t: texto): texto {
+    var salida: texto = ""
+    para c en caracteres(minusculas(sinAcentos(t))) {
+        si esLetra(c) o esEspacio(c) { salida = salida + c }
+    }
+    devolver salida
+}
+
+fijo POSITIVAS: lista = ["bueno", "buena", "excelente", "bien", "feliz",
+    "contento", "agradecido", "impresionante", "recomiendo", "encanta",
+    "rapido", "rapida", "amable", "perfecto", "cumplio"]
+fijo NEGATIVAS: lista = ["malo", "mala", "terrible", "pesimo", "pesima",
+    "triste", "demorado", "demorada", "preocupado", "evito", "arrepentido",
+    "peor", "decepcionado", "nunca", "tarde", "roto"]
+
+# ── puntuar ───────────────────────────────────────────────────────────────
+fn puntuar(t: texto): dic {
+    fijo fichas: lista = palabras(limpiar(t))
+    var mas: entero = 0
+    var menos: entero = 0
+    para f en fichas {
+        # «contiene» es del núcleo: no hace falta escribir el bucle de buscar.
+        si contiene(POSITIVAS, f) { mas = mas + 1 }
+        si contiene(NEGATIVAS, f) { menos = menos + 1 }
+    }
+    fijo cuentan: entero = mas + menos
+    # El divisor honesto: las palabras con carga. Si ninguna la tiene, el tono no
+    # es 0 —que significaría «neutro medido»— sino que no hay nada que medir.
+    var tono: real = 0.0
+    si cuentan > 0 { tono = real(mas - menos) / real(cuentan) }
+    # Y el diluido, el de dividir entre todo, para poder comparar.
+    var diluido: real = 0.0
+    si longitud(fichas) > 0 { diluido = real(mas - menos) / real(longitud(fichas)) }
+    devolver {
+        "mas": mas, "menos": menos, "cuentan": cuentan,
+        "largo": longitud(fichas), "tono": tono, "diluido": diluido
+    }
+}
+
+fijo resenas: lista = [
+    "Excelente servicio, el domicilio llegó rápido y el muchacho fue muy amable. Recomiendo.",
+    "Pésimo. Pedí a las dos y llegó a las seis, todo frío y la caja rota. Nunca más.",
+    "Buena la comida pero el pedido llegó demorado, aunque el empaque cumplió bien.",
+    "Excelente servicio, el domicilio llegó rápido y el muchacho fue muy amable. Recomiendo!!",
+    "Llegó el pedido.",
+    "Todo bien, excelente, recomiendo, muy amable, perfecto, cumplió, rápido y la verdad quedé muy contento con la atención que me dieron de principio a fin porque además el empaque venía bien cuidado."
+]
+
+imprimir(enNegrita("TONO DE CADA RESEÑA"))
+imprimir(regla(74))
+var filas: lista = []
+para i en rango(longitud(resenas)) {
+    fijo p: dic = puntuar(resenas[i])
+    filas = filas + [{
+        "n": i + 1,
+        "reseña": acortar(resenas[i], 34),
+        "palabras": p["largo"],
+        "+": p["mas"],
+        "-": p["menos"],
+        "tono": decimales(p["tono"], 2),
+        "diluido": decimales(p["diluido"], 2)
+    }]
+}
+imprimir(tablaTexto(filas))
+
+imprimir("")
+imprimir(enNegrita("POR QUÉ IMPORTA EL DIVISOR"))
+imprimir(regla(74))
+fijo corta: dic = puntuar(resenas[0])
+fijo larga: dic = puntuar(resenas[5])
+imprimir("  Las reseñas 1 y 6 son las dos positivas, sin una sola palabra negativa.")
+imprimir("")
+imprimir("  reseña 1 · " + plural(corta["largo"], "palabra") + ", " +
+         texto(corta["cuentan"]) + " con carga")
+imprimir("      tono     " + decimales(corta["tono"], 2) +
+         enGris("   ← sobre las que cuentan"))
+imprimir("      diluido  " + decimales(corta["diluido"], 2))
+imprimir("  reseña 6 · " + plural(larga["largo"], "palabra") + ", " +
+         texto(larga["cuentan"]) + " con carga")
+imprimir("      tono     " + decimales(larga["tono"], 2) +
+         enGris("   ← el mismo: las dos son positivas y punto"))
+imprimir("      diluido  " + decimales(larga["diluido"], 2) +
+         enGris("   ← castigada por explicarse"))
+
+# ── las copiadas ──────────────────────────────────────────────────────────
+imprimir("")
+imprimir(enNegrita("RESEÑAS SOSPECHOSAMENTE PARECIDAS"))
+imprimir(regla(74))
+imprimir(enGris("  «parecido» del eDSL «texto»: 1 es idéntico, 0 es nada en común."))
+imprimir("")
+fijo UMBRAL: real = 0.85
+var halladas: entero = 0
+para i en rango(longitud(resenas)) {
+    para j en rango(longitud(resenas)) {
+        # Solo la mitad de arriba de la matriz: comparar 1 con 4 y 4 con 1 es
+        # la misma pregunta dos veces.
+        si j > i {
+            fijo p: real = parecido(limpiar(resenas[i]), limpiar(resenas[j]))
+            si p >= UMBRAL {
+                halladas = halladas + 1
+                imprimir("  " + enRojo("⚠") + "  reseña " + texto(i + 1) + " y reseña " +
+                         texto(j + 1) + "  →  " + porciento(p) + " parecidas")
+                imprimir("      " + enGris(acortar(resenas[i], 62)))
+                imprimir("      " + enGris(acortar(resenas[j], 62)))
+                imprimir("      " + enGris("distancia de edición: " +
+                         texto(distancia(limpiar(resenas[i]), limpiar(resenas[j]))) +
+                         " caracteres"))
+            }
+        }
+    }
+}
+si halladas == 0 { imprimir("  " + enVerde("ninguna pareja pasa del umbral")) }
+
+imprimir("")
+imprimir(enNegrita("LA MATRIZ DE PARECIDO"))
+imprimir(regla(74))
+var cab: texto = "        "
+para j en rango(longitud(resenas)) { cab = cab + alinearDer(texto(j + 1), 6) }
+imprimir(enGris(cab))
+para i en rango(longitud(resenas)) {
+    var fila: texto = "  r" + alinearDer(texto(i + 1), 2) + "   "
+    para j en rango(longitud(resenas)) {
+        fijo p: real = parecido(limpiar(resenas[i]), limpiar(resenas[j]))
+        var celda: texto = decimales(p, 2)
+        si i == j { celda = enGris(celda) }
+        si i != j y p >= UMBRAL { celda = enRojo(celda) }
+        si i != j y p >= 0.5 y p < UMBRAL { celda = enAmarillo(celda) }
+        fila = fila + alinearDer(celda, 6)
+    }
+    imprimir(fila)
+}
+
+imprimir("")
+imprimir(regla(74))
+imprimir(enGris("El tono medio de las que tienen algo que medir: " +
+         decimales(media(mapear(filtrar(resenas, fn(r: texto): bool {
+             devolver puntuar(r)["cuentan"] > 0
+         }), fn(r: texto): real { devolver puntuar(r)["tono"] })), 2)))
+imprimir(enGris("La reseña 5 queda fuera de ese promedio a propósito: «Llegó el"))
+imprimir(enGris("pedido» no es neutra, es que no dice nada. Meterla como 0 movería"))
+imprimir(enGris("el promedio con una opinión que nadie dio."))

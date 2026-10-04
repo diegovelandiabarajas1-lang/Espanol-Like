@@ -1,0 +1,68 @@
+# ═══ Números escritos como se dicen ════════════════════════════════════════
+# Facturas, cheques y actas piden el valor en letras. Y de paso: los romanos,
+# los ordinales y los plurales raros del español, que no se pueden adivinar.
+# eDSL: formato
+
+usar enLetras, romano, ordinal, plural, numero, moneda, decimales,
+     abreviar, tamanoLegible, intervalo, listaLegible, regla, marco,
+     centrar, enNegrita, alinearDer, aAncho, tablaTexto de "formato"
+
+imprimir(enNegrita("VALORES EN LETRAS — para un cheque"))
+imprimir(regla(72))
+para v en [1, 15, 100, 101, 999, 1000, 1250, 21000, 100000, 1423500, 25000000] {
+    imprimir("  " + alinearDer(moneda(v), 16) + "   " + enLetras(v))
+}
+
+imprimir("")
+imprimir(enNegrita("LOS CASOS QUE SE EQUIVOCAN A MANO"))
+imprimir(regla(72))
+imprimir("  100 → " + enLetras(100) + "    (no «ciento»)")
+imprimir("  101 → " + enLetras(101))
+imprimir("  21  → " + enLetras(21) + "   (una sola palabra)")
+imprimir("  31  → " + enLetras(31) + " (tres palabras)")
+imprimir("  16  → " + enLetras(16) + "    (junto)")
+imprimir("  26  → " + enLetras(26) + " (separado)")
+
+imprimir("")
+imprimir(enNegrita("ORDINALES, Y EL FEMENINO"))
+imprimir(regla(72))
+var filas: lista = []
+para n en [1, 2, 3, 11, 21, 100] {
+    filas = filas + [{"n": texto(n), "masculino": ordinal(n), "femenino": ordinal(n, cierto)}]
+}
+imprimir(tablaTexto(filas))
+
+imprimir("")
+imprimir(enNegrita("PLURALES QUE NO SON PONER UNA S"))
+imprimir(regla(72))
+para par en [[2, "factura"], [3, "lápiz"], [1, "mes"], [5, "mes"], [2, "ley"], [7, "pez"], [1, "cliente"], [4, "cliente"]] {
+    imprimir("  " + plural(par[0], par[1]))
+}
+
+imprimir("")
+imprimir(enNegrita("ROMANOS — para los tomos y los siglos"))
+imprimir(regla(72))
+para n en [4, 9, 14, 40, 90, 400, 1999, 2026] {
+    imprimir("  " + alinearDer(texto(n), 6) + " → " + romano(n))
+}
+
+imprimir("")
+imprimir(enNegrita("LISTAS COMO SE DICEN EN VOZ ALTA"))
+imprimir(regla(72))
+imprimir("  " + listaLegible(["Bucaramanga"]))
+imprimir("  " + listaLegible(["Bucaramanga", "Girón"]))
+imprimir("  " + listaLegible(["Bucaramanga", "Girón", "Floridablanca"]))
+imprimir("  " + listaLegible(["Pedro", "Inés"]) + "   ← «e» en vez de «y», porque sigue una i")
+imprimir("  " + listaLegible(["acero", "pintura", "tornillos"], "o") + "   ← con «o»")
+
+imprimir("")
+imprimir(enNegrita("ABREVIAR Y TAMAÑOS"))
+imprimir(regla(72))
+para v en [999, 1500, 1234567, 45000000, 2300000000] {
+    imprimir("  " + alinearDer(numero(v), 16) + " → " + aAncho(abreviar(v), 10) + tamanoLegible(v))
+}
+
+imprimir("")
+imprimir(marco(centrar("Páguese a la orden de\nCONSTRUCTORA LOS ANDES S.A.S.\n\n" +
+                       moneda(25000000) + "\n\n" + enLetras(25000000) + " pesos m/cte.", 54),
+               "CHEQUE N.º " + romano(471)))

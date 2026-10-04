@@ -1,0 +1,78 @@
+# ═══ Cartera por edades ═════════════════════════════════════════════════════
+# El informe que pide todo gerente: cuánto deben y desde cuándo, repartido en
+# tramos. Los tramos salen de restar fechas, no de un campo «días» que alguien
+# tendría que mantener a mano.
+# eDSL: fecha, datos, formato
+
+usar hoy, aFecha, deFecha, diasEntre, sumarDias, esAntesDe, nombreMes de "fecha"
+usar deRegistros, conColumna, agrupar, sumaCol, contarCol, ordenarPor,
+     columna, vistazo, donde, resumir, soloColumnas de "datos"
+usar moneda, porciento, barraTexto, regla, enNegrita, enRojo, enVerde,
+     enAmarillo, tablaTexto, plural, tiempoRelativo de "formato"
+
+fijo HOY = hoy()
+
+var cartera = deRegistros([
+    {"factura": "FV-1001", "cliente": "Ferretería El Tornillo", "vence": "2026-08-18", "saldo": 12400000},
+    {"factura": "FV-1002", "cliente": "Panadería La Espiga",    "vence": "2026-09-20", "saldo": 3200000},
+    {"factura": "FV-1003", "cliente": "Droguería Salud",        "vence": "2026-10-15", "saldo": 19800000},
+    {"factura": "FV-1004", "cliente": "Café del Parque",        "vence": "2026-09-29", "saldo": 1800000},
+    {"factura": "FV-1005", "cliente": "Ferretería El Tornillo", "vence": "2026-06-30", "saldo": 7500000},
+    {"factura": "FV-1006", "cliente": "Supermercado La Canasta","vence": "2026-11-05", "saldo": 24000000},
+    {"factura": "FV-1007", "cliente": "Droguería Salud",        "vence": "2026-07-12", "saldo": 5100000}
+])
+
+# Los días de mora y el tramo salen de la fecha: una sola fuente de verdad.
+cartera = conColumna(cartera, "mora", fn(f: dic): entero { devolver diasEntre(aFecha(f["vence"]), HOY) })
+cartera = conColumna(cartera, "tramo", fn(f: dic): texto {
+    fijo m: entero = diasEntre(aFecha(f["vence"]), HOY)
+    si m < 0 { devolver "0 · por vencer" }
+    si m <= 30 { devolver "1 · 1 a 30" }
+    si m <= 60 { devolver "2 · 31 a 60" }
+    si m <= 90 { devolver "3 · 61 a 90" }
+    devolver "4 · más de 90"
+})
+
+imprimir(enNegrita("CARTERA AL " + deFecha(HOY, "larga")))
+imprimir(regla(74))
+vistazo(ordenarPor(soloColumnas(cartera, ["factura", "cliente", "vence", "mora", "saldo", "tramo"]), "mora", cierto))
+
+imprimir("")
+imprimir(enNegrita("POR EDADES"))
+fijo tramos = ordenarPor(agrupar(cartera, ["tramo"], {
+    "facturas": contarCol(), "saldo": sumaCol("saldo")
+}), "tramo")
+fijo total: entero = columna(resumir(cartera, {"t": sumaCol("saldo")}), "t")[0]
+para i en rango(longitud(columna(tramos, "tramo"))) {
+    fijo nombre1: texto = columna(tramos, "tramo")[i]
+    fijo s: entero = columna(tramos, "saldo")[i]
+    var pinta: texto = enVerde(nombre1)
+    si nombre1 == "2 · 31 a 60" { pinta = enAmarillo(nombre1) }
+    si nombre1 == "3 · 61 a 90" o nombre1 == "4 · más de 90" { pinta = enRojo(nombre1) }
+    imprimir("  " + pinta)
+    imprimir("    " + barraTexto(s, total, 36) + " " + moneda(s) + "  (" + porciento(real(s) / real(total)) + ")")
+}
+
+imprimir("")
+imprimir(enNegrita("LO QUE HAY QUE LLAMAR HOY — más de 60 días"))
+fijo urgente = ordenarPor(donde(cartera, fn(f: dic): bool { devolver f["mora"] > 60 }), "saldo", cierto)
+si longitud(columna(urgente, "factura")) == 0 {
+    imprimir("  " + enVerde("nada con más de 60 días"))
+}
+para i en rango(longitud(columna(urgente, "factura"))) {
+    imprimir("  " + enRojo(columna(urgente, "cliente")[i]) + " · " + columna(urgente, "factura")[i] +
+             " · " + moneda(columna(urgente, "saldo")[i]) +
+             " · " + plural(columna(urgente, "mora")[i], "día") + " de mora")
+}
+
+imprimir("")
+imprimir(enNegrita("POR CLIENTE"))
+vistazo(ordenarPor(agrupar(cartera, ["cliente"], {
+    "facturas": contarCol(), "debe": sumaCol("saldo")
+}), "debe", cierto))
+
+imprimir("")
+imprimir(regla(74))
+imprimir("Total de cartera: " + moneda(total))
+fijo vencido: entero = columna(resumir(donde(cartera, fn(f: dic): bool { devolver f["mora"] > 0 }), {"t": sumaCol("saldo")}), "t")[0]
+imprimir("Vencido: " + enRojo(moneda(vencido)) + " (" + porciento(real(vencido) / real(total)) + " de la cartera)")

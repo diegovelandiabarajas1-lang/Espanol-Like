@@ -1,0 +1,19 @@
+# Un módulo: lo que no lleva «publico» no existe fuera de este archivo.
+# Se usa desde ejemplos/resumen.esl con
+#   usar "lib/tabla.esl" como tabla
+# porque las rutas son relativas al archivo que escribe el «usar».
+
+
+usar alinearDer de "formato"
+
+fijo RELLENO = 10          # privado: nadie de fuera puede nombrarlo
+
+fn columna(t: texto) -> texto { devolver alinearDer(t, RELLENO, " ") }
+
+publico fn fila(celdas: lista) -> texto {
+  var salida = ""
+  para c en celdas { salida = salida + columna(texto(c)) }
+  devolver salida
+}
+
+publico fn regla(ancho: entero) -> texto { devolver alinearDer("", ancho, "─") }

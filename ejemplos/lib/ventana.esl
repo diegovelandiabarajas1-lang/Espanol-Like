@@ -1,0 +1,27 @@
+# Un módulo que envuelve raylib: por fuera son cinco funciones en español, por
+# dentro es FFI. Los dos caminos nuevos —módulos y código nativo— en un archivo.
+fijo RL = entorno("N_RAYLIB", "./libraylib.so")
+
+estructuraNativa("Color", {"r": "natural8", "g": "natural8", "b": "natural8", "a": "natural8"})
+
+fijo _abrir    = nativa(RL, "InitWindow", "nulo", ["entero", "entero", "texto"])
+fijo _cerrar   = nativa(RL, "CloseWindow", "nulo", [])
+fijo _empezar  = nativa(RL, "BeginDrawing", "nulo", [])
+fijo _terminar = nativa(RL, "EndDrawing", "nulo", [])
+fijo _fondo    = nativa(RL, "ClearBackground", "nulo", ["Color"])
+fijo _caja     = nativa(RL, "DrawRectangle", "nulo", ["entero","entero","entero","entero","Color"])
+fijo _texto    = nativa(RL, "DrawText", "nulo", ["texto","entero","entero","entero","Color"])
+fijo _medir    = nativa(RL, "MeasureText", "entero", ["texto", "entero"])
+fijo _captura  = nativa(RL, "TakeScreenshot", "nulo", ["texto"])
+
+publico fn color(r: entero, g: entero, b: entero): dic { devolver {"r": r, "g": g, "b": b, "a": 255} }
+publico fn abrir(ancho: entero, alto: entero, titulo: texto) { _abrir(ancho, alto, titulo) }
+publico fn cerrar() { _cerrar() }
+publico fn medir(t: texto, tam: entero): entero { devolver _medir(t, tam) }
+publico fn captura(ruta: texto) { _captura(ruta) }
+
+publico fn pintar(dibujo) {
+    _empezar()
+    dibujo({"fondo": _fondo, "caja": _caja, "texto": _texto})
+    _terminar()
+}

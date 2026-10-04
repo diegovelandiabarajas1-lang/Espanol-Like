@@ -1,0 +1,114 @@
+# ═══ Panel con gráficas de verdad ══════════════════════════════════════════
+# El lienzo y las gráficas del núcleo: barras, dispersión y una serie. Y el
+# dibujo a mano alzada —rect, circulo, linea— para lo que no es una gráfica,
+# como un medidor.
+# eDSL: numerico, datos, formato, estilo · núcleo: lienzo, gráficas, web
+
+usar arreglo, correlacion, regresion, suma, tendencia, mediaMovil,
+     aListaA, redondear de "numerico"
+usar estilo, estiloGlobal, reiniciar, tema, espacio de "estilo"
+usar decimales, porciento, regla, enNegrita, enGris, minigrafico,
+     barraTexto, tablaTexto, porcientoCambio, signoMas de "formato"
+
+# ── los datos ─────────────────────────────────────────────────────────────
+fijo meses: lista = ["ene", "feb", "mar", "abr", "may", "jun",
+                     "jul", "ago", "sep", "oct", "nov", "dic"]
+fijo ventas: lista = [82.0, 91.0, 88.0, 104.0, 97.0, 112.0,
+                      118.0, 109.0, 131.0, 126.0, 140.0, 155.0]
+fijo gastos: lista = [61.0, 64.0, 66.0, 70.0, 72.0, 75.0,
+                      78.0, 76.0, 84.0, 83.0, 88.0, 92.0]
+fijo publicidad: lista = [4.0, 5.0, 4.5, 7.0, 6.0, 8.0,
+                          9.0, 7.5, 11.0, 10.0, 12.0, 14.0]
+
+# ── el panel pintado ──────────────────────────────────────────────────────
+reiniciar()
+estiloGlobal(":root", tema({
+    # «color» aquí es la del NÚCLEO, la del lienzo. La del eDSL «estilo» es un
+    # token y se llama igual: por eso no se importa, para no taparla.
+    "color": {"marca": "#4f3fd4", "texto": "#1a1a1a", "suave": "#888888",
+              "fondo": "#ffffff", "borde": "#e5e5e5"},
+    "espacio": {"corto": "8px", "medio": "16px", "largo": "24px"}
+}))
+
+pintar(etiqueta("h2", {}, "Panel del año"))
+
+# Las gráficas del núcleo: una llamada cada una
+barras(ventas, meses, "Ventas por mes (millones)")
+graficar(meses, gastos, "Gastos por mes")
+dispersion(publicidad, ventas, "Publicidad contra ventas")
+
+# Y el dibujo a mano para lo que no es una gráfica: un medidor de cumplimiento
+fijo META: real = 1400.0
+fijo logrado: real = suma(ventas)
+lienzo(300, 120)
+color("#f0f0f0")
+rect(10, 50, 280, 24, cierto)
+color("#4f3fd4")
+rect(10, 50, redondear(280.0 * logrado / META), 24, cierto)
+color("#1a1a1a")
+escribirEn(10, 40, "Cumplimiento de la meta anual")
+escribirEn(10, 95, decimales(logrado, 0) + " de " + decimales(META, 0) + " millones")
+# La marca del 100 %
+color("#c62828")
+grosor(2)
+linea(290, 45, 290, 80)
+
+# ── y el mismo panel en la consola, que es lo que se comprueba ────────────
+imprimir(enNegrita("PANEL DEL AÑO"))
+imprimir(regla(68))
+
+imprimir("")
+imprimir(enNegrita("  VENTAS"))
+imprimir("  " + minigrafico(ventas))
+fijo mayor: real = 155.0
+para i en rango(12) {
+    imprimir("  " + meses[i] + " " + barraTexto(ventas[i], mayor, 34) + " " + decimales(ventas[i], 0))
+}
+
+imprimir("")
+imprimir(enNegrita("  VENTAS CONTRA GASTOS"))
+var filas: lista = []
+para i en rango(12) {
+    fijo margen: real = (ventas[i] - gastos[i]) / ventas[i]
+    filas = filas + [{
+        "mes": meses[i],
+        "ventas": decimales(ventas[i], 0),
+        "gastos": decimales(gastos[i], 0),
+        "margen": porciento(margen)
+    }]
+}
+imprimir(tablaTexto(filas))
+
+imprimir("")
+imprimir(enNegrita("  SUAVIZADA A TRES MESES — se ve la tendencia sin el ruido"))
+fijo suave: lista = aListaA(mediaMovil(arreglo(ventas), 3))
+imprimir("  original: " + minigrafico(ventas))
+imprimir("  suavizada: " + minigrafico(suave))
+
+imprimir("")
+imprimir(enNegrita("  ¿LA PUBLICIDAD SIRVE?"))
+imprimir(regla(68))
+fijo r: dic = regresion(publicidad, ventas)
+imprimir("  correlación publicidad/ventas: " + decimales(correlacion(publicidad, ventas), 4))
+imprimir("  cada millón de publicidad trae " + decimales(r["pendiente"], 1) + " de ventas")
+imprimir("  el ajuste explica el " + porciento(r["r2"]) + " de la variación")
+si r["r2"] > 0.8 {
+    imprimir("  " + enGris("una correlación así de alta no prueba la causa, pero sí vale mirarla"))
+}
+
+imprimir("")
+imprimir(enNegrita("  CIERRE DEL AÑO"))
+imprimir(regla(68))
+imprimir("  ventas        " + decimales(suma(ventas), 0) + " millones")
+imprimir("  gastos        " + decimales(suma(gastos), 0) + " millones")
+imprimir("  utilidad      " + decimales(suma(ventas) - suma(gastos), 0) + " millones")
+imprimir("  margen        " + porciento((suma(ventas) - suma(gastos)) / suma(ventas)))
+imprimir("  meta          " + decimales(META, 0) + " millones · " +
+         porciento(logrado / META) + " cumplido")
+imprimir("  crece         " + signoMas(tendencia(ventas), 1) + " millones por mes")
+imprimir("  diciembre contra enero: " + porcientoCambio(ventas[0], ventas[11]))
+
+imprimir("")
+imprimir(enGris("  Se pintaron tres gráficas y un medidor a mano. En la consola no"))
+imprimir(enGris("  hay dónde dibujar, así que el mismo panel sale con barras de"))
+imprimir(enGris("  texto: los números son los mismos y no hay dos verdades."))

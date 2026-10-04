@@ -1,0 +1,37 @@
+# Las terminaciones de línea se normalizan a LF en el repositorio. No es por
+# corrección —el lexer de Ñ lee CRLF sin problema, está comprobado— sino porque
+# si no, «espanol-like-v4.html» aparece como 846 KB cambiados cada vez que se
+# construye en un sistema distinto.
+* text=auto eol=lf
+
+*.esl   text eol=lf
+*.txt   text eol=lf
+*.md    text eol=lf
+*.js    text eol=lf
+*.html  text eol=lf
+*.json  text eol=lf
+*.ñdatos text eol=lf
+
+# El .cmd es para Windows y lo lee cmd.exe: ahí sí se quieren CRLF.
+*.cmd   text eol=crlf
+
+*.png  binary
+*.zip  binary
+*.dll  binary
+*.so   binary
+*.dylib binary
+*.elb  binary
+
+# ── para que GitHub no diga que Ñ es un proyecto de HTML ──────────────────────
+# Sin esto, el lenguaje del repositorio lo deciden los 846 KB del IDE y los
+# 537 KB de la referencia, y la portada dice «HTML 94%». Los cuatro se generan:
+# el fuente son «motor/src/» y los «.esl».
+espanol-like-v4.html    linguist-generated=true
+referencia-stdlib.html  linguist-generated=true
+referencia-contexto.txt linguist-generated=true
+motor/bundle.js         linguist-generated=true
+motor/inventario.ñdatos linguist-generated=true
+
+# Informes, no código: que no cuenten como lenguaje del repositorio ni salgan
+# en los diffs por defecto.
+docs/*.html             linguist-documentation=true

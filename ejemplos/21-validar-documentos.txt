@@ -1,0 +1,92 @@
+# ═══ Validar y formatear documentos colombianos ═════════════════════════════
+# NIT con dígito de verificación, teléfonos y correos. Validar no es «parece
+# bien»: es la cuenta que dice si está bien. El dígito del NIT se calcula, y
+# por eso un NIT mal escrito se detecta sin preguntarle a nadie.
+# eDSL: texto, formato
+
+usar esDigito, caracteres, indiceDe, reemplazar, izquierda, derecha,
+     subtexto, minusculas, recortar, dividir, empiezaCon de "texto"
+usar numero, regla, enNegrita, enVerde, enRojo, tablaTexto de "formato"
+
+# Los pesos que la DIAN usa para el dígito de verificación del NIT
+fijo PESOS: lista = [3, 7, 13, 17, 19, 23, 29, 37, 41, 43, 47, 53, 59, 67, 71]
+
+fn digitoNit(nit: texto): entero {
+    fijo d: lista = caracteres(nit)
+    var suma1: entero = 0
+    var j: entero = 0
+    # se recorre de derecha a izquierda
+    para i en rango(longitud(d)) {
+        fijo c: texto = d[longitud(d) - 1 - i]
+        suma1 = suma1 + entero(c) * PESOS[i]
+    }
+    fijo r: entero = suma1 % 11
+    si r < 2 { devolver r }
+    devolver 11 - r
+}
+
+fn soloDigitos(s: texto): texto {
+    var out: texto = ""
+    para c en caracteres(s) { si esDigito(c) { out = out + c } }
+    devolver out
+}
+
+fn formatearNit(nit: texto): texto {
+    fijo n: texto = soloDigitos(nit)
+    devolver numero(entero(n)) + "-" + texto(digitoNit(n))
+}
+
+imprimir(enNegrita("NIT — el dígito de verificación se CALCULA"))
+imprimir(regla(62))
+var filas: lista = []
+para n en ["900123456", "830053105", "811012345", "900456789"] {
+    filas = filas + [{"nit": n, "dígito": texto(digitoNit(n)), "como se escribe": formatearNit(n)}]
+}
+imprimir(tablaTexto(filas))
+
+imprimir("")
+imprimir(enNegrita("¿ESTÁ BIEN ESTE NIT CON SU DÍGITO?"))
+para completo en ["900123456-1", "900123456-7", "830053105-3"] {
+    fijo partes: lista = dividir(completo, "-")
+    fijo esperado: entero = digitoNit(partes[0])
+    var r: texto = enRojo("MAL · debería ser " + texto(esperado))
+    si entero(partes[1]) == esperado { r = enVerde("bien") }
+    imprimir("  " + completo + "  →  " + r)
+}
+
+imprimir("")
+imprimir(enNegrita("TELÉFONOS"))
+fn formatearTelefono(t: texto): texto {
+    fijo d: texto = soloDigitos(t)
+    si longitud(d) == 10 y empiezaCon(d, "3") {
+        devolver "+57 " + subtexto(d, 0, 3) + " " + subtexto(d, 3, 6) + " " + subtexto(d, 6, 10)
+    }
+    si longitud(d) == 7 { devolver "(607) " + subtexto(d, 0, 3) + " " + subtexto(d, 3, 7) }
+    devolver enRojo("no reconocido: " + t)
+}
+para t en ["3151234567", "315 123 4567", "6451234", "12345"] {
+    imprimir("  «" + t + "»  →  " + formatearTelefono(t))
+}
+
+imprimir("")
+imprimir(enNegrita("CORREOS"))
+fn correoValido(c: texto): bool {
+    fijo arroba: entero = indiceDe(c, "@")
+    si arroba <= 0 { devolver falso }
+    fijo dominio: texto = subtexto(c, arroba + 1, longitud(c))
+    si indiceDe(dominio, ".") <= 0 { devolver falso }
+    si indiceDe(c, " ") >= 0 { devolver falso }
+    devolver cierto
+}
+para c en ["gerencia@datapro.com.co", "sin-arroba.com", "con espacio@a.com", "a@b", "ana@empresa.co"] {
+    var r: texto = enRojo("inválido")
+    si correoValido(c) { r = enVerde("válido") }
+    imprimir("  " + recortar(c) + repetirEspacios1(26 - longitud(c)) + r)
+}
+
+fn repetirEspacios1(n: entero): texto {
+    var s: texto = ""
+    si n < 1 { devolver " " }
+    repetir n { s = s + " " }
+    devolver s
+}

@@ -1,0 +1,40 @@
+# ═══ Ajustar una recta a datos reales ═══════════════════════════════════════
+# Dos caminos al mismo sitio: «regresion», que sale de las fórmulas de la
+# covarianza, y «minimosCuadrados», que sale de una factorización QR. Que
+# coincidan es la comprobación de que ninguno de los dos está mal.
+# eDSL: numerico, formato
+
+usar regresion, minimosCuadrados, arreglo, unos, apilar, elemento,
+     correlacion, tendencia de "numerico"
+usar decimales, porciento, signoMas, minigrafico, regla de "formato"
+
+# Consumo de energía de una planta contra toneladas procesadas
+fijo toneladas: lista = [12.0, 19.0, 25.0, 31.0, 38.0, 44.0, 51.0, 58.0]
+fijo kilovatios: lista = [340.0, 465.0, 580.0, 690.0, 820.0, 930.0, 1055.0, 1180.0]
+
+imprimir("Consumo contra producción")
+imprimir(minigrafico(kilovatios))
+imprimir(regla(52))
+
+fijo r: dic = regresion(toneladas, kilovatios)
+imprimir("Por las fórmulas de la covarianza:")
+imprimir("  kWh = " + decimales(r["intercepto"], 1) + " " + signoMas(0) + " " + decimales(r["pendiente"], 2) + " × toneladas")
+imprimir("  ajuste r² = " + porciento(r["r2"]))
+
+# El mismo ajuste por mínimos cuadrados. La columna de unos es la constante.
+fijo A = apilar(unos([8]), arreglo(toneladas), 1)
+fijo x = minimosCuadrados(A, arreglo(kilovatios))
+imprimir("Por mínimos cuadrados (QR):")
+imprimir("  constante " + decimales(elemento(x, 0), 1) + " · pendiente " + decimales(elemento(x, 1), 2))
+
+imprimir("")
+imprimir("Correlación: " + decimales(correlacion(toneladas, kilovatios), 4))
+imprimir("Cada tonelada cuesta " + decimales(r["pendiente"], 1) + " kWh de más.")
+imprimir("La serie sube " + decimales(tendencia(kilovatios), 1) + " kWh por medición.")
+
+imprimir("")
+imprimir("Qué predice para producciones que no se han medido:")
+para t en [20.0, 35.0, 65.0] {
+    fijo pred: real = r["intercepto"] + r["pendiente"] * t
+    imprimir("  " + decimales(t, 0) + " t  →  " + decimales(pred, 0) + " kWh")
+}

@@ -1,0 +1,135 @@
+# ═══ Un registro de eventos que se puede consultar ═════════════════════════
+# Escribir un log es fácil; lo que sirve es poder preguntarle cosas después.
+# Aquí se escribe en un formato que se vuelve a leer como TABLA, y entonces el
+# registro deja de ser un archivo de texto y pasa a ser datos.
+# núcleo: archivos, sistema · eDSL: datos, texto, fecha, formato
+
+usar deDatos, aDatos, deRegistros, agrupar, contarCol, ordenarPor,
+     columna, donde, vistazo, contarPor de "datos"
+usar lineas, recortar de "texto"
+# NO se importa «ahora» del eDSL «fecha»: taparía la del núcleo, que devuelve
+# MILISEGUNDOS — un número, que es lo que se puede guardar. Y «desdeMarca» es el
+# camino de vuelta: de ese número a una fecha.
+usar hoy, deFecha, desdeMarca de "fecha"
+usar regla, enNegrita, enRojo, enVerde, enAmarillo, enGris, tablaTexto,
+     plural, porciento, tiempoRelativo, barraTexto, alinearDer de "formato"
+
+fijo ARCHIVO: texto = "salida/eventos.ñdatos"
+
+# ── escribir: cada evento es una fila con sus tipos ───────────────────────
+# El formato .ñdatos conserva los tipos. Un log en texto plano hay que volver a
+# interpretarlo con «dividir» y adivinar qué era número y qué era fecha; esto
+# vuelve exactamente como salió.
+var eventos: lista = []
+
+fn anotar(nivel: texto, modulo: texto, mensaje: texto, ms: entero) {
+    # «ahora()» del núcleo da milisegundos: un número, que es lo que se guarda.
+    eventos = eventos + [{
+        "marca": ahora() - ms,
+        "nivel": nivel,
+        "modulo": modulo,
+        "mensaje": mensaje
+    }]
+}
+
+imprimir(enNegrita("REGISTRO DE EVENTOS"))
+imprimir(regla(70))
+
+# Unos eventos como los que deja un programa de verdad
+anotar("info",  "ventas",    "informe mensual generado",        200000)
+anotar("info",  "cartera",   "sincronización con Siigo",       3600000)
+anotar("aviso", "cartera",   "3 facturas sin NIT",             3700000)
+anotar("error", "respaldos", "no se pudo escribir el respaldo", 86400000)
+anotar("error", "respaldos", "reintento falló",                86300000)
+anotar("info",  "ventas",    "exportación a CSV",               90000000)
+anotar("aviso", "ventas",    "una ciudad sin datos",           172800000)
+anotar("error", "siigo",     "credenciales rechazadas",        259200000)
+anotar("info",  "ventas",    "informe semanal",                 10000)
+
+fijo t = deRegistros(eventos)
+crearCarpeta("salida")
+escribirTexto(ARCHIVO, aDatos(t))
+imprimir("  escrito " + ARCHIVO + " · " + plural(longitud(eventos), "evento") +
+         " · " + texto(tamanoArchivo(ARCHIVO)) + " bytes")
+
+# ── leer: y vuelve siendo una tabla, con los tipos ────────────────────────
+imprimir("")
+imprimir(enNegrita("LO QUE SE LEE DE VUELTA"))
+fijo leido = deDatos(leerTexto(ARCHIVO))
+vistazo(leido)
+
+# ── preguntarle cosas ─────────────────────────────────────────────────────
+imprimir("")
+imprimir(enNegrita("POR NIVEL"))
+imprimir(regla(70))
+fijo porNivel = ordenarPor(contarPor(leido, "nivel"), "cuantas", cierto)
+fijo total: entero = longitud(columna(leido, "nivel"))
+para i en rango(longitud(columna(porNivel, "nivel"))) {
+    fijo n: texto = columna(porNivel, "nivel")[i]
+    fijo c: entero = columna(porNivel, "cuantas")[i]
+    var pinta: texto = enGris(n)
+    si n == "aviso" { pinta = enAmarillo(n) }
+    si n == "error" { pinta = enRojo(n) }
+    imprimir("  " + pinta + "  " + barraTexto(c, total, 26) + " " +
+             texto(c) + " (" + porciento(real(c) / real(total)) + ")")
+}
+
+imprimir("")
+imprimir(enNegrita("QUÉ MÓDULO DA MÁS PROBLEMAS"))
+imprimir(regla(70))
+fijo malos = donde(leido, fn(f: dic): bool { devolver f["nivel"] == "error" })
+si longitud(columna(malos, "modulo")) == 0 {
+    imprimir("  " + enVerde("ninguno: no hay errores"))
+} sino {
+    vistazo(ordenarPor(agrupar(malos, ["modulo"], {"errores": contarCol()}), "errores", cierto))
+}
+
+imprimir("")
+imprimir(enNegrita("LA LÍNEA DE TIEMPO, DEL MÁS RECIENTE AL MÁS VIEJO"))
+imprimir(regla(70))
+fijo ordenados = ordenarPor(leido, "marca", cierto)
+para i en rango(longitud(columna(ordenados, "marca"))) {
+    fijo m: entero = columna(ordenados, "marca")[i]
+    fijo cuando = desdeMarca(m)
+    fijo nivel: texto = columna(ordenados, "nivel")[i]
+    var marca: texto = enGris("·")
+    si nivel == "aviso" { marca = enAmarillo("!") }
+    si nivel == "error" { marca = enRojo("✗") }
+    imprimir("  " + marca + " " + alinearDer(tiempoRelativo(ahora() - m), 16) + "  " +
+             columna(ordenados, "modulo")[i] + ": " + columna(ordenados, "mensaje")[i])
+}
+
+imprimir("")
+imprimir(enNegrita("LO DE LAS ÚLTIMAS 24 HORAS"))
+imprimir(regla(70))
+fijo recientes = donde(leido, fn(f: dic): bool { devolver ahora() - f["marca"] < 86400000 })
+imprimir("  " + plural(longitud(columna(recientes, "marca")), "evento") +
+         " de " + texto(total) + " son de hoy")
+fijo erroresHoy = donde(recientes, fn(f: dic): bool { devolver f["nivel"] == "error" })
+si longitud(columna(erroresHoy, "marca")) > 0 {
+    imprimir("  " + enRojo(plural(longitud(columna(erroresHoy, "marca")), "error") + " en las últimas 24 h"))
+} sino {
+    imprimir("  " + enVerde("sin errores en las últimas 24 h"))
+}
+
+# ── y además el log de texto, para quien quiera leerlo con los ojos ───────
+imprimir("")
+imprimir(enNegrita("EL MISMO REGISTRO EN TEXTO, PARA LEERLO A OJO"))
+imprimir(regla(70))
+var plano: texto = ""
+para i en rango(longitud(columna(ordenados, "marca"))) {
+    plano = plano + deFecha(desdeMarca(columna(ordenados, "marca")[i]), "completa") +
+            "  " + columna(ordenados, "nivel")[i] +
+            "  " + columna(ordenados, "modulo")[i] +
+            "  " + columna(ordenados, "mensaje")[i] + "\n"
+}
+escribirTexto("salida/eventos.log", plano)
+imprimir("  salida/eventos.log · " + texto(tamanoArchivo("salida/eventos.log")) + " bytes")
+imprimir("")
+para l en lineas(recortar(plano)) { imprimir("  " + enGris(l)) }
+
+imprimir("")
+imprimir(regla(70))
+imprimir(enGris("Dos archivos, dos propósitos: el .ñdatos vuelve a ser tabla y se"))
+imprimir(enGris("le pueden hacer preguntas; el .log se lee con los ojos. Escribir"))
+imprimir(enGris("los dos cuesta dos líneas, y evita el log que nadie puede consultar."))

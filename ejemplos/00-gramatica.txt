@@ -1,0 +1,279 @@
+(* ═══════════════════════════════════════════════════════════════════
+   GRAMÁTICA FORMAL DE Ñ — verificada contra el motor
+   3 de octubre de 2026
+
+   Esta versión NO está deducida de leer ejemplos: está contrastada con
+   el lexer y el parser de «motor/src/01-front.js», y cada punto dudoso
+   se comprobó corriendo un programa que lo usa. Donde el motor y una
+   suposición razonable no coincidían, manda el motor.
+
+   Notación: ::= define | | alternativa | {} cero o más
+             [] opcional | () agrupación | "..." terminal literal
+   ═══════════════════════════════════════════════════════════════════ *)
+
+
+(* ─── 0. PROGRAMA ────────────────────────────────────────────────── *)
+
+programa            ::= { importacion | sentencia_superior }
+
+sentencia_superior  ::= [ "publico" | "público" ] ( declaracion | funcion )
+                      | sentencia
+
+(* Dos formas de «usar». La primera trae nombres; la segunda activa un MODO
+   para todo el archivo —«usar "clasico"» reexporta los nombres que antes
+   eran globales—. El «usar» es POR ARCHIVO: lo que trae un archivo no lo
+   ve otro.                                                              *)
+importacion         ::= "usar" simbolo { "," simbolo } "de" texto
+                      | "usar" texto
+
+simbolo             ::= identificador
+
+
+(* ─── 1. DECLARACIONES Y FUNCIONES ──────────────────────────────── *)
+
+declaracion         ::= ( "fijo" | "var" ) identificador [ ":" tipo ] "=" expresion
+
+(* «fn», «funcion», «función» y «definir» son el MISMO token.
+   El tipo de retorno se escribe con ":" o con "->", a gusto.
+   Ni el tipo de los parámetros ni el de retorno son obligatorios: el
+   verificador los usa si están y los infiere si no.                     *)
+funcion             ::= palabra_fn identificador
+                        "(" [ parametros ] ")" [ ( ":" | "->" ) tipo ] bloque
+
+funcion_anonima     ::= palabra_fn "(" [ parametros ] ")" [ ( ":" | "->" ) tipo ] bloque
+
+palabra_fn          ::= "fn" | "funcion" | "función" | "definir"
+
+parametros          ::= parametro { "," parametro }
+parametro           ::= identificador [ ":" tipo ]
+
+bloque              ::= "{" { sentencia } "}"
+
+
+(* ─── 2. TIPOS ───────────────────────────────────────────────────── *)
+
+tipo                ::= tipo_simple | tipo_generico
+
+tipo_simple         ::= "entero" | "real" | "texto" | "bool" | "nulo"
+                      | "lista" | "dic" | "funcion" | "nodo" | "estilo"
+                      | "error" | "fecha" | "tabla" | "arreglo" | "cualquiera"
+
+(* «dic» lleva DOS parámetros: la clave y el valor. *)
+tipo_generico       ::= "lista" "<" tipo ">"
+                      | "dic" "<" tipo "," tipo ">"
+
+(* NOTA: los tipos unión —«real|arreglo»— existen en el motor, pero solo
+   en las firmas de la biblioteca. Un programa no puede escribirlos.     *)
+
+
+(* ─── 3. SENTENCIAS ──────────────────────────────────────────────── *)
+
+sentencia           ::= declaracion
+                      | funcion
+                      | si
+                      | para
+                      | repetir
+                      | mientras
+                      | intentar
+                      | devolver
+                      | romper
+                      | continuar
+                      | lanzar
+                      | bloque
+                      | expresion            (* incluye llamadas Y asignaciones *)
+
+(* «sino» va seguido de un bloque o de otro «si»: no hay token «sino si». *)
+si                  ::= "si" expresion bloque [ "sino" ( si | bloque ) ]
+
+para                ::= "para" identificador "en" expresion bloque
+
+(* El «veces» es opcional, y es la razón de que sea palabra reservada. *)
+repetir             ::= "repetir" expresion [ "veces" ] bloque
+
+mientras            ::= "mientras" expresion bloque
+
+(* Tres formas: con nombre entre paréntesis, sin nombre, o sin capturar
+   pero con «finalmente». Lo que NO vale es «capturar e» sin paréntesis. *)
+intentar            ::= "intentar" bloque
+                        [ "capturar" [ "(" identificador ")" ] bloque ]
+                        [ "finalmente" bloque ]
+
+devolver            ::= ( "devolver" | "retornar" ) [ expresion ]
+
+romper              ::= "romper"
+continuar           ::= "continuar"
+
+(* Se lanza CUALQUIER valor, no solo un error(). «error(mensaje, tipo?)»
+   es una función normal de la biblioteca, no parte de la sintaxis.      *)
+lanzar              ::= "lanzar" expresion
+
+
+(* ─── 4. EXPRESIONES (de menor a mayor precedencia) ──────────────── *)
+
+(* La asignación es una EXPRESIÓN, asocia a la derecha, y admite los
+   operadores compuestos. Por eso «a = b = 7» funciona.                 *)
+expresion           ::= asignacion
+
+asignacion          ::= expr_o [ op_asigna asignacion ]
+op_asigna           ::= "=" | "+=" | "-=" | "*=" | "/="
+                        (* el lado izquierdo tiene que ser
+                           identificador, a[i] o a.campo *)
+
+expr_o              ::= expr_y { "o" expr_y }
+expr_y              ::= expr_igual { "y" expr_igual }
+
+(* La igualdad y la comparación son DOS niveles, y los dos encadenan.
+   «1 < 2 == cierto» es «(1 < 2) == cierto».                            *)
+expr_igual          ::= expr_comp { ( "==" | "!=" ) expr_comp }
+expr_comp           ::= expr_suma { ( "<" | "<=" | ">" | ">=" ) expr_suma }
+
+expr_suma           ::= expr_mul { ( "+" | "-" ) expr_mul }
+expr_mul            ::= expr_unaria { ( "*" | "/" | "//" | "%" ) expr_unaria }
+
+(* «no» está AQUÍ, no junto a «y»/«o»: aprieta más que la comparación.
+   «no 1 == 2» es «(no 1) == 2», que da falso — no «no (1 == 2)», que
+   daría cierto. Y es recursivo: «no no x» y «- -5» son válidos.         *)
+expr_unaria         ::= ( "no" | "-" ) expr_unaria
+                      | expr_potencia
+
+(* La potencia asocia a la DERECHA y su lado derecho es una unaria, así
+   que «2 ** 3 ** 2» es 512 y «-2 ** 2» es −4.                          *)
+expr_potencia       ::= expr_postfija [ "**" expr_unaria ]
+
+(* Cualquier expresión se puede llamar, indexar o pedirle un campo, en
+   cualquier orden y cuantas veces haga falta: «haz("a")("b")[0].x».     *)
+expr_postfija       ::= primario { "(" [ argumentos ] ")"
+                                 | "[" expresion "]"
+                                 | "." identificador }
+
+argumentos          ::= expresion { "," expresion }   (* SIN coma final *)
+
+primario            ::= literal
+                      | constante
+                      | funcion_anonima
+                      | identificador
+                      | "(" expresion ")"
+                      | lista_literal
+                      | dic_literal
+
+
+(* ─── 5. LITERALES ───────────────────────────────────────────────── *)
+
+(* El signo menos NO es parte del literal: es el operador unario. Importa,
+   porque así «2-3» se lee como una resta y no como dos números.         *)
+literal             ::= numero | texto | booleano | "nulo" | "Nulo"
+
+numero              ::= digito { digito } [ "." digito { digito } ]
+                        (* sin separadores «1_000» ni hexadecimal «0xFF» *)
+
+booleano            ::= "cierto" | "Cierto" | "verdadero" | "falso" | "Falso"
+
+constante           ::= "|" identificador
+                        (* las del lenguaje: |PI, |E, |INFINITO.
+                           Un programa NO puede declarar una. *)
+
+(* En listas y diccionarios la coma final SÍ se admite; en los argumentos
+   de una llamada, NO.                                                   *)
+lista_literal       ::= "[" [ expresion { "," expresion } [ "," ] ] "]"
+
+dic_literal         ::= "{" [ par { "," par } [ "," ] ] "}"
+par                 ::= ( texto | identificador ) ":" expresion
+
+
+(* ─── 6. LÉXICO ──────────────────────────────────────────────────── *)
+
+identificador       ::= letra { letra | digito | "_" }
+letra               ::= letra_min | letra_may | "ñ" | "Ñ"
+                      | "á" | "é" | "í" | "ó" | "ú" | "ü"
+                      | "Á" | "É" | "Í" | "Ó" | "Ú" | "Ü"
+letra_min           ::= "a" … "z"
+letra_may           ::= "A" … "Z"
+digito              ::= "0" … "9"
+
+(* DOS clases de texto, y la diferencia importa: la comilla doble
+   interpola, la simple no. *)
+texto               ::= '"' { car_doble } '"'
+                      | "'" { car_simple } "'"
+
+car_doble           ::= escape | interpolacion | ( cualquiera - '"' - "\\" - "{" )
+car_simple          ::= escape | ( cualquiera - "'" - "\\" )
+
+interpolacion       ::= "{" expresion "}"
+
+(* Reconocidos: \n \t \r \\ \{ \}. Cualquier otro «\x» da «x» tal cual,
+   así que \" y \' funcionan por esa regla.                             *)
+escape              ::= "\\" cualquiera
+
+comentario          ::= "#" { cualquiera - salto }
+
+
+(* ─── 7. PALABRAS RESERVADAS ─────────────────────────────────────── *)
+
+(*
+   Las DURAS — las conoce el lexer y no valen como nombre:
+
+     var  fijo
+     fn  funcion  función  definir
+     devolver  retornar
+     si  sino  mientras  para  en
+     repetir  veces  romper  continuar
+     intentar  capturar  finalmente  lanzar
+     cierto  Cierto  verdadero  falso  Falso  nulo  Nulo
+     no
+
+   Las BLANDAS — las mira el parser por su texto, así que SÍ valen como
+   nombre de variable:
+
+     usar  de  publico  público
+
+   Y dos excepciones que sorprenden:
+
+     · «y» y «o» son operadores Y nombres válidos a la vez. Se leen como
+       operador solo si están en la MISMA LÍNEA que lo anterior y no les
+       sigue «=», «[», «.» ni «(». Así «var y = 3» funciona.
+     · «no» NO vale como nombre, aunque «y» y «o» sí. Es la única de las
+       tres que está cerrada.
+
+   «error» NO es palabra reservada: es una función de la biblioteca. No se
+   puede REDECLARAR —como ninguna de la biblioteca— pero eso es otra regla.
+*)
+
+
+(* ─── 8. NOTAS DE DISEÑO ─────────────────────────────────────────── *)
+
+(*
+   · La indentación NUNCA es significativa. El SALTO DE LÍNEA sí lo es,
+     en dos sitios:
+         — «devolver» seguido de salto de línea devuelve nulo, no lo que
+           venga en la línea siguiente.
+         — «y» y «o» en una línea nueva dejan de ser operadores.
+     Todo lo demás cabe en una sola línea: «fn f() { devolver 1 }  f()».
+
+   · Los comentarios empiezan con # y llegan al final de la línea. No hay
+     comentarios de bloque.
+
+   · Las llaves dentro de un texto de comilla DOBLE son interpolación. Para
+     que sean caracteres se escapan: "\{x\}". En comilla simple no hace
+     falta: ahí nunca interpolan.
+
+   · «fn» y «funcion» son sinónimos exactos, y también «función» y
+     «definir». Igual «devolver» y «retornar».
+
+   · Un nombre declarado con «fn» es FIJO: no se puede reasignar. Lo que se
+     reasigna es una «var» que guarde una función.
+
+   · No hay operador ternario: «si» es sentencia, no expresión. Pero la
+     ASIGNACIÓN sí es expresión, así que «a = b = 7» y «f(x = 5)» son
+     válidos.
+
+   · No hay clases definidas por el usuario: los datos se modelan con dic
+     y lista<dic>, y para tablas con el tipo «tabla» del eDSL «datos».
+
+   · Los eDSL (numerico, datos, texto, fecha, formato, estilo, probar) se
+     activan con «usar» y aportan sus nombres al ámbito DE ESE ARCHIVO.
+     Un nombre puede existir a la vez en el núcleo y en un eDSL —«color»,
+     «pares», «tabla», «ahora»— y el «usar» tapa al del núcleo.
+
+   · Una función anidada es un cierre: captura las variables de fuera, y
+     si les escribe, el de fuera lo ve.
+*)

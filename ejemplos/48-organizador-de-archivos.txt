@@ -1,0 +1,140 @@
+# ═══ Organizar una carpeta: leer, clasificar y mover ═══════════════════════
+# El trabajo que todo el mundo hace a mano: mirar qué hay en una carpeta,
+# clasificarlo y dejarlo ordenado. Y lo importante — NO borra nada: copia a su
+# sitio y deja el original. Un programa que borra archivos ajenos tiene que
+# pedirlo, no suponerlo.
+# núcleo: archivos, sistema · eDSL: texto, formato, datos, fecha
+
+usar despuesDe, ultimoIndiceDe, subtexto, minusculas, antesDe, aUrl,
+     recortar, dividir, terminaCon, empiezaCon de "texto"
+usar deRegistros, agrupar, contarCol, sumaCol, ordenarPor, columna, vistazo,
+     donde, conColumna de "datos"
+usar tamanoLegible, tablaTexto, regla, enNegrita, enVerde, enGris, enAmarillo,
+     plural, porciento, alinearDer de "formato"
+usar hoy, deFecha de "fecha"
+
+fijo CARPETA: texto = "datos"
+
+# Qué extensión tiene un nombre, y a qué grupo pertenece
+fn extensionDe(nombre: texto): texto {
+    fijo i: entero = ultimoIndiceDe(nombre, ".")
+    si i < 0 { devolver "(sin extensión)" }
+    devolver minusculas(subtexto(nombre, i + 1, longitud(nombre)))
+}
+
+fn grupoDe(ext: texto): texto {
+    si contiene(["csv", "tsv", "xlsx", "ñdatos"], ext) { devolver "datos" }
+    si contiene(["txt", "md", "log"], ext) { devolver "texto" }
+    si contiene(["png", "jpg", "jpeg", "svg", "gif"], ext) { devolver "imágenes" }
+    si contiene(["pdf", "docx"], ext) { devolver "documentos" }
+    si contiene(["js", "esl", "py", "json"], ext) { devolver "código" }
+    devolver "otros"
+}
+
+imprimir(enNegrita("ORGANIZADOR DE CARPETA · " + deFecha(hoy(), "larga")))
+imprimir(regla(68))
+
+si no existeArchivo(CARPETA) {
+    imprimir(enAmarillo("No existe la carpeta «" + CARPETA + "»."))
+    salir(1)
+}
+si no esCarpeta(CARPETA) {
+    imprimir(enAmarillo("«" + CARPETA + "» existe pero no es una carpeta."))
+    salir(1)
+}
+
+# ── 1 · mirar qué hay ─────────────────────────────────────────────────────
+fijo nombres: lista = listar(CARPETA)
+imprimir("")
+imprimir(enNegrita("1 · QUÉ HAY EN " + CARPETA + "/"))
+si longitud(nombres) == 0 {
+    imprimir("  " + enGris("vacía"))
+    salir(0)
+}
+
+var filas: lista = []
+var total: entero = 0
+para n en nombres {
+    fijo ruta: texto = CARPETA + "/" + n
+    fijo tam: entero = tamanoArchivo(ruta)
+    total = total + tam
+    fijo ext: texto = extensionDe(n)
+    filas = filas + [{
+        "archivo": n, "extensión": ext, "grupo": grupoDe(ext), "bytes": tam
+    }]
+}
+fijo t = deRegistros(filas)
+vistazo(ordenarPor(t, "bytes", cierto))
+imprimir("  " + plural(longitud(nombres), "archivo") + " · " + tamanoLegible(total) + " en total")
+
+# ── 2 · clasificar ────────────────────────────────────────────────────────
+imprimir("")
+imprimir(enNegrita("2 · POR GRUPO"))
+fijo porGrupo = ordenarPor(agrupar(t, ["grupo"], {
+    "archivos": contarCol(), "bytes": sumaCol("bytes")
+}), "bytes", cierto)
+para i en rango(longitud(columna(porGrupo, "grupo"))) {
+    fijo g: texto = columna(porGrupo, "grupo")[i]
+    fijo b: entero = columna(porGrupo, "bytes")[i]
+    imprimir("  " + alinearDer(texto(columna(porGrupo, "archivos")[i]), 3) + "  " +
+             g + "  " + tamanoLegible(b) + "  (" + porciento(real(b) / real(total)) + ")")
+}
+
+# ── 3 · dejarlo ordenado, SIN borrar nada ─────────────────────────────────
+imprimir("")
+imprimir(enNegrita("3 · COPIAR CADA UNO A SU CARPETA"))
+imprimir(enGris("  No se borra nada: se copia y el original se queda donde está."))
+fijo DESTINO: texto = "salida/ordenado"
+crearCarpeta(DESTINO)
+
+var copiados: entero = 0
+para f en filas {
+    fijo grupo1: texto = f["grupo"]
+    fijo carpetaGrupo: texto = DESTINO + "/" + aUrl(grupo1)
+    crearCarpeta(carpetaGrupo)
+    fijo origen: texto = CARPETA + "/" + f["archivo"]
+    fijo destino: texto = carpetaGrupo + "/" + f["archivo"]
+    # Copiar es leer y escribir: el contenido pasa por el programa, así que de
+    # paso se podría transformar. Aquí va tal cual.
+    escribirTexto(destino, leerTexto(origen))
+    copiados = copiados + 1
+    imprimir("  " + enVerde("→") + " " + f["archivo"] + "  a  " + carpetaGrupo + "/")
+}
+
+# ── 4 · comprobar que quedó donde se dijo ─────────────────────────────────
+imprimir("")
+imprimir(enNegrita("4 · COMPROBAR"))
+imprimir("  copiados: " + plural(copiados, "archivo"))
+para g en columna(porGrupo, "grupo") {
+    fijo c: texto = DESTINO + "/" + aUrl(g)
+    si existeArchivo(c) {
+        imprimir("  " + c + "/  →  " + texto(listar(c)))
+    }
+}
+
+# ── 5 · el informe, escrito a un archivo ──────────────────────────────────
+var informe: texto = "Inventario de " + CARPETA + " · " + deFecha(hoy(), "iso") + "\n"
+informe = informe + regla(50) + "\n"
+para f en filas {
+    informe = informe + f["archivo"] + "\t" + f["grupo"] + "\t" + texto(f["bytes"]) + "\n"
+}
+informe = informe + regla(50) + "\n"
+informe = informe + plural(longitud(filas), "archivo") + " · " + tamanoLegible(total) + "\n"
+escribirTexto("salida/inventario.txt", informe)
+imprimir("")
+imprimir(enNegrita("5 · INFORME ESCRITO"))
+imprimir("  salida/inventario.txt · " + tamanoLegible(tamanoArchivo("salida/inventario.txt")))
+
+# Y «agregarTexto» añade al final sin pisar lo que había: es lo que sirve para
+# un registro que crece cada vez que corre el programa.
+agregarTexto("salida/corridas.log", deFecha(hoy(), "iso") + "\t" +
+             plural(copiados, "archivo") + "\n")
+imprimir("  salida/corridas.log  ← una línea más cada vez que esto corra")
+imprimir("")
+imprimir("  lo que quedó en salida/: " + texto(listar("salida")))
+
+imprimir("")
+imprimir(regla(68))
+imprimir("Argumentos con que se llamó: " + texto(argumentos()))
+imprimir("Usuario: " + texto(entorno("USUARIO", "(sin definir)")) +
+         " · empresa: " + texto(entorno("EMPRESA", "(sin definir)")))

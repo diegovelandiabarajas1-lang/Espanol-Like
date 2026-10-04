@@ -1,0 +1,82 @@
+# ═══ Tablero de indicadores, en la consola ══════════════════════════════════
+# Un panel de verdad sin navegador: barras, minigráficos, colores de semáforo y
+# todo cuadrado. Lo que se mira al entrar a trabajar.
+# eDSL: formato, numerico, fecha
+
+usar barraTexto, minigrafico, moneda, porciento, porcientoCambio, abreviar,
+     decimales, regla, centrar, alinearDer, aAncho,
+     enVerde, enRojo, enAmarillo, enGris, enNegrita, tablaTexto,
+     duracionLegible, tiempoRelativo, signoMas de "formato"
+usar media, tendencia, suma de "numerico"
+usar hoy, ahora, deFecha, nombreDia de "fecha"
+
+fijo ANCHO: entero = 64
+
+fn semaforo(valor: real, meta: real): texto {
+    fijo r: real = valor / meta
+    si r >= 1.0 { devolver enVerde("●") }
+    si r >= 0.85 { devolver enAmarillo("●") }
+    devolver enRojo("●")
+}
+
+fn indicador(nombre: texto, valor: real, meta: real, serie: lista, formato: texto) {
+    var v: texto = decimales(valor, 1)
+    si formato == "moneda" { v = moneda(valor) }
+    si formato == "porciento" { v = porciento(valor) }
+    imprimir("  " + semaforo(valor, meta) + " " + aAncho(nombre, 22) +
+             alinearDer(v, 16) + "  " + minigrafico(serie))
+    imprimir("    " + barraTexto(valor, meta, 40) + " " + porciento(valor / meta) + " de la meta")
+}
+
+imprimir(centrar(enNegrita("TABLERO DATAPRO"), ANCHO))
+imprimir(centrar(nombreDia(hoy()) + ", " + deFecha(hoy(), "larga"), ANCHO))
+imprimir(regla(ANCHO))
+imprimir("")
+
+fijo ventasMes: lista = [82.0, 91.0, 88.0, 104.0, 97.0, 112.0, 118.0]
+fijo clientesMes: lista = [41.0, 44.0, 43.0, 47.0, 46.0, 49.0, 52.0]
+fijo cumplimiento: lista = [0.78, 0.81, 0.79, 0.88, 0.86, 0.92, 0.95]
+
+imprimir(enNegrita("  VENTAS"))
+indicador("Facturado (millones)", 118.0, 120.0, ventasMes, "")
+imprimir("")
+imprimir(enNegrita("  CLIENTES"))
+indicador("Clientes activos", 52.0, 50.0, clientesMes, "")
+imprimir("")
+imprimir(enNegrita("  OPERACIÓN"))
+indicador("Cumplimiento", 0.95, 1.0, cumplimiento, "porciento")
+
+imprimir("")
+imprimir(regla(ANCHO))
+imprimir(enNegrita("  CÓMO VA LA TENDENCIA"))
+var filas: lista = []
+filas = filas + [{"indicador": "Ventas", "última": decimales(ventasMes[6], 0),
+                  "cambio": porcientoCambio(ventasMes[5], ventasMes[6]),
+                  "por semana": signoMas(tendencia(ventasMes), 1),
+                  "promedio": decimales(media(ventasMes), 1)}]
+filas = filas + [{"indicador": "Clientes", "última": decimales(clientesMes[6], 0),
+                  "cambio": porcientoCambio(clientesMes[5], clientesMes[6]),
+                  "por semana": signoMas(tendencia(clientesMes), 1),
+                  "promedio": decimales(media(clientesMes), 1)}]
+imprimir(tablaTexto(filas))
+
+imprimir("")
+imprimir(regla(ANCHO))
+imprimir(enNegrita("  ÚLTIMOS SUCESOS"))
+fijo sucesos: lista = [
+    {"hace": 180000,    "que": "Informe de La Canasta generado", "nivel": "ok"},
+    {"hace": 3600000,   "que": "Sincronización con Siigo", "nivel": "ok"},
+    {"hace": 7200000,   "que": "Cartera de Girón sin actualizar", "nivel": "aviso"},
+    {"hace": 86400000,  "que": "Respaldo nocturno falló", "nivel": "error"}
+]
+para s en sucesos {
+    var marca: texto = enVerde("✓")
+    si s["nivel"] == "aviso" { marca = enAmarillo("!") }
+    si s["nivel"] == "error" { marca = enRojo("✗") }
+    imprimir("  " + marca + " " + aAncho(s["que"], 44) + enGris(tiempoRelativo(s["hace"])))
+}
+
+imprimir("")
+imprimir(regla(ANCHO))
+imprimir(enGris("  total facturado en 7 semanas: " + abreviar(entero(suma(ventasMes))) + " millones" +
+         "  ·  tiempo de cálculo: " + duracionLegible(1250)))

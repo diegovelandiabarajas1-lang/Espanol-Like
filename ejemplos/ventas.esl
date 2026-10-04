@@ -1,0 +1,273 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Panel de ventas — una aplicación pequeña pero completa.
+#
+#  Pegas un CSV como sale de un sistema —punto y coma, comas dentro de comillas,
+#  fechas dd/mm/aaaa, huecos— y sale el total por ciudad, ordenado, con su
+#  porcentaje y su barra. Lo que se guarda sobrevive a cerrar la página.
+#
+#  Y corre en los DOS sitios, con el mismo cálculo:
+#
+#    en el navegador   pegas el CSV en la caja y sale la página
+#    en la consola     node motor/util/n-node.js ejemplos/ventas.esl ventas.csv
+#                      y sale la misma cuenta en texto, con «tablaTexto»
+#
+#  No es un adorno: es lo que separa «el cálculo» de «cómo se enseña». El
+#  cálculo son doce líneas y no sabe si hay página; lo demás es presentación.
+#
+#  Está escrita para enseñar los eDSL trabajando juntos:
+#    datos    leer el CSV, agrupar y sumar
+#    formato  los pesos con coma decimal, el rango de fechas, y la tabla de texto
+#    estilo   el tema con tokens, y el modo oscuro en dos líneas
+# ─────────────────────────────────────────────────────────────────────────────
+
+usar deCsv, columnas, columna, agrupar, ordenarPor, sumaCol, contarCol,
+     celda, minCol, maxCol, resumir, aRegistros, unicas de "datos"
+usar moneda, porciento, plural, numero, decimales, rangoFechas,
+     tablaTexto, barraTexto, regla de "formato"
+usar tema, color, espacio, radio, estilo, estiloGlobal, enOscuro, reiniciar,
+     enFila, enColumna, separado, rejillaDe, transicion, alPasar, aparecer,
+     dentro, escalaTipo, tipografia de "estilo"
+usar recortar, unir de "texto"
+
+# ── el tema, arriba y una sola vez ───────────────────────────────────────────
+fijo claro = tema({
+    "color": {"fondo": "#F7F7FB", "tarjeta": "blanco", "tinta": "#1B1A26",
+              "suave": "#6C6B80", "acento": "#4F3FD4", "borde": "#E1E0EB"},
+    "espacio": {"s": 8, "m": 16, "g": 24},
+    "radio": {"suave": 12},
+    "tipografia": escalaTipo(15, 1.3, 5)
+})
+fijo oscuro = tema({
+    "color": {"fondo": "#15131F", "tarjeta": "#201D2E", "tinta": "#EDECF5",
+              "suave": "#9A99AD", "borde": "#322E45"}
+})
+
+fijo base = estilo({"fuente": "system-ui, sans-serif", "fondo": color("fondo"),
+                    "color": color("tinta"), "relleno": espacio("g"),
+                    "altoMin": "100vh", "tamano": tipografia("0")})
+fijo tarjeta = estilo({"fondo": color("tarjeta"), "relleno": espacio("m"),
+                       "redondeo": radio("suave"), "borde": "1px solid " + color("borde")})
+fijo suave = estilo({"color": color("suave"), "tamano": tipografia("0")})
+
+fn barra(parte: real): nodo {
+    # Una barra de proporción, con el ancho como porcentaje y nada más.
+    devolver etiqueta("div", estilo({"alto": 6, "redondeo": 3, "fondo": color("borde")}),
+        etiqueta("div", estilo({"alto": 6, "redondeo": 3, "fondo": color("acento"),
+                                "ancho": decimales(parte * 100, 1) + "%"})))
+}
+
+# ── el estado ────────────────────────────────────────────────────────────────
+fijo EJEMPLO = "ciudad;dia;cliente;ventas
+Girón;01/09/2026;\"Pérez, Ana\";1200000
+Bogotá;01/09/2026;Gómez;450000
+Girón;02/09/2026;Ruiz;300000
+Cali;02/09/2026;\"Díaz, Luis\";780000
+Bogotá;03/09/2026;Ortiz;320000
+Girón;03/09/2026;Salas;
+Medellín;04/09/2026;Nieto;1450000
+Cali;05/09/2026;Rojas;95000"
+
+# Ni el almacén ni la página existen en todos los anfitriones, y preguntar es
+# intentarlo: no hay una función que lo diga. Envolverlo aquí, una vez, deja el
+# resto del programa sin un solo «intentar» de más.
+fn hayAlmacen(): bool {
+    intentar { guardados()  devolver cierto } capturar (e) { devolver falso }
+}
+fn hayPagina(): bool {
+    intentar { limpiarPagina()  devolver cierto } capturar (e) { devolver falso }
+}
+fn argumentosSiHay(): lista {
+    # En el navegador no hay línea de órdenes, así que «argumentos» se queja. Sin
+    # este envoltorio el programa reventaba al ABRIRLO en el IDE, que es donde
+    # más se va a abrir.
+    intentar { devolver argumentos() } capturar (e) { devolver [] }
+}
+
+fijo ALMACEN: bool = hayAlmacen()
+fijo PAGINA: bool = hayPagina()
+
+# En la consola el CSV sale del archivo que se pase; en el navegador, de lo
+# último que se guardó. Y si no hay ninguno de los dos, del ejemplo.
+fn fuenteInicial(): texto {
+    fijo args: lista = argumentosSiHay()
+    si longitud(args) > 0 {
+        intentar { devolver leerTexto(args[0]) }
+        capturar (e) { imprimir("no pude leer " + args[0] + ": " + e.mensaje) }
+    }
+    si ALMACEN { devolver recuperar("csv", EJEMPLO) }
+    devolver EJEMPLO
+}
+
+var fuente: texto = fuenteInicial()
+var aviso: texto = ""
+
+fn escribiendo(ev: dic) { fuente = obtener(ev, "valor", "") }
+
+fn calcular() {
+    si recortar(fuente) == "" {
+        aviso = "Pega un CSV con una columna «ciudad» y otra «ventas»."
+        ver()
+        devolver
+    }
+    intentar {
+        fijo t: tabla = deCsv(fuente)
+        si no contiene(columnas(t), "ciudad") o no contiene(columnas(t), "ventas") {
+            aviso = "Faltan columnas. El archivo trae: " + unir(columnas(t), ", ")
+        } sino {
+            aviso = ""
+            si ALMACEN { guardar("csv", fuente) }
+        }
+    } capturar (e) {
+        aviso = "No pude leer el CSV: " + e.mensaje
+    }
+    ver()
+}
+
+fn restaurar() { fuente = EJEMPLO  aviso = ""  si ALMACEN { guardar("csv", fuente) }  ver() }
+
+fn resumenCorto(): texto {
+    # La frase de debajo del título. Se calcula aparte porque «ver» ya hace
+    # bastante, y porque así se ve para qué sirve «plural»: nadie quiere leer
+    # «1 ventas en 1 ciudades».
+    si aviso != "" o recortar(fuente) == "" {
+        devolver "Pega el CSV como salga del sistema. Se guarda solo."
+    }
+    intentar {
+        fijo t: tabla = deCsv(fuente)
+        fijo c: lista = unicas(t, "ciudad")
+        devolver plural(longitud(t), "venta") + " en " + plural(longitud(c), "ciudad") +
+                 " · se guarda solo"
+    } capturar (e) {
+        devolver "Pega el CSV como salga del sistema. Se guarda solo."
+    }
+}
+
+# ── el cálculo, que no sabe si hay página ────────────────────────────────────
+fn cuentas(): dic {
+    # Lo único que calcula este programa. Devuelve la tabla por ciudad y el
+    # total. Doce líneas, y las mismas para la página y para la consola.
+    fijo t: tabla = deCsv(fuente)
+    fijo gen: tabla = resumir(t, {"total": sumaCol("ventas"), "n": contarCol()})
+    # La columna de fechas es opcional: un archivo puede traer solo ciudad y
+    # ventas, y entonces no hay periodo que enseñar. Pedirla igual reventaba con
+    # «la tabla no tiene una columna dia», que es un buen mensaje para un fallo
+    # y una tontería para un archivo que está bien.
+    var periodo: texto = ""
+    si contiene(columnas(t), "dia") {
+        fijo d: tabla = resumir(t, {"desde": minCol("dia"), "hasta": maxCol("dia")})
+        periodo = rangoFechas(celda(d, 0, "desde"), celda(d, 0, "hasta"))
+    }
+    devolver {
+        "total": real(celda(gen, 0, "total")),
+        "cuantas": entero(celda(gen, 0, "n")),
+        "periodo": periodo,
+        "ciudades": ordenarPor(
+            agrupar(t, ["ciudad"], {"total": sumaCol("ventas"), "ventas": contarCol()}),
+            "total", cierto)
+    }
+}
+
+# ── en la consola ────────────────────────────────────────────────────────────
+fn verEnConsola() {
+    si aviso != "" { imprimir(aviso)  devolver }
+    fijo c: dic = cuentas()
+    fijo total: real = real(obtener(c, "total", 0))
+    fijo porCiudad: tabla = obtener(c, "ciudades", nulo)
+
+    imprimir("PANEL DE VENTAS")
+    imprimir(regla(52))
+    imprimir("Total     " + moneda(total))
+    imprimir("Ventas    " + numero(entero(obtener(c, "cuantas", 0))))
+    si obtener(c, "periodo", "") != "" { imprimir("Periodo   " + obtener(c, "periodo", "")) }
+    imprimir("")
+    # tablaTexto recibe una lista de DICCIONARIOS —las claves son los títulos— y
+    # alinea los números a la derecha y el texto a la izquierda. De una tabla los
+    # diccionarios salen con aRegistros, así que esto es casi un paso directo.
+    var filas: lista = []
+    para f en aRegistros(porCiudad) {
+        fijo suma: real = real(obtener(f, "total", 0))
+        agregar(filas, {"ciudad": obtener(f, "ciudad", ""),
+                        "total": moneda(suma),
+                        "parte": porciento(suma / total, 1),
+                        "": barraTexto(suma, total)})
+    }
+    imprimir(tablaTexto(filas))
+}
+
+# ── la vista ─────────────────────────────────────────────────────────────────
+fn ver() {
+    si no PAGINA { verEnConsola()  devolver }
+    limpiarPagina()
+    var partes: lista = [
+        etiqueta("h1", estilo({"margen": [0, 0, 4, 0], "tamano": tipografia("3")}), "Panel de ventas"),
+        etiqueta("p", suave, estilo({"margen": [0, 0, 24, 0]}), resumenCorto()),
+        etiqueta("div", tarjeta, estilo({"margenAbajo": 24}),
+            etiqueta("div", enColumna(8),
+                areaTexto("El CSV", nulo, {"valor": fuente, "alEscribir": escribiendo,
+                                           "rows": "7", "spellcheck": "false"}),
+                etiqueta("div", enFila(8),
+                    boton("Calcular", fn(ev) { calcular() },
+                        estilo({"fondo": color("acento"), "color": "blanco", "borde": "ninguno",
+                                "relleno": [10, 18], "redondeo": 8, "cursor": "mano"},
+                               transicion("opacidad", 150), alPasar({"opacidad": 0.85}))),
+                    boton("Volver al ejemplo", fn(ev) { restaurar() },
+                        estilo({"fondo": "transparente", "color": color("suave"),
+                                "borde": "1px solid " + color("borde"),
+                                "relleno": [10, 18], "redondeo": 8, "cursor": "mano"})))))
+    ]
+
+    si aviso != "" {
+        agregar(partes, etiqueta("p", tarjeta, aparecer(200),
+            estilo({"color": "#B62E24", "borde": "1px solid #B62E24"}), aviso))
+        pintar(etiqueta("main", base, estiloGlobal(":root", claro),
+            enOscuro(estiloGlobal(":root", oscuro)), reiniciar(), partes))
+        devolver
+    }
+
+    var c: dic = {}
+    intentar { c = cuentas() } capturar (e) {
+        # «ya se sabe que se puede leer» es lo que se dice justo antes de que la
+        # página salga en blanco.
+        aviso = "No pude leer el CSV: " + e.mensaje
+        ver()
+        devolver
+    }
+    fijo total: real = real(obtener(c, "total", 0))
+    fijo porCiudad: tabla = obtener(c, "ciudades", nulo)
+
+    agregar(partes, etiqueta("div", rejillaDe(3, 16), estilo({"margenAbajo": 24}),
+        ficha("Total", moneda(total)),
+        ficha("Ventas", numero(entero(obtener(c, "cuantas", 0)))),
+        ficha("Periodo", si2(obtener(c, "periodo", "") != "", obtener(c, "periodo", ""), "sin fechas"))))
+
+    agregar(partes, etiqueta("div", tarjeta,
+        etiqueta("h2", estilo({"margen": [0, 0, 12, 0], "tamano": tipografia("1")}), "Por ciudad"),
+        etiqueta("div", enColumna(14),
+            mapear(aRegistros(porCiudad), fn(f: dic): nodo {
+                fijo suma: real = real(obtener(f, "total", 0))
+                devolver etiqueta("div", enColumna(6),
+                    etiqueta("div", separado(),
+                        etiqueta("strong", obtener(f, "ciudad", "")),
+                        etiqueta("span", suave,
+                            moneda(suma) + "  ·  " + porciento(suma / total, 1))),
+                    barra(suma / total))
+            }))))
+
+    pintar(etiqueta("main", base, estiloGlobal(":root", claro),
+        enOscuro(estiloGlobal(":root", oscuro)), reiniciar(), partes))
+}
+
+fn si2(cond: bool, a: texto, b: texto): texto {
+    # Un «si» que es una expresión. El lenguaje no tiene operador ternario, y
+    # meter un «si» de cuatro líneas dentro de una lista de nodos se lee peor.
+    si cond { devolver a }
+    devolver b
+}
+
+fn ficha(rotulo: texto, valor: texto): nodo {
+    devolver etiqueta("div", tarjeta,
+        etiqueta("p", suave, estilo({"margen": 0}), rotulo),
+        etiqueta("p", estilo({"margen": [4, 0, 0, 0], "grosor": 700, "tamano": tipografia("2")}), valor))
+}
+
+ver()

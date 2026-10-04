@@ -1,0 +1,54 @@
+# ═══ Resultados de una encuesta ═════════════════════════════════════════════
+# Las respuestas llegan una por fila. Para leerlas hay que darles la vuelta, y
+# eso es «despivotar» y «pivotar», que son la misma operación en los dos
+# sentidos.
+# eDSL: datos, formato
+
+usar deRegistros, despivotar, pivotar, agrupar, contarCol, promedioCol,
+     columna, vistazo, ordenarPor, contarPor, unicas, donde de "datos"
+usar decimales, porciento, barraTexto, regla, enNegrita, tablaTexto de "formato"
+
+# Cada fila es una persona; cada columna, una pregunta de 1 a 5.
+fijo respuestas = deRegistros([
+    {"persona": "p1", "sede": "Bucaramanga",   "atencion": 5, "precio": 3, "entrega": 4},
+    {"persona": "p2", "sede": "Bucaramanga",   "atencion": 4, "precio": 2, "entrega": 5},
+    {"persona": "p3", "sede": "Girón",         "atencion": 3, "precio": 4, "entrega": 3},
+    {"persona": "p4", "sede": "Girón",         "atencion": 5, "precio": 3, "entrega": 2},
+    {"persona": "p5", "sede": "Floridablanca", "atencion": 2, "precio": 5, "entrega": 4},
+    {"persona": "p6", "sede": "Floridablanca", "atencion": 4, "precio": 4, "entrega": 5},
+    {"persona": "p7", "sede": "Bucaramanga",   "atencion": 5, "precio": 1, "entrega": 4}
+])
+
+imprimir(enNegrita("COMO LLEGÓ — una fila por persona"))
+vistazo(respuestas)
+
+# Tres columnas de preguntas pasan a ser dos: «pregunta» y «nota».
+fijo largo = despivotar(respuestas, ["persona", "sede"], "pregunta", "nota")
+imprimir("")
+imprimir(enNegrita("DESPIVOTADA — una fila por respuesta"))
+vistazo(largo)
+
+imprimir("")
+imprimir(enNegrita("PROMEDIO POR PREGUNTA"))
+fijo porPregunta = ordenarPor(agrupar(largo, ["pregunta"], {
+    "promedio": promedioCol("nota"), "respuestas": contarCol()
+}), "promedio", cierto)
+para i en rango(longitud(columna(porPregunta, "pregunta"))) {
+    fijo p: real = columna(porPregunta, "promedio")[i]
+    imprimir("  " + columna(porPregunta, "pregunta")[i] + "  " + decimales(p, 2) + "  " + barraTexto(p, 5.0, 25))
+}
+
+imprimir("")
+imprimir(enNegrita("SEDE CONTRA PREGUNTA"))
+vistazo(pivotar(largo, "sede", "pregunta", {"nota": promedioCol("nota")}))
+
+imprimir("")
+imprimir(enNegrita("CUÁNTAS VECES SE PUSO CADA NOTA"))
+vistazo(ordenarPor(contarPor(largo, "nota"), "nota"))
+
+imprimir("")
+fijo malas = donde(largo, fn(f: dic): bool { devolver f["nota"] <= 2 })
+fijo n: entero = longitud(columna(malas, "nota"))
+fijo total: entero = longitud(columna(largo, "nota"))
+imprimir(regla(52))
+imprimir("Respuestas de 1 o 2: " + texto(n) + " de " + texto(total) + " (" + porciento(real(n) / real(total)) + ")")

@@ -1,0 +1,79 @@
+# ═══ Un informe que junta tres fuentes ══════════════════════════════════════
+# Clientes, ventas y cartera en tres archivos distintos, como siempre llegan.
+# Se cruzan por el NIT y sale una sola tabla con la que se puede decidir.
+# eDSL: datos, formato, fecha
+
+usar deCsv, deRegistros, cruzar, agrupar, sumaCol, contarCol, maxCol,
+     conColumna, ordenarPor, columna, vistazo, soloColumnas, donde,
+     juntarColumnas, resumir, numerar de "datos"
+usar moneda, decimales, regla, enNegrita, enRojo, enVerde, enAmarillo,
+     tablaTexto, plural, tiempoRelativo de "formato"
+usar hoy, diasEntre, aFecha, deFecha de "fecha"
+
+# 1 · los clientes vienen en un CSV (aquí escrito a mano, pero deCsv es el mismo
+#     que lee un archivo con leerTexto)
+fijo clientes = deCsv("nit,nombre,ciudad,desde
+900123,Ferretería El Tornillo,Bucaramanga,2019-03-14
+900456,Panadería La Espiga,Girón,2022-07-01
+900789,Droguería Salud,Floridablanca,2015-11-20
+900321,Café del Parque,Girón,2024-02-10")
+
+# 2 · las ventas del año
+fijo ventas = deRegistros([
+    {"nit": 900123, "monto": 42000000}, {"nit": 900123, "monto": 18000000},
+    {"nit": 900456, "monto": 7500000},
+    {"nit": 900789, "monto": 95000000}, {"nit": 900789, "monto": 31000000},
+    {"nit": 900321, "monto": 2100000}
+])
+
+# 3 · lo que deben
+fijo cartera = deRegistros([
+    {"nit": 900123, "saldo": 0},
+    {"nit": 900456, "saldo": 3200000},
+    {"nit": 900789, "saldo": 12000000},
+    {"nit": 900321, "saldo": 1800000}
+])
+
+imprimir(enNegrita("PASO 1 · ventas resumidas por cliente"))
+fijo resumenVentas = agrupar(ventas, ["nit"], {
+    "facturado": sumaCol("monto"), "facturas": contarCol(), "mayor": maxCol("monto")
+})
+vistazo(resumenVentas)
+
+imprimir("")
+imprimir(enNegrita("PASO 2 · cruzar las tres por el NIT"))
+var t = cruzar(clientes, resumenVentas, "nit")
+t = cruzar(t, cartera, "nit")
+t = conColumna(t, "antiguedad", fn(f: dic): entero { devolver entero(real(diasEntre(f["desde"], hoy())) / 365.0) })
+t = ordenarPor(t, "facturado", cierto)
+vistazo(soloColumnas(t, ["nit", "nombre", "ciudad", "antiguedad", "facturado", "saldo"]))
+
+imprimir("")
+imprimir(enNegrita("PASO 3 · el informe que de verdad se lee"))
+imprimir(regla(72))
+para i en rango(longitud(columna(t, "nit"))) {
+    fijo saldo: entero = columna(t, "saldo")[i]
+    var estado: texto = enVerde("al día")
+    si saldo > 0 { estado = enAmarillo("debe " + moneda(saldo)) }
+    si saldo > 10000000 { estado = enRojo("DEBE " + moneda(saldo)) }
+    imprimir("  " + columna(t, "nombre")[i])
+    imprimir("    " + columna(t, "ciudad")[i] + " · cliente desde hace " +
+             plural(columna(t, "antiguedad")[i], "año") +
+             " · facturó " + moneda(columna(t, "facturado")[i]) +
+             " en " + plural(columna(t, "facturas")[i], "factura"))
+    imprimir("    " + estado)
+}
+
+fijo tot = resumir(t, {"facturado": sumaCol("facturado"), "porCobrar": sumaCol("saldo")})
+imprimir("")
+imprimir(regla(72))
+imprimir("Facturado: " + moneda(columna(tot, "facturado")[0]) +
+         "   ·   por cobrar: " + moneda(columna(tot, "porCobrar")[0]))
+
+imprimir("")
+imprimir(enNegrita("LOS QUE DEBEN Y FACTURAN POCO — a revisar"))
+fijo riesgo = donde(t, fn(f: dic): bool { devolver f["saldo"] > 0 y f["facturado"] < 10000000 })
+para i en rango(longitud(columna(riesgo, "nit"))) {
+    imprimir("  " + enRojo(columna(riesgo, "nombre")[i]) + " debe " + moneda(columna(riesgo, "saldo")[i]) +
+             " y solo facturó " + moneda(columna(riesgo, "facturado")[i]))
+}

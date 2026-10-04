@@ -1,0 +1,226 @@
+# Las pruebas del eDSL «texto», en Ñ.
+#
+# Lo que más se comprueba aquí es el español, porque es la razón de que este
+# eDSL exista: el orden de la ñ, las tildes que no deben estorbar al buscar, y
+# los plurales y mayúsculas que las bibliotecas pensadas en inglés hacen mal.
+
+usar probar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCierto, debeSerFalso,
+     debeFallarCon, debeTener, debeContener, debeSerCerca, debeSerMayor, debeEstarVacio de "probar"
+usar mayusculas, minusculas, recortar, dividir, unir, reemplazar, empiezaCon, terminaCon,
+     subtexto, indiceDe, ultimoIndiceDe, cuantasVeces, izquierda, derecha, entre,
+     antesDe, despuesDe, recortarIzq, recortarDer, quitarPrefijo, quitarSufijo,
+     capitalizar, titular, reemplazarPrimero, repetirTexto, invertirTexto,
+     lineas, palabras, caracteres, envolver, sangrar, desangrar,
+     sinAcentos, igualSinAcentos, ordenAlfabetico, distancia, parecido, aUrl, aIdentificador,
+     codigo, deCodigo, esLetra, esDigito, esEspacio, esVocal, esMayuscula,
+     plantilla, escaparHtml, escaparCsv de "texto"
+
+grupo("el español, que es para lo que existe", fn() {
+    probar("la ñ va entre la n y la o, no después de la z", fn() {
+        var ps: lista = ["ñandú", "nube", "nada", "ñu", "oso", "zapato"]
+        # Por códigos Unicode la ñ cae después de la z: esto es lo que falla.
+        debeSer(ordenar(ps), ["nada", "nube", "oso", "zapato", "ñandú", "ñu"])
+        # En español:
+        debeSer(ordenAlfabetico(ps), ["nada", "nube", "ñandú", "ñu", "oso", "zapato"])
+    })
+    probar("las tildes no cambian el orden, solo desempatan", fn() {
+        debeSer(ordenAlfabetico(["él", "el"]), ["el", "él"])
+        debeSer(ordenAlfabetico(["ánimo", "amor", "árbol"]), ["amor", "ánimo", "árbol"])
+    })
+    probar("y la minúscula va antes que la mayúscula", fn() {
+        debeSer(ordenAlfabetico(["El", "el"]), ["el", "El"])
+    })
+    probar("sinAcentos quita las tildes y DEJA la ñ", fn() {
+        # La ñ no es una n con sombrero: es una letra. Quitarle la tilde
+        # convertiría «año» en «ano», que es otra palabra.
+        debeSer(sinAcentos("Martín Núñez"), "Martin Nuñez")
+        debeSer(sinAcentos("ü"), "u")
+        debeSer(sinAcentos("año"), "año")
+    })
+    probar("igualSinAcentos encuentra al cliente mal escrito", fn() {
+        debeSerCierto(igualSinAcentos("Martín", "martin"))
+        debeSerCierto(igualSinAcentos("GONZÁLEZ", "gonzalez"))
+        # pero no confunde dos palabras distintas
+        debeSerFalso(igualSinAcentos("año", "ano"))
+    })
+    probar("parecido dice cuánto, de 0 a 1", fn() {
+        debeSer(parecido("Gonzalez", "González"), 1)
+        debeSer(parecido("Ana", "Ana"), 1)
+        debeSerCerca(parecido("Ana", "Juan"), 0.25)
+        debeSerMayor(parecido("Rodriguez", "Rodríguez"), 0.9)
+    })
+    probar("distancia cuenta los cambios de una letra", fn() {
+        debeSer(distancia("gato", "pato"), 1)
+        debeSer(distancia("casa", "casa"), 0)
+        debeSer(distancia("", "abc"), 3)
+        debeSer(distancia("casa", "calle"), 3)
+    })
+    probar("aUrl sí pasa la ñ a n, porque una dirección no la admite", fn() {
+        debeSer(aUrl("Camión Año 2026"), "camion-ano-2026")
+        debeSer(aUrl("¡Ya está!"), "ya-esta")
+        debeSer(aUrl("  varios   espacios  "), "varios-espacios")
+    })
+    probar("aIdentificador da un nombre que Ñ acepta", fn() {
+        debeSer(aIdentificador("Total año 2026"), "Total_año_2026")
+        debeSer(aIdentificador("2 vueltas"), "_2_vueltas")
+        debeFallarCon(fn() { aIdentificador("!!!") }, "no queda nada")
+    })
+    probar("titular deja en minúscula las palabras de enlace", fn() {
+        debeSer(titular("juan de la cruz"), "Juan de la Cruz")
+        debeSer(titular("ventas por region"), "Ventas por Region")
+        # la primera siempre va en mayúscula, aunque sea de enlace
+        debeSer(titular("el mar"), "El Mar")
+    })
+    probar("esLetra y esVocal cuentan las tildes y la ñ", fn() {
+        debeSerCierto(esLetra("Ñandú"))
+        debeSerFalso(esLetra("a1"))
+        debeSerCierto(esVocal("áé"))
+        debeSerFalso(esVocal("abc"))
+    })
+    probar("esMayuscula no se deja engañar por un texto sin letras", fn() {
+        debeSerCierto(esMayuscula("HOLA"))
+        debeSerFalso(esMayuscula("Hola"))
+        # «123» == mayusculas("123"), así que la comparación ingenua diría cierto
+        debeSerFalso(esMayuscula("123"))
+        debeSerCierto(esMayuscula("AÑO"))
+    })
+    probar("codigo y deCodigo son ida y vuelta", fn() {
+        debeSer(codigo("ñ"), 241)
+        debeSer(deCodigo(241), "ñ")
+        debeSer(deCodigo(codigo("Ñ")), "Ñ")
+        debeFallarCon(fn() { codigo("") }, "de un texto vacío")
+    })
+})
+
+grupo("buscar y cortar", fn() {
+    probar("indiceDe y ultimoIndiceDe", fn() {
+        debeSer(indiceDe("banana", "na"), 2)
+        debeSer(ultimoIndiceDe("banana", "na"), 4)
+        debeSer(indiceDe("banana", "z"), -1)
+        debeSer(indiceDe("banana", "na", 3), 4)
+    })
+    probar("cuantasVeces no cuenta solapes", fn() {
+        # «aba» aparece en 0 y en 4, no en 2: los solapes no cuentan.
+        debeSer(cuantasVeces("abababa", "aba"), 2)
+        debeSer(cuantasVeces("hola", "z"), 0)
+        debeFallarCon(fn() { cuantasVeces("x", "") }, "no puede estar vacío")
+    })
+    probar("izquierda y derecha, con los bordes", fn() {
+        debeSer(izquierda("Ñandú", 2), "Ña")
+        debeSer(derecha("Ñandú", 2), "dú")
+        debeSer(izquierda("ab", 10), "ab")
+        debeSer(izquierda("ab", 0), "")
+        debeSer(derecha("ab", 0), "")
+    })
+    probar("entre saca el campo, y vacío si no está", fn() {
+        debeSer(entre("nombre: Ana;", ": ", ";"), "Ana")
+        debeSer(entre("no la trae", ": ", ";"), "")
+        debeSer(entre("solo la primera: ", ": ", ";"), "")
+    })
+    probar("antesDe y despuesDe se comportan distinto si falta la marca", fn() {
+        debeSer(antesDe("clave=valor", "="), "clave")
+        debeSer(despuesDe("clave=valor", "="), "valor")
+        # sin la marca: antesDe da todo, despuesDe da nada
+        debeSer(antesDe("sin igual", "="), "sin igual")
+        debeSer(despuesDe("sin igual", "="), "")
+    })
+    probar("recortar por un lado o por los dos", fn() {
+        debeSer(recortarIzq("  x  "), "x  ")
+        debeSer(recortarDer("  x  "), "  x")
+        debeSer(recortar("  x  "), "x")
+    })
+    probar("quitarPrefijo y quitarSufijo no tocan lo que no empieza así", fn() {
+        debeSer(quitarPrefijo("tmp_datos", "tmp_"), "datos")
+        debeSer(quitarPrefijo("datos", "tmp_"), "datos")
+        debeSer(quitarSufijo("informe.esl", ".esl"), "informe")
+        debeSer(quitarSufijo("informe.csv", ".esl"), "informe.csv")
+    })
+})
+
+grupo("transformar, partir y juntar", fn() {
+    probar("capitalizar toca solo la primera", fn() {
+        debeSer(capitalizar("hOLA mUNDO"), "Hola mundo")
+        debeSer(capitalizar(""), "")
+    })
+    probar("reemplazar cambia todas, reemplazarPrimero una", fn() {
+        debeSer(reemplazar("a-b-c", "-", "+"), "a+b+c")
+        debeSer(reemplazarPrimero("a-b-c", "-", "+"), "a+b-c")
+        debeSer(reemplazarPrimero("sin guion", "-", "+"), "sin guion")
+    })
+    probar("repetirTexto, con sus bordes", fn() {
+        debeSer(repetirTexto("ab", 3), "ababab")
+        debeSer(repetirTexto("ab", 0), "")
+        debeFallarCon(fn() { repetirTexto("a", 0 - 1) }, "menos de 0")
+    })
+    probar("invertirTexto no parte los caracteres", fn() {
+        debeSer(invertirTexto("Ñandú"), "údnaÑ")
+        debeSer(invertirTexto(""), "")
+    })
+    probar("lineas entiende los saltos de Windows", fn() {
+        debeSer(lineas("uno\ndos"), ["uno", "dos"])
+        debeTener(lineas("uno\r\ndos"), 2)
+        debeSer(lineas(""), [""])
+    })
+    probar("palabras no deja huecos vacíos", fn() {
+        debeSer(palabras("  el   ñandú  "), ["el", "ñandú"])
+        debeSer(palabras("   "), [])
+        # dividir sí los deja, y por eso son dos funciones
+        debeSerMayor(longitud(dividir("  a  b  ", " ")), 2)
+    })
+    probar("caracteres cuenta por carácter", fn() {
+        debeSer(caracteres("añb"), ["a", "ñ", "b"])
+        debeSer(longitud(caracteres("Ñandú")), 5)
+    })
+    probar("envolver no corta palabras", fn() {
+        var ls: lista = envolver("El ñandú corría por la pampa mientras el sol caía", 20)
+        para l en ls { debeSerCierto(longitud(l) <= 20) }
+        # y no se pierde ninguna palabra
+        debeSer(longitud(palabras(unir(ls, " "))), 10)
+        debeFallarCon(fn() { envolver("x", 0) }, "1 o más")
+    })
+    probar("sangrar y desangrar", fn() {
+        debeSer(sangrar("uno\ndos", 2), "  uno\n  dos")
+        # desangrar quita la sangría COMÚN, así que el anidado sobrevive
+        debeSer(desangrar("    uno\n      dos"), "uno\n  dos")
+        debeSer(desangrar("uno\ndos"), "uno\ndos")
+    })
+    probar("empiezaCon, terminaCon y subtexto siguen igual tras la mudanza", fn() {
+        debeSerCierto(empiezaCon("hola", "ho"))
+        debeSerCierto(terminaCon("hola", "la"))
+        debeSer(subtexto("abcdef", 1, 4), "bcd")
+        debeSer(mayusculas("ñandú"), "ÑANDÚ")
+        debeSer(minusculas("ÑANDÚ"), "ñandú")
+        debeSer(unir(["a", "b"], "-"), "a-b")
+    })
+})
+
+grupo("plantillas y escapes", fn() {
+    probar("plantilla rellena desde un diccionario", fn() {
+        # Las llaves se escapan: en un texto escrito aquí son la interpolación
+        # del propio lenguaje, que se resuelve al compilar.
+        debeSer(plantilla("Hola \{nombre\}", {"nombre": "Ana"}), "Hola Ana")
+        debeSer(plantilla("\{a\} y \{b\}", {"a": 1, "b": 2}), "1 y 2")
+    })
+    probar("y avisa de la clave que falta, diciendo las que hay", fn() {
+        var m: texto = ""
+        intentar { plantilla("\{falta\}", {"otra": 1}) }
+        capturar (e) { m = e.mensaje }
+        debeContener(m, "falta")
+    })
+    probar("escaparHtml", fn() {
+        debeSer(escaparHtml("<b>"), "&lt;b&gt;")
+        debeSer(escaparHtml("Ana & Co"), "Ana &amp; Co")
+        debeSer(escaparHtml("sin nada"), "sin nada")
+    })
+    probar("escaparCsv pone comillas solo si hacen falta", fn() {
+        debeSer(escaparCsv("Ana"), "Ana")
+        debeSer(escaparCsv("Pérez, Ana"), "\"Pérez, Ana\"")
+        # y dobla las de dentro, que es lo que espera una hoja de cálculo
+        debeSer(escaparCsv("dijo \"si\""), "\"dijo \"\"si\"\"\"")
+        debeSer(escaparCsv("con;punto"), "\"con;punto\"")
+    })
+})
+
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(resumenPruebas())

@@ -1,0 +1,110 @@
+# ═══ Modo oscuro, impresión y respeto por quien no quiere movimiento ════════
+# Las consultas de medios que de verdad importan, y una que casi nadie escribe:
+# «prefers-reduced-motion», para quien el movimiento le marea.
+# eDSL: estilo
+
+usar estilo, estiloGlobal, reiniciar, tema, color, espacio, enOscuro, enClaro,
+     enPantalla, enAlto, enImpresion, enMovimientoReducido, enTactil,
+     enApaisado, transicion, aparecer, deslizar, fotogramas, animar,
+     alPasar, cssCrudo de "estilo"
+usar regla, enNegrita, enGris, enAmarillo de "formato"
+
+reiniciar()
+
+imprimir(enNegrita("1 · LOS TOKENS, UNA VEZ EN CLARO Y UNA EN OSCURO"))
+imprimir(regla(68))
+estiloGlobal(":root", tema({
+    "color": {"fondo": "#ffffff", "texto": "#1a1a1a", "suave": "#666666",
+              "superficie": "#f7f7f7", "borde": "#e0e0e0", "marca": "#4f3fd4"},
+    "espacio": {"corto": "8px", "medio": "16px", "largo": "24px"}
+}))
+estiloGlobal(":root", enOscuro(tema({
+    "color": {"fondo": "#121212", "texto": "#f0f0f0", "suave": "#a0a0a0",
+              "superficie": "#1e1e1e", "borde": "#333333", "marca": "#9f97e8"}
+})))
+imprimir("  Declarados los dos juegos. Ningún componente se entera.")
+
+imprimir("")
+imprimir(enNegrita("2 · UN COMPONENTE QUE NO SABE EN QUÉ MODO ESTÁ"))
+imprimir(regla(68))
+fijo panel = estilo({
+    "fondo": color("superficie"),
+    "color": color("texto"),
+    "borde": "1px solid " + color("borde"),
+    "relleno": espacio("largo"),
+    "radio": "8px"
+})
+imprimir("  panel: " + texto(panel))
+imprimir(enGris("  Dice color(\"superficie\"). En claro es #f7f7f7 y en oscuro #1e1e1e."))
+
+imprimir("")
+imprimir(enNegrita("3 · TAMAÑOS DE PANTALLA"))
+imprimir(regla(68))
+fijo contenedor = estilo(
+    {"anchoMaximo": "1200px", "margen": "0 auto", "relleno": espacio("largo")},
+    enPantalla(0, 600,  {"relleno": espacio("corto")}),
+    enPantalla(601, 1024, {"relleno": espacio("medio")}),
+    enAlto(0, 500, {"relleno": espacio("corto")}),
+    enApaisado({"relleno": espacio("medio") + " " + espacio("largo")})
+)
+imprimir("  contenedor: " + texto(contenedor))
+imprimir(enGris("  móvil, tableta, pantalla baja y apaisado — cuatro casos, un estilo"))
+
+imprimir("")
+imprimir(enNegrita("4 · TÁCTIL: EL «HOVER» NO EXISTE EN UN TELÉFONO"))
+imprimir(regla(68))
+fijo boton1 = estilo(
+    {"relleno": "10px 16px", "fondo": color("marca"), "color": "blanco", "radio": "6px"},
+    alPasar({"opacidad": "0.9"}),
+    # En táctil el área de toque tiene que ser mayor: 44px es el mínimo que
+    # recomiendan las dos plataformas.
+    enTactil({"relleno": "14px 20px", "altoMinimo": "44px"})
+)
+imprimir("  botón: " + texto(boton1))
+
+imprimir("")
+imprimir(enNegrita("5 · IMPRESIÓN: lo que no se imprime"))
+imprimir(regla(68))
+fijo pagina = estilo(
+    {"fondo": color("fondo"), "color": color("texto")},
+    enImpresion({"fondo": "blanco", "color": "negro", "tamano": "11pt"})
+)
+imprimir("  página: " + texto(pagina))
+estiloGlobal(".sin-imprimir", enImpresion({"mostrar": "ninguno"}))
+imprimir(enGris("  y «.sin-imprimir» desaparece en el papel: menús, botones, el pie"))
+
+imprimir("")
+imprimir(enNegrita("6 · LA QUE CASI NADIE ESCRIBE"))
+imprimir(regla(68))
+fijo giro = fotogramas({
+    "0%": estilo({"transformar": "rotate(0deg)"}),
+    "100%": estilo({"transformar": "rotate(360deg)"})
+})
+fijo cargando = estilo(
+    # «animar» devuelve un estilo con la propiedad puesta; se compone, no se pega
+    animar(giro, 800),
+    # A quien le marea el movimiento, sin movimiento. Es una línea.
+    enMovimientoReducido({"animacion": "ninguna", "opacidad": "0.6"})
+)
+imprimir("  cargando: " + texto(cargando))
+fijo entrada1 = estilo(
+    aparecer(250),
+    enMovimientoReducido({"animacion": "ninguna"})
+)
+imprimir("  entrada:  " + texto(entrada1))
+imprimir("")
+imprimir(enAmarillo("  enMovimientoReducido es @media (prefers-reduced-motion: reduce)."))
+imprimir(enGris("  Quien lo activó en su sistema lo hizo por algo. Cuesta una línea."))
+
+imprimir("")
+imprimir(enNegrita("7 · LA PUERTA DE ATRÁS, cuando hace falta"))
+imprimir(regla(68))
+# «estiloGlobal» valida el selector: un «@supports» no es un selector y se
+# queja en vez de escribir CSS que el navegador va a ignorar en silencio. Para
+# eso está cssCrudo, que es la puerta de atrás y se ve que lo es.
+cssCrudo("@supports (backdrop-filter: blur(4px)) \{ .panel \{ background: rgba(255,255,255,.7) \} \}")
+imprimir("  Para lo que el eDSL no cubre está cssCrudo, y se ve que es crudo:")
+# Las llaves van escapadas con «\{»: dentro de un texto escrito en el programa
+# serían la interpolación del lenguaje y el compilador buscaría una variable.
+imprimir("    cssCrudo(\"@font-face \{ ... \}\")")
+imprimir(enGris("  Que la puerta de atrás exista y se note es mejor que no tenerla."))

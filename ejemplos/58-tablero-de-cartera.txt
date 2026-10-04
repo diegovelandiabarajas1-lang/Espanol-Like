@@ -1,0 +1,264 @@
+# ═══ Tablero de cartera: el rendimiento se divide entre el COSTO ════════════
+# El 51 mira una cartera con estadística —ponderación, regresión, VaR— y en
+# consola. Este la mira como contabilidad y en pantalla: qué costó, qué vale,
+# cuánto se ganó y qué hay que rebalancear.
+#
+# Y arregla dos cosas del original:
+#
+# 1 · «rendimiento = ganancia / valorActual». No. El rendimiento se divide
+#     entre lo que se PUSO, no entre lo que hay hoy. Las dos cuentas se parecen
+#     y la equivocada sale siempre más baja cuando la cartera va bien, así que
+#     nadie la discute: parece prudencia. Abajo salen las dos.
+#
+# 2 · La alerta de concentración calculaba el exceso sobre el límite y luego
+#     decía «vender parte de X para reducir exposición». Tenía la cifra en la
+#     mano y recomendaba «parte». Ahora dice cuántas unidades y cuánto dinero,
+#     que es lo que convierte una alerta en algo que alguien puede ejecutar.
+# núcleo: web · eDSL: numerico, formato, estilo
+
+usar suma, redondear, absoluto de "numerico"
+usar moneda, porciento, decimales, signoMas, plural, enNegrita, regla,
+     enVerde, enRojo, enGris, alinearDer, alinearIzq, tablaTexto de "formato"
+usar tema, estiloGlobal, reiniciar, estilo, color, espacio, radio, tipografia,
+     paleta, escalaTipo, enOscuro de "estilo"
+
+fijo LIMITE: real = 0.25   # ningún activo por encima del 25 % de la cartera
+
+# ── estilos ───────────────────────────────────────────────────────────────
+fijo tonos: dic = paleta("#3B4F8F")
+fijo escala: dic = escalaTipo(15)
+
+estiloGlobal(":root", reiniciar())
+estiloGlobal(":root", tema({
+    "color": { "marca": tonos["5"], "suave": tonos["1"], "fuerte": tonos["7"],
+               "tinta": "#161B2A", "apagado": "#5F6880", "fondo": "#F5F6FA",
+               "panel": "#FFFFFF", "linea": "#E3E5EF",
+               "sube": "#15803D", "baja": "#B3261E", "ojo": "#9A6700" },
+    "espacio": { "mini": "4px", "corto": "8px", "medio": "16px", "largo": "24px" },
+    "radio": { "poco": "6px", "medio": "12px", "redondo": "999px" },
+    "tipografia": { "cuerpo": "system-ui, -apple-system, sans-serif",
+                    "cifra": "ui-monospace, monospace" }
+}))
+estiloGlobal(":root", enOscuro(tema({
+    "color": { "tinta": "#E6E9F2", "apagado": "#9BA3BA", "fondo": "#0C0F18",
+               "panel": "#141825", "linea": "#262B3C", "suave": tonos["8"] }
+})))
+
+fijo hoja = estilo({ "fuenteFamilia": tipografia("cuerpo"), "fondo": color("fondo"),
+                     "color": color("tinta"), "margen": 0, "relleno": espacio("largo") })
+fijo caja = estilo({ "maxAncho": 980, "margen": "0 auto" })
+fijo panel = estilo({ "fondo": color("panel"), "relleno": espacio("largo"),
+                      "redondeo": radio("medio"), "margenAbajo": espacio("medio"),
+                      "borde": "1px solid " + color("linea") })
+fijo h1 = estilo({ "tamano": escala["5"], "grosor": 700, "margen": 0,
+                   "color": color("fuerte") })
+fijo h2 = estilo({ "tamano": escala["2"], "grosor": 600, "margen": 0,
+                   "margenAbajo": espacio("medio") })
+fijo bajada = estilo({ "color": color("apagado"), "margenAbajo": espacio("largo") })
+fijo rejilla = estilo({ "display": "grid", "gap": espacio("medio"),
+                        "columnas": "repeat(auto-fit, minmax(170px, 1fr))" })
+fijo ficha = estilo({ "fondo": color("suave"), "relleno": espacio("medio"),
+                      "redondeo": radio("poco") })
+fijo rotulo = estilo({ "tamano": escala["0"], "color": color("apagado"),
+                       "textoTransformar": "uppercase" })
+fijo cifraG = estilo({ "tamano": escala["4"], "grosor": 700,
+                       "fuenteFamilia": tipografia("cifra") })
+fijo detalle = estilo({ "tamano": escala["0"], "color": color("apagado") })
+fijo sube = estilo({ "color": color("sube"), "grosor": 700 })
+fijo baja = estilo({ "color": color("baja"), "grosor": 700 })
+fijo filaA = estilo({ "display": "flex", "gap": espacio("medio"),
+                      "alinearItems": "center", "relleno": "7px 0",
+                      "bordeAbajo": "1px solid " + color("linea"),
+                      "tamano": escala["1"] })
+fijo mono = estilo({ "fuenteFamilia": tipografia("cifra"), "minAncho": 120,
+                     "textoAlinear": "right" })
+fijo barra = estilo({ "altura": 8, "fondo": color("linea"),
+                      "redondeo": radio("redondo"), "ancho": 110,
+                      "desbordar": "hidden" })
+fijo alerta = estilo({ "fondo": "#FFF8E1", "color": "#6B4E00",
+                       "borde": "1px solid " + color("ojo"),
+                       "relleno": espacio("medio"), "redondeo": radio("poco"),
+                       "margenAbajo": espacio("corto") })
+
+# ── la cartera: cantidad, lo que costó y lo que vale ──────────────────────
+# Nada derivado guardado. El valor, el costo, la ganancia y el peso se calculan.
+fijo cartera: lista = [
+    {"simbolo": "ECOPETROL", "clase": "acción",    "cantidad": 12000.0, "compra":  2180.0, "hoy":  2610.0},
+    {"simbolo": "PFBCOLOM",  "clase": "acción",    "cantidad":  1800.0, "compra": 29400.0, "hoy": 33100.0},
+    {"simbolo": "ISA",       "clase": "acción",    "cantidad":   900.0, "compra": 18500.0, "hoy": 17200.0},
+    {"simbolo": "TES-2032",  "clase": "renta fija","cantidad":    40.0, "compra":980000.0, "hoy":1012000.0},
+    {"simbolo": "ORO-ETF",   "clase": "materia",   "cantidad":   260.0, "compra": 94000.0, "hoy":118500.0}
+]
+
+fn valorDe(a: dic): real  { devolver a["cantidad"] * a["hoy"] }
+fn costoDe(a: dic): real  { devolver a["cantidad"] * a["compra"] }
+fn gananciaDe(a: dic): real { devolver valorDe(a) - costoDe(a) }
+
+fijo valorTotal: real = suma(mapear(cartera, valorDe))
+fijo costoTotal: real = suma(mapear(cartera, costoDe))
+fijo gananciaTotal: real = valorTotal - costoTotal
+
+fn pesoDe(a: dic): real { devolver valorDe(a) / valorTotal }
+
+# ── el rendimiento, con los dos divisores ─────────────────────────────────
+fijo rendBien: real = gananciaTotal / costoTotal     # sobre lo que se puso
+fijo rendMal: real  = gananciaTotal / valorTotal     # sobre lo que hay hoy
+
+# ── rebalanceo: cuánto, no «parte» ────────────────────────────────────────
+fn excesoDe(a: dic): real {
+    si pesoDe(a) <= LIMITE { devolver 0.0 }
+    # El valor que sobra para que este activo quede justo en el límite. Hay que
+    # tener en cuenta que al vender, el valor total también baja: resolviendo
+    # (valor - x) / (total - x) = LIMITE se obtiene lo de abajo.
+    # Redondeado: el peso no tiene centavos, y un aviso con dos decimales que
+    # no existen hace dudar del resto del informe.
+    devolver redondear((valorDe(a) - LIMITE * valorTotal) / (1.0 - LIMITE), 0)
+}
+
+fijo concentrados: lista = filtrar(cartera, fn(a: dic): bool {
+    devolver pesoDe(a) > LIMITE
+})
+
+# ── la página ─────────────────────────────────────────────────────────────
+# No hay operador ternario en Ñ y «si» es una sentencia, así que un nodo que
+# depende de una condición se arma en una función con «var», no dentro de la
+# lista de argumentos.
+fn gananciaPintada(): nodo {
+    var pinta = sube
+    var signo: texto = "+"
+    si gananciaTotal < 0.0 { pinta = baja  signo = "−" }
+    devolver etiqueta("span", pinta, signo + moneda(absoluto(gananciaTotal)))
+}
+
+fn fichaDe(rot: texto, c: nodo, det: texto): nodo {
+    devolver etiqueta("div", ficha,
+        etiqueta("div", rotulo, rot),
+        etiqueta("div", cifraG, c),
+        etiqueta("div", detalle, det))
+}
+
+fn filaDe(a: dic): nodo {
+    fijo g: real = gananciaDe(a)
+    var pintaG = sube
+    var signo: texto = "+"
+    si g < 0.0 { pintaG = baja  signo = "−" }
+    devolver etiqueta("div", filaA,
+        etiqueta("span", estilo({"grosor": 700, "minAncho": 100}), a["simbolo"]),
+        etiqueta("span", estilo(detalle, {"minAncho": 80}), a["clase"]),
+        etiqueta("span", mono, moneda(costoDe(a))),
+        etiqueta("span", mono, moneda(valorDe(a))),
+        etiqueta("span", estilo(mono, pintaG), signo + moneda(absoluto(g))),
+        etiqueta("span", estilo(mono, pintaG, {"minAncho": 70}),
+                 porciento(g / costoDe(a))),
+        etiqueta("div", barra, etiqueta("div", estilo({
+            "altura": 8, "fondo": color("marca"),
+            "ancho": porciento(pesoDe(a) / maximo(mapear(cartera, pesoDe)))
+        }))),
+        etiqueta("span", estilo(detalle, {"minAncho": 48, "textoAlinear": "right"}),
+                 porciento(pesoDe(a))))
+}
+
+var avisos: lista = []
+para a en concentrados {
+    fijo x: real = excesoDe(a)
+    avisos = avisos + [etiqueta("div", alerta,
+        etiqueta("strong", a["simbolo"]),
+        " pesa " + porciento(pesoDe(a)) + ", por encima del límite de " +
+        porciento(LIMITE) + ". Para dejarlo en el límite hay que vender ",
+        etiqueta("strong", decimales(x / a["hoy"], 0) + " unidades"),
+        " — " + moneda(x) + " a precio de hoy.")]
+}
+si longitud(concentrados) == 0 {
+    avisos = [etiqueta("div", estilo(detalle), "Ningún activo pasa del " +
+              porciento(LIMITE) + ".")]
+}
+
+limpiarPagina()
+pintar(etiqueta("div", hoja, etiqueta("div", caja,
+    etiqueta("div", panel,
+        etiqueta("h1", h1, "Cartera"),
+        etiqueta("p", bajada, plural(longitud(cartera), "posición") +
+            ". El costo, el valor, la ganancia y el peso se calculan; " +
+            "lo guardado son solo cantidad, precio de compra y precio de hoy."),
+        etiqueta("div", rejilla,
+            fichaDe("costo", etiqueta("span", moneda(costoTotal)), "lo que se puso"),
+            fichaDe("valor hoy", etiqueta("span", moneda(valorTotal)), "a precio de mercado"),
+            fichaDe("ganancia", gananciaPintada(), "valor hoy − costo"))),
+
+    etiqueta("div", panel,
+        etiqueta("h2", h2, "El rendimiento, con los dos divisores"),
+        etiqueta("div", rejilla,
+            fichaDe("rendimiento", etiqueta("span", sube, porciento(rendBien)),
+                    "ganancia ÷ costo  ← el correcto"),
+            fichaDe("si se divide mal", etiqueta("span", estilo(detalle),
+                    porciento(rendMal)), "ganancia ÷ valor de hoy"),
+            fichaDe("la diferencia", etiqueta("span",
+                    porciento(rendBien - rendMal)),
+                    "siempre a la baja cuando se va ganando"))),
+
+    etiqueta("div", panel,
+        etiqueta("h2", h2, "Posición por posición"),
+        etiqueta("div", estilo(detalle, {"display": "flex",
+            "gap": espacio("medio"), "margenAbajo": espacio("corto")}),
+            etiqueta("span", estilo({"minAncho": 100}), "símbolo"),
+            etiqueta("span", estilo({"minAncho": 80}), "clase"),
+            etiqueta("span", estilo(mono), "costo"),
+            etiqueta("span", estilo(mono), "valor hoy"),
+            etiqueta("span", estilo(mono), "ganancia"),
+            etiqueta("span", estilo(mono, {"minAncho": 70}), "rend."),
+            etiqueta("span", estilo({"minAncho": 110}), "peso"),
+            etiqueta("span", estilo({"minAncho": 48}), "")),
+        mapear(cartera, filaDe)),
+
+    etiqueta("div", panel,
+        etiqueta("h2", h2, "Rebalanceo"),
+        avisos)
+)))
+
+# ── consola ───────────────────────────────────────────────────────────────
+imprimir(enNegrita("LA CARTERA"))
+imprimir(regla(76))
+imprimir(tablaTexto(mapear(cartera, fn(a: dic): dic {
+    devolver {
+        "símbolo": a["simbolo"],
+        "costo": moneda(costoDe(a)),
+        "valor": moneda(valorDe(a)),
+        "ganancia": moneda(gananciaDe(a)),
+        "rend": porciento(gananciaDe(a) / costoDe(a)),
+        "peso": porciento(pesoDe(a))
+    }
+})))
+
+imprimir("")
+imprimir(enNegrita("EL RENDIMIENTO, Y EL DIVISOR QUE LO CAMBIA"))
+imprimir(regla(76))
+imprimir("  costo total        " + alinearDer(moneda(costoTotal), 18))
+imprimir("  valor hoy          " + alinearDer(moneda(valorTotal), 18))
+imprimir("  ganancia           " + alinearDer(moneda(gananciaTotal), 18))
+imprimir("")
+imprimir("  ganancia ÷ costo   " + alinearDer(porciento(rendBien), 18) + "  " +
+         enVerde("← el rendimiento"))
+imprimir("  ganancia ÷ valor   " + alinearDer(porciento(rendMal), 18) + "  " +
+         enGris("← no es el rendimiento de nada"))
+imprimir("  la diferencia      " + alinearDer(porciento(rendBien - rendMal), 18))
+imprimir("")
+imprimir(enGris("  La de abajo sale más baja siempre que se vaya ganando, porque"))
+imprimir(enGris("  el divisor incluye la propia ganancia. Parece conservadora y"))
+imprimir(enGris("  por eso nadie la revisa."))
+
+imprimir("")
+imprimir(enNegrita("REBALANCEO"))
+imprimir(regla(76))
+si longitud(concentrados) == 0 {
+    imprimir("  " + enVerde("ningún activo pasa del " + porciento(LIMITE)))
+}
+para a en concentrados {
+    fijo x: real = excesoDe(a)
+    imprimir("  " + enRojo("⚠") + " " + alinearIzq(a["simbolo"], 12) +
+             " pesa " + porciento(pesoDe(a)) + " (límite " + porciento(LIMITE) + ")")
+    imprimir("      vender " + decimales(x / a["hoy"], 0) + " de " +
+             decimales(a["cantidad"], 0) + " unidades = " + moneda(x))
+    # Y la comprobación de que la cuenta deja el peso justo en el límite.
+    imprimir("      " + enGris("después quedaría en " +
+             porciento((valorDe(a) - x) / (valorTotal - x))))
+}

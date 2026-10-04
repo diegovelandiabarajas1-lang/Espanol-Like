@@ -1,0 +1,447 @@
+# Las pruebas del eDSL «datos», en Ñ.
+#
+# Lo que más se comprueba es la PROMESA DEL FORMATO: que la ida y vuelta por
+# .ñdatos sea exacta y que la del CSV no lo sea. Si eso no se cumple, el formato
+# no tiene razón de existir.
+
+usar probar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCierto, debeSerFalso,
+     debeFallarCon, debeTener, debeContener, debeSerTipo, noDebeSer, debeSerCerca de "probar"
+usar deRegistros, aColumnas, deColumnas, deLista, deCsv, deDatos, aCsv, aDatos, aLista, aRegistros,
+     columnas, tipos, primeras, ultimas, vacios, describir,
+     columna, celda, fila, soloColumnas, sinColumna, renombrar, reordenar,
+     donde, ordenarPor, unicas, sinRepetir, quitarVacios,
+     conColumna, convertir, aplicarA, rellenarVacios, numerar,
+     agrupar, resumir, contarPor, pivotar, despivotar,
+     cruzar, apilar, juntarColumnas, diferencia,
+     sumaCol, promedioCol, minCol, maxCol, primeroCol, ultimoCol, contarCol, juntarCol de "datos"
+usar fecha, aFecha, anio de "fecha"
+usar mayusculas de "texto"
+
+fn ventas(): tabla {
+    devolver deColumnas({
+        "ciudad": ["Girón", "Bogotá", "Girón", "Cali", "Bogotá"],
+        "dia":    [fecha(2026,9,1), fecha(2026,9,1), fecha(2026,9,2), fecha(2026,9,2), fecha(2026,9,3)],
+        "ventas": [1200, 450, 300, 780, 320]
+    })
+}
+
+grupo("la promesa del formato", fn() {
+    probar("por .ñdatos la ida y vuelta es exacta", fn() {
+        var t: tabla = ventas()
+        debeSer(deDatos(aDatos(t)), t)
+        debeSer(tipos(deDatos(aDatos(t))), tipos(t))
+    })
+    probar("y las fechas siguen siendo fechas", fn() {
+        var t: tabla = deDatos(aDatos(ventas()))
+        debeSer(tipos(t)["dia"], "fecha")
+        debeSerTipo(celda(t, 0, "dia"), "fecha")
+        debeSer(anio(celda(t, 0, "dia")), 2026)
+    })
+    probar("el CSV pierde los ceros de delante", fn() {
+        # Un NIT, un código de producto, un teléfono: todo lo que empieza por 0.
+        var t: tabla = deColumnas({"nit": ["0012345"]})
+        debeSer(columna(deDatos(aDatos(t)), "nit"), ["0012345"])
+        debeSer(columna(deCsv(aCsv(t)), "nit"), [12345])
+    })
+    probar("el CSV confunde el texto vacío con un hueco", fn() {
+        # Con dos columnas la coma distingue una fila vacía del final del
+        # archivo, así que las filas sobreviven — pero el "" vuelve como hueco.
+        var t: tabla = deColumnas({"nota": ["", nulo], "n": [1, 2]})
+        debeSer(columna(deDatos(aDatos(t)), "nota"), ["", nulo])
+        debeSer(columna(deCsv(aCsv(t)), "nota"), [nulo, nulo])
+    })
+    probar("y con UNA columna vacía el CSV pierde hasta las filas", fn() {
+        # La línea en blanco y el salto final del archivo son el mismo
+        # carácter: el CSV no puede representar esta tabla, y no hay arreglo.
+        var t: tabla = deColumnas({"nota": ["", nulo]})
+        debeSer(longitud(t), 2)
+        debeSer(longitud(deDatos(aDatos(t))), 2)
+        debeSer(longitud(deCsv(aCsv(t))), 0)
+    })
+    probar("y por eso una tabla no sobrevive al CSV", fn() {
+        var t: tabla = deColumnas({"nit": ["0012345"], "nota": [""]})
+        debeSer(deDatos(aDatos(t)), t)
+        noDebeSer(deCsv(aCsv(t)), t)
+    })
+    probar("el archivo lleva versión, esquema y filas", fn() {
+        var j: texto = aDatos(ventas())
+        debeContener(j, "\"ñdatos\":1")
+        debeContener(j, "\"columnas\"")
+        debeContener(j, "\"filas\":5")
+        debeContener(j, "\"tipo\":\"fecha\"")
+    })
+})
+
+grupo("el formato se queja de lo que está mal", fn() {
+    probar("un JSON que no es del formato", fn() {
+        debeFallarCon(fn() { deDatos("\{\}") }, "falta la marca «ñdatos»")
+        debeFallarCon(fn() { deDatos("[1,2]") }, "no es un documento")
+        debeFallarCon(fn() { deDatos("no soy json") }, "no es JSON válido")
+    })
+    probar("una versión del futuro", fn() {
+        debeFallarCon(fn() { deDatos("\{\"ñdatos\":99,\"columnas\":[],\"datos\":[]\}") },
+            "versión 99")
+    })
+    probar("un esquema que no cuadra con los datos", fn() {
+        debeFallarCon(fn() {
+            deDatos("\{\"ñdatos\":1,\"columnas\":[\{\"nombre\":\"a\",\"tipo\":\"entero\"\}],\"datos\":[]\}")
+        }, "1 columnas declaradas y 0 listas")
+        debeFallarCon(fn() {
+            deDatos("\{\"ñdatos\":1,\"columnas\":[\{\"nombre\":\"a\",\"tipo\":\"entero\"\},\{\"nombre\":\"b\",\"tipo\":\"entero\"\}],\"datos\":[[1,2],[1]]\}")
+        }, "trae 1 valores")
+    })
+    probar("un valor que no es del tipo que dice la columna", fn() {
+        debeFallarCon(fn() {
+            deDatos("\{\"ñdatos\":1,\"columnas\":[\{\"nombre\":\"a\",\"tipo\":\"entero\"\}],\"datos\":[[\"hola\"]]\}")
+        }, "debía traer un número")
+        debeFallarCon(fn() {
+            deDatos("\{\"ñdatos\":1,\"columnas\":[\{\"nombre\":\"a\",\"tipo\":\"fecha\"\}],\"datos\":[[\"el martes\"]]\}")
+        }, "no es una fecha")
+    })
+    probar("un tipo de columna que no existe", fn() {
+        debeFallarCon(fn() {
+            deDatos("\{\"ñdatos\":1,\"columnas\":[\{\"nombre\":\"a\",\"tipo\":\"color\"\}],\"datos\":[[1]]\}")
+        }, "no es un tipo de columna")
+    })
+})
+
+grupo("leer un CSV como sale de un sistema", fn() {
+    probar("adivina el separador, las comillas y los tipos", fn() {
+        var t: tabla = deCsv("a;b;c\n1;\"Pérez, Ana\";01/09/2026")
+        debeSer(columnas(t), ["a", "b", "c"])
+        debeSer(celda(t, 0, "a"), 1)
+        debeSer(celda(t, 0, "b"), "Pérez, Ana")
+        debeSer(celda(t, 0, "c"), fecha(2026, 9, 1))
+        debeSer(tipos(t)["c"], "fecha")
+    })
+    probar("las comillas dobladas", fn() {
+        var t: tabla = deCsv("a\n\"dijo \"\"si\"\"\"")
+        debeSer(celda(t, 0, "a"), "dijo \"si\"")
+    })
+    probar("un campo vacío es un hueco, no un cero", fn() {
+        var t: tabla = deCsv("a,b\n1,\n2,5")
+        debeSer(celda(t, 0, "b"), nulo)
+        debeSer(vacios(t)["b"], 1)
+    })
+    probar("cierto y falso en español", fn() {
+        var t: tabla = deCsv("a\ncierto\nfalso")
+        debeSer(tipos(t)["a"], "bool")
+        debeSerCierto(celda(t, 0, "a"))
+        debeSerFalso(celda(t, 1, "a"))
+    })
+    probar("y lo que no encaja en nada se queda como texto", fn() {
+        var t: tabla = deCsv("a\n1\nhola")
+        debeSer(tipos(t)["a"], "texto")
+    })
+})
+
+grupo("mirar y seleccionar", fn() {
+    probar("longitud son las filas, columnas son las columnas", fn() {
+        var t: tabla = ventas()
+        debeSer(longitud(t), 5)
+        debeTener(columnas(t), 3)
+    })
+    probar("columna, celda y fila", fn() {
+        var t: tabla = ventas()
+        debeSer(columna(t, "ventas"), [1200, 450, 300, 780, 320])
+        debeSer(celda(t, 1, "ciudad"), "Bogotá")
+        debeSer(fila(t, 0)["ciudad"], "Girón")
+    })
+    probar("una columna que no existe dice las que hay", fn() {
+        debeFallarCon(fn() { columna(ventas(), "precio") }, "no tiene una columna «precio»")
+    })
+    probar("soloColumnas respeta el orden que se pide", fn() {
+        debeSer(columnas(soloColumnas(ventas(), ["ventas", "ciudad"])), ["ventas", "ciudad"])
+    })
+    probar("sinColumna quita una o varias", fn() {
+        debeSer(columnas(sinColumna(ventas(), "dia")), ["ciudad", "ventas"])
+        debeSer(columnas(sinColumna(ventas(), "dia", "ventas")), ["ciudad"])
+    })
+    probar("renombrar, y no deja duplicar", fn() {
+        debeSer(columnas(renombrar(ventas(), "ventas", "monto")), ["ciudad", "dia", "monto"])
+        debeFallarCon(fn() { renombrar(ventas(), "ventas", "ciudad") }, "ya hay una columna")
+    })
+    probar("reordenar deja detrás las que no se nombran", fn() {
+        debeSer(columnas(reordenar(ventas(), ["ventas"])), ["ventas", "ciudad", "dia"])
+    })
+    probar("primeras y ultimas", fn() {
+        debeSer(longitud(primeras(ventas(), 2)), 2)
+        debeSer(celda(ultimas(ventas(), 1), 0, "ciudad"), "Bogotá")
+        # pedir más de las que hay no falla
+        debeSer(longitud(primeras(ventas(), 99)), 5)
+    })
+    probar("describir devuelve una tabla, así que se puede seguir usando", fn() {
+        var d: tabla = describir(ventas())
+        debeSerTipo(d, "tabla")
+        debeSer(longitud(d), 3)
+        debeContener(columnas(d), "distintos")
+        debeSer(celda(d, 0, "columna"), "ciudad")
+        debeSer(celda(d, 0, "distintos"), 3)
+    })
+})
+
+grupo("filtrar, ordenar y derivar", fn() {
+    probar("donde recibe cada fila como diccionario", fn() {
+        var t: tabla = donde(ventas(), fn(f: dic): bool { devolver f["ventas"] > 400 })
+        debeSer(longitud(t), 3)
+        debeSer(columna(t, "ciudad"), ["Girón", "Bogotá", "Cali"])
+    })
+    probar("ordenarPor, en los dos sentidos y estable", fn() {
+        debeSer(columna(ordenarPor(ventas(), "ventas"), "ventas"), [300, 320, 450, 780, 1200])
+        debeSer(columna(ordenarPor(ventas(), "ventas", cierto), "ventas"), [1200, 780, 450, 320, 300])
+        # estable: dos «Girón» conservan su orden de origen
+        debeSer(columna(ordenarPor(ventas(), "ciudad"), "ventas"), [450, 320, 780, 1200, 300])
+    })
+    probar("y los huecos van al final, en los dos sentidos", fn() {
+        var t: tabla = deColumnas({"v": [3, nulo, 1]})
+        debeSer(columna(ordenarPor(t, "v"), "v"), [1, 3, nulo])
+        debeSer(columna(ordenarPor(t, "v", cierto), "v"), [3, 1, nulo])
+    })
+    probar("también ordena por fechas", fn() {
+        var t: tabla = ordenarPor(ventas(), "dia", cierto)
+        debeSer(celda(t, 0, "dia"), fecha(2026, 9, 3))
+    })
+    probar("unicas y sinRepetir son cosas distintas", fn() {
+        # unicas: los valores de UNA columna. sinRepetir: filas repetidas.
+        debeSer(unicas(ventas(), "ciudad"), ["Girón", "Bogotá", "Cali"])
+        var t: tabla = deColumnas({"a": [1, 1, 2], "b": ["x", "x", "y"]})
+        debeSer(longitud(sinRepetir(t)), 2)
+        debeSer(longitud(sinRepetir(deColumnas({"a": [1, 1], "b": ["x", "z"]}), ["a"])), 1)
+    })
+    probar("quitarVacios, toda la fila o por columna", fn() {
+        var t: tabla = deColumnas({"a": [1, nulo, 3], "b": ["x", "y", nulo]})
+        debeSer(longitud(quitarVacios(t)), 1)
+        debeSer(longitud(quitarVacios(t, ["a"])), 2)
+    })
+    probar("conColumna calcula desde la fila, y reemplaza si ya existe", fn() {
+        var t: tabla = conColumna(ventas(), "iva", fn(f: dic): real { devolver real(f["ventas"]) * 0.19 })
+        debeSer(columnas(t), ["ciudad", "dia", "ventas", "iva"])
+        debeSerCerca(celda(t, 0, "iva"), 228.0)
+        # otra vez con el mismo nombre no deja dos columnas
+        var t2: tabla = conColumna(t, "iva", fn(f: dic): entero { devolver 0 })
+        debeSer(longitud(columnas(t2)), 4)
+    })
+    probar("aplicarA recibe cada VALOR, no la fila", fn() {
+        var t: tabla = aplicarA(ventas(), "ciudad", mayusculas)
+        debeSer(celda(t, 0, "ciudad"), "GIRÓN")
+        debeSer(tipos(t)["ciudad"], "texto")
+    })
+    probar("convertir arregla lo que un CSV adivinó mal", fn() {
+        var t: tabla = deCsv("nit\n0012345")
+        debeSer(tipos(t)["nit"], "entero")
+        var arreglada: tabla = convertir(t, "nit", "texto")
+        debeSer(tipos(arreglada)["nit"], "texto")
+        debeSer(celda(arreglada, 0, "nit"), "12345")
+        debeFallarCon(fn() { convertir(t, "nit", "color") }, "no es un tipo de columna")
+    })
+    probar("rellenarVacios y numerar", fn() {
+        var t: tabla = rellenarVacios(deColumnas({"v": [1, nulo]}), "v", 0)
+        debeSer(columna(t, "v"), [1, 0])
+        debeSer(columna(numerar(ventas()), "n"), [1, 2, 3, 4, 5])
+        debeFallarCon(fn() { numerar(numerar(ventas())) }, "ya hay una columna")
+    })
+})
+
+grupo("agrupar y resumir", fn() {
+    probar("agrupar con varios agregados a la vez", fn() {
+        var g: tabla = agrupar(ventas(), ["ciudad"],
+            {"total": sumaCol("ventas"), "dias": contarCol(), "mejor": maxCol("ventas")})
+        debeSer(columnas(g), ["ciudad", "total", "dias", "mejor"])
+        debeSer(longitud(g), 3)
+        debeSer(celda(g, 0, "ciudad"), "Girón")
+        debeSer(celda(g, 0, "total"), 1500)
+        debeSer(celda(g, 0, "dias"), 2)
+        debeSer(celda(g, 0, "mejor"), 1200)
+    })
+    probar("los grupos salen en el orden en que aparecen", fn() {
+        debeSer(columna(agrupar(ventas(), ["ciudad"], {"n": contarCol()}), "ciudad"),
+                ["Girón", "Bogotá", "Cali"])
+    })
+    probar("resumir es la tabla entera en una fila", fn() {
+        var r: tabla = resumir(ventas(), {"total": sumaCol("ventas"), "media": promedioCol("ventas")})
+        debeSer(longitud(r), 1)
+        debeSer(celda(r, 0, "total"), 3050)
+        debeSer(celda(r, 0, "media"), 610)
+    })
+    probar("la suma de puros huecos es NULO, no 0", fn() {
+        # Un 0 en una celda de ventas dice «no vendió»; un hueco dice «no se
+        # sabe». Es la regla de SQL, y es la que no miente.
+        var t: tabla = deColumnas({"c": ["x", "x"], "v": [nulo, nulo]})
+        debeSer(celda(resumir(t, {"s": sumaCol("v")}), 0, "s"), nulo)
+        # pero con un valor sí suma, ignorando el hueco
+        var t2: tabla = deColumnas({"c": ["x", "x"], "v": [nulo, 5]})
+        debeSer(celda(resumir(t2, {"s": sumaCol("v")}), 0, "s"), 5)
+    })
+    probar("contarCol cuenta filas, o valores si le das columna", fn() {
+        var t: tabla = deColumnas({"v": [1, nulo, 3]})
+        debeSer(celda(resumir(t, {"n": contarCol()}), 0, "n"), 3)
+        debeSer(celda(resumir(t, {"n": contarCol("v")}), 0, "n"), 2)
+    })
+    probar("primeroCol, ultimoCol y juntarCol", fn() {
+        var g: tabla = agrupar(ventas(), ["ciudad"],
+            {"primera": primeroCol("dia"), "ultima": ultimoCol("dia"), "cuales": juntarCol("ventas", "+")})
+        debeSer(celda(g, 0, "primera"), fecha(2026, 9, 1))
+        debeSer(celda(g, 0, "ultima"), fecha(2026, 9, 2))
+        debeSer(celda(g, 0, "cuales"), "1200+300")
+    })
+    probar("minCol y maxCol valen también para fechas", fn() {
+        var r: tabla = resumir(ventas(), {"desde": minCol("dia"), "hasta": maxCol("dia")})
+        debeSer(celda(r, 0, "desde"), fecha(2026, 9, 1))
+        debeSer(celda(r, 0, "hasta"), fecha(2026, 9, 3))
+    })
+    probar("sumar una columna de texto se queja y dice cómo arreglarlo", fn() {
+        debeFallarCon(fn() { resumir(ventas(), {"x": sumaCol("ciudad")}) }, "no es de números")
+    })
+    probar("y poner algo que no es un agregado también", fn() {
+        debeFallarCon(fn() { resumir(ventas(), {"x": 5}) }, "no es un agregado")
+        debeFallarCon(fn() { resumir(ventas(), {}) }, "no se pidió ningún resumen")
+    })
+    probar("contarPor es el atajo del caso más común", fn() {
+        var c: tabla = contarPor(ventas(), "ciudad")
+        debeSer(columnas(c), ["ciudad", "cuantas"])
+        debeSer(columna(c, "cuantas"), [2, 2, 1])
+    })
+})
+
+grupo("pivotar y despivotar", fn() {
+    probar("pivotar cruza dos columnas", fn() {
+        var p: tabla = pivotar(ventas(), "ciudad", "dia", {"v": sumaCol("ventas")})
+        debeSer(longitud(p), 3)
+        debeSer(celda(p, 0, "ciudad"), "Girón")
+        debeSer(celda(p, 0, "2026-09-01"), 1200)
+        debeSer(celda(p, 0, "2026-09-02"), 300)
+        # una celda sin datos queda en hueco, no en 0
+        debeSer(celda(p, 0, "2026-09-03"), nulo)
+    })
+    probar("y pide un solo agregado, porque una celda es un valor", fn() {
+        debeFallarCon(fn() {
+            pivotar(ventas(), "ciudad", "dia", {"a": sumaCol("ventas"), "b": contarCol()})
+        }, "un solo agregado")
+    })
+    probar("despivotar es lo contrario", fn() {
+        var ancha: tabla = deColumnas({"ciudad": ["Girón"], "ene": [10], "feb": [20]})
+        var larga: tabla = despivotar(ancha, ["ciudad"], "mes", "ventas")
+        debeSer(columnas(larga), ["ciudad", "mes", "ventas"])
+        debeSer(longitud(larga), 2)
+        debeSer(columna(larga, "mes"), ["ene", "feb"])
+        debeSer(columna(larga, "ventas"), [10, 20])
+    })
+})
+
+grupo("combinar tablas", fn() {
+    probar("cruzar se queda con lo que está en las dos", fn() {
+        var a: tabla = deColumnas({"nit": ["1", "2", "3"], "nombre": ["Ana", "Beto", "Caro"]})
+        var b: tabla = deColumnas({"nit": ["2", "3", "9"], "monto": [100, 200, 300]})
+        var c: tabla = cruzar(a, b, "nit")
+        debeSer(longitud(c), 2)
+        debeSer(columnas(c), ["nit", "nombre", "monto"])
+        debeSer(columna(c, "nombre"), ["Beto", "Caro"])
+    })
+    probar("y un nombre repetido lleva «_2» en vez de perderse", fn() {
+        var a: tabla = deColumnas({"nit": ["1"], "monto": [10]})
+        var b: tabla = deColumnas({"nit": ["1"], "monto": [99]})
+        debeSer(columnas(cruzar(a, b, "nit")), ["nit", "monto", "monto_2"])
+    })
+    probar("apilar pone una debajo de otra", fn() {
+        var a: tabla = deColumnas({"x": [1, 2]})
+        var b: tabla = deColumnas({"x": [3]})
+        debeSer(columna(apilar(a, b), "x"), [1, 2, 3])
+        debeSer(longitud(apilar(a, b, a)), 5)
+    })
+    probar("y se queja si las columnas no coinciden", fn() {
+        debeFallarCon(fn() {
+            apilar(deColumnas({"x": [1]}), deColumnas({"y": [1]}))
+        }, "tiene otras columnas")
+    })
+    probar("juntarColumnas pone lado a lado", fn() {
+        var j: tabla = juntarColumnas(deColumnas({"a": [1, 2]}), deColumnas({"b": [3, 4]}))
+        debeSer(columnas(j), ["a", "b"])
+        debeSer(longitud(j), 2)
+    })
+    probar("y avisa cuando lo que hacía falta era cruzar", fn() {
+        debeFallarCon(fn() {
+            juntarColumnas(deColumnas({"a": [1, 2]}), deColumnas({"b": [3]}))
+        }, "una tiene 2 filas y la otra 1")
+        debeFallarCon(fn() {
+            juntarColumnas(deColumnas({"a": [1]}), deColumnas({"a": [1]}))
+        }, "las dos tienen una columna")
+    })
+    probar("diferencia: lo que está en una y no en la otra", fn() {
+        # Es lo que se hace al conciliar dos listados.
+        var sistema: tabla = deColumnas({"nit": ["1", "2", "3"]})
+        var banco: tabla = deColumnas({"nit": ["2"]})
+        debeSer(columna(diferencia(sistema, banco, "nit"), "nit"), ["1", "3"])
+        debeSer(longitud(diferencia(banco, sistema, "nit")), 0)
+    })
+})
+
+grupo("entrar y salir por otros caminos", fn() {
+    probar("tabla desde registros, y aRegistros de vuelta", fn() {
+        var rs: lista = [{"a": 1, "b": "x"}, {"a": 2, "b": "y"}]
+        var t: tabla = deRegistros(rs)
+        debeSer(columnas(t), ["a", "b"])
+        debeSer(aRegistros(t), rs)
+    })
+    probar("y se queja del registro que trae una clave de más", fn() {
+        debeFallarCon(fn() { deRegistros([{"a": 1}, {"a": 2, "b": 3}]) }, "que no está en el primero")
+    })
+    probar("deLista con los nombres aparte", fn() {
+        var t: tabla = deLista([[1, "x"], [2, "y"]], ["n", "letra"])
+        debeSer(columnas(t), ["n", "letra"])
+        debeSer(columna(t, "n"), [1, 2])
+        debeFallarCon(fn() { deLista([[1]], ["a", "b"]) }, "hay 2 columnas")
+    })
+    probar("deColumnas exige que todas midan lo mismo", fn() {
+        debeFallarCon(fn() { deColumnas({"a": [1, 2], "b": [1]}) }, "y las otras 2")
+    })
+    probar("aLista da una lista por fila", fn() {
+        debeSer(aLista(deColumnas({"a": [1, 2], "b": [3, 4]})), [[1, 3], [2, 4]])
+    })
+    probar("los cinco pares de entrada y salida son inversos", fn() {
+        # Cada «deAlgo» tiene su «aAlgo» y deshace lo que el otro hizo. El único
+        # par que NO cierra es el del CSV, y eso no es un descuido: es lo que
+        # este eDSL existe para arreglar.
+        var t: tabla = deColumnas({"n": [1, 2], "c": ["x", "y"]})
+        debeSer(deColumnas(aColumnas(t)), t)
+        debeSer(deRegistros(aRegistros(t)), t)
+        debeSer(deLista(aLista(t), columnas(t)), t)
+        debeSer(deDatos(aDatos(t)), t)
+    })
+    probar("una tabla vacía no revienta nada", fn() {
+        var v: tabla = deRegistros([])
+        debeSer(longitud(v), 0)
+        debeSer(columnas(v), [])
+        debeSer(deDatos(aDatos(v)), v)
+    })
+})
+
+grupo("el tipo tabla", fn() {
+    probar("es un tipo de la máquina", fn() {
+        debeSerTipo(ventas(), "tabla")
+        debeSer(tipo(ventas()), "tabla")
+    })
+    probar("dos tablas iguales lo son en profundidad", fn() {
+        debeSer(ventas(), ventas())
+        noDebeSer(ventas(), primeras(ventas(), 2))
+        # y el nombre de la columna cuenta
+        noDebeSer(deColumnas({"a": [1]}), deColumnas({"b": [1]}))
+    })
+    probar("no tiene orden, y lo dice", fn() {
+        var a: cualquiera = ventas()
+        var b: cualquiera = ventas()
+        debeFallarCon(fn() { debeSerCierto(a < b) }, "no se pueden comparar")
+    })
+    probar("todas las operaciones devuelven una tabla NUEVA", fn() {
+        var t: tabla = ventas()
+        var _: tabla = donde(t, fn(f: dic): bool { devolver falso })
+        var __: tabla = ordenarPor(t, "ventas")
+        var ___: tabla = conColumna(t, "x", fn(f: dic): entero { devolver 1 })
+        # la original no se tocó
+        debeSer(longitud(t), 5)
+        debeSer(columnas(t), ["ciudad", "dia", "ventas"])
+    })
+})
+
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(resumenPruebas())

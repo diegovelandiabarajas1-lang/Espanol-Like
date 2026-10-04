@@ -1,0 +1,52 @@
+# Lo mínimo para usar «estilo» y la web juntos.
+#
+#   la web   (etiqueta, pintar, boton, entrada…) es GLOBAL: no lleva «usar»
+#   estilo   es un eDSL: hay que pedirlo
+#
+# Y los dos necesitan una PÁGINA donde pintar: el IDE o una app exportada. En la
+# consola los estilos y los nodos se pueden construir igual —son valores— pero
+# «pintar» se queja, porque ahí no hay dónde.
+
+usar tema, color, espacio, radio, estilo, estiloGlobal, enOscuro, reiniciar,
+     enColumna, separado, alPasar, transicion, aparecer de "estilo"
+
+fijo claro = tema({
+    "color": {"fondo": "#F7F7FB", "tarjeta": "blanco", "tinta": "#1B1A26",
+              "suave": "#6C6B80", "acento": "#4F3FD4", "borde": "#E1E0EB"},
+    "espacio": {"m": 16, "g": 24},
+    "radio": {"suave": 12}
+})
+fijo oscuro = tema({
+    "color": {"fondo": "#15131F", "tarjeta": "#201D2E", "tinta": "#EDECF5",
+              "suave": "#9A99AD", "borde": "#322E45"}
+})
+
+fijo pagina = estilo({"fuente": "system-ui, sans-serif", "fondo": color("fondo"),
+                      "color": color("tinta"), "relleno": espacio("g"), "altoMin": "100vh"})
+fijo tarjeta = estilo({"fondo": color("tarjeta"), "relleno": espacio("m"),
+                       "redondeo": radio("suave"), "borde": "1px solid " + color("borde")})
+fijo boton1 = estilo({"fondo": color("acento"), "color": "blanco", "borde": "ninguno",
+                      "relleno": [10, 18], "redondeo": 8, "cursor": "mano"},
+                     transicion("opacidad", 150), alPasar({"opacidad": 0.85}))
+
+var pulsos: entero = 0
+
+fn pulsar() { pulsos = pulsos + 1  ver() }
+
+fn ver() {
+    limpiarPagina()
+    pintar(etiqueta("main", pagina,
+        estiloGlobal(":root", claro),
+        enOscuro(estiloGlobal(":root", oscuro)),
+        reiniciar(),
+        etiqueta("div", tarjeta, aparecer(300), enColumna(12),
+            etiqueta("h1", estilo({"margen": 0, "tamano": 22}), "Hola desde Ñ"),
+            etiqueta("p", estilo({"margen": 0, "color": color("suave")}),
+                "Cambia el tema de tu sistema a oscuro y mira: el modo oscuro son dos líneas."),
+            etiqueta("div", separado(),
+                etiqueta("span", estilo({"color": color("suave")}),
+                    "pulsado " + texto(pulsos) + " veces"),
+                boton("Púlsame", fn(ev) { pulsar() }, boton1)))))
+}
+
+ver()

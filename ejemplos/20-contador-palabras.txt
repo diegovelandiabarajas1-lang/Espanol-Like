@@ -1,0 +1,72 @@
+# ═══ Qué dice un texto: palabras, frecuencias y legibilidad ═════════════════
+# Contar palabras es fácil. Lo útil es quitar las que no dicen nada y mirar las
+# que quedan.
+# eDSL: texto, formato, numerico
+
+usar palabras, lineas, minusculas, sinAcentos, reemplazar,
+     caracteres, esVocal, unir, titular de "texto"
+usar numero, decimales, barraTexto, regla, enNegrita, tablaTexto, plural de "formato"
+usar media, mediana de "numerico"
+
+fijo TEXTO: texto = "El lenguaje Ñ nació de una idea simple: que programar en
+español no tuviera que ser peor que programar en inglés. No es un traductor de
+palabras clave. Es un lenguaje con verificador de tipos, máquina de bytecode y
+compilación a JavaScript, y con una biblioteca pensada para lo que de verdad se
+hace: leer un archivo, limpiar unos datos, sacar un informe. El lenguaje no es
+el objetivo. El objetivo es que cualquiera pueda usarlo para lo que quiera, sin
+tener que aprender el resto de los eDSL si solo necesita uno."
+
+# Las palabras que no aportan: se quitan para que las que quedan signifiquen algo
+fijo VACIAS: lista = ["el", "la", "los", "las", "un", "una", "de", "del", "que",
+                      "y", "o", "a", "en", "no", "es", "para", "con", "lo", "se",
+                      "su", "por", "si", "al", "le", "mas", "pero", "sin", "ser"]
+
+fijo texto1: texto = reemplazar(reemplazar(reemplazar(TEXTO, ".", " "), ",", " "), ":", " ")
+fijo todas: lista = palabras(minusculas(texto1))
+
+imprimir(enNegrita("RECUENTO"))
+imprimir(regla(56))
+imprimir("  líneas             " + texto(longitud(lineas(TEXTO))))
+imprimir("  palabras           " + texto(longitud(todas)))
+imprimir("  caracteres         " + texto(longitud(caracteres(TEXTO))))
+var largos: lista = []
+para p en todas { largos = largos + [real(longitud(p))] }
+imprimir("  palabra media      " + decimales(media(largos), 1) + " letras")
+imprimir("  palabra mediana    " + decimales(mediana(largos), 1) + " letras")
+var vocales: entero = 0
+para c en caracteres(TEXTO) { si esVocal(c) { vocales = vocales + 1 } }
+imprimir("  vocales            " + texto(vocales))
+
+# Contar sin repetir: un diccionario donde la clave es la palabra
+var cuenta: dic = {}
+para p en todas {
+    fijo clave: texto = sinAcentos(p)
+    si longitud(clave) > 2 y no contiene(VACIAS, clave) {
+        cuenta[clave] = obtener(cuenta, clave, 0) + 1
+    }
+}
+
+var ordenadas: lista = []
+para par en pares(cuenta) { ordenadas = ordenadas + [{"palabra": par[0], "veces1": par[1]}] }
+ordenadas = ordenar(ordenadas, fn(x: dic): entero { devolver 0 - x["veces1"] })
+
+imprimir("")
+imprimir(enNegrita("LAS QUE MÁS APARECEN"))
+imprimir(regla(56))
+fijo tope: entero = ordenadas[0]["veces1"]
+para i en rango(12) {
+    fijo x: dic = ordenadas[i]
+    imprimir("  " + x["palabra"] + repetirEspacios(16 - longitud(x["palabra"])) +
+             barraTexto(x["veces1"], tope, 18) + " " + texto(x["veces1"]))
+}
+
+fn repetirEspacios(n: entero): texto {
+    var s: texto = ""
+    repetir n { s = s + " " }
+    devolver s
+}
+
+imprimir("")
+imprimir("Palabras distintas con contenido: " + texto(longitud(claves(cuenta))))
+imprimir(plural(longitud(todas), "palabra") + " en total, " +
+         decimales(real(longitud(claves(cuenta))) * 100.0 / real(longitud(todas)), 1) + " % distintas")

@@ -1,0 +1,44 @@
+# ═══ Resumen estadístico de una serie ═══════════════════════════════════════
+# Lo primero que se le hace a una columna de números: saber qué hay dentro.
+# eDSL: numerico, formato
+
+usar media, mediana, moda, desviacion, cuartiles, amplitud, percentil,
+     tipificar, varianza, suma de "numerico"
+usar decimales, tablaTexto, minigrafico, regla de "formato"
+
+fijo ventas: lista = [120.0, 150.0, 80.0, 95.0, 200.0, 180.0, 110.0, 160.0, 90.0, 205.0]
+
+imprimir("Ventas diarias (millones de pesos)")
+imprimir(minigrafico(ventas))
+imprimir(regla(44))
+
+fijo c: dic = cuartiles(ventas)
+fijo filas: lista = [
+    {"dato": "cuántos",        "valor": texto(longitud(ventas))},
+    {"dato": "suma",           "valor": decimales(suma(ventas), 1)},
+    {"dato": "media",          "valor": decimales(media(ventas), 2)},
+    {"dato": "mediana",        "valor": decimales(mediana(ventas), 2)},
+    {"dato": "moda",           "valor": texto(moda(ventas))},
+    {"dato": "desviación",     "valor": decimales(desviacion(ventas), 2)},
+    {"dato": "varianza",       "valor": decimales(varianza(ventas), 2)},
+    {"dato": "amplitud",       "valor": decimales(amplitud(ventas), 1)},
+    {"dato": "mínimo",         "valor": decimales(c["minimo"], 1)},
+    {"dato": "primer cuartil", "valor": decimales(c["q1"], 1)},
+    {"dato": "tercer cuartil", "valor": decimales(c["q3"], 1)},
+    {"dato": "máximo",         "valor": decimales(c["maximo"], 1)},
+    {"dato": "percentil 90",   "valor": decimales(percentil(ventas, 90), 1)}
+]
+imprimir(tablaTexto(filas))
+# Tipificar deja la serie en media 0 y desviación 1: así se ve cuántas
+# desviaciones se aparta cada día de lo normal, y eso sí se puede comparar
+# entre series que no están en la misma unidad.
+imprimir("")
+imprimir("Días fuera de lo normal (más de una desviación):")
+fijo z: lista = tipificar(ventas)
+para i en rango(longitud(ventas)) {
+    si z[i] > 1.0 o z[i] < 0.0 - 1.0 {
+        var señal: texto = "bajo "
+        si z[i] > 0.0 { señal = "alto " }
+        imprimir("  día " + texto(i + 1) + ": " + decimales(ventas[i], 0) + "  " + señal + "(z = " + decimales(z[i], 2) + ")")
+    }
+}

@@ -1,0 +1,72 @@
+# ═══ Agenda de citas ════════════════════════════════════════════════════════
+# Lo que hace falta de verdad con fechas: saber qué viene, qué se pasó, y qué
+# cae en fin de semana. Nada de aritmética de milisegundos a mano.
+# eDSL: fecha, formato
+
+usar fecha, fechaHora, hoy, ahora, deFecha, sumarDias, sumarHoras, diasEntre,
+     horasEntre, esFinDeSemana, nombreDia, nombreMes, diaSemana, inicioSemana,
+     finSemana, estaEntre, esAntesDe, esMismoDia, hora, minuto, aIso de "fecha"
+usar tiempoRelativo, regla, enNegrita, enVerde, enRojo, enAmarillo, enGris,
+     tablaTexto, plural, duracionLegible de "formato"
+
+fijo HOY = hoy()
+
+fijo citas: lista = [
+    {"que": "Revisión con Ferretería El Tornillo", "cuando": sumarHoras(HOY, 9),  "minutos": 60},
+    {"que": "Entrega del informe de La Espiga", "cuando": sumarHoras(sumarDias(HOY, 2), 14), "minutos": 90},
+    {"que": "Capacitación del equipo",          "cuando": sumarHoras(sumarDias(HOY, 5), 8),  "minutos": 180},
+    {"que": "Reunión que ya pasó",              "cuando": sumarHoras(sumarDias(HOY, 0 - 3), 10), "minutos": 45},
+    {"que": "Cierre contable",                  "cuando": sumarHoras(sumarDias(HOY, 12), 16), "minutos": 120}
+]
+
+imprimir(enNegrita("HOY ES " + nombreDia(HOY) + ", " + deFecha(HOY, "larga")))
+imprimir("Semana del " + deFecha(inicioSemana(HOY), "corta") + " al " + deFecha(finSemana(HOY), "corta"))
+imprimir(regla(68))
+
+para c en ordenar(citas, fn(x: dic): real { devolver real(diasEntre(HOY, x["cuando"])) }) {
+    fijo cuando = c["cuando"]
+    fijo dias: entero = diasEntre(HOY, cuando)
+    var marca: texto = enGris("pasó")
+    si dias == 0 { marca = enRojo("HOY") }
+    si dias > 0 { marca = enVerde("en " + plural(dias, "día")) }
+    var finde: texto = ""
+    si esFinDeSemana(cuando) { finde = "  " + enAmarillo("⚠ cae en fin de semana") }
+    imprimir("  " + marca)
+    imprimir("    " + c["que"])
+    imprimir("    " + nombreDia(cuando) + " " + deFecha(cuando, "corta") +
+             " a las " + texto(hora(cuando)) + ":" + dosDigitos(minuto(cuando)) +
+             " · dura " + duracionLegible(c["minutos"] * 60000) + finde)
+}
+
+fn dosDigitos(n: entero): texto {
+    si n < 10 { devolver "0" + texto(n) }
+    devolver texto(n)
+}
+
+imprimir("")
+imprimir(enNegrita("LO DE ESTA SEMANA"))
+fijo l = inicioSemana(HOY)
+fijo d = finSemana(HOY)
+var hay: entero = 0
+para c en citas {
+    si estaEntre(c["cuando"], l, d) {
+        hay = hay + 1
+        imprimir("  " + nombreDia(c["cuando"]) + ": " + c["que"])
+    }
+}
+si hay == 0 { imprimir("  " + enGris("nada")) }
+
+imprimir("")
+imprimir(enNegrita("CALENDARIO DE LA SEMANA"))
+para i en rango(7) {
+    fijo dia1 = sumarDias(l, i)
+    var marca: texto = "  "
+    si esMismoDia(dia1, HOY) { marca = "→ " }
+    var cuantas: entero = 0
+    para c en citas { si esMismoDia(c["cuando"], dia1) { cuantas = cuantas + 1 } }
+    var puntos: texto = ""
+    repetir cuantas { puntos = puntos + "●" }
+    var nombre1: texto = nombreDia(dia1)
+    si esFinDeSemana(dia1) { nombre1 = enGris(nombreDia(dia1)) }
+    imprimir(marca + nombre1 + " " + deFecha(dia1, "corta") + "  " + puntos)
+}

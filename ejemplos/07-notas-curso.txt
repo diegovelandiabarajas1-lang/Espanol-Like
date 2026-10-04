@@ -1,0 +1,63 @@
+# ═══ Boletín de notas de un curso ═══════════════════════════════════════════
+# Una nota suelta no dice nada. Lo que dice algo es dónde está respecto al
+# grupo, y para eso sirven el percentil y la puntuación z.
+# eDSL: numerico, formato, texto
+
+usar media, mediana, desviacion, tipificar, histograma de "numerico"
+usar decimales, tablaTexto, barraTexto, regla, enVerde, enRojo, enAmarillo de "formato"
+usar titular de "texto"
+
+fijo curso: lista = [
+    {"nombre": "ana maría rueda",      "nota": 4.6},
+    {"nombre": "carlos peña",          "nota": 3.1},
+    {"nombre": "diego jaimes",         "nota": 4.9},
+    {"nombre": "esteban ortiz",        "nota": 2.4},
+    {"nombre": "fernanda gómez",       "nota": 3.8},
+    {"nombre": "gabriel suárez",       "nota": 4.2},
+    {"nombre": "helena cárdenas",      "nota": 3.5},
+    {"nombre": "iván martínez",        "nota": 2.9},
+    {"nombre": "julia restrepo",       "nota": 4.4},
+    {"nombre": "kevin arias",          "nota": 1.8}
+]
+
+var notas: lista = []
+para e en curso { notas = notas + [e["nota"]] }
+
+imprimir("BOLETÍN DEL CURSO")
+imprimir(regla(62))
+fijo prom: real = media(notas)
+fijo desv: real = desviacion(notas)
+imprimir("promedio " + decimales(prom, 2) + " · mediana " + decimales(mediana(notas), 2) + " · desviación " + decimales(desv, 2))
+imprimir("")
+
+fijo z: lista = tipificar(notas)
+var filas: lista = []
+para i en rango(longitud(curso)) {
+    fijo n: real = curso[i]["nota"]
+    var estado: texto = enRojo("reprueba")
+    si n >= 3.0 { estado = enAmarillo("pasa") }
+    si n >= 4.0 { estado = enVerde("notable") }
+    filas = filas + [{
+        "estudiante": titular(curso[i]["nombre"]),
+        "nota": decimales(n, 1),
+        "z": decimales(z[i], 2),
+        "percentil": texto(posicionEn(notas, n)),
+        "estado": estado
+    }]
+}
+imprimir(tablaTexto(filas))
+
+# El percentil de una nota: qué porcentaje del curso queda por debajo.
+fn posicionEn(todas: lista, n: real): entero {
+    var debajo: entero = 0
+    para x en todas { si x < n { debajo = debajo + 1 } }
+    devolver entero(real(debajo) * 100.0 / real(longitud(todas)))
+}
+
+imprimir("")
+imprimir("Reparto por rangos:")
+fijo cajas: lista = histograma(notas, 5)
+fijo etiquetas: lista = ["1,0–1,8", "1,8–2,6", "2,6–3,4", "3,4–4,2", "4,2–5,0"]
+para i en rango(5) {
+    imprimir("  " + etiquetas[i] + "  " + barraTexto(cajas[i], longitud(notas), 20) + " " + texto(cajas[i]))
+}

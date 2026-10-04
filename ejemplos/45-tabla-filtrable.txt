@@ -1,0 +1,166 @@
+# ═══ Tabla con filtro y orden, en la página ════════════════════════════════
+# El eDSL «datos» hace el trabajo y el núcleo lo pinta. Lo importante: el
+# filtro y el orden viven en el ESTADO, no en el DOM, así que repintar siempre
+# da lo mismo y no hay dos verdades que sincronizar.
+# eDSL: datos, estilo, formato · núcleo: web, almacén
+
+usar deRegistros, donde, ordenarPor, columna, columnas, vistazo, agrupar,
+     sumaCol, contarCol, resumir, soloColumnas, aRegistros de "datos"
+usar estilo, estiloGlobal, reiniciar, tema, color, espacio, radio,
+     alPasar, pares, enFila, separado, cuando, transicion de "estilo"
+usar sinAcentos, minusculas, indiceDe de "texto"
+usar moneda, regla, enNegrita, enGris, enVerde, plural, tablaTexto, porciento de "formato"
+
+fijo CLIENTES = deRegistros([
+    {"nit": 900123456, "nombre": "Ferretería El Tornillo",   "ciudad": "Bucaramanga",   "ventas": 60400000, "activo": cierto},
+    {"nit": 900456789, "nombre": "Panadería La Espiga",      "ciudad": "Girón",         "ventas": 7500000,  "activo": cierto},
+    {"nit": 900789012, "nombre": "Droguería Salud Total",    "ciudad": "Floridablanca", "ventas": 126000000,"activo": cierto},
+    {"nit": 900321654, "nombre": "Café del Parque",          "ciudad": "Girón",         "ventas": 2100000,  "activo": falso},
+    {"nit": 900654321, "nombre": "Almacén González",         "ciudad": "Bucaramanga",   "ventas": 43800000, "activo": cierto},
+    {"nit": 900987654, "nombre": "Distribuidora Peña",       "ciudad": "Piedecuesta",   "ventas": 18200000, "activo": falso},
+    {"nit": 900111222, "nombre": "Supermercado La Canasta",  "ciudad": "Bucaramanga",   "ventas": 91500000, "activo": cierto}
+])
+
+# ── el estado: TODO lo que decide qué se ve ───────────────────────────────
+var busqueda: texto = ""
+var ciudad: texto = "todas"
+var ordenPor: texto = "ventas"
+var descendente: bool = cierto
+var soloActivos: bool = falso
+
+# ── la consulta, que sale solo del estado ─────────────────────────────────
+fn visibles(): tabla {
+    var t = CLIENTES
+    si longitud(busqueda) > 0 {
+        # Buscar sin tildes ni mayúsculas: nadie escribe «Droguería» con tilde
+        fijo q: texto = minusculas(sinAcentos(busqueda))
+        t = donde(t, fn(f: dic): bool {
+            devolver indiceDe(minusculas(sinAcentos(f["nombre"])), q) >= 0
+        })
+    }
+    si ciudad != "todas" {
+        t = donde(t, fn(f: dic): bool { devolver f["ciudad"] == ciudad })
+    }
+    si soloActivos {
+        t = donde(t, fn(f: dic): bool { devolver f["activo"] })
+    }
+    devolver ordenarPor(t, ordenPor, descendente)
+}
+
+fn cambiarOrden(col: texto) {
+    si ordenPor == col { descendente = no descendente }
+    sino { ordenPor = col  descendente = cierto }
+    repintar()
+}
+
+# ── los estilos ───────────────────────────────────────────────────────────
+reiniciar()
+estiloGlobal(":root", tema({
+    "color": {"marca": "#4f3fd4", "texto": "#1a1a1a", "suave": "#777777",
+              "borde": "#e5e5e5", "fondo": "#ffffff", "franja": "#fafafa"},
+    "espacio": {"corto": "8px", "medio": "16px"},
+    "radio": {"medio": "6px"}
+}))
+fijo thEstilo = estilo(
+    {"relleno": "10px 12px", "alineacion": "izquierda", "tamano": "13px",
+     "color": color("suave"), "cursor": "puntero", "borde-abajo": "2px solid " + color("borde")},
+    alPasar({"color": color("marca")}),
+    transicion("color", 120)
+)
+fijo trEstilo = estilo(
+    {"borde-abajo": "1px solid " + color("borde")},
+    pares({"fondo": color("franja")}),
+    alPasar({"fondo": "#f3f1fd"}),
+    cuando(".inactivo", {"opacidad": "0.55"})
+)
+fijo tdEstilo = estilo({"relleno": "10px 12px", "tamano": "14px"})
+
+# ── lo que se pinta ───────────────────────────────────────────────────────
+fn repintar() {
+    limpiarPagina()
+    fijo t = visibles()
+    fijo nombres: lista = columna(t, "nombre")
+
+    var filas: lista = []
+    # El encabezado: cada columna es un botón que cambia el orden
+    var cabezas: lista = []
+    para c en ["nombre", "ciudad", "ventas"] {
+        var flecha: texto = ""
+        si ordenPor == c {
+            flecha = " ▲"
+            si descendente { flecha = " ▼" }
+        }
+        cabezas = cabezas + [etiqueta("th", {"estilo": thEstilo},
+            boton(c + flecha, fn() { cambiarOrden(c) }))]
+    }
+    filas = filas + [etiqueta("tr", {}, cabezas)]
+
+    para i en rango(longitud(nombres)) {
+        var clases: texto = ""
+        si no columna(t, "activo")[i] { clases = "inactivo" }
+        filas = filas + [etiqueta("tr", {"estilo": trEstilo, "class": clases},
+            etiqueta("td", {"estilo": tdEstilo}, nombres[i]),
+            etiqueta("td", {"estilo": tdEstilo}, columna(t, "ciudad")[i]),
+            etiqueta("td", {"estilo": tdEstilo}, moneda(columna(t, "ventas")[i]))
+        )]
+    }
+
+    pintar(
+        etiqueta("div", {"estilo": estilo(enFila(8), {"margenAbajo": espacio("medio")})},
+            entrada("Buscar cliente", fn(d: dic) { busqueda = d["valor"]  repintar() }),
+            desplegable(["todas", "Bucaramanga", "Girón", "Floridablanca", "Piedecuesta"],
+                        fn(d: dic) { ciudad = d["valor"]  repintar() }),
+            casilla("solo activos", soloActivos, fn(d: dic) { soloActivos = d["valor"]  repintar() })
+        ),
+        etiqueta("table", {"estilo": estilo({"ancho": "100%", "colapso": "collapse"})}, filas),
+        etiqueta("p", {"estilo": estilo({"color": color("suave"), "tamano": "13px"})},
+                 plural(longitud(nombres), "cliente") + " de " + texto(longitud(columna(CLIENTES, "nit"))))
+    )
+}
+
+repintar()
+
+# ── y la comprobación sin navegador: el estado manda ──────────────────────
+imprimir(enNegrita("TABLA FILTRABLE — el estado decide, no el DOM"))
+imprimir(regla(66))
+
+fn mostrar(titulo: texto) {
+    fijo t = visibles()
+    imprimir("")
+    imprimir(enNegrita(titulo))
+    var filas: lista = []
+    para f en aRegistros(soloColumnas(t, ["nombre", "ciudad", "ventas"])) {
+        filas = filas + [{"cliente": f["nombre"], "ciudad": f["ciudad"], "ventas": moneda(f["ventas"])}]
+    }
+    si longitud(filas) == 0 { imprimir(enGris("  (ninguno)")) }
+    sino { imprimir(tablaTexto(filas)) }
+}
+
+mostrar("Todo, por ventas de mayor a menor")
+
+busqueda = "drogueria"
+mostrar("Buscando «drogueria» — sin tilde y en minúscula, y aun así lo encuentra")
+
+busqueda = ""
+ciudad = "Girón"
+mostrar("Solo Girón")
+
+ciudad = "todas"
+soloActivos = cierto
+ordenPor = "nombre"
+descendente = falso
+mostrar("Solo activos, por nombre de la A a la Z")
+
+imprimir("")
+imprimir(regla(66))
+fijo tot = resumir(CLIENTES, {"ventas": sumaCol("ventas"), "n": contarCol()})
+fijo act = resumir(donde(CLIENTES, fn(f: dic): bool { devolver f["activo"] }),
+                   {"ventas": sumaCol("ventas"), "n": contarCol()})
+imprimir("Cartera total: " + moneda(columna(tot, "ventas")[0]) +
+         " en " + plural(columna(tot, "n")[0], "cliente"))
+imprimir("De los activos: " + moneda(columna(act, "ventas")[0]) + " (" +
+         porciento(real(columna(act, "ventas")[0]) / real(columna(tot, "ventas")[0])) + ")")
+imprimir("")
+imprimir(enGris("Cada «mostrar» cambió el estado y volvió a consultar. La página"))
+imprimir(enGris("se repinta entera desde el estado, así que no puede quedar"))
+imprimir(enGris("mostrando una cosa mientras el filtro dice otra."))

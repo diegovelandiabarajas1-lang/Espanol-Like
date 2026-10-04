@@ -1,0 +1,12 @@
+# Un programa en varios archivos. Solo funciona fuera del navegador, porque los
+# módulos los resuelve el anfitrión contra el disco:
+#   node motor/util/n-node.js ejemplos/resumen.esl
+#   qjs --std motor/util/n.js  ejemplos/resumen.esl
+usar "lib/tabla.esl" como tabla
+usar resumen de "lib/numeros.esl"
+
+fijo datos = [12, 7, 31, 4, 19, 25]
+
+imprimir(tabla.regla(40))
+imprimir(resumen(datos))
+imprimir(tabla.regla(40))

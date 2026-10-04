@@ -1,0 +1,51 @@
+# Fallos que no tumban el programa. «intentar» protege un trozo, «capturar»
+# recoge lo que salga mal y «finalmente» corre siempre, incluso si te vas por
+# «devolver». Lo que lanzas puede ser cualquier valor.
+
+fn leerCantidad(texto_entrada: texto) -> entero {
+    intentar {
+        var n = entero(texto_entrada)
+        si n < 0 { lanzar error("no puede ser negativa", "validacion") }
+        devolver n
+    } capturar (e) {
+        imprimir("  rechazado «" + texto_entrada + "» → " + e.mensaje)
+        devolver 0
+    } finalmente {
+        imprimir("  (revisado: " + texto_entrada + ")")
+    }
+}
+
+imprimir("Leyendo cantidades:")
+var total = 0
+para t en ["12", "siete", "30", "-4"] {
+    total = total + leerCantidad(t)
+}
+imprimir("total válido: {total}")
+imprimir("")
+
+# Los errores del propio motor también se capturan, con su tipo, su mensaje y
+# la línea donde saltaron.
+imprimir("Divisiones:")
+para d en [4, 0, 2] {
+    intentar {
+        imprimir("  100/{d} = {100 / d}")
+    } capturar (e) {
+        imprimir("  100/{d} → {e.tipo}: {e.mensaje} (línea {e.linea})")
+    }
+}
+imprimir("")
+
+# Y se pueden encadenar: el de dentro relanza y el de fuera decide.
+fn cargar(cual: texto) {
+    intentar {
+        si cual == "roto" { lanzar "el archivo está corrupto" }
+        imprimir("  cargado: " + cual)
+    } capturar (e) {
+        lanzar "al cargar «" + cual + "»: " + texto(e)
+    }
+}
+
+imprimir("Cargas:")
+para c en ["datos", "roto"] {
+    intentar { cargar(c) } capturar (e) { imprimir("  fallo → " + texto(e)) }
+}

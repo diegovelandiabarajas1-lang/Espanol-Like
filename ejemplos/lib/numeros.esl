@@ -1,0 +1,8 @@
+# Otro módulo, y uno que importa al anterior: los módulos se apilan.
+usar fila de "tabla.esl"
+usar media, redondear de "numerico"
+
+publico fn resumen(datos: lista) -> texto {
+  devolver fila(["n", "min", "max", "media"]) + "\n" +
+           fila([longitud(datos), minimo(datos), maximo(datos), redondear(media(datos), 2)])
+}

@@ -1,0 +1,196 @@
+# Control de gastos — una aplicación entera en Ñ.
+# Pulsa «⤓ Exportar app» y sale un solo archivo que se abre en cualquier
+# navegador, guarda lo que anotes y no necesita nada más.
+
+# ─────────────────────────────────────────────── datos
+# recuperar() lee lo que quedó de la última vez; [] es lo que vale la primera.
+usar recortar de "texto"
+usar redondear, suma de "numerico"
+usar alPasar, enMovimientoReducido, enOscuro, estilo de "estilo"
+
+var gastos = recuperar("gastos", [])
+var concepto = ""
+var monto = ""
+var categoria = "Comida"
+var filtro = "todas"
+var aviso = ""
+
+fijo CATEGORIAS = ["Comida", "Transporte", "Casa", "Ocio", "Otros"]
+fijo COLORES = {"Comida": "#4F3FD4", "Transporte": "#1F7A4D", "Casa": "#A8201A",
+                "Ocio": "#8A5800", "Otros": "#6C6B80"}
+
+# ─────────────────────────────────────────────── estilo
+# Un estilo es un valor: se compone, se guarda en variables y se anida como en
+# SCSS. De cada uno distinto sale una clase, emitida una sola vez.
+fijo tarjeta = estilo({"fondo": "#FFFFFF", "relleno": 20, "redondeo": 14, "anchoMax": 560,
+                       "margen": [0, "auto"], "sombra": "0 1px 3px rgba(0,0,0,.12)"},
+  enOscuro({"fondo": "#1C1A26", "sombra": "ninguna"}))
+
+fijo titulo = estilo({"tamano": 22, "grosor": 700, "margen": [0, 0, 4, 0]})
+fijo suave  = estilo({"color": "#6C6B80", "tamano": 13})
+fijo fila   = estilo({"mostrar": "flex", "hueco": 8, "alinearItems": "center",
+                      "envolver": "wrap", "margen": [14, 0]})
+fijo cifra  = estilo({"tamano": 30, "grosor": 700, "color": "#4F3FD4"},
+  enOscuro({"color": "#9B8CFF"}))
+
+fijo lista = estilo({"relleno": 0, "margen": [12, 0, 0, 0], "estiloLista": "none"})
+fijo item  = estilo({"mostrar": "flex", "alinearItems": "center", "hueco": 10,
+                     "relleno": [8, 0], "bordeAbajo": "1px solid #E1E0EB"},
+  enOscuro({"bordeAbajo": "1px solid #2A2836"}))
+
+fijo equis = estilo({"fondo": "transparente", "color": "#A8201A", "borde": "ninguno",
+                      "cursor": "pointer", "relleno": 4, "tamano": 16},
+  alPasar({"opacidad": 0.6}))
+
+# La barra usa una variable de CSS para el ancho. Así cien barras distintas
+# comparten UNA clase en vez de fabricar una por cada dato.
+fijo barra = estilo({"alto": 10, "redondeo": 5, "ancho": "var(--p)",
+                     "fondo": "var(--c)", "transicion": "width .3s"},
+  enMovimientoReducido({"transicion": "ninguna"}))
+
+# ─────────────────────────────────────────────── cuentas
+fn montos(l): lista<real> {
+    devolver mapear(l, fn(g) { devolver g["monto"] })
+}
+
+fn visibles(): lista<cualquiera> {
+    si filtro == "todas" { devolver gastos }
+    devolver filtrar(gastos, fn(g) { devolver g["categoria"] == filtro })
+}
+
+fn totalDe(l): real {
+    si longitud(l) == 0 { devolver 0.0 }
+    devolver suma(montos(l))
+}
+
+fn porCategoria(): lista<cualquiera> {
+    var salida = []
+    para c en CATEGORIAS {
+        fijo t = totalDe(filtrar(gastos, fn(g) { devolver g["categoria"] == c }))
+        si t > 0 { agregar(salida, {"categoria": c, "total": t}) }
+    }
+    devolver salida
+}
+
+fn pesos(n: real): texto {
+    devolver "$" + texto(redondear(n, 2))
+}
+
+# ─────────────────────────────────────────────── acciones
+fn escribeConcepto(ev) { concepto = obtener(ev, "valor", "") }
+fn escribeMonto(ev)    { monto = obtener(ev, "valor", "") }
+fn eligeCategoria(v: texto) { categoria = v  ver() }
+fn eligeFiltro(v: texto)    { filtro = v  ver() }
+
+fn anotar() {
+    fijo c = recortar(concepto)
+    si c == "" {
+        aviso = "Falta el concepto"
+        ver()
+        devolver
+    }
+    # real("") lanza un error: se comprueba antes de convertir, no después.
+    si recortar(monto) == "" {
+        aviso = "Falta el monto"
+        ver()
+        devolver
+    }
+    fijo m = real(recortar(monto))
+    si m <= 0 {
+        aviso = "El monto tiene que ser un número mayor que cero"
+        ver()
+        devolver
+    }
+    agregar(gastos, {"concepto": c, "categoria": categoria, "monto": m})
+    concepto = ""
+    monto = ""
+    aviso = ""
+    guardar("gastos", gastos)
+    ver()
+}
+
+# Devuelve una función: cada botón se lleva la suya, con su índice dentro.
+fn quitarGasto(g) {
+    devolver fn() {
+        quitar(gastos, g)
+        guardar("gastos", gastos)
+        ver()
+    }
+}
+
+# ─────────────────────────────────────────────── componentes
+# Una función que devuelve «nodo» es un componente. Se compone como cualquier
+# otro valor, y el verificador comprueba que lo que devuelve es un nodo.
+fn lineaGasto(g): nodo {
+    devolver etiqueta("li", item,
+        etiqueta("span", estilo({"crecer": 1}), g["concepto"]),
+        etiqueta("span", suave, g["categoria"]),
+        etiqueta("b", pesos(g["monto"])),
+        boton("×", quitarGasto(g), equis))
+}
+
+fn barraCategoria(d, tope: real): nodo {
+    fijo ancho = texto(entero(100 * d["total"] / tope)) + "%"
+    devolver etiqueta("div", estilo({"margen": [10, 0]}),
+        etiqueta("div", estilo({"mostrar": "flex", "justificar": "space-between", "tamano": 13}),
+            etiqueta("span", d["categoria"]),
+            etiqueta("span", suave, pesos(d["total"]))),
+        etiqueta("div", estilo({"fondo": "#ECEBF3", "redondeo": 5, "margenArriba": 4}),
+            enOscuro({"fondo": "#2A2836"}),
+            etiqueta("div", barra, {"--p": ancho, "--c": obtener(COLORES, d["categoria"], "#4F3FD4")})))
+}
+
+fn resumen(): nodo {
+    fijo hoy = visibles()
+    devolver etiqueta("div",
+        etiqueta("div", cifra, pesos(totalDe(hoy))),
+        etiqueta("div", suave, texto(longitud(hoy)) + " gastos · filtro: " + filtro))
+}
+
+fn formulario(): nodo {
+    devolver etiqueta("div", fila,
+        entrada("Concepto", nulo, {"clave": "concepto", "valor": concepto,
+            "alEscribir": escribeConcepto, "alCambiar": fn(ev) { anotar() }}),
+        entrada("Monto", nulo, {"clave": "monto", "valor": monto, "tipo": "number",
+            "alEscribir": escribeMonto, "alCambiar": fn(ev) { anotar() }}),
+        desplegable(CATEGORIAS, eligeCategoria, {"clave": "cat", "valor": categoria}),
+        boton("Anotar", anotar))
+}
+
+fn barraAviso(): nodo {
+    si aviso == "" { devolver etiqueta("span") }
+    devolver etiqueta("div", estilo({"fondo": "#FBEBEA", "color": "#A8201A", "relleno": [8, 12],
+                                     "redondeo": 8, "tamano": 13, "margen": [8, 0]}),
+        enOscuro({"fondo": "#3A1E1C", "color": "#EC7C6E"}), aviso)
+}
+
+# ─────────────────────────────────────────────── pintar
+fn ver() {
+    limpiarPagina()
+    fijo porCat = porCategoria()
+    fijo tope = si0(mapear(porCat, fn(d) { devolver d["total"] }))
+
+    pintar(etiqueta("div", tarjeta,
+        etiqueta("h1", titulo, "Control de gastos"),
+        etiqueta("div", suave, "Lo que anotes sigue aquí la próxima vez que abras esto."),
+        resumen(),
+        formulario(),
+        barraAviso(),
+        etiqueta("div", fila,
+            etiqueta("span", suave, "Ver:"),
+            desplegable(agregar(copiar(CATEGORIAS), "todas"), eligeFiltro,
+                {"clave": "filtro", "valor": filtro})),
+        etiqueta("ul", lista, mapear(visibles(), lineaGasto)),
+        etiqueta("div", estilo({"margenArriba": 18}),
+            etiqueta("div", suave, "Por categoría"),
+            mapear(porCat, fn(d) { devolver barraCategoria(d, tope) }))))
+}
+
+# maximo() sobre una lista vacía falla; esto le pone suelo.
+fn si0(l): real {
+    si longitud(l) == 0 { devolver 1.0 }
+    devolver maximo(l)
+}
+
+ver()
+imprimir("Listo. Anota un gasto y pulsa Intro.")

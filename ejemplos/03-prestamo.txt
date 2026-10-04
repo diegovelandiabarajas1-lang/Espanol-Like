@@ -1,0 +1,41 @@
+# ═══ Tabla de amortización de un crédito ════════════════════════════════════
+# Lo que de verdad se paga, cuota por cuota. La última cuota cierra el saldo
+# exacto: si no cuadrara en cero, la tabla estaría mal.
+# eDSL: numerico, formato
+
+usar cuota, amortizacion, tasaEfectiva, suma, redondear de "numerico"
+usar moneda, porciento, tablaTexto, regla, enVerde, enRojo, alinearDer de "formato"
+
+fijo capital: real = 25000000.0
+fijo nominalAnual: real = 0.24
+fijo meses: entero = 12
+fijo tasaMes: real = nominalAnual / 12.0
+
+imprimir("CRÉDITO DE LIBRE INVERSIÓN")
+imprimir(regla(58))
+imprimir("Capital:         " + moneda(capital))
+imprimir("Tasa nominal:    " + porciento(nominalAnual) + " anual · " + porciento(tasaMes) + " mensual")
+imprimir("Tasa EFECTIVA:   " + porciento(tasaEfectiva(nominalAnual, 12)) + "  ← la que de verdad se paga")
+imprimir("Plazo:           " + texto(meses) + " meses")
+imprimir("Cuota fija:      " + moneda(redondear(cuota(capital, tasaMes, meses))))
+imprimir("")
+
+fijo tabla1: lista = amortizacion(capital, tasaMes, meses)
+var filas: lista = []
+para p en tabla1 {
+    filas = filas + [{
+        "n": texto(p["periodo"]),
+        "cuota": moneda(redondear(p["cuota"])),
+        "interés": moneda(redondear(p["interes"])),
+        "abono": moneda(redondear(p["abono"])),
+        "saldo": moneda(redondear(p["saldo"]))
+    }]
+}
+imprimir(tablaTexto(filas))
+
+var totalInteres: real = 0.0
+para p en tabla1 { totalInteres = totalInteres + p["interes"] }
+imprimir("")
+imprimir("Intereses totales: " + enRojo(moneda(redondear(totalInteres))))
+imprimir("Devuelto en total: " + moneda(redondear(capital + totalInteres)))
+imprimir("Saldo final:       " + enVerde(moneda(redondear(tabla1[meses - 1]["saldo"]))) + "  (tiene que ser cero)")

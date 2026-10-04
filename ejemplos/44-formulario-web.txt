@@ -1,0 +1,161 @@
+# ═══ Un formulario que valida y guarda ════════════════════════════════════
+# Controles de verdad: texto, desplegable, casilla y área. La validación corre
+# al escribir, no al enviar, que es lo que evita el formulario que se pierde.
+# eDSL: texto, formato, estilo · núcleo: web, almacén
+
+usar estilo, estiloGlobal, reiniciar, tema, color, espacio, radio,
+     alEnfocar, siInvalido, enColumna, enFila, separado, transicion de "estilo"
+usar recortar, indiceDe, caracteres, esDigito de "texto"
+usar regla, enNegrita, enVerde, enRojo, enGris, plural de "formato"
+usar hoy, deFecha, desdeMarca de "fecha"
+
+# ── el estado del formulario ───────────────────────────────────────────────
+var datos: dic = {"nombre": "", "nit": "", "correo": "", "ciudad": "Bucaramanga",
+                  "plan": "mensual", "acepta": falso, "notas": ""}
+var errores: dic = {}
+
+# ── la validación, en un solo sitio ───────────────────────────────────────
+fn validar(d: dic): dic {
+    var e: dic = {}
+    si longitud(recortar(d["nombre"])) < 3 {
+        e["nombre"] = "el nombre necesita al menos 3 letras"
+    }
+    si no soloNumeros(d["nit"]) o longitud(d["nit"]) < 9 {
+        e["nit"] = "el NIT son 9 dígitos, sin puntos ni guion"
+    }
+    si indiceDe(d["correo"], "@") <= 0 o indiceDe(d["correo"], ".") <= 0 {
+        e["correo"] = "el correo necesita un @ y un punto"
+    }
+    si no d["acepta"] {
+        e["acepta"] = "hay que aceptar los términos"
+    }
+    devolver e
+}
+
+fn soloNumeros(s: texto): bool {
+    si longitud(s) == 0 { devolver falso }
+    para c en caracteres(s) { si no esDigito(c) { devolver falso } }
+    devolver cierto
+}
+
+fn cambiar(campo: texto, valor: cualquiera) {
+    datos[campo] = valor
+    errores = validar(datos)
+    repintar()
+}
+
+fn enviar() {
+    errores = validar(datos)
+    si longitud(claves(errores)) > 0 { repintar()  devolver }
+    # Se guarda con la hora. OJO: aquí «ahora()» es la del NÚCLEO, que da
+    # milisegundos — un número, que sí se puede guardar. La «ahora» del eDSL
+    # «fecha» devuelve una fecha, y «guardar» se niega a guardar fechas porque
+    # el almacén solo entiende números, textos, booleanos, listas y diccionarios.
+    # Para volver a leerla como fecha: desdeMarca(ese número).
+    var enviados: lista = recuperar("inscripciones", [])
+    enviados = enviados + [{"cuando": ahora(), "datos": copiar(datos)}]
+    guardar("inscripciones", enviados)
+    repintar()
+}
+
+# ── los estilos ───────────────────────────────────────────────────────────
+reiniciar()
+estiloGlobal(":root", tema({
+    "color": {"marca": "#4f3fd4", "error": "#c62828", "ok": "#2e7d32",
+              "borde": "#d4d4d4", "texto": "#1a1a1a", "suave": "#777777",
+              "fondo": "#ffffff"},
+    "espacio": {"corto": "8px", "medio": "16px", "largo": "24px"},
+    "radio": {"medio": "6px"}
+}))
+fijo campo = estilo(
+    {"ancho": "100%", "relleno": "9px 12px", "borde": "1px solid " + color("borde"),
+     "radio": radio("medio"), "tamano": "15px"},
+    transicion("borde-color", 150),
+    alEnfocar({"borde-color": color("marca"), "contorno": "ninguno",
+               "sombra": "0 0 0 3px rgba(79,63,212,.15)"})
+)
+fijo campoMal = estilo(campo, {"borde-color": color("error")})
+fijo textoError = estilo({"color": color("error"), "tamano": "13px", "margenArriba": "3px"})
+fijo grupo1 = estilo(enColumna(3), {"margenAbajo": espacio("medio")})
+
+# ── lo que se pinta ───────────────────────────────────────────────────────
+fn repintar() {
+    limpiarPagina()
+    var hijos: lista = []
+    hijos = hijos + [etiqueta("h2", {}, "Inscripción de cliente")]
+
+    hijos = hijos + [bloqueCampo("nombre", entrada("Razón social",
+        fn(d: dic) { cambiar("nombre", d["valor"]) }, estiloDe("nombre"), {"valor": datos["nombre"]}))]
+    hijos = hijos + [bloqueCampo("nit", entrada("NIT (9 dígitos)",
+        fn(d: dic) { cambiar("nit", d["valor"]) }, estiloDe("nit"), {"valor": datos["nit"]}))]
+    hijos = hijos + [bloqueCampo("correo", entrada("Correo",
+        fn(d: dic) { cambiar("correo", d["valor"]) }, estiloDe("correo"), {"valor": datos["correo"]}))]
+
+    hijos = hijos + [etiqueta("div", {"estilo": grupo1},
+        desplegable(["Bucaramanga", "Girón", "Floridablanca", "Piedecuesta"],
+                    fn(d: dic) { cambiar("ciudad", d["valor"]) }, campo))]
+    hijos = hijos + [etiqueta("div", {"estilo": grupo1},
+        desplegable([["mensual", "Plan mensual"], ["anual", "Plan anual (2 meses gratis)"]],
+                    fn(d: dic) { cambiar("plan", d["valor"]) }, campo))]
+    hijos = hijos + [etiqueta("div", {"estilo": grupo1},
+        areaTexto("Notas", fn(d: dic) { cambiar("notas", d["valor"]) }, campo))]
+    hijos = hijos + [bloqueCampo("acepta", casilla("Acepto los términos", datos["acepta"],
+        fn(d: dic) { cambiar("acepta", d["valor"]) }))]
+
+    hijos = hijos + [etiqueta("div", {"estilo": estilo(separado(8))},
+        boton("Inscribir", fn() { enviar() }),
+        etiqueta("span", {"estilo": estilo({"color": color("suave"), "tamano": "13px"})},
+                 texto(longitud(claves(errores))) + " por corregir"))]
+
+    pintar(etiqueta("form", {}, hijos))
+}
+
+fn estiloDe(campo1: texto): estilo {
+    si contiene(claves(errores), campo1) { devolver campoMal }
+    devolver campo
+}
+
+fn bloqueCampo(nombre1: texto, control: nodo): nodo {
+    var dentro1: lista = [control]
+    si contiene(claves(errores), nombre1) {
+        dentro1 = dentro1 + [etiqueta("div", {"estilo": textoError}, "⚠ " + errores[nombre1])]
+    }
+    devolver etiqueta("div", {"estilo": grupo1}, dentro1)
+}
+
+repintar()
+
+# ── y la comprobación sin navegador ───────────────────────────────────────
+imprimir(enNegrita("FORMULARIO DE INSCRIPCIÓN"))
+imprimir(regla(60))
+imprimir("Con el formulario vacío, lo que se queja:")
+para par en pares(validar(datos)) {
+    imprimir("  " + enRojo("✗ " + par[0]) + ": " + par[1])
+}
+
+imprimir("")
+imprimir("Llenándolo bien, paso a paso:")
+cambiar("nombre", "Constructora Los Andes")
+imprimir("  nombre → faltan " + texto(longitud(claves(errores))))
+cambiar("nit", "900123456")
+imprimir("  nit    → faltan " + texto(longitud(claves(errores))))
+cambiar("correo", "compras@losandes.com.co")
+imprimir("  correo → faltan " + texto(longitud(claves(errores))))
+cambiar("acepta", cierto)
+imprimir("  acepta → faltan " + texto(longitud(claves(errores))))
+
+imprimir("")
+si longitud(claves(errores)) == 0 {
+    imprimir(enVerde("  ✓ válido, enviando…"))
+    enviar()
+    fijo guardadas: lista = recuperar("inscripciones", [])
+    imprimir("  guardadas: " + plural(longitud(guardadas), "inscripción"))
+    fijo ult: dic = guardadas[longitud(guardadas) - 1]
+    imprimir("  la última: " + ult["datos"]["nombre"] + " · plan " + ult["datos"]["plan"])
+    imprimir("  guardada el " + deFecha(desdeMarca(ult["cuando"]), "completa"))
+}
+
+imprimir("")
+imprimir(enGris("  La validación corre en «cambiar», al escribir, no al enviar."))
+imprimir(enGris("  Por eso el error aparece junto al campo y no en una alerta al"))
+imprimir(enGris("  final, que es cuando ya se perdió lo que se había escrito."))

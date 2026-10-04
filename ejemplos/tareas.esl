@@ -1,0 +1,43 @@
+# Lista de tareas, con el DSL jerárquico: el árbol se construye por valores y
+# solo pintar() toca la página.
+
+usar recortar de "texto"
+usar dentro, estilo de "estilo"
+
+var tareas: lista<dic<texto, cualquiera>> = []
+
+fijo fila = estilo({"margen": [5, 0]}, dentro("button", {"margenIzquierda": 10}))
+fijo hecha = estilo(fila, {"decoracion": "line-through", "opacidad": 0.55})
+
+fn filaTarea(t: dic<texto, cualquiera>) -> nodo {
+    var pinta: estilo = fila
+    si t["hecha"] == verdadero { pinta = hecha }
+    devolver etiqueta("li", pinta,
+        texto(t["que"]),
+        boton("alternar", fn() {
+            t["hecha"] = no t["hecha"]
+            pintarTodo()
+        }))
+}
+
+fn pintarTodo() {
+    limpiarPagina()
+
+    var pendientes: entero = 0
+    para t en tareas {
+        si t["hecha"] == falso { pendientes = pendientes + 1 }
+    }
+
+    pintar(etiqueta("div", {"class": "panel"},
+        etiqueta("h2", "Tareas"),
+        entrada("Nueva tarea", fn(v: texto) {
+            si longitud(recortar(v)) > 0 {
+                agregar(tareas, {"que": recortar(v), "hecha": falso})
+                pintarTodo()
+            }
+        }),
+        etiqueta("ul", mapear(tareas, filaTarea)),
+        etiqueta("p", "{pendientes} pendientes de {longitud(tareas)}")))
+}
+
+pintarTodo()

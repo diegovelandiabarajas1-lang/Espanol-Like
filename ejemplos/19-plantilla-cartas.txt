@@ -1,0 +1,63 @@
+# ═══ Cartas en serie desde una plantilla ════════════════════════════════════
+# La plantilla llega de un archivo, así que sus llaves NO son la interpolación
+# del lenguaje: son texto que «plantilla» rellena en ejecución. Esa es toda la
+# diferencia entre las dos cosas, y es la que más confunde.
+# eDSL: texto, formato, fecha
+
+usar plantilla, envolver, sangrar, titular, repetirTexto, lineas, unir de "texto"
+usar moneda, regla, enNegrita, tiempoRelativo de "formato"
+usar hoy, deFecha, sumarDias, diasEntre de "fecha"
+
+# Esto podría venir de leerTexto("plantillas/cobro.txt"); va aquí para que el
+# ejemplo corra solo. Y por eso las llaves van ESCAPADAS con «\{…\}»: dentro de
+# un texto escrito en el programa, {empresa} sería la interpolación del lenguaje
+# y el compilador buscaría una variable llamada «empresa». Escapándolas se
+# quedan como caracteres, que es lo que «plantilla» espera rellenar. Leída de un
+# archivo no hace falta escapar nada: ahí ya son caracteres.
+fijo PLANTILLA: texto = "Señores \{empresa\}
+Atn. \{contacto\}
+\{ciudad\}
+
+Cordial saludo:
+
+Le recordamos que la factura \{factura\}, por valor de \{valor\}, tenía como fecha de vencimiento el \{vence\}. A la fecha registra \{dias\} días de mora.
+
+Le agradecemos comunicarse con nuestra área de cartera para acordar el pago.
+
+Atentamente,
+\{firma\}
+DATAPRO ANALITICA SAS"
+
+fijo deudores: lista = [
+    {"empresa": "ferretería el tornillo", "contacto": "juan gonzález", "ciudad": "Bucaramanga",
+     "factura": "FV-1001", "valor": 12400000, "vencio": 45},
+    {"empresa": "panadería la espiga",    "contacto": "maría restrepo","ciudad": "Girón",
+     "factura": "FV-1002", "valor": 3200000,  "vencio": 12},
+    {"empresa": "café del parque",        "contacto": "pedro peña",    "ciudad": "Girón",
+     "factura": "FV-1006", "valor": 1800000,  "vencio": 3}
+]
+
+para d en deudores {
+    fijo fv = sumarDias(hoy(), 0 - d["vencio"])
+    fijo carta: texto = plantilla(PLANTILLA, {
+        "empresa":  titular(d["empresa"]),
+        "contacto": titular(d["contacto"]),
+        "ciudad":   d["ciudad"],
+        "factura":  d["factura"],
+        "valor":    moneda(d["valor"]),
+        "vence":    deFecha(fv, "larga"),
+        "dias":     texto(d["vencio"]),
+        "firma":    "Nicolás Jaimes"
+    })
+    imprimir(repetirTexto("═", 70))
+    # «envolver» parte una línea larga sin cortar palabras, y devuelve la LISTA
+    # de trozos — no un texto con saltos: hay que unirlos.
+    para l en lineas(carta) {
+        si longitud(l) > 66 { imprimir(unir(envolver(l, 66), "\n")) } sino { imprimir(l) }
+    }
+    imprimir("")
+}
+
+imprimir(repetirTexto("═", 70))
+imprimir(enNegrita("Por qué «plantilla» y no la interpolación del lenguaje"))
+imprimir(sangrar(unir(envolver("En un texto escrito dentro del programa, las llaves ya son la interpolación de Ñ y se reemplazan al compilar. Pero una plantilla que llega de un archivo o de una base de datos no pasa por el compilador: sus llaves son caracteres, y «plantilla» es quien las rellena cuando el programa ya está corriendo.", 64), "\n"), 2))

@@ -1,0 +1,61 @@
+# ═══ Un calendario de mes, dibujado ════════════════════════════════════════
+# Lo clásico, y pone a prueba lo que de verdad cuesta de las fechas: con qué
+# día de la semana empieza el mes y cuántos días tiene.
+# eDSL: fecha, formato
+
+usar fecha, hoy, inicioMes, finMes, diasDelMes, diaSemana, nombreMes,
+     anio, mes, dia, sumarDias, sumarMeses, esFinDeSemana, esMismoDia,
+     deFecha, semana de "fecha"
+usar centrar, regla, enNegrita, enVerde, enRojo, enGris, alinearDer de "formato"
+
+fn calendario(f: fecha) {
+    fijo primero = inicioMes(f)
+    fijo cuantos: entero = diasDelMes(f)
+    # diaSemana da 1 para lunes: en español la semana empieza el lunes, y por
+    # eso la primera casilla vacía es diaSemana(primero) − 1.
+    fijo huecos: entero = diaSemana(primero) - 1
+
+    imprimir(centrar(nombreMes(f) + " de " + texto(anio(f)), 28))
+    imprimir(" lu  ma  mi  ju  vi  sá  do")
+    var linea1: texto = ""
+    repetir huecos { linea1 = linea1 + "    " }
+    para d en rango(1, cuantos + 1) {
+        fijo dia1 = fecha(anio(f), mes(f), d)
+        var celda: texto = alinearDer(texto(d), 3)
+        si esFinDeSemana(dia1) { celda = enGris(alinearDer(texto(d), 3)) }
+        si esMismoDia(dia1, hoy()) { celda = enVerde("[" + texto(d) + "]") }
+        linea1 = linea1 + celda + " "
+        si diaSemana(dia1) == 7 {
+            imprimir(linea1)
+            linea1 = ""
+        }
+    }
+    si longitud(linea1) > 0 { imprimir(linea1) }
+}
+
+fijo HOY = hoy()
+imprimir(enNegrita("HOY: " + deFecha(HOY, "larga") + " · semana " + texto(semana(HOY))))
+imprimir(regla(30))
+imprimir("")
+
+# El mes de hoy y los dos siguientes
+para i en rango(3) {
+    calendario(sumarMeses(HOY, i))
+    imprimir("")
+}
+
+imprimir(regla(30))
+imprimir(enNegrita("DATOS DEL MES"))
+imprimir("  primer día: " + deFecha(inicioMes(HOY), "corta") + " (" + nombreDiaDe(inicioMes(HOY)) + ")")
+imprimir("  último día: " + deFecha(finMes(HOY), "corta") + " (" + nombreDiaDe(finMes(HOY)) + ")")
+imprimir("  tiene " + texto(diasDelMes(HOY)) + " días")
+var hábiles: entero = 0
+para d en rango(1, diasDelMes(HOY) + 1) {
+    si no esFinDeSemana(fecha(anio(HOY), mes(HOY), d)) { hábiles = hábiles + 1 }
+}
+imprimir("  " + texto(hábiles) + " días de semana · " + texto(diasDelMes(HOY) - hábiles) + " de fin de semana")
+
+fn nombreDiaDe(f: fecha): texto {
+    fijo nombres: lista = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    devolver nombres[diaSemana(f) - 1]
+}

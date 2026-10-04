@@ -1,0 +1,97 @@
+# ═══ Días hábiles y festivos de Colombia ═══════════════════════════════════
+# Contar días es fácil; contar días HÁBILES es lo que se necesita de verdad, y
+# los festivos de Colombia se mueven: la ley Emiliani los corre al lunes.
+# eDSL: fecha, formato
+
+usar fecha, hoy, aFecha, deFecha, sumarDias, diasEntre, diaSemana,
+     esFinDeSemana, esMismoDia, nombreDia, nombreMes, anio, mes, dia,
+     inicioMes, finMes, diasDelMes, estaEntre de "fecha"
+usar regla, enNegrita, enVerde, enRojo, enGris, enAmarillo, plural,
+     tablaTexto, barraTexto, porciento de "formato"
+
+fijo A: entero = 2026
+
+# Los festivos fijos y los que la ley Emiliani corre al lunes siguiente
+fijo FIJOS: lista = ["01-01", "05-01", "07-20", "08-07", "12-08", "12-25"]
+fijo CORRIBLES: lista = ["01-06", "03-19", "06-29", "08-15", "10-12", "11-01", "11-11"]
+
+fn festivosDe(anio1: entero): lista {
+    var f: lista = []
+    para md en FIJOS { f = f + [aFecha(texto(anio1) + "-" + md)] }
+    # Los que se corren: si no caen lunes, se pasan al lunes siguiente
+    para md en CORRIBLES {
+        var d = aFecha(texto(anio1) + "-" + md)
+        mientras diaSemana(d) != 1 { d = sumarDias(d, 1) }
+        f = f + [d]
+    }
+    devolver f
+}
+
+fijo festivos: lista = festivosDe(A)
+
+fn esFestivo(d: fecha, lista1: lista): bool {
+    para f en lista1 { si esMismoDia(d, f) { devolver cierto } }
+    devolver falso
+}
+
+fn habilesEntre(desde: fecha, hasta: fecha, fest: lista): entero {
+    var n: entero = 0
+    var d = desde
+    mientras no esMismoDia(d, hasta) {
+        si no esFinDeSemana(d) y no esFestivo(d, fest) { n = n + 1 }
+        d = sumarDias(d, 1)
+    }
+    devolver n
+}
+
+imprimir(enNegrita("FESTIVOS DE " + texto(A) + " (fijos y corridos al lunes)"))
+imprimir(regla(60))
+var filas: lista = []
+para f en ordenar(festivos, fn(x: fecha): real { devolver real(diasEntre(aFecha(texto(A) + "-01-01"), x)) }) {
+    var nota: texto = enGris("fijo")
+    si diaSemana(f) == 1 { nota = enVerde("lunes") }
+    filas = filas + [{"fecha": deFecha(f, "corta"), "día": nombreDia(f), "qué": nota}]
+}
+imprimir(tablaTexto(filas))
+imprimir("")
+imprimir("Son " + plural(longitud(festivos), "festivo") + " de los fijos y corribles.")
+imprimir(enGris("(faltan los de Semana Santa y Corpus, que salen de la Pascua)"))
+
+imprimir("")
+imprimir(enNegrita("DÍAS HÁBILES MES A MES"))
+imprimir(regla(60))
+var totalHabiles: entero = 0
+para m en rango(1, 13) {
+    fijo primero = fecha(A, m, 1)
+    fijo siguiente = sumarDias(finMes(primero), 1)
+    fijo h: entero = habilesEntre(primero, siguiente, festivos)
+    totalHabiles = totalHabiles + h
+    imprimir("  " + nombreMes(primero) + repetirEsp(12 - longitud(nombreMes(primero))) +
+             barraTexto(h, 23, 23) + " " + texto(h) + " de " + texto(diasDelMes(primero)))
+}
+
+fn repetirEsp(n: entero): texto {
+    var s: texto = ""
+    si n < 1 { devolver " " }
+    repetir n { s = s + " " }
+    devolver s
+}
+
+imprimir("")
+imprimir("Hábiles en el año: " + texto(totalHabiles) + " de 365 (" +
+         porciento(real(totalHabiles) / 365.0) + ")")
+
+imprimir("")
+imprimir(enNegrita("PLAZOS CONTADOS EN DÍAS HÁBILES"))
+imprimir(regla(60))
+fijo HOY = hoy()
+para plazo en [5, 10, 15, 30] {
+    var d = HOY
+    var contados: entero = 0
+    mientras contados < plazo {
+        d = sumarDias(d, 1)
+        si no esFinDeSemana(d) y no esFestivo(d, festivos) { contados = contados + 1 }
+    }
+    imprimir("  " + plural(plazo, "día hábil") + " desde hoy → " + nombreDia(d) + " " + deFecha(d, "larga") +
+             "  (" + plural(diasEntre(HOY, d), "día") + " de calendario)")
+}

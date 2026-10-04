@@ -1,0 +1,105 @@
+# ═══ Un tema de marca: los tokens de diseño ════════════════════════════════
+# Antes de escribir un solo estilo se declaran los NOMBRES: colores, espacios,
+# radios y tipografía. Después nadie vuelve a escribir «#4F3FD4» a mano, y
+# cambiar la marca es cambiar una línea.
+# eDSL: estilo
+
+usar tema, estiloGlobal, reiniciar, color, espacio, radio, tipografia,
+     sombraToken, paleta, escalaTipo, estilo, enOscuro de "estilo"
+usar regla, enNegrita, aAncho de "formato"
+
+# «paleta» y «escalaTipo» devuelven DICCIONARIOS, con las claves "1", "2", "3"…
+# Eso no es un detalle: están hechos para meterse enteros dentro de «tema», sin
+# desarmarlos. De un color sale una escala completa, en vez de elegir siete
+# tonos a ojo.
+fijo tonos: dic = paleta("#4F3FD4", 7)
+fijo tamanos: dic = escalaTipo(16.0, 1.25, 6)
+
+imprimir(enNegrita("LOS TONOS DE LA MARCA, de un solo color"))
+imprimir(regla(44))
+para par en pares(tonos) {
+    imprimir("  marca-" + par[0] + "  " + par[1])
+}
+
+imprimir("")
+imprimir(enNegrita("LA ESCALA TIPOGRÁFICA desde 16px, razón 1,25"))
+imprimir(regla(44))
+para par en pares(tamanos) {
+    imprimir("  texto-" + aAncho(par[0], 4) + texto(par[1]) + "px")
+}
+
+imprimir("")
+imprimir(enNegrita("EL TEMA"))
+imprimir(regla(44))
+reiniciar()
+# Las claves de «paleta» son "1".."7". Para que el tema se lea se les pone
+# prefijo, y de paso se añaden los nombres con significado —«fondo», «error»—
+# que no salen de una paleta.
+var cols: dic = {}
+para par en pares(tonos) { cols["marca-" + par[0]] = par[1] }
+cols["texto"] = "#1a1a1a"
+cols["exito"] = "#2e7d32"
+cols["aviso"] = "#ed6c02"
+cols["error"] = "#c62828"
+
+estiloGlobal(":root", tema({
+    "color": cols,
+    "espacio": { "mini": "4px", "corto": "8px", "medio": "16px",
+                 "largo": "24px", "enorme": "48px" },
+    "radio":   { "poco": "4px", "medio": "8px", "mucho": "16px", "redondo": "999px" },
+    "tipografia": {
+        "cuerpo": "system-ui, -apple-system, 'Segoe UI', sans-serif",
+        "titulo": "Georgia, 'Times New Roman', serif",
+        "codigo": "ui-monospace, 'Cascadia Code', monospace"
+    },
+    "sombra": { "poca":  "0 1px 2px rgba(0,0,0,.06)",
+                "media": "0 2px 8px rgba(0,0,0,.10)",
+                "mucha": "0 8px 24px rgba(0,0,0,.16)" }
+}))
+imprimir("  declarado: " + texto(longitud(claves(cols))) + " colores · 5 espacios · 4 radios · 3 tipografías · 3 sombras")
+
+# Y a partir de aquí todo se escribe con NOMBRES. Ese es el punto: el token es
+# la única fuente de verdad, y «color("marca-3")» no se puede escribir mal sin
+# que se note.
+imprimir("")
+imprimir(enNegrita("COMPONENTES ESCRITOS CON TOKENS, no con valores"))
+imprimir(regla(44))
+
+fijo tarjeta = estilo({
+    "fondo": color("marca-1"),
+    "relleno": espacio("largo"),
+    "radio": radio("medio"),
+    "sombra": sombraToken("media"),
+    "fuente": tipografia("cuerpo"),
+    "borde": "1px solid " + color("marca-2")
+})
+imprimir("  tarjeta  " + texto(tarjeta))
+
+fijo titulo = estilo({
+    "fuente": tipografia("titulo"),
+    "tamano": "31.25px",
+    "color": color("marca-5"),
+    "margenAbajo": espacio("medio")
+})
+imprimir("  título   " + texto(titulo))
+
+fijo boton1 = estilo({
+    "fondo": color("marca-3"),
+    "color": color("marca-1"),
+    "relleno": espacio("corto") + " " + espacio("medio"),
+    "radio": radio("redondo"),
+    "borde": "ninguno"
+})
+imprimir("  botón    " + texto(boton1))
+
+# El modo oscuro se declara UNA vez, redefiniendo los tokens. Ni un componente
+# se entera: siguen diciendo color("marca-1") y ahora eso es oscuro.
+estiloGlobal(":root", enOscuro(tema({
+    "color": { "marca-1": "#121212", "marca-2": "#333333", "marca-5": "#9f97e8" }
+})))
+imprimir("")
+imprimir(enNegrita("MODO OSCURO"))
+imprimir(regla(44))
+imprimir("  Se redefinen tres tokens y nada más.")
+imprimir("  La tarjeta sigue diciendo color(\"marca-1\") y ahora eso es #121212.")
+imprimir("  Ningún componente se tuvo que tocar: es lo que un token compra.")

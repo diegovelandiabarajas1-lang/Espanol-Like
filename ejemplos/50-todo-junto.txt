@@ -1,0 +1,254 @@
+# ═══ Los siete eDSL en un solo programa ════════════════════════════════════
+# El informe mensual completo: lee un CSV, lo limpia, lo resume, le hace
+# estadística, lo formatea, lo prueba y lo escribe. Usa los SIETE eDSL y el
+# núcleo, que es lo que este archivo viene a demostrar.
+#
+#   datos     · leer el CSV, limpiarlo, agrupar y pivotar
+#   numerico  · estadística, tendencia, ajuste y proyección
+#   fecha     · el periodo y los días hábiles
+#   texto     · normalizar los nombres que llegaron mal escritos
+#   formato   · el informe que se lee: monedas, tablas, barras, colores
+#   estilo    · la versión para pantalla, con tokens y modo oscuro
+#   probar    · comprobar que el informe cuadra ANTES de mandarlo
+#
+# núcleo: archivos, web, lienzo
+
+usar deCsv, aCsv, aDatos, agrupar, sumaCol, promedioCol, contarCol,
+     ordenarPor, columna, columnas, vistazo, donde, conColumna,
+     pivotar, resumir, aplicarA, unicas, vacios, tipos, aRegistros de "datos"
+usar media, desviacion, tendencia, regresion, suma, redondear de "numerico"
+usar hoy, deFecha, inicioMes, finMes, nombreMes, anio, mes,
+     diasDelMes, esFinDeSemana, fecha de "fecha"
+usar titular, palabras, unir, aUrl de "texto"
+usar moneda, porciento, porcientoCambio, decimales, abreviar, enLetras,
+     tablaTexto, barraTexto, minigrafico, regla, marco, centrar,
+     alinearDer, enNegrita, enVerde, enRojo, enAmarillo, enGris, sinColor,
+     plural, signoMas, listaLegible de "formato"
+usar estilo, estiloGlobal, reiniciar, tema, espacio, radio, rejillaDe,
+     enColumna, separado, enOscuro, alPasar de "estilo"
+usar probar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCerca,
+     debeSerCierto, debeSerMayor de "probar"
+
+fijo HOY = hoy()
+fijo META_MES: real = 120000000.0
+
+# ══ 1 · DATOS · leer el CSV como llega, con sus males ═════════════════════
+imprimir(enNegrita("1 · LEER"))
+imprimir(regla(74))
+
+fijo CRUDO: texto = "cliente;ciudad;mes;ventas
+  ferretería el tornillo ;bucaramanga;7;18400000
+ferretería el tornillo;bucaramanga;8;21100000
+ferretería el tornillo;bucaramanga;9;19800000
+PANADERÍA LA ESPIGA;girón;7;4200000
+PANADERÍA LA ESPIGA;girón;8;5100000
+PANADERÍA LA ESPIGA;girón;9;4800000
+droguería  salud  total;floridablanca;7;38000000
+droguería salud total;floridablanca;8;41500000
+droguería salud total;floridablanca;9;44200000
+café del parque;girón;7;1900000
+café del parque;girón;8;2300000
+café del parque;girón;9;2100000"
+
+var t = deCsv(CRUDO, ";")
+imprimir("  " + plural(longitud(columna(t, "cliente")), "fila") + " leídas")
+imprimir("  tipos que adivinó: " + texto(tipos(t)))
+imprimir("  huecos: " + texto(vacios(t)))
+
+# ══ 2 · TEXTO · normalizar los nombres ════════════════════════════════════
+imprimir("")
+imprimir(enNegrita("2 · LIMPIAR LOS NOMBRES"))
+imprimir(regla(74))
+imprimir("  antes: " + listaLegible(unicas(t, "cliente")))
+# «palabras» + «unir» aplasta los espacios de dentro; «titular» pone las
+# mayúsculas como se escriben en español; «recortar» ya lo hizo deCsv.
+t = aplicarA(t, "cliente", fn(s: texto): texto { devolver titular(unir(palabras(s), " ")) })
+t = aplicarA(t, "ciudad", fn(s: texto): texto { devolver titular(s) })
+t = ordenarPor(t, "cliente")
+imprimir("  ahora: " + listaLegible(unicas(t, "cliente")))
+fijo antesN: entero = longitud(unicas(deCsv(CRUDO, ";"), "cliente"))
+imprimir("  " + enVerde("de " + texto(antesN) + " nombres distintos a " +
+         texto(longitud(unicas(t, "cliente")))) +
+         enGris("  ← los duplicados eran solo de escritura"))
+
+# ══ 3 · DATOS · resumir y pivotar ═════════════════════════════════════════
+imprimir("")
+imprimir(enNegrita("3 · RESUMIR"))
+imprimir(regla(74))
+fijo porCliente = ordenarPor(agrupar(t, ["cliente"], {
+    "total": sumaCol("ventas"), "promedio": promedioCol("ventas"), "meses": contarCol()
+}), "total", cierto)
+vistazo(porCliente)
+
+imprimir("")
+imprimir(enNegrita("   CLIENTE CONTRA MES"))
+vistazo(pivotar(t, "cliente", "mes", {"ventas": sumaCol("ventas")}))
+
+# ══ 4 · NUMERICO · la estadística y la proyección ═════════════════════════
+imprimir("")
+imprimir(enNegrita("4 · LOS NÚMEROS"))
+imprimir(regla(74))
+fijo porMes = ordenarPor(agrupar(t, ["mes"], {"total": sumaCol("ventas")}), "mes")
+fijo serie: lista = columna(porMes, "total")
+var serieReal: lista = []
+para v en serie { serieReal = serieReal + [real(v)] }
+
+imprimir("  serie mensual: " + minigrafico(serieReal))
+imprimir("  media         " + moneda(redondear(media(serieReal))))
+imprimir("  desviación    " + moneda(redondear(desviacion(serieReal))))
+imprimir("  crece         " + signoMas(redondear(tendencia(serieReal))) + " por mes")
+
+# Proyectar el mes siguiente con el ajuste, no a ojo
+var xs: lista = []
+para i en rango(longitud(serieReal)) { xs = xs + [real(i)] }
+fijo r: dic = regresion(xs, serieReal)
+fijo proyeccion: real = r["intercepto"] + r["pendiente"] * real(longitud(serieReal))
+imprimir("  ajuste r²     " + porciento(r["r2"]))
+imprimir("  proyección    " + moneda(redondear(proyeccion)) + " el mes que viene")
+
+# ══ 5 · FECHA · el periodo y los días hábiles ═════════════════════════════
+imprimir("")
+imprimir(enNegrita("5 · EL PERIODO"))
+imprimir(regla(74))
+fijo primero = inicioMes(HOY)
+fijo ultimo = finMes(HOY)
+var habiles: entero = 0
+para d en rango(1, diasDelMes(HOY) + 1) {
+    si no esFinDeSemana(fecha(anio(HOY), mes(HOY), d)) { habiles = habiles + 1 }
+}
+imprimir("  " + nombreMes(HOY) + " de " + texto(anio(HOY)) +
+         ": del " + deFecha(primero, "corta") + " al " + deFecha(ultimo, "corta"))
+imprimir("  " + texto(diasDelMes(HOY)) + " días, " + texto(habiles) + " hábiles")
+imprimir("  hace falta vender " + moneda(redondear(META_MES / real(habiles))) + " por día hábil")
+
+# ══ 6 · FORMATO · el informe que se lee ═══════════════════════════════════
+imprimir("")
+imprimir(enNegrita("6 · EL INFORME"))
+imprimir(regla(74))
+
+fijo total: entero = columna(resumir(t, {"t": sumaCol("ventas")}), "t")[0]
+fijo mayor: entero = columna(porCliente, "total")[0]
+
+var filas: lista = []
+para f en aRegistros(porCliente) {
+    var señal: texto = enVerde("▲")
+    si f["total"] < 10000000 { señal = enAmarillo("▼") }
+    filas = filas + [{
+        "cliente": f["cliente"],
+        "total": moneda(f["total"]),
+        "promedio": moneda(redondear(f["promedio"])),
+        "peso": porciento(real(f["total"]) / real(total)),
+        "": señal
+    }]
+}
+imprimir(tablaTexto(filas))
+
+imprimir("")
+para f en aRegistros(porCliente) {
+    imprimir("  " + f["cliente"])
+    imprimir("    " + barraTexto(f["total"], mayor, 44) + " " + abreviar(f["total"]))
+}
+
+imprimir("")
+imprimir(marco(
+    centrar("VENTAS DEL TRIMESTRE", 52) + "\n" +
+    centrar(moneda(total), 52) + "\n" +
+    centrar(enLetras(total) + " pesos", 52) + "\n\n" +
+    "Meta del mes:  " + alinearDer(moneda(redondear(META_MES)), 36) + "\n" +
+    "Último mes:    " + alinearDer(moneda(serie[longitud(serie) - 1]), 36) + "\n" +
+    "Cumplimiento:  " + alinearDer(porciento(real(serie[longitud(serie) - 1]) / META_MES), 36) + "\n" +
+    "Contra el mes anterior: " + alinearDer(porcientoCambio(serie[longitud(serie) - 2],
+                                                            serie[longitud(serie) - 1]), 27),
+    "DATAPRO · " + deFecha(HOY, "larga")))
+
+# ══ 7 · ESTILO · la versión para pantalla ═════════════════════════════════
+reiniciar()
+estiloGlobal(":root", tema({
+    "color": {"marca": "#4f3fd4", "texto": "#1a1a1a", "suave": "#888888",
+              "fondo": "#fafafa", "tarjeta": "#ffffff", "borde": "#e8e8e8"},
+    "espacio": {"corto": "8px", "medio": "16px", "largo": "24px"},
+    "radio": {"medio": "8px"}
+}))
+estiloGlobal(":root", enOscuro(tema({
+    "color": {"texto": "#f0f0f0", "fondo": "#121212", "tarjeta": "#1e1e1e", "borde": "#333333"}
+})))
+fijo tarjeta = estilo(
+    {"fondo": "#ffffff", "radio": radio("medio"), "relleno": espacio("largo"),
+     "borde": "1px solid #e8e8e8"},
+    alPasar({"sombra": "0 4px 16px rgba(0,0,0,.08)"})
+)
+var tarjetas: lista = []
+para f en aRegistros(porCliente) {
+    tarjetas = tarjetas + [etiqueta("div", {"estilo": tarjeta},
+        etiqueta("h3", {}, f["cliente"]),
+        etiqueta("p", {"estilo": estilo({"tamano": "22px", "peso": "700"})}, moneda(f["total"])),
+        etiqueta("p", {"estilo": estilo({"color": "#888888", "tamano": "13px"})},
+                 porciento(real(f["total"]) / real(total)) + " del trimestre")
+    )]
+}
+pintar(
+    etiqueta("h2", {}, "Ventas del trimestre"),
+    etiqueta("div", {"estilo": estilo(rejillaDe(2, 16))}, tarjetas)
+)
+barras(serieReal, ["julio", "agosto", "septiembre"], "Ventas por mes")
+
+# ══ 8 · PROBAR · que el informe cuadre antes de mandarlo ══════════════════
+imprimir("")
+imprimir(enNegrita("8 · COMPROBAR ANTES DE MANDARLO"))
+imprimir(regla(74))
+
+grupo("el informe cuadra", fn() {
+    probar("el total de los clientes es el total de la tabla", fn() {
+        debeSer(suma(columna(porCliente, "total")), suma(columna(t, "ventas")))
+    })
+    probar("el total por mes también", fn() {
+        debeSer(suma(columna(porMes, "total")), suma(columna(t, "ventas")))
+    })
+    probar("los pesos suman 100 %", fn() {
+        var acc: real = 0.0
+        para f en aRegistros(porCliente) { acc = acc + real(f["total"]) / real(total) }
+        debeSerCerca(acc, 1.0, 0.0001)
+    })
+    probar("limpiar nombres NO cambió los números", fn() {
+        debeSer(suma(columna(t, "ventas")), suma(columna(deCsv(CRUDO, ";"), "ventas")))
+    })
+    probar("y sí juntó los duplicados de escritura", fn() {
+        debeSer(longitud(unicas(t, "cliente")), 4)
+        debeSerMayor(longitud(unicas(deCsv(CRUDO, ";"), "cliente")), 4)
+    })
+    probar("no quedaron huecos", fn() {
+        para c en columnas(t) { debeSer(vacios(t)[c], 0) }
+    })
+    probar("la proyección es un número razonable, no un disparate", fn() {
+        debeSerCierto(proyeccion > 0.0)
+        debeSerCierto(proyeccion < real(total))
+    })
+})
+var res: dic = correrPruebas()
+imprimir("")
+imprimir(resumenPruebas())
+
+# ══ 9 · NÚCLEO · escribirlo ═══════════════════════════════════════════════
+imprimir("")
+imprimir(enNegrita("9 · ESCRIBIR"))
+imprimir(regla(74))
+crearCarpeta("salida")
+fijo base: texto = "salida/informe-" + aUrl(nombreMes(HOY)) + "-" + texto(anio(HOY))
+escribirTexto(base + ".csv", aCsv(porCliente))
+escribirTexto(base + ".ñdatos", aDatos(porCliente))
+# El informe en texto va SIN colores: a un archivo no se le meten códigos de
+# escape, y por eso existe «sinColor».
+escribirTexto(base + ".txt", sinColor(tablaTexto(filas)))
+para n en listar("salida") {
+    si longitud(n) > 7 {
+        imprimir("  " + enVerde("✓") + " salida/" + n)
+    }
+}
+
+imprimir("")
+imprimir(regla(74))
+si res["fallan"] == 0 {
+    imprimir(enVerde("  Los siete eDSL, el núcleo, y el informe comprobado. Listo para mandar."))
+} sino {
+    imprimir(enRojo("  El informe NO cuadra: " + texto(res["fallan"]) + " pruebas fallan. No se manda."))
+}

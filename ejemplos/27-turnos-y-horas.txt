@@ -1,0 +1,89 @@
+# ═══ Turnos, horas trabajadas y recargos ════════════════════════════════════
+# Cuántas horas, cuáles son nocturnas y cuáles dominicales. Todo sale de
+# comparar fechas con horas, que es donde la aritmética a mano se rompe.
+# eDSL: fecha, formato, numerico
+
+usar fechaHora, hoy, sumarDias, sumarHoras, horasEntre, minutosEntre,
+     hora, diaSemana, esFinDeSemana, nombreDia, deFecha, duracion,
+     anio, mes, dia, inicioDia de "fecha"
+usar decimales, moneda, tablaTexto, regla, enNegrita, enAmarillo, enVerde,
+     enAzul, duracionLegible, porciento, plural de "formato"
+usar redondear, suma de "numerico"
+
+fijo VALOR_HORA: real = 8000.0
+fijo RECARGO_NOCTURNO: real = 0.35
+fijo RECARGO_DOMINICAL: real = 0.75
+
+fijo HOY = hoy()
+fijo A: entero = anio(HOY)
+fijo M: entero = mes(HOY)
+
+# Turnos de la semana: entrada y salida de verdad
+fijo turnos: lista = [
+    {"dia": 1, "entra": 6,  "sale": 14},
+    {"dia": 2, "entra": 14, "sale": 22},
+    {"dia": 3, "entra": 22, "sale": 30},   # cruza la medianoche
+    {"dia": 4, "entra": 6,  "sale": 14},
+    {"dia": 5, "entra": 6,  "sale": 16},
+    {"dia": 6, "entra": 8,  "sale": 14},
+    {"dia": 7, "entra": 8,  "sale": 12}
+]
+
+imprimir(enNegrita("TURNOS DE LA SEMANA"))
+imprimir("hora ordinaria " + moneda(VALOR_HORA) + " · nocturno +" + porciento(RECARGO_NOCTURNO) +
+         " · dominical +" + porciento(RECARGO_DOMINICAL))
+imprimir(regla(78))
+
+var filas: lista = []
+var totalHoras: real = 0.0
+var totalPago: real = 0.0
+para t en turnos {
+    fijo inicio = fechaHora(A, M, t["dia"], entero(t["entra"] % 24), 0)
+    fijo fin = sumarHoras(inicio, t["sale"] - t["entra"])
+    fijo horas: real = real(horasEntre(inicio, fin))
+
+    # Las nocturnas: de 21:00 a 6:00. Se cuentan hora por hora, que es lo
+    # honesto cuando el turno cruza la medianoche.
+    var nocturnas: real = 0.0
+    para h en rango(t["entra"], t["sale"]) {
+        fijo hh: entero = h % 24
+        si hh >= 21 o hh < 6 { nocturnas = nocturnas + 1.0 }
+    }
+    fijo diurnas: real = horas - nocturnas
+    fijo esDomingo: bool = diaSemana(inicio) == 7
+
+    var pago: real = diurnas * VALOR_HORA + nocturnas * VALOR_HORA * (1.0 + RECARGO_NOCTURNO)
+    si esDomingo { pago = pago * (1.0 + RECARGO_DOMINICAL) }
+
+    totalHoras = totalHoras + horas
+    totalPago = totalPago + pago
+
+    var marca: texto = nombreDia(inicio)
+    si esDomingo { marca = enAzul(nombreDia(inicio)) }
+    sino { si esFinDeSemana(inicio) { marca = enAmarillo(nombreDia(inicio)) } }
+
+    filas = filas + [{
+        "día": marca,
+        "turno": dosD(entero(t["entra"] % 24)) + ":00 a " + dosD(entero(t["sale"] % 24)) + ":00",
+        "horas": decimales(horas, 1),
+        "nocturnas": decimales(nocturnas, 1),
+        "pago": moneda(entero(redondear(pago)))
+    }]
+}
+imprimir(tablaTexto(filas))
+
+fn dosD(n: entero): texto {
+    si n < 10 { devolver "0" + texto(n) }
+    devolver texto(n)
+}
+
+imprimir("")
+imprimir(regla(78))
+imprimir("Horas de la semana: " + decimales(totalHoras, 1) +
+         "   (" + duracionLegible(entero(totalHoras * 3600000.0)) + ")")
+imprimir("A pagar: " + enVerde(moneda(entero(redondear(totalPago)))))
+imprimir("Hora efectiva promedio: " + moneda(entero(redondear(totalPago / totalHoras))) +
+         "  frente a " + moneda(VALOR_HORA) + " de la ordinaria")
+si totalHoras > 48.0 {
+    imprimir(enAmarillo("⚠ pasa de 48 horas semanales: " + decimales(totalHoras - 48.0, 1) + " de más"))
+}

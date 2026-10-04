@@ -1,0 +1,197 @@
+# Las pruebas del eDSL «formato», en Ñ.
+#
+# Este archivo no existía, y por eso vivió mucho tiempo un fallo de toda una
+# familia: «tablaTexto», «marco», «alinearIzq», «alinearDer», «centrar»,
+# «aAncho» y «columnas» medían el ancho con la longitud del texto, y un código
+# de color ANSI son varios caracteres que no ocupan ninguna columna. Como los
+# colores los da ESTE MISMO eDSL, poner color a una celda —lo más natural del
+# mundo— desalineaba la tabla entera. Apareció escribiendo un ejemplo de
+# turnos con los domingos en azul.
+#
+# Lo que se comprueba aquí es sobre todo eso: que el ancho que cuenta es el
+# ancho VISIBLE. Y las conversiones de números, que son las que tienen reglas
+# del español que no se pueden adivinar (el punto de los miles, la coma de los
+# decimales, la «y» de «a, b y c», la «e» delante de «i»).
+
+usar probar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCierto,
+     debeSerFalso, debeContener, debeTener, debeFallarCon, debeSerMayor,
+     noDebeContener de "probar"
+usar numero, decimales, moneda, porciento, porcientoCambio, signoMas, abreviar,
+     ordinal, enLetras, romano, intervalo, plural, listaLegible,
+     mayusculaInicial, acortar, elipsis, alinearIzq, alinearDer, centrar,
+     aAncho, tamanoLegible, duracionLegible, tiempoReloj, tiempoRelativo,
+     regla, barraTexto, minigrafico, marco, tablaTexto, columnas,
+     enRojo, enVerde, enAzul, enNegrita, sinColor, separadores,
+     monedaPorDefecto, rangoFechas de "formato"
+usar lineas de "texto"
+
+grupo("números con las reglas del español", fn() {
+    probar("el punto es de los miles y la coma de los decimales", fn() {
+        debeSer(numero(1234567), "1.234.567")
+        debeSer(numero(1234.5), "1.234,5")
+        debeSer(decimales(3.14159, 2), "3,14")
+        debeSer(decimales(1234.5678, 3), "1.234,568")
+    })
+    probar("moneda, con el símbolo separado", fn() {
+        debeSer(moneda(1234567), "$ 1.234.567")
+        debeSer(moneda(9.5, "€", 2), "€ 9,50")
+    })
+    probar("porciento recibe la FRACCIÓN, no el número ya multiplicado", fn() {
+        debeSer(porciento(0.156), "15,6 %")
+        debeSer(porciento(1.0), "100 %")
+        debeSer(porciento(0.5, 0), "50 %")
+    })
+    probar("porcientoCambio lleva el signo delante", fn() {
+        debeSer(porcientoCambio(80, 90), "+12,5 %")
+        debeSer(porcientoCambio(90, 80), "-11,1 %")
+    })
+    probar("signoMas pone el más que un número no trae", fn() {
+        debeSer(signoMas(3), "+3")
+        debeSer(signoMas(0 - 3), "-3")
+    })
+    probar("abreviar y tamanoLegible", fn() {
+        debeSer(abreviar(1234567), "1,2 M")
+        debeSer(tamanoLegible(1536000), "1,5 MB")
+    })
+    probar("separadores se puede cambiar, y vuelve", fn() {
+        separadores(",", ".")
+        debeSer(numero(1234.5), "1,234.5")
+        separadores(".", ",")
+        debeSer(numero(1234.5), "1.234,5")
+    })
+    probar("monedaPorDefecto evita repetir el símbolo", fn() {
+        monedaPorDefecto("€")
+        debeSer(moneda(1000), "€ 1.000")
+        monedaPorDefecto("$")
+        debeSer(moneda(1000), "$ 1.000")
+    })
+})
+
+grupo("palabras: lo que no se puede adivinar del español", fn() {
+    probar("enLetras, para facturas y cheques", fn() {
+        debeSer(enLetras(1250), "mil doscientos cincuenta")
+        debeSer(enLetras(1), "uno")
+        debeSer(enLetras(100), "cien")
+    })
+    probar("romano", fn() {
+        debeSer(romano(2026), "MMXXVI")
+        debeSer(romano(4), "IV")
+        debeSer(romano(1999), "MCMXCIX")
+    })
+    probar("ordinal, y el femenino", fn() {
+        debeSer(ordinal(1), "1.º")
+        debeSer(ordinal(1, cierto), "1.ª")
+    })
+    probar("plural sabe los plurales raros", fn() {
+        debeSer(plural(2, "factura"), "2 facturas")
+        debeSer(plural(1, "factura"), "1 factura")
+        debeSer(plural(3, "lápiz"), "3 lápices")
+    })
+    probar("listaLegible pone «y», y «e» donde toca", fn() {
+        debeSer(listaLegible(["a", "b", "c"]), "a, b y c")
+        debeSer(listaLegible(["uno"]), "uno")
+        debeSer(listaLegible(["Pedro", "Inés"]), "Pedro e Inés")
+    })
+    probar("mayusculaInicial toca solo la primera", fn() {
+        debeSer(mayusculaInicial("hola mundo"), "Hola mundo")
+    })
+    probar("intervalo lleva raya, no guion", fn() {
+        debeContener(intervalo(3, 7), "–")
+        noDebeContener(intervalo(3, 7), " - ")
+    })
+})
+
+grupo("tiempo", fn() {
+    probar("duracionLegible y tiempoReloj dicen lo mismo de otra forma", fn() {
+        debeSer(duracionLegible(7505000), "2 h 5 min")
+        debeSer(tiempoReloj(7531000), "2:05:31")
+    })
+    probar("tiempoRelativo, y el futuro con negativo", fn() {
+        debeSer(tiempoRelativo(259200000), "hace 3 días")
+        debeContener(tiempoRelativo(0 - 259200000), "3 días")
+    })
+})
+
+grupo("dibujos de consola", fn() {
+    probar("regla mide lo que se le pide", fn() {
+        debeSer(longitud(regla(20)), 20)
+    })
+    probar("barraTexto llena la proporción", fn() {
+        debeSer(longitud(barraTexto(7, 10, 20)), 20)
+        debeContener(barraTexto(10, 10, 10), "█")
+        noDebeContener(barraTexto(10, 10, 10), "░")
+        noDebeContener(barraTexto(0, 10, 10), "█")
+    })
+    probar("minigrafico pone un carácter por dato", fn() {
+        debeSer(longitud(minigrafico([1, 5, 3, 9, 2])), 5)
+    })
+    probar("columnas reparte una lista larga", fn() {
+        fijo salida: texto = columnas(["a", "b", "c", "d", "e", "f"], 3)
+        debeSer(longitud(lineas(salida)), 2)
+    })
+})
+
+grupo("el ancho que cuenta es el VISIBLE, no el de los caracteres", fn() {
+    # Este grupo entero es la regresión del fallo que no tenía pruebas.
+    probar("sinColor quita los códigos y deja el texto", fn() {
+        debeSer(sinColor(enRojo("hola")), "hola")
+        debeSerMayor(longitud(enRojo("hola")), longitud("hola"))
+    })
+    probar("alinearIzq cuenta el ancho visible", fn() {
+        # Con color o sin color, lo que se ve ocupa lo mismo.
+        debeSer(longitud(sinColor(alinearIzq("ab", 6))), 6)
+        debeSer(longitud(sinColor(alinearIzq(enRojo("ab"), 6))), 6)
+    })
+    probar("alinearDer también", fn() {
+        debeSer(longitud(sinColor(alinearDer("7", 5))), 5)
+        debeSer(longitud(sinColor(alinearDer(enVerde("7"), 5))), 5)
+    })
+    probar("centrar también", fn() {
+        debeSer(longitud(sinColor(centrar("ab", 8))), 8)
+        debeSer(longitud(sinColor(centrar(enAzul("ab"), 8))), 8)
+    })
+    probar("aAncho también, y no recorta lo que lleva color", fn() {
+        debeSer(longitud(sinColor(aAncho("ab", 6))), 6)
+        debeSer(longitud(sinColor(aAncho(enRojo("ab"), 6))), 6)
+        # Un texto largo SIN color se recorta con puntos suspensivos
+        debeContener(aAncho("un texto demasiado largo", 10), "…")
+        # Uno CON color no se recorta: cortar en medio de un código ANSI dejaría
+        # la terminal pintada del color de la última celda.
+        noDebeContener(aAncho(enRojo("un texto demasiado largo"), 10), "…")
+    })
+    probar("marco encaja aunque el contenido lleve color", fn() {
+        fijo conColor: lista = lineas(marco(enVerde("hola"), "aviso"))
+        fijo sin: lista = lineas(marco("hola", "aviso"))
+        # Todas las líneas del marco miden lo mismo, con color y sin color
+        para l en conColor { debeSer(longitud(sinColor(l)), longitud(sin[0])) }
+    })
+    probar("tablaTexto alinea las columnas con celdas de color", fn() {
+        fijo filas: lista = [
+            {"dia": enAzul("domingo"), "horas": 8},
+            {"dia": "lunes", "horas": 10},
+            {"dia": enRojo("sábado"), "horas": 6}
+        ]
+        fijo ls: lista = lineas(tablaTexto(filas))
+        # Encabezado, raya y tres filas
+        debeTener(ls, 5)
+        # Y todas miden lo mismo una vez quitado el color: eso es estar alineada
+        para l en ls { debeSer(longitud(sinColor(l)), longitud(ls[1])) }
+    })
+    probar("y sin color sigue alineando igual, que es lo que ya funcionaba", fn() {
+        fijo ls: lista = lineas(tablaTexto([{"a": "xx", "b": 1}, {"a": "yyyy", "b": 22}]))
+        para l en ls { debeSer(longitud(l), longitud(ls[1])) }
+    })
+})
+
+grupo("se quejan cuando toca", fn() {
+    probar("tablaTexto con listas en vez de diccionarios lo dice", fn() {
+        debeFallarCon(fn() { tablaTexto([["a", 1], ["b", 2]]) }, "diccionario")
+    })
+    probar("tablaTexto vacía no revienta", fn() {
+        debeSer(tablaTexto([]), "")
+    })
+})
+
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(resumenPruebas())

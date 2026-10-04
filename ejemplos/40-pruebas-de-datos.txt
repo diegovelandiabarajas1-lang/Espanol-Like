@@ -1,0 +1,143 @@
+# ═══ Probar una transformación de datos ════════════════════════════════════
+# Lo que se prueba de un informe no son los números: son las INVARIANTES. Que
+# el total de los grupos sea el total de la tabla, que agrupar no pierda filas,
+# que ordenar no cambie el contenido. Esas no se pueden aprobar por casualidad.
+# eDSL: probar, datos, numerico
+
+usar probar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCerca,
+     debeSerCierto, debeTener, debeFallarCon, debeContener, noDebeSer,
+     debeSerMayor, antesDeCada de "probar"
+usar deRegistros, deCsv, agrupar, sumaCol, contarCol, promedioCol, columna,
+     ordenarPor, donde, conColumna, sinRepetir, quitarVacios, columnas,
+     resumir, aCsv, aDatos, deDatos, unicas, tipos, vacios, primeras de "datos"
+usar suma, media de "numerico"
+usar regla, enNegrita, enGris de "formato"
+
+fn datosDePrueba(): tabla {
+    devolver deRegistros([
+        {"ciudad": "Bucaramanga",   "mes": 1, "ventas": 120},
+        {"ciudad": "Bucaramanga",   "mes": 2, "ventas": 150},
+        {"ciudad": "Girón",         "mes": 1, "ventas": 80},
+        {"ciudad": "Girón",         "mes": 2, "ventas": 95},
+        {"ciudad": "Floridablanca", "mes": 1, "ventas": 200},
+        {"ciudad": "Floridablanca", "mes": 2, "ventas": 180}
+    ])
+}
+
+grupo("agrupar no pierde ni inventa", fn() {
+    probar("el total de los grupos es el total de la tabla", fn() {
+        fijo t = datosDePrueba()
+        fijo g = agrupar(t, ["ciudad"], {"total": sumaCol("ventas")})
+        debeSer(suma(columna(g, "total")), suma(columna(t, "ventas")))
+    })
+    probar("las filas de los grupos suman las filas de la tabla", fn() {
+        fijo t = datosDePrueba()
+        fijo g = agrupar(t, ["ciudad"], {"n": contarCol()})
+        debeSer(suma(columna(g, "n")), longitud(columna(t, "ciudad")))
+    })
+    probar("hay un grupo por valor distinto, ni uno más", fn() {
+        fijo t = datosDePrueba()
+        fijo g = agrupar(t, ["ciudad"], {"n": contarCol()})
+        debeSer(longitud(columna(g, "ciudad")), longitud(unicas(t, "ciudad")))
+    })
+    probar("el promedio de un grupo es el promedio de sus filas", fn() {
+        fijo t = datosDePrueba()
+        fijo g = agrupar(t, ["ciudad"], {"prom": promedioCol("ventas")})
+        fijo giron = donde(t, fn(f: dic): bool { devolver f["ciudad"] == "Girón" })
+        fijo esperado: real = media(columna(giron, "ventas"))
+        # Girón es el segundo grupo, en el orden en que apareció
+        debeSerCerca(columna(g, "prom")[1], esperado, 0.0001)
+    })
+})
+
+grupo("ordenar cambia el orden y nada más", fn() {
+    probar("mismas filas, mismo total", fn() {
+        fijo t = datosDePrueba()
+        fijo o = ordenarPor(t, "ventas", cierto)
+        debeSer(longitud(columna(o, "ventas")), longitud(columna(t, "ventas")))
+        debeSer(suma(columna(o, "ventas")), suma(columna(t, "ventas")))
+    })
+    probar("de mayor a menor, cada uno es mayor o igual que el siguiente", fn() {
+        fijo o = ordenarPor(datosDePrueba(), "ventas", cierto)
+        fijo v: lista = columna(o, "ventas")
+        para i en rango(longitud(v) - 1) {
+            debeSerCierto(v[i] >= v[i + 1])
+        }
+    })
+    probar("las columnas siguen siendo las mismas y en el mismo orden", fn() {
+        fijo t = datosDePrueba()
+        debeSer(columnas(ordenarPor(t, "ventas")), columnas(t))
+    })
+})
+
+grupo("filtrar solo quita", fn() {
+    probar("no quedan más filas que antes", fn() {
+        fijo t = datosDePrueba()
+        fijo f = donde(t, fn(r: dic): bool { devolver r["ventas"] > 100 })
+        debeSerCierto(longitud(columna(f, "ventas")) <= longitud(columna(t, "ventas")))
+    })
+    probar("todas las que quedan cumplen la condición", fn() {
+        fijo f = donde(datosDePrueba(), fn(r: dic): bool { devolver r["ventas"] > 100 })
+        para v en columna(f, "ventas") { debeSerCierto(v > 100) }
+    })
+    probar("una condición imposible deja la tabla vacía, no la rompe", fn() {
+        fijo f = donde(datosDePrueba(), fn(r: dic): bool { devolver r["ventas"] > 999999 })
+        debeSer(longitud(columna(f, "ventas")), 0)
+        debeSer(columnas(f), columnas(datosDePrueba()))
+    })
+})
+
+grupo("ida y vuelta por los formatos", fn() {
+    probar(".ñdatos conserva los TIPOS; es su razón de existir", fn() {
+        fijo t = datosDePrueba()
+        fijo vuelta = deDatos(aDatos(t))
+        debeSer(tipos(vuelta), tipos(t))
+        debeSer(columna(vuelta, "ventas"), columna(t, "ventas"))
+        debeSer(columnas(vuelta), columnas(t))
+    })
+    probar("el CSV pierde los tipos y hay que adivinarlos otra vez", fn() {
+        fijo t = datosDePrueba()
+        fijo vuelta = deCsv(aCsv(t))
+        # Los valores vuelven, pero porque deCsv acertó al adivinar
+        debeSer(columna(vuelta, "ventas"), columna(t, "ventas"))
+        debeSer(columnas(vuelta), columnas(t))
+    })
+})
+
+grupo("las columnas calculadas", fn() {
+    probar("conColumna añade una y no toca las demás", fn() {
+        fijo t = datosDePrueba()
+        fijo c = conColumna(t, "doble", fn(f: dic): entero { devolver f["ventas"] * 2 })
+        debeSer(longitud(columnas(c)), longitud(columnas(t)) + 1)
+        debeContener(columnas(c), "doble")
+        debeSer(columna(c, "ventas"), columna(t, "ventas"))
+        debeSer(suma(columna(c, "doble")), suma(columna(t, "ventas")) * 2)
+    })
+    probar("si ya existe, la reemplaza en vez de duplicarla", fn() {
+        fijo t = datosDePrueba()
+        fijo c = conColumna(t, "ventas", fn(f: dic): entero { devolver 0 })
+        debeSer(longitud(columnas(c)), longitud(columnas(t)))
+        debeSer(suma(columna(c, "ventas")), 0)
+    })
+})
+
+grupo("se quejan con datos malos", fn() {
+    probar("una columna que no existe se dice, no se adivina", fn() {
+        debeFallarCon(fn() { columna(datosDePrueba(), "noExiste") }, "noExiste")
+    })
+    probar("agrupar por una columna que no existe también", fn() {
+        debeFallarCon(fn() {
+            agrupar(datosDePrueba(), ["inventada"], {"n": contarCol()})
+        }, "inventada")
+    })
+})
+
+imprimir("")
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(regla(62))
+imprimir(resumenPruebas())
+imprimir("")
+imprimir(enGris("Ninguna de estas pruebas escribe un número esperado a mano."))
+imprimir(enGris("Todas comprueban una relación que tiene que cumplirse siempre:"))
+imprimir(enGris("eso es lo que no se puede aprobar por casualidad."))

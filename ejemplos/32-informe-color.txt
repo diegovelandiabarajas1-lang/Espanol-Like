@@ -1,0 +1,77 @@
+# ═══ Un informe de consola con semáforos ═══════════════════════════════════
+# Los colores de la terminal, y «sinColor» para la misma cosa escrita a un
+# archivo: a un registro no se le meten códigos de escape.
+# eDSL: formato, numerico · núcleo: archivos
+
+usar enRojo, enVerde, enAmarillo, enAzul, enGris, enNegrita, enTenue,
+     enSubrayado, sinColor, regla, marco, centrar, aAncho, alinearDer,
+     barraTexto, porciento, moneda, decimales, tablaTexto, plural de "formato"
+usar media, suma de "numerico"
+
+fijo servicios: lista = [
+    {"nombre": "api-ventas",     "activo": cierto, "latencia": 42.0,  "errores": 0,   "peticiones": 184200},
+    {"nombre": "api-cartera",    "activo": cierto, "latencia": 310.0, "errores": 14,  "peticiones": 92100},
+    {"nombre": "sincro-siigo",   "activo": falso,  "latencia": 0.0,   "errores": 203, "peticiones": 1200},
+    {"nombre": "informes",       "activo": cierto, "latencia": 1250.0,"errores": 2,   "peticiones": 4300},
+    {"nombre": "respaldos",      "activo": cierto, "latencia": 88.0,  "errores": 0,   "peticiones": 24}
+]
+
+fn estadoDe(s: dic): texto {
+    si no s["activo"] { devolver "caído" }
+    si s["errores"] > 100 { devolver "crítico" }
+    si s["latencia"] > 1000.0 { devolver "lento" }
+    si s["errores"] > 0 { devolver "con avisos" }
+    devolver "bien"
+}
+
+fn pintar1(estado: texto): texto {
+    si estado == "bien" { devolver enVerde(estado) }
+    si estado == "con avisos" { devolver enAmarillo(estado) }
+    si estado == "lento" { devolver enAmarillo(estado) }
+    devolver enRojo(estado)
+}
+
+var lineas1: lista = []
+lineas1 = lineas1 + [centrar(enNegrita("ESTADO DE LOS SERVICIOS"), 58)]
+lineas1 = lineas1 + [regla(58)]
+
+var filas: lista = []
+para s en servicios {
+    fijo est: texto = estadoDe(s)
+    var lat: texto = decimales(s["latencia"], 0) + " ms"
+    si s["latencia"] == 0.0 { lat = enGris("—") }
+    si s["latencia"] > 1000.0 { lat = enRojo(decimales(s["latencia"], 0) + " ms") }
+    var err: texto = enGris("0")
+    si s["errores"] > 0 { err = enRojo(texto(s["errores"])) }
+    filas = filas + [{
+        "servicio": s["nombre"], "estado": pintar1(est),
+        "latencia": lat, "errores": err,
+        "peticiones": texto(s["peticiones"])
+    }]
+}
+imprimir(tablaTexto(filas))
+
+imprimir("")
+imprimir(enNegrita("TASA DE ERROR"))
+para s en servicios {
+    fijo tasa: real = real(s["errores"]) / real(s["peticiones"])
+    var barra: texto = barraTexto(tasa, 0.02, 30)
+    imprimir("  " + aAncho(s["nombre"], 16) + barra + " " + porciento(tasa, 3))
+}
+
+imprimir("")
+imprimir(enNegrita("LOS ESTILOS QUE HAY"))
+imprimir("  " + enNegrita("negrita") + " · " + enTenue("tenue") + " · " + enSubrayado("subrayado"))
+imprimir("  " + enRojo("rojo") + " · " + enVerde("verde") + " · " + enAmarillo("amarillo") +
+         " · " + enAzul("azul") + " · " + enGris("gris"))
+
+# A un archivo NO se le meten códigos de escape: «sinColor» los quita, y por
+# eso la función existe. El mismo informe sirve para la pantalla y para el log.
+fijo informe: texto = tablaTexto(filas)
+crearCarpeta("salida")
+escribirTexto("salida/estado.log", sinColor(informe))
+imprimir("")
+imprimir(regla(58))
+imprimir("Escrito a salida/estado.log, " + texto(tamanoArchivo("salida/estado.log")) + " bytes")
+imprimir("En pantalla ocupa " + texto(longitud(informe)) + " caracteres; en el archivo, " +
+         texto(longitud(sinColor(informe))) + ". La diferencia son los códigos de color.")
