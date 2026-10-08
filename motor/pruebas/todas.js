@@ -18,6 +18,7 @@ const SUITES = [
   ['aislado',     'aislado.js',      'el IDE entero en un navegador de verdad'],
   ['ejemplos',    'ejemplos-ide.js', 'los ejemplos del selector, uno por uno'],
   ['apps',        'apps.js',         'los programas de ejemplos/, con anfitrión completo'],
+  ['pseudocódigo','pseudocodigo.js',  'la notación de PSeInt corriendo en el motor de Ñ'],
 ];
 
 let fallan = 0, saltadas = 0;

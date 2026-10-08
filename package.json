@@ -38,7 +38,8 @@
     "probar": "node motor/pruebas/todas.js",
     "referencia": "node motor/util/referencia.js",
     "contexto": "node motor/util/referencia.js --contexto",
-    "ejemplos": "node motor/util/correr-ejemplos.js ejemplos"
+    "ejemplos": "node motor/util/correr-ejemplos.js ejemplos",
+    "pseudocodigo": "node PSeInt/correr.js"
   },
   "files": [
     "motor/src/",
@@ -49,6 +50,7 @@
     "motor/ARQUITECTURA.md",
     "motor/inventario.ñdatos",
     "ejemplos/",
+    "PSeInt/",
     "espanol-like-v4.html",
     "referencia-stdlib.html",
     "referencia-contexto.txt",

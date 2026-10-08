@@ -5,6 +5,7 @@
 * text=auto eol=lf
 
 *.esl   text eol=lf
+*.psc   text eol=lf
 *.txt   text eol=lf
 *.md    text eol=lf
 *.js    text eol=lf
