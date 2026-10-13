@@ -1650,7 +1650,8 @@ function crearRT(vm) {
                  if (b === 0) vm.error('división entre cero'); return Math.floor(a / b); },
     mod(a, b) { if (typeof a !== 'number' || typeof b !== 'number') return vm.aritOtro(a, b, '%');
                 if (b === 0) vm.error('módulo entre cero'); return ((a % b) + b) % b; },
-    pow(a, b) { return vm.aritOtro(a, b, '**'); },
+    pow(a, b) { if (typeof a === 'number' && typeof b === 'number') return Math.pow(a, b);
+                return vm.aritOtro(a, b, '**'); },
     neg(a) { if (a instanceof ObjArreglo) return vm.arrArit(a, -1, '*');
              if (typeof a !== 'number') vm.error(`«-» necesita un número y recibió ${tipoDe(a)}`); return -a; },
     lt(a, b) { vm.cmp(a, b, '<'); return a < b; },

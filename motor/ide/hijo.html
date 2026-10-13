@@ -130,9 +130,14 @@
 
   // El anfitrión —página, lienzo y tiempo— es el mismo código que usan las
   // aplicaciones exportadas. Aquí solo se le dice cómo hablar con el IDE.
+  let panelesPendientes = false;
   const anf = crearAnfitrion({
     irA, linea,
-    traspintar: () => mandarPaneles(),
+    traspintar: () => {
+      if (panelesPendientes) return;
+      panelesPendientes = true;
+      setTimeout(() => { panelesPendientes = false; mandarPaneles(); }, 100);
+    },
     fmtErr: e => fmtErr(e),
     almacen,
     vacioLienzo: '<div class="vacio">Sin dibujo todavía. Llama a <code>lienzo(ancho, alto)</code> y luego a <code>graficar</code>, <code>barras</code>, <code>circulo</code>, <code>punto</code>…</div>',

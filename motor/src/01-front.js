@@ -744,7 +744,15 @@ function parser(toks, fuenteNombre) {
     const previo = toks[p - 1];
     if (previo && t.linea !== previo.linea) return false;
     const sig = ver(1);
-    if (sig.tipo === '[' || sig.tipo === '.' || sig.tipo === '(') return false;
+    if (sig.tipo === '.') return false;
+    if (sig.tipo === '[') {
+      // «y[0] = 1» es una sentencia nueva; «a y [1, 2][0] == 1» es el operador.
+      // Se distingue mirando qué viene tras el corchete que cierra.
+      let k = 1, hondo = 0;
+      for (;; k++) { const x = ver(k); if (x.tipo === 'FIN') break; if (x.tipo === '[') hondo++; else if (x.tipo === ']' && --hondo === 0) break; }
+      const tras = ver(k + 1);
+      if (tras.tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(tras.valor)) return false;
+    }
     if (sig.tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(sig.valor)) return false;
     return true;
   }

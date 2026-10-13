@@ -12,8 +12,16 @@ const aqui = scriptArgs[0].replace(/[^\/\\]+$/, '');
 globalThis.eval(std.loadFile(std.getenv('NN_BUNDLE') || (aqui + '../bundle.js')));
 
 (function () {
-  const args = typeof scriptArgs !== 'undefined' ? scriptArgs : [];
-  if (args.length < 2) { print('uso: qjs --std util/n.js programa.esl [argumentos…]'); std.exit(2); }
+  const args = typeof scriptArgs !== 'undefined' ? scriptArgs.slice() : [];
+  // Igual que n-node.js: sin tope por defecto en la consola; --limite=N lo pone.
+  let limite = Infinity;
+  while (args.length > 1 && args[1].startsWith('--')) {
+    const op = args.splice(1, 1)[0];
+    const m = /^--limite=(\d+(?:e\d+)?)$/.exec(op);
+    if (m) limite = Number(m[1]);
+    else { print('opción desconocida ' + op + ' · la única es --limite=N'); std.exit(2); }
+  }
+  if (args.length < 2) { print('uso: qjs --std util/n.js [--limite=N] programa.esl [argumentos…]'); std.exit(2); }
   const fuente = std.loadFile(args[1]);
   if (fuente === null) { print('no se pudo abrir ' + args[1]); std.exit(2); }
 
@@ -148,7 +156,7 @@ globalThis.eval(std.loadFile(std.getenv('NN_BUNDLE') || (aqui + '../bundle.js'))
   const m = globalThis.EspanolLike.crearMotor({
     salida: s => print(s),
     host: { archivos, sistema, modulos },
-    limiteInstr: 4e8,
+    limiteInstr: limite,
   });
   const claveRaiz = rutaReal(absoluta(cwd(), args[1])) || absoluta(cwd(), args[1]);
   const r = m.ejecutar(fuente, claveRaiz);

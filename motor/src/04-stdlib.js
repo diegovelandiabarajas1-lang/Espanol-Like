@@ -1125,6 +1125,16 @@ function instalarBiblioteca(vm, host) {
       'enPantalla', 'enAlto', 'enOscuro', 'enClaro', 'enImpresion',
       'enMovimientoReducido'],
   });
+  // NEÑ —Numeric Extension for Ñ— es UN eDSL hecho de cuatro partes, en este
+  // orden a propósito: C1EÑ primero, porque crea «vm.c1en» y las otras partes
+  // registran núcleos en él al instalarse (si no existiera se quedarían con su
+  // respaldo en JavaScript). Luego cálculo, fórmulas y tensores.
+  instalarEdsl(vm, 'nen', def => {
+    instalarNenC1en(vm, def);
+    instalarNenCalculo(vm, def);
+    instalarNenFormulas(vm, def);
+    instalarNenTensores(vm, def);
+  });
   // El interruptor va al final: es la unión de los de arriba.
   instalarClasico(vm);
 

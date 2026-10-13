@@ -4,7 +4,7 @@
 // estorba al uso de siempre, porque «node util/n-node.js» ignora la
 // primera línea.
 // Intérprete de Ñ de línea de órdenes, para Node.
-//   node motor/util/n-node.js programa.esl [argumentos…]
+//   node motor/util/n-node.js [--limite=N] programa.esl [argumentos…]
 // El mismo motor y el mismo anfitrión de archivos y sistema que la versión de
 // QuickJS; cambia solo cómo se le pide al sistema operativo. Existe porque Node
 // ya está donde se desarrolla, y bajar un binario aparte para probar un
@@ -17,7 +17,19 @@ const R = require('../rutas.js');
 require(R.bundle);
 
 const args = process.argv.slice(2);
-if (!args.length) { console.log('uso: node motor/util/n-node.js programa.esl [argumentos…]'); process.exit(2); }
+// Opciones del intérprete: van ANTES del programa; lo que va después es del programa.
+// En la consola no hay tope de instrucciones por defecto: un programa largo —una
+// simulación de horas— es trabajo legítimo, y uno desbocado se para con Ctrl+C,
+// como en cualquier lenguaje. El tope existe para el IDE, que comparte hilo con
+// la interfaz. Quien lo quiera aquí lo pide: --limite=400000000
+let limite = Infinity;
+while (args.length && args[0].startsWith('--')) {
+  const op = args.shift();
+  const m = /^--limite=(\d+(?:e\d+)?)$/.exec(op);
+  if (m) limite = Number(m[1]);
+  else { console.log('opción desconocida ' + op + ' · la única es --limite=N'); process.exit(2); }
+}
+if (!args.length) { console.log('uso: node motor/util/n-node.js [--limite=N] programa.esl [argumentos…]'); process.exit(2); }
 let fuente;
 try { fuente = fs.readFileSync(args[0], 'utf8'); }
 catch (e) { console.log('no se pudo abrir ' + args[0]); process.exit(2); }
@@ -164,7 +176,7 @@ const m = globalThis.EspanolLike.crearMotor({
   host: Object.assign({ archivos, sistema, modulos },
                       nativo ? { nativo } : null,
                       red ? { red } : null),
-  limiteInstr: 4e8,
+  limiteInstr: limite,
 });
 const r = m.ejecutar(fuente, claveRaiz);
 if (!r.ok) {

@@ -745,7 +745,15 @@ function parser(toks, fuenteNombre) {
     const previo = toks[p - 1];
     if (previo && t.linea !== previo.linea) return false;
     const sig = ver(1);
-    if (sig.tipo === '[' || sig.tipo === '.' || sig.tipo === '(') return false;
+    if (sig.tipo === '.') return false;
+    if (sig.tipo === '[') {
+      // «y[0] = 1» es una sentencia nueva; «a y [1, 2][0] == 1» es el operador.
+      // Se distingue mirando qué viene tras el corchete que cierra.
+      let k = 1, hondo = 0;
+      for (;; k++) { const x = ver(k); if (x.tipo === 'FIN') break; if (x.tipo === '[') hondo++; else if (x.tipo === ']' && --hondo === 0) break; }
+      const tras = ver(k + 1);
+      if (tras.tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(tras.valor)) return false;
+    }
     if (sig.tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(sig.valor)) return false;
     return true;
   }
@@ -3494,7 +3502,8 @@ function crearRT(vm) {
                  if (b === 0) vm.error('división entre cero'); return Math.floor(a / b); },
     mod(a, b) { if (typeof a !== 'number' || typeof b !== 'number') return vm.aritOtro(a, b, '%');
                 if (b === 0) vm.error('módulo entre cero'); return ((a % b) + b) % b; },
-    pow(a, b) { return vm.aritOtro(a, b, '**'); },
+    pow(a, b) { if (typeof a === 'number' && typeof b === 'number') return Math.pow(a, b);
+                return vm.aritOtro(a, b, '**'); },
     neg(a) { if (a instanceof ObjArreglo) return vm.arrArit(a, -1, '*');
              if (typeof a !== 'number') vm.error(`«-» necesita un número y recibió ${tipoDe(a)}`); return -a; },
     lt(a, b) { vm.cmp(a, b, '<'); return a < b; },
@@ -5028,6 +5037,16 @@ function instalarBiblioteca(vm, host) {
       'primero', 'ultimo', 'impares', 'antes', 'despues',
       'enPantalla', 'enAlto', 'enOscuro', 'enClaro', 'enImpresion',
       'enMovimientoReducido'],
+  });
+  // NEÑ —Numeric Extension for Ñ— es UN eDSL hecho de cuatro partes, en este
+  // orden a propósito: C1EÑ primero, porque crea «vm.c1en» y las otras partes
+  // registran núcleos en él al instalarse (si no existiera se quedarían con su
+  // respaldo en JavaScript). Luego cálculo, fórmulas y tensores.
+  instalarEdsl(vm, 'nen', def => {
+    instalarNenC1en(vm, def);
+    instalarNenCalculo(vm, def);
+    instalarNenFormulas(vm, def);
+    instalarNenTensores(vm, def);
   });
   // El interruptor va al final: es la unión de los de arriba.
   instalarClasico(vm);
@@ -11331,6 +11350,8776 @@ function deHsl(h, s, l) {
   const comp = t => Math.round((l - c / 2 + c * f(t)) * 255);
   const hex = n => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0');
   return '#' + hex(comp(h + 1 / 3)) + hex(comp(h)) + hex(comp(h - 1 / 3));
+}
+
+
+// ============================================================================
+//  Ñ v4 — C1EÑ («Cuda 1 Engine of Ñ»): funciones de Ñ en GPU y en C nativo
+//  Parte 14. Va dentro del eDSL «nen».
+//
+//  Se importa con:  usar paralelo, azarHilo de "nen"
+//
+//  QUÉ ES. Un compilador pequeño: toma una función de Ñ escrita en un
+//  subconjunto numérico —enteros, reales, bool, arreglos, si/mientras/para— y
+//  la traduce a TRES destinos desde el mismo árbol sintáctico:
+//
+//    "jit"      JavaScript, con «new Function», como el JIT de la máquina.
+//    "nativo"   C, compilado con gcc -O2 -ffp-contract=off y cargado con koffi.
+//    "gpu"      CUDA C, compilado con NVRTC (--fmad=false) y lanzado con la
+//               Driver API desde Node (util/c1en-cuda.js).
+//
+//  La función se ejecuta una vez por índice: paralelo(n, f, a, b) llama a
+//  f(i, a, b) para i = 0..n−1, en el orden que el dispositivo quiera. Por eso
+//  un núcleo no devuelve nada: escribe en sus arreglos.
+//
+//  LA REGLA QUE MANDA: el mismo programa da los MISMOS BITS en los tres
+//  destinos para + − * / y raiz. No es un adorno: es lo que deja comprobar la
+//  GPU contra la CPU número a número en vez de «más o menos». Cuesta tres cosas,
+//  y las tres están escritas abajo donde se pagan:
+//    · nada de FMA: gcc con -ffp-contract=off y NVRTC con --fmad=false. Una FMA
+//      redondea una vez donde a*b+c redondea dos, y el último bit cambia.
+//    · el mismo orden de operaciones en los tres textos: las expresiones se
+//      emiten con paréntesis explícitos y los temporales en el mismo sitio.
+//    · enteros que JavaScript no tiene: un «entero» de Ñ es un double y en C es
+//      un int64. Son el mismo número mientras quepa en 53 bits; para que el
+//      −0 de JavaScript (0 * −3 da −0) no llegue a un arreglo real como −0 y a
+//      C como +0, cada paso de entero a real en JavaScript se escribe «x + 0»,
+//      que en IEEE convierte −0 en +0 y deja todo lo demás igual.
+//  Las trascendentes (exp, log, seno, coseno, tangente, potencia no entera…) NO
+//  entran en la promesa: V8, glibc y CUDA las implementan cada uno a su manera
+//  y pueden diferir en el último bit. Está dicho en la documentación.
+//
+//  LOS ERRORES no pueden lanzarse desde una GPU. Cada sitio que puede fallar
+//  (dividir, indexar, raiz de un negativo…) tiene un número, en orden de
+//  aparición; un hilo que falla se apunta el número más bajo de su sentencia y
+//  termina. De todos los hilos que fallan gana el de índice más bajo, y eso se
+//  resuelve igual en los tres: en JavaScript porque se recorren en orden, en C
+//  con una sección crítica y en CUDA con atomicMin sobre (i << 24 | sitio). Al
+//  volver, el motor convierte el número en un error de Ñ normal, con línea.
+// ============================================================================
+
+// Tope de vueltas por hilo, sumando todos sus bucles. La red contra un
+// «mientras cierto» dentro de un núcleo: en C o en la GPU no hay presupuesto de
+// instrucciones que lo corte, y un hilo que no termina cuelga el proceso entero.
+// Mil millones es mucho más de lo que hace un núcleo razonable (un Monte Carlo
+// de un millón de muestras por hilo da 1e6) y en JavaScript son pocos segundos.
+// Se puede bajar con la variable de entorno C1EN_MAX_VUELTAS (las pruebas lo
+// hacen, para comprobar el tope sin esperar mil millones de vueltas).
+const C1EN_MAX_VUELTAS = (typeof process !== 'undefined' && process.env && Number(process.env.C1EN_MAX_VUELTAS) > 0)
+  ? Math.floor(Number(process.env.C1EN_MAX_VUELTAS)) : 1000000000;
+// Hilos por bloque en CUDA. 256 es el valor que va bien en casi todas las
+// arquitecturas desde Kepler; el núcleo recorre el índice «a zancadas de
+// cuadrícula», así que el número de bloques no limita n.
+const C1EN_HILOS_BLOQUE = 256;
+// El índice del hilo va en los 40 bits altos de la clave de error (los 24
+// bajos son el sitio): 2^40 hilos son un billón, de sobra.
+const C1EN_MAX_HILOS = 1099511627776;
+
+// ── el azar por contador ─────────────────────────────────────────────────────
+// azarHilo(semilla, i, canal) es una FUNCIÓN PURA de sus tres enteros: no hay
+// estado que repartir entre hilos, así que da lo mismo en qué orden o en qué
+// dispositivo corran. Es la idea de Philox/Random123, en barato.
+//
+// POR QUÉ ES IDÉNTICO EN LOS TRES DESTINOS: toda la aritmética es de 32 bits sin
+// signo. En C y en CUDA un uint32_t se envuelve módulo 2^32 por definición del
+// lenguaje; en JavaScript, Math.imul da exactamente los 32 bits bajos del
+// producto y «>>> 0» reduce módulo 2^32. Nunca se forma un producto de 64 bits
+// —que en un double de 53 bits perdería los bits bajos y en un int64 con signo
+// sería desbordamiento indefinido—, y las sumas son de dos números < 2^32, que
+// caben de sobra en 53 bits. Para sacar los 32 bits altos de un entero de Ñ se
+// divide entre 2^32 (exacto: es una potencia de dos) y se redondea hacia abajo,
+// que es lo mismo que el desplazamiento aritmético de un int64.
+// El real final se arma con 27 + 26 = 53 bits: (a>>5)·2^26 + (b>>6) < 2^53 es
+// un entero exacto en double, y multiplicarlo por 2^−53 también es exacto.
+// La mezcla es «lowbias32» de Chris Wellons: dos multiplicaciones y tres
+// desplazamientos, con muy buen efecto avalancha para lo que cuesta.
+function c1enMezclar(h) {
+  h = (h ^ (h >>> 16)) >>> 0;
+  h = Math.imul(h, 0x7feb352d) >>> 0;
+  h = (h ^ (h >>> 15)) >>> 0;
+  h = Math.imul(h, 0x846ca68b) >>> 0;
+  return (h ^ (h >>> 16)) >>> 0;
+}
+function c1enAzar(s, i, c) {
+  let h = 0x2545f491;
+  h = (c1enMezclar((h ^ (s >>> 0)) >>> 0) + 0x9e3779b9) >>> 0;
+  h = (c1enMezclar((h ^ (Math.floor(s / 4294967296) >>> 0)) >>> 0) + 0x9e3779b9) >>> 0;
+  h = (c1enMezclar((h ^ (i >>> 0)) >>> 0) + 0x9e3779b9) >>> 0;
+  h = (c1enMezclar((h ^ (Math.floor(i / 4294967296) >>> 0)) >>> 0) + 0x9e3779b9) >>> 0;
+  h = (c1enMezclar((h ^ (c >>> 0)) >>> 0) + 0x9e3779b9) >>> 0;
+  h = (c1enMezclar((h ^ (Math.floor(c / 4294967296) >>> 0)) >>> 0) + 0x9e3779b9) >>> 0;
+  const a = c1enMezclar((h ^ 0x68e31da4) >>> 0);
+  const b = c1enMezclar((a + 0xb5297a4d) >>> 0);
+  return ((a >>> 5) * 67108864 + (b >>> 6)) * (1 / 9007199254740992);
+}
+
+// Lo mismo en C. Es texto compartido por los destinos C y CUDA: cambia solo la
+// palabra que declara la función (C1EN_D) y los nombres de los tipos.
+const C1EN_PRELUDIO = `
+C1EN_D c1en_i64 c1en_falla(c1en_i64* f, c1en_i64 c) { if (*f == 0 || c < *f) *f = c; return 0; }
+/* división y resto de enteros como en Ñ (y en Python): la división redondea
+   hacia abajo y el resto lleva el signo del divisor. C trunca hacia cero. */
+C1EN_D c1en_i64 c1en_div_piso(c1en_i64 a, c1en_i64 b) {
+  if (b == 0) return 0;
+  c1en_i64 q = a / b;
+  if ((a % b != 0) && ((a < 0) != (b < 0))) q -= 1;
+  return q;
+}
+C1EN_D c1en_i64 c1en_mod(c1en_i64 a, c1en_i64 b) {
+  if (b == 0) return 0;
+  c1en_i64 r = a % b;
+  if (r != 0 && ((r < 0) != (b < 0))) r += b;
+  return r;
+}
+C1EN_D c1en_u32 c1en_mezclar(c1en_u32 h) {
+  h ^= h >> 16; h *= 0x7feb352dU; h ^= h >> 15; h *= 0x846ca68bU; h ^= h >> 16;
+  return h;
+}
+/* azarHilo: real en [0, 1), función pura de (semilla, i, canal). Solo
+   aritmética de 32 bits sin signo, que se envuelve igual en C, en CUDA y en
+   JavaScript (Math.imul y >>> 0). Ver la explicación en 14-c1en.js. */
+C1EN_D double c1en_azar(c1en_i64 s, c1en_i64 i, c1en_i64 c) {
+  c1en_u64 us = (c1en_u64)s, ui = (c1en_u64)i, uc = (c1en_u64)c;
+  c1en_u32 h = 0x2545f491U;
+  h = c1en_mezclar(h ^ (c1en_u32)us) + 0x9e3779b9U;
+  h = c1en_mezclar(h ^ (c1en_u32)(us >> 32)) + 0x9e3779b9U;
+  h = c1en_mezclar(h ^ (c1en_u32)ui) + 0x9e3779b9U;
+  h = c1en_mezclar(h ^ (c1en_u32)(ui >> 32)) + 0x9e3779b9U;
+  h = c1en_mezclar(h ^ (c1en_u32)uc) + 0x9e3779b9U;
+  h = c1en_mezclar(h ^ (c1en_u32)(uc >> 32)) + 0x9e3779b9U;
+  c1en_u32 a = c1en_mezclar(h ^ 0x68e31da4U);
+  c1en_u32 b = c1en_mezclar(a + 0xb5297a4dU);
+  return ((double)(a >> 5) * 67108864.0 + (double)(b >> 6)) * (1.0 / 9007199254740992.0);
+}
+`;
+const C1EN_CABECERA_C = `#include <stdint.h>
+#include <math.h>
+typedef int64_t c1en_i64;
+typedef uint64_t c1en_u64;
+typedef uint32_t c1en_u32;
+#define C1EN_D static inline
+#define C1EN_INF INFINITY
+`;
+// NVRTC no trae <stdint.h> ni <math.h>: los tipos se dicen con sus nombres de
+// siempre y las funciones matemáticas ya están, como funciones de dispositivo.
+const C1EN_CABECERA_CUDA = `typedef long long c1en_i64;
+typedef unsigned long long c1en_u64;
+typedef unsigned int c1en_u32;
+#define C1EN_D static __device__ __forceinline__
+#define C1EN_INF __longlong_as_double(0x7ff0000000000000LL)
+`;
+
+// Un real como literal de CUDA EXACTO: en hexadecimal no hay redondeo que
+// discutir. En C sí se escribe en decimal (gcc lo redondea correctamente, y
+// así se puede leer), pero de NVRTC no consta en ningún sitio que lo haga.
+function c1enHexReal(v) {
+  if (v === 0) return '0.0';
+  const b = new DataView(new ArrayBuffer(8));
+  b.setFloat64(0, v);
+  const hi = b.getUint32(0), lo = b.getUint32(4);
+  const exp = (hi >>> 20) & 0x7ff;
+  const man = ((hi & 0xfffff).toString(16).padStart(5, '0') + lo.toString(16).padStart(8, '0')).replace(/0+$/, '');
+  if (exp === 0) return `0x0.${man || '0'}p-1022`;
+  return `0x1${man ? '.' + man : ''}p${exp - 1023}`;
+}
+
+// ── los anfitriones de Node ──────────────────────────────────────────────────
+// La biblioteca no sabe compilar C ni hablar con una GPU: se lo pide a dos
+// piezas de util/ que solo existen en Node. En el navegador y en QuickJS no hay
+// ni «require» ni «process», y entonces lo único que hay es "jit" — que es la
+// degradación elegante que se pide: el programa corre igual, más despacio.
+// Se cargan la PRIMERA vez que hacen falta, no al crear la máquina: cada
+// prueba crea su máquina y no debería pagar un «gcc --version» por eso.
+const c1enHost = { nativo: undefined, cuda: undefined, motivoNativo: null, motivoCuda: null };
+function c1enEnNode() {
+  return typeof process !== 'undefined' && process.versions && process.versions.node &&
+    typeof require === 'function' && typeof __dirname === 'string';
+}
+function c1enUtil(archivo) {
+  const path = require('path'), fs = require('fs');
+  // Desde bundle.js (motor/) o desde src/ (motor/src/): las dos caen en motor/util.
+  for (const p of [path.join(__dirname, 'util', archivo), path.join(__dirname, '..', 'util', archivo)])
+    if (fs.existsSync(p)) return require(p);
+  return null;
+}
+function c1enNativo() {
+  if (c1enHost.nativo !== undefined) return c1enHost.nativo;
+  c1enHost.nativo = null;
+  if (!c1enEnNode()) { c1enHost.motivoNativo = 'el código nativo solo existe fuera del navegador, en Node'; return null; }
+  try {
+    const m = c1enUtil('c1en-nativo.js');
+    if (!m) { c1enHost.motivoNativo = 'falta motor/util/c1en-nativo.js'; return null; }
+    c1enHost.nativo = m.crear();
+    if (!c1enHost.nativo) c1enHost.motivoNativo = m.porQueNo();
+  } catch (e) { c1enHost.motivoNativo = String((e && e.message) || e); }
+  return c1enHost.nativo;
+}
+function c1enCuda() {
+  if (c1enHost.cuda !== undefined) return c1enHost.cuda;
+  c1enHost.cuda = null;
+  if (!c1enEnNode()) { c1enHost.motivoCuda = 'la GPU solo se alcanza desde Node'; return null; }
+  try {
+    const m = c1enUtil('c1en-cuda.js');
+    if (!m) { c1enHost.motivoCuda = 'falta motor/util/c1en-cuda.js'; return null; }
+    c1enHost.cuda = m.crear();
+    if (!c1enHost.cuda) c1enHost.motivoCuda = m.porQueNo();
+  } catch (e) { c1enHost.motivoCuda = String((e && e.message) || e); }
+  return c1enHost.cuda;
+}
+
+// ── el subconjunto ───────────────────────────────────────────────────────────
+// Las funciones que se pueden llamar dentro de un núcleo, con su número de
+// argumentos. El nombre es el CORTO: dentro del programa pueden venir de
+// «numerico», de «nen» o del núcleo, y se reconocen por la nativa a la que
+// apuntan, no por cómo se escriben (ver «resolverLlamada»).
+const C1EN_FUNCIONES = {
+  raiz: 1, exp: 1, log: 1, log10: 1, seno: 1, coseno: 1, tangente: 1,
+  arcoseno: 1, arcocoseno: 1, arcotangente: 1, angulo: 2,
+  absoluto: 1, piso: 1, techo: 1, minimo: 2, maximo: 2,
+  longitud: 1, tamano: 1, azarHilo: 3, sumarAtomico: 3,
+};
+const C1EN_TRASC = { exp: 'exp', log: 'log', log10: 'log10', seno: 'sin', coseno: 'cos', tangente: 'tan',
+  arcoseno: 'asin', arcocoseno: 'acos', arcotangente: 'atan' };
+const C1EN_TRASC_JS = { exp: 'Math.exp', log: 'Math.log', log10: 'Math.log10', seno: 'Math.sin', coseno: 'Math.cos',
+  tangente: 'Math.tan', arcoseno: 'Math.asin', arcocoseno: 'Math.acos', arcotangente: 'Math.atan' };
+const C1EN_LISTA = 'raiz, exp, log, log10, seno, coseno, tangente, arcoseno, arcocoseno, arcotangente, ' +
+  'angulo, absoluto, piso, techo, minimo, maximo, longitud, tamano, azarHilo y sumarAtomico';
+
+function instalarNenC1en(vm, def) {
+  const c1en = crearC1en(vm);
+  vm.c1en = c1en;
+
+  def('paralelo', '... -> nulo', a => {
+    if (a.length < 2) vm.error('«paralelo» necesita al menos el número de hilos y la función',
+      'paralelo(n, funcion(i, a, b) { … }, a, b)');
+    const n = a[0];
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 0)
+      vm.error(`«paralelo»: el número de hilos tiene que ser un entero no negativo y es ${typeof n === 'number' ? n : tipoDe(n)}`);
+    vm.exigeFuncion(a[1], 2, 'paralelo');
+    c1en.paralelo(n, a[1], a.slice(2), 'paralelo');
+    return null;
+  }, 'paralelo(n, funcion(i, a, b) { a[i] = … }, a, b) — corre el cuerpo para i = 0..n−1 en el dispositivo actual; los arreglos se modifican en el sitio');
+
+  def('dispositivo', ' -> texto', () => c1en.describir(),
+    'dispositivo() — dónde corre «paralelo» ahora: "gpu: Tesla T4 (0)", "nativo: gcc …" o "jit"');
+  def('dispositivos', ' -> lista<texto>', () => vm.nuevaLista(c1en.disponibles()),
+    'dispositivos() — la lista de los dispositivos que hay en esta máquina');
+  def('usarDispositivo', '... -> texto', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«usarDispositivo» recibe el nombre y, para "gpu", el índice',
+      'usarDispositivo("gpu", 1) · usarDispositivo("nativo") · usarDispositivo("jit")');
+    const nombre = vm.exigeTexto(a[0], 1, 'usarDispositivo');
+    let indice = null;
+    if (a.length === 2) {
+      indice = vm.exigeNum(a[1], 2, 'usarDispositivo');
+      if (!Number.isInteger(indice) || indice < 0) vm.error('«usarDispositivo»: el índice de la GPU es un entero desde 0');
+    }
+    c1en.usar(nombre, indice);
+    return c1en.describir();
+  }, 'usarDispositivo("gpu", 0) · usarDispositivo("nativo") · usarDispositivo("jit") — elige dónde corre «paralelo»');
+
+  def('codigoCuda', '... -> texto', a => {
+    if (!a.length) vm.error('«codigoCuda» necesita la función', 'codigoCuda(f) o codigoCuda(f, a, b) con argumentos de ejemplo');
+    vm.exigeFuncion(a[0], 1, 'codigoCuda');
+    return c1en.codigo(a[0], a.slice(1), 'cuda', 'codigoCuda');
+  }, 'codigoCuda(f, a, b) — el CUDA C que C1EÑ genera para f (los argumentos de ejemplo dicen los tipos)');
+  def('codigoC', '... -> texto', a => {
+    if (!a.length) vm.error('«codigoC» necesita la función', 'codigoC(f) o codigoC(f, a, b) con argumentos de ejemplo');
+    vm.exigeFuncion(a[0], 1, 'codigoC');
+    return c1en.codigo(a[0], a.slice(1), 'c', 'codigoC');
+  }, 'codigoC(f, a, b) — el C que C1EÑ genera para f y compila con gcc en el dispositivo "nativo"');
+
+  def('azarHilo', 'real, real, real -> real', a => {
+    for (let k = 0; k < 3; k++) {
+      const v = vm.exigeNum(a[k], k + 1, 'azarHilo');
+      if (!Number.isInteger(v)) vm.error(`«azarHilo»: el argumento ${k + 1} tiene que ser entero y es ${v}`,
+        'azarHilo(semilla, i, canal): los tres son enteros');
+    }
+    return c1enAzar(a[0], a[1], a[2]);
+  }, 'azarHilo(semilla, i, canal) — real en [0, 1) que solo depende de sus tres enteros: el mismo en jit, nativo y gpu');
+  def('sumarAtomico', 'arreglo, real, real -> nulo', a => {
+    const x = a[0];
+    if (!(x instanceof ObjArreglo) || (x.tipo !== 'real' && x.tipo !== 'entero'))
+      vm.error(`«sumarAtomico»: el argumento 1 tiene que ser un arreglo real o entero y es ${tipoDe(x)}`);
+    const j = vm.exigeNum(a[1], 2, 'sumarAtomico');
+    const v = vm.exigeNum(a[2], 3, 'sumarAtomico');
+    if (!Number.isInteger(j) || j < 0 || j >= x.tamano)
+      vm.error(`«sumarAtomico»: el índice ${j} se sale del arreglo (tiene ${x.tamano} elementos)`);
+    if (x.tipo === 'entero' && !Number.isInteger(v))
+      vm.error('«sumarAtomico»: a un arreglo entero se le suman enteros', 'usa piso(v) o un arreglo real');
+    const z = zancadasDe(x.forma);
+    let p = x.desp, r = j;
+    for (let d = 0; d < z.length; d++) { const q = Math.floor(r / z[d]); r -= q * z[d]; p += q * x.zancadas[d]; }
+    x.datos[p] += v;
+    return null;
+  }, 'sumarAtomico(a, j, v) — a[j] += v sin que dos hilos se pisen; en arreglos entero es determinista, en reales el orden de las sumas no');
+}
+
+// ============================================================================
+//  El motor: compilar, elegir dispositivo y lanzar
+// ============================================================================
+function crearC1en(vm) {
+  // El dispositivo se decide la primera vez que alguien pregunta. Lo que manda,
+  // en orden: la variable de entorno C1EN_DISPOSITIVO; si no, el mejor que haya
+  // (gpu, luego nativo, luego jit).
+  let actual = null;
+  let indiceGpu = 0;
+  const elegirInicial = () => {
+    if (actual !== null) return;
+    const env = c1enEnNode() ? process.env.C1EN_DISPOSITIVO : null;
+    if (env === 'jit' || env === 'nativo' || env === 'gpu') {
+      try { usar(env, null); return; } catch (_) { /* si no está, se cae al mejor */ }
+    }
+    const cu = c1enCuda();
+    if (cu && cu.dispositivos.length) { actual = 'gpu'; indiceGpu = cu.actual; return; }
+    if (c1enNativo()) { actual = 'nativo'; return; }
+    actual = 'jit';
+  };
+  function usar(nombre, indice) {
+    if (nombre === 'jit') { actual = 'jit'; return; }
+    if (nombre === 'nativo') {
+      if (!c1enNativo()) vm.error(`no hay dispositivo «nativo»: ${c1enHost.motivoNativo}`,
+        'hace falta Node, koffi (npm install koffi) y gcc; mientras tanto, usarDispositivo("jit")');
+      actual = 'nativo';
+      return;
+    }
+    if (nombre === 'gpu') {
+      const cu = c1enCuda();
+      if (!cu || !cu.dispositivos.length) vm.error(`no hay GPU: ${c1enHost.motivoCuda || 'no se encontró ninguna'}`,
+        'en Kaggle: Settings → Accelerator → GPU T4 x2; aquí usa "nativo" o "jit"');
+      const k = indice === null || indice === undefined ? cu.actual : indice;
+      if (k >= cu.dispositivos.length) vm.error(`no hay GPU ${k}: esta máquina tiene ${cu.dispositivos.length}`,
+        `los índices van de 0 a ${cu.dispositivos.length - 1}`);
+      try { cu.usar(k); }
+      catch (e) { vm.error(`no se pudo activar la GPU ${k}: ${e.message}`); }
+      indiceGpu = k;
+      actual = 'gpu';
+      return;
+    }
+    vm.error(`«usarDispositivo»: no conozco el dispositivo «${nombre}»`, 'los que hay: "jit", "nativo" y "gpu"');
+  }
+  function describir() {
+    elegirInicial();
+    if (actual === 'gpu') return `gpu: ${c1enCuda().dispositivos[indiceGpu].nombre} (${indiceGpu})`;
+    if (actual === 'nativo') return `nativo: ${c1enNativo().nombre}`;
+    return 'jit';
+  }
+  function disponibles() {
+    const out = ['jit'];
+    const na = c1enNativo();
+    if (na) out.push(`nativo: ${na.nombre}`);
+    const cu = c1enCuda();
+    if (cu) for (const d of cu.dispositivos) out.push(`gpu ${d.indice}: ${d.nombre}`);
+    return out;
+  }
+
+  // ── los argumentos ──────────────────────────────────────────────────────────
+  // Un arreglo de Ñ puede ser una vista con zancadas. El núcleo lo ve plano y
+  // contiguo: si ya lo es, se le pasa su trozo de memoria tal cual (cero copias,
+  // y los cambios caen en su sitio); si no, se copia a uno contiguo, se corre y
+  // se copia de vuelta.
+  function prepararArreglo(x, quien, k) {
+    if (x.tipo !== 'real' && x.tipo !== 'entero')
+      vm.error(`«${quien}»: el argumento ${k} es un arreglo de tipo ${x.tipo}, y en un núcleo solo entran arreglos real o entero`,
+        x.tipo === 'bool' ? 'conviértelo con aTipo(a, "entero")' : 'separa la parte real y la imaginaria en dos arreglos reales');
+    const z = zancadasDe(x.forma);
+    let contiguo = true;
+    for (let d = 0; d < z.length; d++) if (x.forma[d] > 1 && z[d] !== x.zancadas[d]) contiguo = false;
+    const n = x.tamano;
+    if (contiguo) return { vista: x.datos.subarray(x.desp, x.desp + n), devolver: null };
+    const vista = new x.datos.constructor(n);
+    let i = 0;
+    for (const p of x.posiciones()) vista[i++] = x.datos[p];
+    return { vista, devolver: () => { let j = 0; for (const p of x.posiciones()) x.datos[p] = vista[j++]; } };
+  }
+  // Dos argumentos que comparten memoria sin ser el mismo arreglo (una vista y
+  // su dueño, dos trozos del mismo) no se pueden llevar a la GPU: se copiarían
+  // por separado y al volver uno pisaría al otro. Se rechaza en todos los
+  // dispositivos, para que un programa no funcione en «jit» y falle en «gpu».
+  function exigirSinSolape(arrs, quien) {
+    for (let p = 0; p < arrs.length; p++) for (let q = p + 1; q < arrs.length; q++) {
+      const A = arrs[p], B = arrs[q];
+      if (A.x !== B.x && A.x.datos === B.x.datos)
+        vm.error(`«${quien}»: los argumentos ${A.k} y ${B.k} comparten memoria (uno es una vista del otro)`,
+          'pasa el mismo arreglo una sola vez, o haz una copia con copia(a)');
+    }
+  }
+  // El tipo que un valor le da a su parámetro. Un número entero da «ent» aunque
+  // se escribiera 2.0: en Ñ los dos son el mismo número, y en el núcleo da igual
+  // porque «/» siempre divide en real y los enteros se convierten exactos.
+  function tipoDeArg(v, anot, quien, k, nombre) {
+    if (v instanceof ObjArreglo) {
+      if (anot && anot.k && anot.k !== 'arreglo' && anot.k !== 'cualquiera')
+        vm.error(`«${quien}»: «${nombre}» está anotado como ${anot.k} y llegó un arreglo`);
+      return v.tipo === 'entero' ? 'i32*' : (v.tipo === 'real' ? 'f64*' : 'otro*');
+    }
+    if (typeof v === 'boolean') return 'bool';
+    if (typeof v === 'number') {
+      if (anot && anot.k === 'real') return 'real';
+      if (anot && anot.k === 'entero') {
+        if (!Number.isInteger(v)) vm.error(`«${quien}»: «${nombre}» es entero y llegó ${v}`);
+        return 'ent';
+      }
+      return Number.isInteger(v) && Math.abs(v) <= 9007199254740992 ? 'ent' : 'real';
+    }
+    if (v instanceof ObjLista)
+      vm.error(`«${quien}»: el argumento ${k} («${nombre}») es una lista, y a un núcleo solo entran números, bool y arreglos`,
+        'conviértela antes con arreglo(lista)');
+    vm.error(`«${quien}»: el argumento ${k} («${nombre}») es ${tipoDe(v)}, y a un núcleo solo entran números, bool y arreglos`);
+  }
+
+  // ── compilación, con caché ──────────────────────────────────────────────────
+  // Por prototipo de función y por firma de tipos de los argumentos: la misma
+  // función llamada con un arreglo real y luego con uno entero son dos núcleos.
+  const cache = new WeakMap();
+  function modeloDe(cierre, tipos, quien) {
+    const fn = cierre.fn;
+    let m = cache.get(fn);
+    if (!m) { m = new Map(); cache.set(fn, m); }
+    const clave = tipos.join(',');
+    let r = m.get(clave);
+    if (!r) {
+      r = { modelo: c1enAnalizar(vm, cierre, tipos, quien), js: null, c: null, cuda: null, fnNativa: null, gpu: new Map() };
+      m.set(clave, r);
+    }
+    return r;
+  }
+
+  function tiposParaLlamada(cierre, args, quien) {
+    const fn = cierre.fn;
+    const ast = fn.ast;
+    if (!ast || fn.deDisco)
+      vm.error(`«${quien}»: esta función vino de bytecode y no trae su código fuente, así que no se puede compilar`,
+        'C1EÑ compila desde el árbol sintáctico, igual que el JIT');
+    if (fn.aridad !== args.length + 1)
+      vm.error(`«${quien}»: la función recibe ${fn.aridad} parámetro(s) y le llegan ${args.length + 1} (el índice y ${args.length} argumento(s))`,
+        'el primer parámetro es siempre el índice del hilo: funcion(i, a, b) con paralelo(n, f, a, b)');
+    return args.map((v, k) => tipoDeArg(v, ast.params[k + 1].anotacion, quien, k + 3, ast.params[k + 1].nombre));
+  }
+
+  function lanzarError(modelo, i, codigo, quien) {
+    const s = modelo.sitios[codigo] || { linea: '?', texto: 'fallo desconocido' };
+    vm.error(`«${quien}»: el hilo i = ${i} falló en la línea ${s.linea}: ${s.texto}`, s.pista || null);
+  }
+
+  // Lo que «paralelo» promete y lo que no:
+  //  · cada índice se calcula igual en cualquier dispositivo (los mismos bits,
+  //    salvo trascendentes y salvo enteros de más de 53 bits);
+  //  · el ORDEN entre hilos no existe: si dos hilos escriben el mismo elemento,
+  //    gana uno cualquiera, y cuál depende del dispositivo (en "jit" el último,
+  //    porque van en orden). Para acumular está sumarAtomico;
+  //  · si un hilo falla, el error es el del hilo de índice más bajo y su línea,
+  //    en todos; pero lo que los DEMÁS hilos alcanzaron a escribir no se
+  //    promete: en "jit" se para en el primer fallo, en C y en la GPU los demás
+  //    siguen. Tras un error, el contenido de los arreglos es indefinido.
+  function paralelo(n, cierre, args, quien) {
+    if (n > C1EN_MAX_HILOS) vm.error(`«${quien}»: ${n} hilos son demasiados; el máximo es 2^40`);
+    if (!(cierre instanceof ObjCierre))
+      vm.error(`«${quien}»: el núcleo tiene que ser una función de Ñ, no una de la biblioteca`);
+    const tipos = tiposParaLlamada(cierre, args, quien);
+    tipos.forEach((t, k) => {
+      if (t === 'otro*') prepararArreglo(args[k], quien, k + 3);   // da el error que toca
+    });
+    const r = modeloDe(cierre, tipos, quien);
+    elegirInicial();
+    vm.cobrar(n);
+    if (n === 0) return;
+    // Los arreglos: vista contigua (o copia) por argumento.
+    const preps = [];
+    const arrs = [];
+    args.forEach((v, k) => {
+      if (v instanceof ObjArreglo) { arrs.push({ x: v, k: k + 3 }); preps[k] = prepararArreglo(v, quien, k + 3); }
+    });
+    exigirSinSolape(arrs, quien);
+    let fallo = null;
+    try {
+      if (actual === 'jit') fallo = correrJS(r, n, args, preps);
+      else if (actual === 'nativo') fallo = correrNativo(r, n, args, preps, quien);
+      else fallo = correrGpu(r, n, args, preps, quien);
+    } finally {
+      for (const p of preps) if (p && p.devolver) p.devolver();
+    }
+    if (fallo) lanzarError(r.modelo, fallo[0], fallo[1], quien);
+  }
+
+  // Los argumentos ya expandidos: un arreglo pasa como (datos, número de
+  // elementos), que es como lo recibe el núcleo para comprobar sus índices.
+  function expandir(args, preps, bool) {
+    const out = [];
+    args.forEach((v, k) => {
+      if (v instanceof ObjArreglo) { out.push(preps[k].vista); out.push(preps[k].vista.length); }
+      else if (typeof v === 'boolean') out.push(bool ? (v ? 1 : 0) : v);
+      else out.push(v);
+    });
+    return out;
+  }
+
+  function correrJS(r, n, args, preps) {
+    if (!r.js) {
+      const src = c1enEmitir(r.modelo, 'js');
+      // eslint-disable-next-line no-new-func
+      r.js = new Function('"use strict"; return ' + src)();
+    }
+    return r.js(n, ...expandir(args, preps, false));
+  }
+
+  function correrNativo(r, n, args, preps, quien) {
+    const na = c1enNativo();
+    if (!r.fnNativa) {
+      if (!r.c) r.c = c1enEmitir(r.modelo, 'c');
+      const firma = ['int64_t n'];
+      for (const p of r.modelo.params.slice(1)) {
+        if (p.arr) { firma.push(p.arr === 'real' ? 'double *' : 'int32_t *'); firma.push('int64_t'); }
+        else firma.push(p.tipoEntrada === 'real' ? 'double' : 'int64_t');
+      }
+      firma.push('uint64_t *');
+      try { r.fnNativa = na.compilar(r.c, [{ nombre: 'c1en_nucleo', firma: `void c1en_nucleo(${firma.join(', ')})` }]).c1en_nucleo; }
+      catch (e) { vm.error(`«${quien}»: no se pudo compilar el núcleo en C: ${e.message}`, 'esto es un fallo de C1EÑ, no de tu programa: avísalo con el código de codigoC(f)'); }
+    }
+    const err = new BigUint64Array([0xffffffffffffffffn]);
+    r.fnNativa(n, ...expandir(args, preps, true), err);
+    return c1enLeerClave(err[0]);
+  }
+
+  // En la GPU: reservar, subir, lanzar, sincronizar, bajar, liberar. En la v1
+  // todo arreglo es de ida y vuelta; el día que haga falta se marcan los de
+  // solo lectura y se ahorra la bajada.
+  function correrGpu(r, n, args, preps, quien) {
+    const cu = c1enCuda();
+    let fun = r.gpu.get(indiceGpu);
+    if (!fun) {
+      if (!r.cuda) r.cuda = c1enEmitir(r.modelo, 'cuda');
+      try { fun = cu.compilar(r.cuda, ['c1en_nucleo']).c1en_nucleo; }
+      catch (e) { vm.error(`«${quien}»: no se pudo compilar el núcleo para la GPU: ${e.message}`, 'esto es un fallo de C1EÑ, no de tu programa: avísalo con el código de codigoCuda(f)'); }
+      r.gpu.set(indiceGpu, fun);
+    }
+    const lanz = [{ t: 'i64', v: n }];
+    const memorias = [];
+    const bajadas = [];
+    const err = new BigUint64Array([0xffffffffffffffffn]);
+    try {
+      args.forEach((v, k) => {
+        if (v instanceof ObjArreglo) {
+          const vista = preps[k].vista;
+          const d = cu.reservar(Math.max(8, vista.byteLength));
+          memorias.push(d);
+          cu.subir(d, vista);
+          bajadas.push([vista, d]);
+          lanz.push({ t: 'ptr', v: d }, { t: 'i64', v: vista.length });
+        } else if (typeof v === 'boolean') lanz.push({ t: 'i64', v: v ? 1 : 0 });
+        else lanz.push({ t: r.modelo.params[k + 1].tipoEntrada === 'real' ? 'f64' : 'i64', v });
+      });
+      const de = cu.reservar(8);
+      memorias.push(de);
+      cu.subir(de, err);
+      lanz.push({ t: 'ptr', v: de });
+      cu.lanzar(fun, c1enBloques(n, cu), C1EN_HILOS_BLOQUE, lanz);
+      cu.sincronizar();
+      for (const [vista, d] of bajadas) cu.bajar(vista, d);
+      cu.bajar(err, de);
+    } catch (e) {
+      if (e instanceof ErrorTiempoEjecucion) throw e;
+      vm.error(`«${quien}»: la GPU falló: ${e.message}`);
+    } finally {
+      for (const d of memorias) { try { cu.liberar(d); } catch (_) { /* ya no hay nada que hacer */ } }
+    }
+    return c1enLeerClave(err[0]);
+  }
+
+  function codigo(cierre, ejemplos, destino, quien) {
+    if (!(cierre instanceof ObjCierre)) vm.error(`«${quien}»: hace falta una función de Ñ, no una de la biblioteca`);
+    const fn = cierre.fn;
+    if (!fn.ast || fn.deDisco) vm.error(`«${quien}»: esta función no trae su código fuente (vino de bytecode)`);
+    const ps = fn.ast.params;
+    if (ejemplos.length > ps.length - 1)
+      vm.error(`«${quien}»: la función tiene ${ps.length - 1} parámetro(s) además del índice y llegaron ${ejemplos.length} ejemplos`);
+    // Sin ejemplo, el tipo sale de la anotación; sin anotación, de cómo se usa:
+    // si se indexa es un arreglo real, y si no, un número real.
+    const tipos = [];
+    for (let k = 1; k < ps.length; k++) {
+      if (k - 1 < ejemplos.length) { tipos.push(tipoDeArg(ejemplos[k - 1], ps[k].anotacion, quien, k + 1, ps[k].nombre)); continue; }
+      const an = ps[k].anotacion;
+      if (an && an.k === 'entero') tipos.push('ent');
+      else if (an && an.k === 'real') tipos.push('real');
+      else if (an && an.k === 'bool') tipos.push('bool');
+      else tipos.push(c1enSeIndexa(fn.ast, ps[k].nombre) ? 'f64*' : 'real');
+    }
+    if (tipos.includes('otro*')) vm.error(`«${quien}»: solo entran arreglos real o entero`);
+    const r = modeloDe(cierre, tipos, quien);
+    if (destino === 'c') return r.c || (r.c = c1enEmitir(r.modelo, 'c'));
+    return r.cuda || (r.cuda = c1enEmitir(r.modelo, 'cuda'));
+  }
+
+  // ── núcleos de biblioteca ─────────────────────────────────────────────────
+  // La interfaz para los autores de la biblioteca (NEÑ): el cuerpo ya viene
+  // escrito en C —válido a la vez para C y para CUDA— con su respaldo en
+  // JavaScript. Aquí no hay análisis: quien escribe un núcleo de biblioteca es
+  // responsable de sus índices, igual que en CUDA.
+  const TIPOS_K = { f64: ['double', 'double', 'double'], i64: ['int64_t', 'long long', 'int64_t'],
+    i32: ['int32_t', 'int', 'int32_t'], 'f64*': ['double *', 'double*', 'double *'], 'i32*': ['int32_t *', 'int*', 'int32_t *'] };
+  const nucleos = new Map();
+  function kernel(spec) {
+    if (!spec || typeof spec !== 'object') throw new Error('vm.c1en.kernel: falta la especificación');
+    const { nombre, params, cuerpo, js } = spec;
+    if (typeof nombre !== 'string' || !/^[a-z0-9_]+$/.test(nombre))
+      throw new Error(`vm.c1en.kernel: el nombre «${nombre}» tiene que ser [a-z0-9_]`);
+    if (nucleos.has(nombre)) throw new Error(`vm.c1en.kernel: ya hay un núcleo «${nombre}»`);
+    if (!Array.isArray(params) || !params.length || params[0][1] !== 'i64')
+      throw new Error(`vm.c1en.kernel «${nombre}»: el primer parámetro es siempre ['n', 'i64']`);
+    for (const [pn, pt] of params) {
+      if (!TIPOS_K[pt]) throw new Error(`vm.c1en.kernel «${nombre}»: el tipo «${pt}» de «${pn}» no existe (f64, i64, i32, f64*, i32*)`);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(pn)) throw new Error(`vm.c1en.kernel «${nombre}»: «${pn}» no es un nombre de C`);
+    }
+    if (typeof cuerpo !== 'string' || typeof js !== 'function')
+      throw new Error(`vm.c1en.kernel «${nombre}»: hacen falta «cuerpo» (C) y «js» (respaldo)`);
+    const k = { nombre, params, cuerpo, js, c: null, cuda: null, fnNativa: null, gpu: new Map() };
+    nucleos.set(nombre, k);
+    const lanzar = (...args) => lanzarKernel(k, args);
+    lanzar.nucleo = k;
+    return lanzar;
+  }
+  function fuenteKernel(k, destino) {
+    const d = destino === 'cuda' ? 1 : 0;
+    const ps = k.params.map(([pn, pt]) => `${TIPOS_K[pt][d]} ${pn}`).join(', ');
+    if (destino === 'c') return C1EN_CABECERA_C + C1EN_PRELUDIO +
+      `\nvoid ${k.nombre}(${ps}) {\n#pragma omp parallel for schedule(static) if (n > 2048)\n` +
+      `  for (long long i = 0; i < n; i++) {\n    ${k.cuerpo}\n  }\n}\n`;
+    const un = k.params.map(([, pt], j) => `*(${TIPOS_K[pt][1]}*)p[${j}]`).join(', ');
+    return C1EN_CABECERA_CUDA + C1EN_PRELUDIO +
+      `\nextern "C" __global__ void ${k.nombre}(${ps}) {\n` +
+      `  for (long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (long long)blockDim.x * gridDim.x) {\n` +
+      `    ${k.cuerpo}\n  }\n}\n` + c1enEmulador(k.nombre, un);
+  }
+  function lanzarKernel(k, args) {
+    const quien = k.nombre;
+    if (args.length !== k.params.length)
+      vm.error(`el núcleo «${quien}» recibe ${k.params.length} argumentos y llegaron ${args.length}`);
+    const n = args[0];
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 0)
+      vm.error(`el núcleo «${quien}»: n tiene que ser un entero no negativo y es ${repr(n, 1)}`);
+    const plano = [];
+    const devolver = [];
+    const arrs = [];
+    args.forEach((v, j) => {
+      const pt = k.params[j][1];
+      if (pt.endsWith('*')) {
+        const ctor = pt === 'f64*' ? Float64Array : Int32Array;
+        if (v instanceof ObjArreglo) {
+          if ((pt === 'f64*' && v.tipo !== 'real') || (pt === 'i32*' && v.tipo !== 'entero'))
+            vm.error(`el núcleo «${quien}»: «${k.params[j][0]}» es un arreglo ${pt === 'f64*' ? 'real' : 'entero'} y llegó uno ${v.tipo}`);
+          arrs.push({ x: v, k: j + 1 });
+          const p = prepararArreglo(v, quien, j + 1);
+          if (p.devolver) devolver.push(p.devolver);
+          plano.push(p.vista);
+        } else if (v instanceof ctor) plano.push(v);
+        else vm.error(`el núcleo «${quien}»: «${k.params[j][0]}» tiene que ser un arreglo y es ${tipoDe(v)}`);
+      } else {
+        if (typeof v !== 'number') vm.error(`el núcleo «${quien}»: «${k.params[j][0]}» tiene que ser un número y es ${tipoDe(v)}`);
+        plano.push(v);
+      }
+    });
+    exigirSinSolape(arrs, quien);
+    elegirInicial();
+    vm.cobrar(n);
+    try {
+      if (n === 0) return null;
+      if (actual === 'jit') { k.js(...plano); return null; }
+      if (actual === 'nativo') {
+        if (!k.fnNativa) {
+          if (!k.c) k.c = fuenteKernel(k, 'c');
+          const firma = k.params.map(([, pt]) => TIPOS_K[pt][2]).join(', ');
+          try { k.fnNativa = c1enNativo().compilar(k.c, [{ nombre: k.nombre, firma: `void ${k.nombre}(${firma})` }])[k.nombre]; }
+          catch (e) { vm.error(`el núcleo «${quien}» no compila en C: ${e.message}`); }
+        }
+        k.fnNativa(...plano);
+        return null;
+      }
+      const cu = c1enCuda();
+      let fun = k.gpu.get(indiceGpu);
+      if (!fun) {
+        if (!k.cuda) k.cuda = fuenteKernel(k, 'cuda');
+        try { fun = cu.compilar(k.cuda, [k.nombre])[k.nombre]; }
+        catch (e) { vm.error(`el núcleo «${quien}» no compila para la GPU: ${e.message}`); }
+        k.gpu.set(indiceGpu, fun);
+      }
+      const memorias = [], bajadas = [], lanz = [];
+      try {
+        plano.forEach((v, j) => {
+          const pt = k.params[j][1];
+          if (pt.endsWith('*')) {
+            const d = cu.reservar(Math.max(8, v.byteLength));
+            memorias.push(d);
+            cu.subir(d, v);
+            bajadas.push([v, d]);
+            lanz.push({ t: 'ptr', v: d });
+          } else lanz.push({ t: pt, v });
+        });
+        cu.lanzar(fun, c1enBloques(n, cu), C1EN_HILOS_BLOQUE, lanz);
+        cu.sincronizar();
+        for (const [v, d] of bajadas) cu.bajar(v, d);
+      } catch (e) {
+        if (e instanceof ErrorTiempoEjecucion) throw e;
+        vm.error(`el núcleo «${quien}»: la GPU falló: ${e.message}`);
+      } finally {
+        for (const d of memorias) { try { cu.liberar(d); } catch (_) { /* nada */ } }
+      }
+      return null;
+    } finally {
+      for (const f of devolver) f();
+    }
+  }
+
+  // ── reducciones deterministas ───────────────────────────────────────────────
+  // Suma, máximo y mínimo por un ÁRBOL DE ORDEN FIJO: en cada pasada el
+  // elemento j es op(x[2j], x[2j+1]) y el último, si sobra, pasa tal cual. El
+  // mismo árbol en los tres dispositivos, así que el mismo resultado al bit. En
+  // la GPU es una pasada por nivel (log2 n lanzamientos) en vez de una
+  // reducción en memoria compartida con atomicAdd: los atómicos de reales suman
+  // en el orden en que llegan los hilos, y eso cambia el último bit de una
+  // ejecución a otra. Como regalo, la suma por parejas acumula mucho menos error
+  // que la suma de izquierda a derecha.
+  const OPS_RED = { suma: 1, maximo: 1, minimo: 1 };
+  let redNativa = null;
+  const redGpu = new Map();
+  function reducir(op, arreglo) {
+    if (!OPS_RED[op]) vm.error(`vm.c1en.reducir: la operación es "suma", "maximo" o "minimo" y llegó «${op}»`);
+    let datos;
+    if (arreglo instanceof ObjArreglo) {
+      if (arreglo.tipo !== 'real' && arreglo.tipo !== 'entero') vm.error(`«${op}»: solo arreglos real o entero`);
+      datos = Float64Array.from(vm.arrValores(arreglo));
+    } else if (arreglo instanceof Float64Array || arreglo instanceof Int32Array) datos = Float64Array.from(arreglo);
+    else vm.error(`vm.c1en.reducir: hace falta un arreglo y llegó ${tipoDe(arreglo)}`);
+    const n = datos.length;
+    if (n === 0) {
+      if (op === 'suma') return 0;
+      vm.error(`«${op}» de un arreglo vacío`);
+    }
+    elegirInicial();
+    vm.cobrar(n);
+    if (actual === 'jit') return c1enReducirJS(op, datos);
+    if (actual === 'nativo') {
+      if (!redNativa) {
+        const f = ['suma', 'maximo', 'minimo'].map(o => ({ nombre: 'c1en_red_' + o, firma: `double c1en_red_${o}(double *, int64_t)` }));
+        try { redNativa = c1enNativo().compilar(c1enFuenteReducir('c'), f); }
+        catch (e) { vm.error(`las reducciones no compilan en C: ${e.message}`); }
+      }
+      return redNativa['c1en_red_' + op](datos, n);
+    }
+    const cu = c1enCuda();
+    let funs = redGpu.get(indiceGpu);
+    if (!funs) {
+      try { funs = cu.compilar(c1enFuenteReducir('cuda'), ['c1en_red_suma', 'c1en_red_maximo', 'c1en_red_minimo']); }
+      catch (e) { vm.error(`las reducciones no compilan para la GPU: ${e.message}`); }
+      redGpu.set(indiceGpu, funs);
+    }
+    let a = null, b = null;
+    try {
+      a = cu.reservar(n * 8); b = cu.reservar(Math.max(8, Math.ceil(n / 2) * 8));
+      cu.subir(a, datos);
+      let len = n;
+      while (len > 1) {
+        const m = Math.ceil(len / 2);
+        cu.lanzar(funs['c1en_red_' + op], c1enBloques(m, cu), C1EN_HILOS_BLOQUE,
+          [{ t: 'i64', v: m }, { t: 'i64', v: len }, { t: 'ptr', v: a }, { t: 'ptr', v: b }]);
+        const t = a; a = b; b = t;
+        len = m;
+      }
+      cu.sincronizar();
+      const r = new Float64Array(1);
+      cu.bajar(r, a);
+      return r[0];
+    } finally {
+      if (a !== null) cu.liberar(a);
+      if (b !== null) cu.liberar(b);
+    }
+  }
+
+  return {
+    get dispositivo() { elegirInicial(); return actual; },
+    get gpu() { elegirInicial(); return actual === 'gpu' ? indiceGpu : null; },
+    usar, describir, disponibles, paralelo, codigo, kernel, reducir,
+    // Para las pruebas y para quien quiera ver el JavaScript que corre en "jit".
+    codigoJS(cierre, ejemplos) {
+      const r = modeloDe(cierre, tiposParaLlamada(cierre, ejemplos, 'codigoJS'), 'codigoJS');
+      return c1enEmitir(r.modelo, 'js');
+    },
+    fuenteKernel(lanzador, destino) { return fuenteKernel(lanzador.nucleo, destino); },
+  };
+}
+
+function c1enLeerClave(k) {
+  if (k === 0xffffffffffffffffn) return null;
+  return [Number(k >> 24n), Number(k & 0xffffffn)];
+}
+function c1enBloques(n, cu) {
+  const max = (cu && cu.maxBloques) || 1048576;
+  return Math.max(1, Math.min(max, Math.ceil(n / C1EN_HILOS_BLOQUE)));
+}
+// ¿Se usa «nombre[…]» en el cuerpo? Solo para adivinar tipos en codigoC/codigoCuda.
+function c1enSeIndexa(ast, nombre) {
+  let si = false;
+  (function mirar(n) {
+    if (si || !n || typeof n !== 'object') return;
+    if (Array.isArray(n)) { n.forEach(mirar); return; }
+    if (n.tipo === 'Indice' && n.obj && n.obj.tipo === 'Variable' && n.obj.nombre === nombre) { si = true; return; }
+    if (n.tipo === 'Llamada' && n.callee && n.callee.tipo === 'Variable' &&
+        ['longitud', 'tamano', 'sumarAtomico'].includes(n.callee.nombre) &&
+        n.args[0] && n.args[0].tipo === 'Variable' && n.args[0].nombre === nombre) { si = true; return; }
+    for (const k in n) if (k !== 'proto' && k !== 'ups') mirar(n[k]);
+  })(ast.cuerpo);
+  return si;
+}
+
+// La reducción por árbol en JavaScript: en el sitio, sobre una copia. Escribir
+// x[j] mientras se leen x[2j] y x[2j+1] es seguro porque 2j ≥ j: nunca se lee
+// algo que ya se haya escrito en esta pasada.
+function c1enOpRed(op) {
+  if (op === 'suma') return (a, b) => a + b;
+  // NaN gana siempre, y si no hay NaN el orden de los argumentos decide los
+  // empates: así máximo(+0, −0) da lo mismo en los tres dispositivos.
+  if (op === 'maximo') return (a, b) => (a !== a ? a : ((b > a || b !== b) ? b : a));
+  return (a, b) => (a !== a ? a : ((b < a || b !== b) ? b : a));
+}
+function c1enReducirJS(op, x) {
+  const f = c1enOpRed(op);
+  let len = x.length;
+  while (len > 1) {
+    const m = Math.ceil(len / 2);
+    for (let j = 0; 2 * j + 1 < len; j++) x[j] = f(x[2 * j], x[2 * j + 1]);
+    if (len % 2) x[m - 1] = x[len - 1];
+    len = m;
+  }
+  return x[0];
+}
+function c1enFuenteReducir(destino) {
+  const ops = {
+    suma: '(a + b)',
+    maximo: '((a != a) ? a : ((b > a || b != b) ? b : a))',
+    minimo: '((a != a) ? a : ((b < a || b != b) ? b : a))',
+  };
+  let s = '/* C1EÑ — reducciones por árbol de orden fijo. */\n';
+  if (destino === 'c') {
+    s += C1EN_CABECERA_C;
+    for (const o in ops) s +=
+      `double c1en_red_${o}(double* x, int64_t len) {\n` +
+      `  while (len > 1) {\n    int64_t m = (len + 1) / 2;\n` +
+      `    for (int64_t j = 0; 2 * j + 1 < len; j++) { double a = x[2 * j], b = x[2 * j + 1]; x[j] = ${ops[o]}; }\n` +
+      `    if (len % 2) x[m - 1] = x[len - 1];\n    len = m;\n  }\n  return x[0];\n}\n`;
+    return s;
+  }
+  s += C1EN_CABECERA_CUDA;
+  for (const o in ops) {
+    s += `extern "C" __global__ void c1en_red_${o}(long long m, long long len, double* x, double* y) {\n` +
+      `  for (long long j = (long long)blockIdx.x * blockDim.x + threadIdx.x; j < m; j += (long long)blockDim.x * gridDim.x) {\n` +
+      `    if (2 * j + 1 < len) { double a = x[2 * j], b = x[2 * j + 1]; y[j] = ${ops[o]}; } else y[j] = x[2 * j];\n  }\n}\n`;
+    s += c1enEmulador(`c1en_red_${o}`, '*(long long*)p[0], *(long long*)p[1], *(double**)p[2], *(double**)p[3]');
+  }
+  return s;
+}
+// Para el simulador de las pruebas: un envoltorio que recorre la cuadrícula en
+// la CPU y desempaqueta los parámetros igual que lo hace el driver con el
+// arreglo «void **kernelParams». Solo existe compilando con -DC1EN_EMULAR: NVRTC
+// no lo ve nunca.
+function c1enEmulador(nombre, desempaquetar) {
+  return `#ifdef C1EN_EMULAR\nextern "C" void c1en_emul_${nombre}(unsigned gx, unsigned bx, void** p) {\n` +
+    `  gridDim.x = gx; blockDim.x = bx;\n` +
+    `  for (unsigned b = 0; b < gx; b++) for (unsigned t = 0; t < bx; t++) {\n` +
+    `    blockIdx.x = b; threadIdx.x = t;\n    ${nombre}(${desempaquetar});\n  }\n}\n#endif\n`;
+}
+
+// ============================================================================
+//  El análisis: tipos, ámbitos y sitios de fallo
+// ============================================================================
+// Recorre la función y deja un MODELO que los tres emisores leen igual: el tipo
+// de cada expresión, el nombre de C de cada variable y el número de cada sitio
+// que puede fallar. Que los tres lean el mismo modelo es lo que garantiza que
+// hagan las mismas conversiones en el mismo sitio.
+//
+// Los tipos son 'ent', 'real' y 'bool'; los arreglos van aparte. El de una
+// variable es la UNIÓN de todo lo que se le asigna (ent ∪ real = real), y se
+// calcula hasta que no cambia: «var x = 0» seguido de «x = x / 2» deja x real,
+// como en Ñ, donde x valdría 0,5.
+function c1enAnalizar(vm, cierre, tiposArgs, quien) {
+  const fn = cierre.fn;
+  const ast = fn.ast;
+  const enl = fn.enlace || null;
+  const nombreFn = fn.nombre && fn.nombre !== '<anónima>' ? fn.nombre : 'anónima';
+  const no = (n, que, pista) =>
+    vm.error(`«${quien}»: no se puede compilar «${nombreFn}» para C1EÑ — línea ${(n && n.linea) || ast.linea}: ${que}`, pista || null);
+
+  if (fn.nUpvalues > 0) {
+    const ups = (ast.ups || []).map(u => u.nombre).filter(Boolean);
+    no(ast, `usa ${ups.length ? ups.map(u => '«' + u + '»').join(', ') : 'variables'} de fuera de la función, ` +
+      'y un núcleo no puede capturar variables: pásalas como argumentos', 'paralelo(n, funcion(i, a, x) { … }, a, x)');
+  }
+
+  const M = {
+    nombre: nombreFn, linea: ast.linea, ast: ast.cuerpo, params: [], vars: [], tipos: new Map(), arrDe: new Map(),
+    sitios: [null], sitioDe: new Map(), llamadas: new Map(), porNodo: new Map(),
+  };
+  const asc = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9_]/g, '_');
+  let nVars = 0;
+  const nuevaVar = (nombre, extra) => Object.assign({ nombre, cn: `v${nVars++}_${asc(nombre)}`, tipo: null, anot: null, fijo: false }, extra);
+
+  // Los parámetros: el 0 es el índice del hilo; los demás, lo que llegó.
+  const ps = ast.params;
+  M.params.push(Object.assign(nuevaVar(ps[0].nombre), { tipo: 'ent', tipoEntrada: 'ent', entrada: 'p0' }));
+  for (let k = 1; k < ps.length; k++) {
+    const t = tiposArgs[k - 1];
+    if (t === 'f64*' || t === 'i32*')
+      M.params.push({ nombre: ps[k].nombre, arr: t === 'f64*' ? 'real' : 'ent', cn: `p${k}`, cnN: `n${k}` });
+    else M.params.push(Object.assign(nuevaVar(ps[k].nombre), { tipo: t, tipoEntrada: t, entrada: `p${k}` }));
+  }
+
+  const sitio = (n, clase, texto, pista) => {
+    let porClase = M.sitioDe.get(n);
+    if (!porClase) { porClase = new Map(); M.sitioDe.set(n, porClase); }
+    if (!porClase.has(clase)) {
+      const id = M.sitios.length;
+      if (id >= 0xffffff) no(n, 'el núcleo es demasiado largo (más de 16 millones de sitios que pueden fallar)');
+      M.sitios.push({ linea: n.linea || ast.linea, texto, pista });
+      porClase.set(clase, id);
+    }
+    return porClase.get(clase);
+  };
+  M.sitio = (n, clase) => M.sitioDe.get(n).get(clase);
+
+  const unir = (a, b, n, nombre) => {
+    if (a === null) return b;
+    if (a === b) return a;
+    if ((a === 'ent' && b === 'real') || (a === 'real' && b === 'ent')) return 'real';
+    no(n, `«${nombre}» es a veces ${a === 'bool' ? 'bool' : 'un número'} y a veces ${b === 'bool' ? 'bool' : 'un número'}`,
+      'dentro de un núcleo cada variable tiene un solo tipo');
+  };
+  const tipoAnot = (an, n, nombre) => {
+    if (!an) return null;
+    if (an.k === 'entero') return 'ent';
+    if (an.k === 'real') return 'real';
+    if (an.k === 'bool') return 'bool';
+    if (an.k === 'cualquiera') return null;
+    no(n, `«${nombre}» está anotada como ${tipoATexto(an)}, y en un núcleo las variables son entero, real o bool`);
+  };
+  const esNum = t => t === 'ent' || t === 'real';
+
+  let scopes;
+  const buscar = nombre => {
+    for (let s = scopes.length - 1; s >= 0; s--) if (scopes[s].has(nombre)) return scopes[s].get(nombre);
+    return null;
+  };
+  const declarar = (clave, nombre, extra) => {
+    let info = M.porNodo.get(clave);
+    if (!info) { info = nuevaVar(nombre, extra); M.porNodo.set(clave, info); M.vars.push(info); }
+    scopes[scopes.length - 1].set(nombre, info);
+    return info;
+  };
+  let cambio = false;
+  const asignarTipo = (info, t, n) => {
+    if (info.anot) {
+      if (info.anot === 'ent' && t === 'real')
+        no(n, `«${info.nombre}» es entera y se le asigna un real`, 'usa piso(x) o techo(x), o declárala real');
+      if ((info.anot === 'bool') !== (t === 'bool')) unir(info.anot, t, n, info.nombre);
+      return;
+    }
+    const u = unir(info.tipo, t, n, info.nombre);
+    if (u !== info.tipo) { info.tipo = u; cambio = true; }
+  };
+
+  // ¿Qué nativa hay detrás de este nombre? Se resuelve como lo hace el
+  // compilador —con el enlace del archivo— y se mira el valor: una función de
+  // usuario que se llame «raiz» no es la raíz.
+  const resolverLlamada = n => {
+    if (n.callee.tipo !== 'Variable') no(n, 'solo se pueden llamar funciones por su nombre');
+    const nombre = n.callee.nombre;
+    if (buscar(nombre)) no(n, `«${nombre}» es una variable, no una función`);
+    const g = vm.globals.get(globalDeEnlace(enl, nombre));
+    if (g instanceof ObjNativa) {
+      const corto = g.nombreCorto || g.nombre;
+      if (C1EN_FUNCIONES[corto] !== undefined && (!g.edsl || g.edsl === 'numerico' || g.edsl === 'nen')) return corto;
+      no(n, `«${nombre}» no se puede llamar dentro de un núcleo`, `las que sí: ${C1EN_LISTA}`);
+    }
+    if (g instanceof ObjCierre)
+      no(n, `llama a la función de usuario «${nombre}», y un núcleo no puede llamar a otras funciones de Ñ`,
+        'escribe esa cuenta dentro del núcleo (en la v1 de C1EÑ no hay llamadas entre núcleos)');
+    no(n, `«${nombre}» no es una función que se conozca aquí`, `las que sí: ${C1EN_LISTA}`);
+  };
+
+  // Una expresión de tipo arreglo: solo un parámetro arreglo, por su nombre.
+  const arregloDe = (n, para) => {
+    if (n.tipo !== 'Variable') no(n, `${para} necesita un arreglo que sea un parámetro, por su nombre`);
+    const info = buscar(n.nombre);
+    if (!info) no(n, `«${n.nombre}» es de fuera del núcleo`, 'pásalo como argumento de paralelo');
+    if (!info.arr) no(n, `«${n.nombre}» no es un arreglo`);
+    M.arrDe.set(n, info);
+    return info;
+  };
+
+  function tx(n) {
+    const t = tx0(n);
+    M.tipos.set(n, t);
+    return t;
+  }
+  function tx0(n) {
+    switch (n.tipo) {
+      case 'Literal':
+        if (typeof n.valor === 'boolean') return 'bool';
+        if (typeof n.valor === 'number') {
+          const real = n.tipoLit && (n.tipoLit === T.real || n.tipoLit.k === 'real');
+          if (!real && Math.abs(n.valor) > 9007199254740992)
+            no(n, `el entero ${n.valor} no cabe exacto en un número de Ñ (más de 2^53)`);
+          return real ? 'real' : 'ent';
+        }
+        if (typeof n.valor === 'string') no(n, `usa texto (${repr(n.valor, 1)}), y en un núcleo solo hay números, bool y arreglos`);
+        no(n, 'usa «nulo», y en un núcleo solo hay números, bool y arreglos');
+        break;
+      case 'Interpolacion': no(n, 'usa texto, y en un núcleo solo hay números, bool y arreglos'); break;
+      case 'ListaLit': no(n, 'crea una lista, y dentro de un núcleo no se crean objetos', 'reserva los arreglos fuera y pásalos'); break;
+      case 'DicLit': no(n, 'crea un diccionario, y dentro de un núcleo no se crean objetos'); break;
+      case 'FuncionAnon': no(n, 'declara una función anónima (un cierre), y un núcleo no puede'); break;
+      case 'Propiedad': no(n, `usa «.${n.nombre}», y dentro de un núcleo no hay campos ni métodos`); break;
+      case 'Variable': {
+        const info = buscar(n.nombre);
+        if (info) {
+          if (info.arr) no(n, `el arreglo «${n.nombre}» solo se puede usar como ${n.nombre}[i], o en longitud(${n.nombre})`);
+          if (info.tipo === null) no(n, `«${n.nombre}» se usa antes de tener valor`);
+          return info.tipo;
+        }
+        if (n.nombre[0] === '|') {
+          const v = vm.globals.get(n.nombre);
+          if (typeof v !== 'number') no(n, `la constante «${n.nombre}» no es un número`);
+          M.llamadas.set(n, v);
+          return 'real';
+        }
+        no(n, `«${n.nombre}» es una variable de fuera del núcleo`, 'pásala como argumento: paralelo(n, f, a, b, ' + n.nombre + ')');
+        break;
+      }
+      case 'Unario': {
+        const t = tx(n.expr);
+        if (n.op === 'no') { if (t !== 'bool') no(n, '«no» necesita un bool'); return 'bool'; }
+        if (!esNum(t)) no(n, '«-» necesita un número');
+        return t;
+      }
+      case 'Binario': {
+        const a = tx(n.izq);
+        // «x ** 2» con el exponente escrito como entero pequeño se multiplica:
+        // x*x da el mismo bit en todas partes y pow() no está garantizado.
+        if (n.op === '**' && n.der.tipo === 'Literal' && typeof n.der.valor === 'number' &&
+            !(n.der.tipoLit && n.der.tipoLit.k === 'real') && n.der.valor >= 0 && n.der.valor <= 4) {
+          tx(n.der);
+          if (!esNum(a)) no(n, '«**» necesita números');
+          return a;
+        }
+        const b = tx(n.der);
+        return tipoBin(n, n.op, a, b);
+      }
+      case 'Indice': {
+        const info = arregloDe(n.obj, 'indexar');
+        const ti = tx(n.indice);
+        if (ti !== 'ent') no(n, `el índice de «${info.nombre}» tiene que ser entero y es ${ti === 'real' ? 'real' : 'bool'}`,
+          'usa piso(x) para convertir un real en índice');
+        sitio(n, 'idx', `el índice se sale del arreglo «${info.nombre}»`, `los índices válidos van de 0 a longitud(${info.nombre}) − 1`);
+        return info.arr;
+      }
+      case 'Llamada': {
+        const f = resolverLlamada(n);
+        M.llamadas.set(n, f);
+        const nArgs = C1EN_FUNCIONES[f];
+        if (n.args.length !== nArgs) no(n, `«${f}» recibe ${nArgs} argumento(s) dentro de un núcleo y llegaron ${n.args.length}`);
+        if (f === 'sumarAtomico') no(n, '«sumarAtomico» es una sentencia: no devuelve nada que usar');
+        if (f === 'longitud' || f === 'tamano') { arregloDe(n.args[0], `«${f}»`); return 'ent'; }
+        const ts = n.args.map(tx);
+        for (let k = 0; k < ts.length; k++) if (!esNum(ts[k])) no(n, `«${f}» necesita números y el argumento ${k + 1} es bool`);
+        if (f === 'azarHilo') {
+          ts.forEach((t, k) => { if (t !== 'ent') no(n, `«azarHilo»: el argumento ${k + 1} tiene que ser entero`, 'azarHilo(semilla, i, canal) con tres enteros'); });
+          return 'real';
+        }
+        if (f === 'raiz') { sitio(n, 'raiz', '«raiz» de un número negativo'); return 'real'; }
+        if (f === 'log' || f === 'log10') { sitio(n, 'log', `«${f}» necesita un número positivo`); return 'real'; }
+        if (f === 'absoluto') return ts[0];
+        if (f === 'piso' || f === 'techo') {
+          if (ts[0] === 'ent') return 'ent';
+          sitio(n, 'piso', `«${f}» de un número que no es un entero exacto (infinito, NaN o más de 2^53)`);
+          return 'ent';
+        }
+        if (f === 'minimo' || f === 'maximo') return ts[0] === 'ent' && ts[1] === 'ent' ? 'ent' : 'real';
+        return 'real';   // trascendentes y angulo
+      }
+      case 'Asignacion': no(n, 'una asignación dentro de una expresión', 'escríbela como sentencia aparte'); break;
+      default: no(n, `«${n.tipo}» no está en el subconjunto que C1EÑ sabe compilar`);
+    }
+    return null;
+  }
+  function tipoBin(n, op, a, b) {
+    if (op === 'y' || op === 'o') {
+      if (a !== 'bool' || b !== 'bool') no(n, `«${op}» une condiciones (bool), y aquí hay números`, 'compara antes: x > 0 y x < 1');
+      return 'bool';
+    }
+    if (op === '==' || op === '!=') {
+      if ((a === 'bool') !== (b === 'bool')) no(n, `«${op}» compara un bool con un número`);
+      return 'bool';
+    }
+    if (!esNum(a) || !esNum(b)) no(n, `«${op}» necesita números y hay un bool`);
+    switch (op) {
+      case '<': case '<=': case '>': case '>=': return 'bool';
+      case '+': case '-': case '*': return a === 'ent' && b === 'ent' ? 'ent' : 'real';
+      case '/': sitio(n, 'div', 'división entre cero'); return 'real';
+      case '//': sitio(n, 'div', 'división entre cero'); return a === 'ent' && b === 'ent' ? 'ent' : 'real';
+      case '%': sitio(n, 'mod', 'módulo entre cero'); return a === 'ent' && b === 'ent' ? 'ent' : 'real';
+      case '**': return 'real';
+      default: no(n, `el operador «${op}» no está en el subconjunto`);
+    }
+    return null;
+  }
+
+  // ── sentencias ──────────────────────────────────────────────────────────────
+  let bucles = 0;
+  function bloque(b) {
+    scopes.push(new Map());
+    for (const s of b.cuerpo) ts(s);
+    scopes.pop();
+  }
+  function cuerpoBucle(n, b) {
+    bucles++;
+    sitio(n, 'vueltas', `un hilo dio más de ${C1EN_MAX_VUELTAS.toLocaleString('es')} vueltas: probablemente un bucle infinito`);
+    bloque(b);
+    bucles--;
+  }
+  function ts(n) {
+    switch (n.tipo) {
+      case 'DeclVar': {
+        const anot = tipoAnot(n.anotacion, n, n.nombre);
+        if (!n.valor && !anot) no(n, `«${n.nombre}» se declara sin valor ni tipo`, `var ${n.nombre}: real = 0.0`);
+        let t = null;
+        if (n.valor) {
+          if (n.valor.tipo === 'Variable' && buscar(n.valor.nombre) && buscar(n.valor.nombre).arr)
+            no(n, `copia el arreglo «${n.valor.nombre}» en una variable, y dentro de un núcleo no se crean arreglos`,
+              `usa ${n.valor.nombre} directamente`);
+          t = tx(n.valor);
+        }
+        const info = declarar(n, n.nombre, { fijo: !!n.esFijo });
+        if (anot) { info.anot = anot; info.tipo = anot; if (t) asignarTipo(info, t, n); }
+        else asignarTipo(info, t, n);
+        return;
+      }
+      case 'ExprSent': {
+        const e = n.expr;
+        if (e.tipo === 'Asignacion') return asignacion(e);
+        if (e.tipo === 'Llamada') {
+          const f = resolverLlamada(e);
+          M.llamadas.set(e, f);
+          if (f !== 'sumarAtomico') no(e, `el resultado de «${f}» no se usa`, 'guárdalo en una variable o en un arreglo');
+          if (e.args.length !== 3) no(e, '«sumarAtomico» recibe (arreglo, índice, valor)');
+          const info = arregloDe(e.args[0], '«sumarAtomico»');
+          const tj = tx(e.args[1]), tv = tx(e.args[2]);
+          if (tj !== 'ent') no(e, 'el índice de «sumarAtomico» tiene que ser entero');
+          if (!esNum(tv)) no(e, '«sumarAtomico» suma números');
+          if (info.arr === 'ent' && tv !== 'ent') no(e, `«${info.nombre}» es un arreglo entero y se le suma un real`, 'usa piso(v), o un arreglo real');
+          sitio(e, 'idx', `el índice se sale del arreglo «${info.nombre}»`, `los índices válidos van de 0 a longitud(${info.nombre}) − 1`);
+          return;
+        }
+        no(n, 'esta expresión no hace nada', 'en un núcleo las sentencias son asignaciones, si, mientras, para y sumarAtomico');
+        return;
+      }
+      case 'Si': {
+        if (tx(n.cond) !== 'bool') no(n.cond, 'la condición de «si» tiene que ser un bool', 'compara: si x > 0 { … }');
+        ts(n.entonces);
+        if (n.sino) ts(n.sino);
+        return;
+      }
+      case 'Bloque': bloque(n); return;
+      case 'Mientras': {
+        if (tx(n.cond) !== 'bool') no(n.cond, 'la condición de «mientras» tiene que ser un bool');
+        cuerpoBucle(n, n.cuerpo);
+        return;
+      }
+      case 'Repetir': {
+        if (tx(n.cuantas) !== 'ent') no(n, '«repetir» necesita un número entero de veces');
+        cuerpoBucle(n, n.cuerpo);
+        return;
+      }
+      case 'Para': {
+        const it = n.iterable;
+        const esRango = it.tipo === 'Llamada' && it.callee.tipo === 'Variable' && !buscar(it.callee.nombre) &&
+          (() => { const g = vm.globals.get(globalDeEnlace(enl, it.callee.nombre)); return g instanceof ObjNativa && (g.nombreCorto || g.nombre) === 'rango'; })();
+        if (!esRango) no(n, '«para» solo recorre rango(…) dentro de un núcleo', 'para j en rango(longitud(a)) { … a[j] … }');
+        if (it.args.length < 1 || it.args.length > 3) no(n, '«rango» acepta 1, 2 o 3 argumentos');
+        for (const x of it.args) if (tx(x) !== 'ent') no(x, '«rango» necesita enteros dentro de un núcleo', 'usa piso(x)');
+        if (it.args.length === 3) {
+          const p = it.args[2];
+          if (p.tipo === 'Literal' && p.valor === 0) no(p, 'el paso de «rango» no puede ser 0');
+          sitio(n, 'paso', 'el paso de «rango» es 0');
+        }
+        scopes.push(new Map());
+        const info = declarar(n, n.nombre, {});
+        asignarTipo(info, 'ent', n);
+        cuerpoBucle(n, n.cuerpo);
+        scopes.pop();
+        return;
+      }
+      case 'Romper': case 'Continuar':
+        if (!bucles) no(n, `«${n.tipo === 'Romper' ? 'romper' : 'continuar'}» fuera de un bucle`);
+        return;
+      case 'Devolver':
+        if (n.valor) no(n, 'devuelve un valor, y un núcleo no devuelve nada', 'escribe el resultado en un arreglo: r[i] = …');
+        return;
+      case 'DeclFuncion': no(n, `declara la función «${n.nombre}» dentro, y un núcleo no puede`); return;
+      case 'Intentar': no(n, 'usa intentar/capturar, y en una GPU no hay excepciones', 'los fallos (dividir entre cero, índices) los informa el propio C1EÑ con la línea'); return;
+      case 'Lanzar': no(n, 'usa «lanzar», y en una GPU no hay excepciones'); return;
+      case 'Usar': no(n, 'un «usar» dentro de un núcleo'); return;
+      default: no(n, `«${n.tipo}» no está en el subconjunto que C1EÑ sabe compilar`);
+    }
+  }
+  function asignacion(e) {
+    const d = e.destino;
+    if (d.tipo === 'Variable') {
+      const info = buscar(d.nombre);
+      if (!info) no(e, `asigna a «${d.nombre}», que es de fuera del núcleo`, 'el núcleo solo escribe en sus variables y en sus arreglos');
+      if (info.arr) no(e, `reasigna el arreglo «${d.nombre}»`, `escribe en sus elementos: ${d.nombre}[i] = …`);
+      if (info.fijo) no(e, `«${d.nombre}» es fija`);
+      let t = tx(e.valor);
+      if (e.op !== '=') {
+        if (info.tipo === null) no(e, `«${d.nombre}» se usa antes de tener valor`);
+        M.tipos.set(d, info.tipo);
+        t = tipoBin(e, e.op[0], info.tipo, t);
+      }
+      M.tipos.set(e, t);
+      asignarTipo(info, t, e);
+      return;
+    }
+    if (d.tipo === 'Indice') {
+      const info = arregloDe(d.obj, 'asignar por índice');
+      if (tx(d.indice) !== 'ent') no(e, `el índice de «${info.nombre}» tiene que ser entero`, 'usa piso(x)');
+      sitio(d, 'idx', `el índice se sale del arreglo «${info.nombre}»`, `los índices válidos van de 0 a longitud(${info.nombre}) − 1`);
+      let t = tx(e.valor);
+      if (e.op !== '=') t = tipoBin(e, e.op[0], info.arr, t);
+      M.tipos.set(e, t);
+      if (!esNum(t)) no(e, `se guarda un bool en el arreglo «${info.nombre}»`);
+      if (info.arr === 'ent' && t === 'real') no(e, `se guarda un real en el arreglo entero «${info.nombre}»`, 'usa piso(x) o techo(x), o un arreglo real');
+      return;
+    }
+    no(e, 'solo se puede asignar a una variable o a a[i]');
+  }
+
+  // Punto fijo: se repite hasta que ningún tipo cambie (una variable solo
+  // puede pasar de ent a real, así que son dos o tres vueltas).
+  for (let vuelta = 0; ; vuelta++) {
+    cambio = false;
+    scopes = [new Map()];
+    for (const p of M.params) scopes[0].set(p.nombre, p);
+    // Un parámetro escalar se copia a una local al entrar: se puede reasignar,
+    // y su tipo puede ensancharse (llega 2 y luego se le suma 0,5).
+    bloque(ast.cuerpo);
+    if (!cambio) break;
+    if (vuelta > 20) no(ast, 'los tipos no se estabilizan (fallo interno de C1EÑ)');
+  }
+  for (const v of M.vars) if (v.tipo === null) v.tipo = 'ent';
+  return M;
+}
+
+// ============================================================================
+//  Los emisores: el mismo modelo, tres textos
+// ============================================================================
+// Todo se escribe con la misma forma en los tres destinos: variables y
+// temporales declarados arriba, los fallos como expresiones que valen 0, y
+// después de cada sentencia que puede fallar un «if (f) return f». Así el
+// orden de evaluación y el punto donde un hilo se detiene son los mismos.
+function c1enEmitir(M, destino) {
+  const js = destino === 'js', cu = destino === 'cuda';
+  const TY = { ent: cu ? 'long long' : 'int64_t', real: 'double', bool: 'int' };
+  const EQ = js ? '===' : '==', NE = js ? '!==' : '!=';
+  const temps = [];
+  const tmp = t => { const nm = `t${temps.length}`; temps.push([nm, t]); return nm; };
+  let fallas = 0;
+  const FALLA = id => { fallas++; return js ? `((f === 0 || ${id} < f) ? (f = ${id}) : 0, 0)` : `c1en_falla(&f, ${id})`; };
+  const FALLA_S = id => js ? `{ if (f === 0 || ${id} < f) f = ${id}; return f; }` : `{ c1en_falla(&f, ${id}); return f; }`;
+  const MATH = f => (js ? 'Math.' + f : f);
+  const aReal = (c, t) => (t === 'real' ? c : (js ? `(${c} + 0)` : `((double)(${c}))`));
+  const conv = (c, de, a) => (a === 'real' ? aReal(c, de) : c);
+  const lit = (v, t) => {
+    if (t === 'bool') return js ? String(v) : (v ? '1' : '0');
+    if (t === 'ent') return js ? String(v) : `${v}LL`;
+    if (v === Infinity) return js ? 'Infinity' : 'C1EN_INF';
+    if (js) return String(v);
+    if (cu) return `${c1enHexReal(v)} /* ${v} */`;
+    const s = String(v);
+    return /[.eE]/.test(s) ? s : s + '.0';
+  };
+  const enRango = (j, nn) => (js ? `(${j} >= 0 && ${j} < ${nn})` : `((${cu ? 'unsigned long long' : 'uint64_t'})(${j}) < (${cu ? 'unsigned long long' : 'uint64_t'})(${nn}))`);
+  const tipoDe = n => M.tipos.get(n);
+
+  function binop(nodo, op, a, ta, b, tb, tr) {
+    switch (op) {
+      case 'y': return `(${a} && ${b})`;
+      case 'o': return `(${a} || ${b})`;
+      case '==': return `(${a} ${EQ} ${b})`;
+      case '!=': return `(${a} ${NE} ${b})`;
+      case '<': case '<=': case '>': case '>=': return `(${a} ${op} ${b})`;
+      case '+': case '-': case '*':
+        return tr === 'ent' ? `(${a} ${op} ${b})` : `(${aReal(a, ta)} ${op} ${aReal(b, tb)})`;
+      case '/': {
+        const t = tmp('real');
+        return `(${t} = ${aReal(b, tb)}, ${t} ${EQ} 0 ? ${FALLA(M.sitio(nodo, 'div'))} : ${aReal(a, ta)} / ${t})`;
+      }
+      case '//': {
+        if (tr === 'ent') {
+          const t = tmp('ent');
+          return `(${t} = ${b}, ${t} ${EQ} 0 ? ${FALLA(M.sitio(nodo, 'div'))} : ${js ? `Math.floor(${a} / ${t})` : `c1en_div_piso(${a}, ${t})`})`;
+        }
+        const t = tmp('real');
+        return `(${t} = ${aReal(b, tb)}, ${t} ${EQ} 0 ? ${FALLA(M.sitio(nodo, 'div'))} : ${MATH('floor')}(${aReal(a, ta)} / ${t}))`;
+      }
+      case '%': {
+        if (tr === 'ent') {
+          const t = tmp('ent');
+          return `(${t} = ${b}, ${t} ${EQ} 0 ? ${FALLA(M.sitio(nodo, 'mod'))} : ${js ? `((${a} % ${t}) + ${t}) % ${t}` : `c1en_mod(${a}, ${t})`})`;
+        }
+        const t = tmp('real');
+        const r = js ? `((${aReal(a, ta)} % ${t}) + ${t}) % ${t}` : `fmod(fmod(${aReal(a, ta)}, ${t}) + ${t}, ${t})`;
+        return `(${t} = ${aReal(b, tb)}, ${t} ${EQ} 0 ? ${FALLA(M.sitio(nodo, 'mod'))} : ${r})`;
+      }
+      case '**': return `${MATH('pow')}(${aReal(a, ta)}, ${aReal(b, tb)})`;
+    }
+    throw new Error('operador sin emitir: ' + op);
+  }
+
+  function leerArr(info, j) {
+    const t = tmp('ent');
+    return { t, codigo: (nodo) => `(${t} = ${j}, ${enRango(t, info.cnN)} ? ${info.cn}[${t}] : ${FALLA(M.sitio(nodo, 'idx'))})` };
+  }
+
+  function ex(n) {
+    const t = tipoDe(n);
+    switch (n.tipo) {
+      case 'Literal': return lit(n.valor, t);
+      case 'Variable': {
+        if (M.llamadas.has(n)) return lit(M.llamadas.get(n), 'real');
+        return varDe(n.nombre);
+      }
+      case 'Unario': return n.op === 'no' ? `(!${ex(n.expr)})` : `(-${ex(n.expr)})`;
+      case 'Binario': {
+        if (n.op === '**' && n.der.tipo === 'Literal' && tipoDe(n.der) === 'ent' && n.der.valor >= 0 && n.der.valor <= 4) {
+          const k = n.der.valor;
+          const tb = tmp(t);
+          const base = ex(n.izq);
+          if (k === 0) return `(${tb} = ${base}, ${lit(1, t)})`;
+          let prod = tb;
+          for (let q = 1; q < k; q++) prod = `(${prod} * ${tb})`;
+          return `(${tb} = ${base}, ${prod})`;
+        }
+        return binop(n, n.op, ex(n.izq), tipoDe(n.izq), ex(n.der), tipoDe(n.der), t);
+      }
+      case 'Indice': {
+        const info = M.arrDe.get(n.obj);
+        return leerArr(info, ex(n.indice)).codigo(n);
+      }
+      case 'Llamada': return llamada(n, t);
+    }
+    throw new Error('expresión sin emitir: ' + n.tipo);
+  }
+  function llamada(n, t) {
+    const f = M.llamadas.get(n);
+    const as = n.args;
+    if (f === 'longitud' || f === 'tamano') return M.arrDe.get(as[0]).cnN;
+    const a0 = () => ex(as[0]), t0 = tipoDe(as[0]);
+    switch (f) {
+      case 'raiz': {
+        const x = tmp('real');
+        return `(${x} = ${aReal(a0(), t0)}, ${x} < 0 ? ${FALLA(M.sitio(n, 'raiz'))} : ${MATH('sqrt')}(${x}))`;
+      }
+      case 'log': case 'log10': {
+        const x = tmp('real');
+        return `(${x} = ${aReal(a0(), t0)}, ${x} <= 0 ? ${FALLA(M.sitio(n, 'log'))} : ${js ? C1EN_TRASC_JS[f] : C1EN_TRASC[f]}(${x}))`;
+      }
+      case 'angulo': return `${MATH('atan2')}(${aReal(a0(), t0)}, ${aReal(ex(as[1]), tipoDe(as[1]))})`;
+      case 'absoluto': {
+        if (t === 'real') return `${js ? 'Math.abs' : 'fabs'}(${a0()})`;
+        const x = tmp('ent');
+        return `(${x} = ${a0()}, ${x} < 0 ? -${x} : ${x})`;
+      }
+      case 'piso': case 'techo': {
+        if (t0 === 'ent') return a0();
+        const x = tmp('real');
+        const fn = f === 'piso' ? 'floor' : 'ceil';
+        const r = js ? `Math.${fn}(${x})` : `(${TY.ent})${fn}(${x})`;
+        return `(${x} = ${a0()}, (${x} >= -9007199254740992.0 && ${x} <= 9007199254740992.0) ? ${r} : ${FALLA(M.sitio(n, 'piso'))})`;
+      }
+      case 'minimo': case 'maximo': {
+        const a = tmp(t), b = tmp(t);
+        return `(${a} = ${conv(a0(), t0, t)}, ${b} = ${conv(ex(as[1]), tipoDe(as[1]), t)}, ${b} ${f === 'minimo' ? '<' : '>'} ${a} ? ${b} : ${a})`;
+      }
+      case 'azarHilo': return `${js ? 'c1enAzar' : 'c1en_azar'}(${a0()}, ${ex(as[1])}, ${ex(as[2])})`;
+      default: return `${js ? C1EN_TRASC_JS[f] : C1EN_TRASC[f]}(${aReal(a0(), t0)})`;
+    }
+  }
+
+  // Los nombres de las variables por ámbito, igual que en el análisis.
+  let scopes;
+  const buscar = nombre => {
+    for (let s = scopes.length - 1; s >= 0; s--) if (scopes[s].has(nombre)) return scopes[s].get(nombre);
+    return null;
+  };
+  const varDe = nombre => buscar(nombre).cn;
+
+  const lineas = [];
+  let ind = 2;
+  const L = s => lineas.push(' '.repeat(ind) + s);
+  const comprobar = antes => { if (fallas > antes) L('if (f) return f;'); };
+
+  function bloque(b) {
+    scopes.push(new Map());
+    for (const s of b.cuerpo) st(s);
+    scopes.pop();
+  }
+  function vuelta(n) { L(`if (++vueltas > ${C1EN_MAX_VUELTAS}) ${FALLA_S(M.sitio(n, 'vueltas'))}`); }
+  function st(n) {
+    if (!js) L(`/* línea ${n.linea} */`);
+    switch (n.tipo) {
+      case 'DeclVar': {
+        const info = M.porNodo.get(n);
+        scopes[scopes.length - 1].set(n.nombre, info);
+        const antes = fallas;
+        const v = n.valor ? conv(ex(n.valor), tipoDe(n.valor), info.tipo) : lit(info.tipo === 'bool' ? false : 0, info.tipo);
+        L(`${info.cn} = ${v};`);
+        comprobar(antes);
+        return;
+      }
+      case 'ExprSent': {
+        const e = n.expr;
+        if (e.tipo === 'Llamada') return sumarAtomico(e);
+        return asignacion(e);
+      }
+      case 'Si': {
+        const c = tmp('bool');
+        const antes = fallas;
+        L(`${c} = ${ex(n.cond)};`);
+        comprobar(antes);
+        L(`if (${c}) {`);
+        ind += 2; st(n.entonces); ind -= 2;
+        if (n.sino) { L('} else {'); ind += 2; st(n.sino); ind -= 2; }
+        L('}');
+        return;
+      }
+      case 'Bloque': bloque(n); return;
+      case 'Mientras': {
+        const c = tmp('bool');
+        L('for (;;) {');
+        ind += 2;
+        vuelta(n);
+        const antes = fallas;
+        L(`${c} = ${ex(n.cond)};`);
+        comprobar(antes);
+        L(`if (!${c}) break;`);
+        bloque(n.cuerpo);
+        ind -= 2;
+        L('}');
+        return;
+      }
+      case 'Repetir': {
+        const cn = tmp('ent'), k = tmp('ent');
+        const antes = fallas;
+        L(`${cn} = ${ex(n.cuantas)};`);
+        comprobar(antes);
+        L(`for (${k} = 0; ${k} < ${cn}; ${k}++) {`);
+        ind += 2;
+        vuelta(n);
+        bloque(n.cuerpo);
+        ind -= 2;
+        L('}');
+        return;
+      }
+      case 'Para': {
+        const as = n.iterable.args;
+        const ini = tmp('ent'), fin = tmp('ent'), paso = tmp('ent'), cur = tmp('ent');
+        const antes = fallas;
+        if (as.length === 1) { L(`${ini} = 0;`); L(`${fin} = ${ex(as[0])};`); }
+        else { L(`${ini} = ${ex(as[0])};`); L(`${fin} = ${ex(as[1])};`); }
+        L(`${paso} = ${as.length === 3 ? ex(as[2]) : lit(1, 'ent')};`);
+        comprobar(antes);
+        if (as.length === 3) L(`if (${paso} ${EQ} 0) ${FALLA_S(M.sitio(n, 'paso'))}`);
+        L(`for (${cur} = ${ini}; ${paso} > 0 ? ${cur} < ${fin} : ${cur} > ${fin}; ${cur} += ${paso}) {`);
+        ind += 2;
+        vuelta(n);
+        scopes.push(new Map());
+        const info = M.porNodo.get(n);
+        scopes[scopes.length - 1].set(n.nombre, info);
+        L(`${info.cn} = ${cur};`);
+        bloque(n.cuerpo);
+        scopes.pop();
+        ind -= 2;
+        L('}');
+        return;
+      }
+      case 'Romper': L('break;'); return;
+      case 'Continuar': L('continue;'); return;
+      case 'Devolver': L('return 0;'); return;
+    }
+    throw new Error('sentencia sin emitir: ' + n.tipo);
+  }
+  // Guardar en un arreglo entero: Ñ guarda los enteros en Int32Array, que se
+  // envuelve módulo 2^32 al escribir. En C se dice lo mismo pasando por
+  // unsigned, que es la única conversión que el estándar define para todos los
+  // valores.
+  const guardarEnt = v => (js ? v : `(${cu ? 'int' : 'int32_t'})(${cu ? 'unsigned int' : 'uint32_t'})(${cu ? 'unsigned long long' : 'uint64_t'})(${v})`);
+  function asignacion(e) {
+    const d = e.destino;
+    const t = tipoDe(e) || tipoDe(e.valor);
+    if (d.tipo === 'Variable') {
+      const info = buscar(d.nombre);
+      const antes = fallas;
+      let v = ex(e.valor);
+      if (e.op !== '=') v = binop(e, e.op[0], info.cn, info.tipo, v, tipoDe(e.valor), t);
+      L(`${info.cn} = ${conv(v, e.op !== '=' ? t : tipoDe(e.valor), info.tipo)};`);
+      comprobar(antes);
+      return;
+    }
+    const info = M.arrDe.get(d.obj);
+    const tj = tmp('ent');
+    const elem = info.arr;
+    const tv = tmp(e.op === '=' ? (elem === 'real' ? 'real' : 'ent') : t);
+    const antes = fallas;
+    L(`${tj} = ${ex(d.indice)};`);
+    let v = ex(e.valor);
+    let tvTipo = tipoDe(e.valor);
+    if (e.op !== '=') {
+      const lee = `(${enRango(tj, info.cnN)} ? ${info.cn}[${tj}] : ${FALLA(M.sitio(d, 'idx'))})`;
+      v = binop(e, e.op[0], lee, elem, v, tvTipo, t);
+      tvTipo = t;
+    }
+    L(`${tv} = ${elem === 'real' ? aReal(v, tvTipo) : v};`);
+    comprobar(antes);
+    L(`if (!${enRango(tj, info.cnN)}) ${FALLA_S(M.sitio(d, 'idx'))}`);
+    L(`${info.cn}[${tj}] = ${elem === 'real' ? tv : guardarEnt(tv)};`);
+  }
+  function sumarAtomico(e) {
+    const info = M.arrDe.get(e.args[0]);
+    const tj = tmp('ent'), tv = tmp(info.arr === 'real' ? 'real' : 'ent');
+    const antes = fallas;
+    L(`${tj} = ${ex(e.args[1])};`);
+    L(`${tv} = ${info.arr === 'real' ? aReal(ex(e.args[2]), tipoDe(e.args[2])) : ex(e.args[2])};`);
+    comprobar(antes);
+    L(`if (!${enRango(tj, info.cnN)}) ${FALLA_S(M.sitio(e, 'idx'))}`);
+    if (js) L(`${info.cn}[${tj}] += ${tv};`);
+    else if (cu) L(info.arr === 'real' ? `atomicAdd(&${info.cn}[${tj}], ${tv});` : `atomicAdd(&${info.cn}[${tj}], (int)(unsigned int)(unsigned long long)${tv});`);
+    else {
+      L('#pragma omp atomic');
+      L(info.arr === 'real' ? `${info.cn}[${tj}] += ${tv};` : `*(uint32_t*)&${info.cn}[${tj}] += (uint32_t)(uint64_t)${tv};`);
+    }
+  }
+
+  scopes = [new Map()];
+  for (const p of M.params) scopes[0].set(p.nombre, p);
+  // La copia de los parámetros escalares a sus locales.
+  for (const p of M.params) if (!p.arr) L(`${p.cn} = ${conv(p.entrada, p.tipoEntrada, p.tipo)};`);
+  bloque(M.ast);
+  const cuerpo = lineas.join('\n');
+
+  // ── el envoltorio de cada destino ──
+  const firmaCuerpo = [], llamada0 = [], firmaNucleo = [], desemp = [];
+  M.params.forEach((p, k) => {
+    if (p.arr) {
+      const ty = p.arr === 'real' ? 'double' : (cu ? 'int' : 'int32_t');
+      firmaCuerpo.push(`${ty}* ${p.cn}`, `${TY.ent} ${p.cnN}`);
+      llamada0.push(p.cn, p.cnN);
+      firmaNucleo.push(`${ty}* ${p.cn}`, `${TY.ent} ${p.cnN}`);
+      desemp.push(`*(${ty}**)p[${desemp.length}]`, `*(long long*)p[${desemp.length + 1}]`);
+    } else {
+      const ty = p.tipoEntrada === 'real' ? 'double' : TY.ent;
+      firmaCuerpo.push(`${ty} ${p.entrada}`);
+      llamada0.push(k === 0 ? 'i' : p.entrada);
+      if (k > 0) {
+        firmaNucleo.push(`${ty} ${p.entrada}`);
+        desemp.push(`*(${ty === 'double' ? 'double' : 'long long'}*)p[${desemp.length}]`);
+      }
+    }
+  });
+  const locales = [];
+  for (const p of M.params) if (!p.arr) locales.push([p.cn, p.tipo]);
+  for (const v of M.vars) locales.push([v.cn, v.tipo]);
+  for (const [nm, t] of temps) locales.push([nm, t]);
+
+  if (js) {
+    const decl = locales.map(([nm, t]) => `${nm} = ${t === 'bool' ? 'false' : '0'}`);
+    const sinN = firmaCuerpo.slice(1).map(s => s.split(' ').pop());
+    return `(function () {\n` +
+      `  ${c1enMezclar.toString()}\n  ${c1enAzar.toString()}\n` +
+      `  // C1EÑ — «${M.nombre}» (línea ${M.linea}), destino jit\n` +
+      `  function cuerpo(${['p0'].concat(sinN).join(', ')}) {\n` +
+      `    let f = 0, vueltas = 0;\n` + (decl.length ? `    let ${decl.join(', ')};\n` : '') +
+      cuerpo.split('\n').map(l => '  ' + l).join('\n') + `\n    return 0;\n  }\n` +
+      `  return function nucleo(n${sinN.length ? ', ' + sinN.join(', ') : ''}) {\n` +
+      `    for (let i = 0; i < n; i++) {\n` +
+      `      const c = cuerpo(i${sinN.length ? ', ' + sinN.join(', ') : ''});\n` +
+      `      if (c !== 0) return [i, c];\n` +
+      `      }\n    return null;\n  };\n})()`;
+  }
+  // En JavaScript el primer hilo que falla es el de índice más bajo porque se
+  // recorren en orden, así que se puede parar ahí. En C y en CUDA los hilos
+  // corren a la vez y se elige el más bajo con la clave (i << 24 | sitio).
+  const decl = locales.map(([nm, t]) => `  ${TY[t]} ${nm} = 0;`).join('\n');
+  const titulo = `/* C1EÑ — generado desde la función «${M.nombre}» (línea ${M.linea}).\n` +
+    (cu ? '   Compilar con NVRTC: --fmad=false -arch=compute_75 (sin FMA: mismos bits que la CPU). */\n'
+      : '   Compilar con: gcc -O2 -shared -fPIC -ffp-contract=off [-fopenmp] (sin FMA). */\n');
+  const cab = (cu ? C1EN_CABECERA_CUDA : C1EN_CABECERA_C) + C1EN_PRELUDIO;
+  const fCuerpo = `${cu ? 'static __device__ ' : 'static '}${TY.ent} c1en_cuerpo(${firmaCuerpo.join(', ')}) {\n` +
+    `  ${TY.ent} f = 0, vueltas = 0;\n${decl}\n${cuerpo}\n  (void)vueltas;\n  return 0;\n}\n`;
+  if (!cu) {
+    return titulo + cab + '\n' + fCuerpo + '\n' +
+      `void c1en_nucleo(int64_t n${firmaNucleo.length ? ', ' + firmaNucleo.join(', ') : ''}, uint64_t* c1en_err) {\n` +
+      // Reparto dinámico en trozos de 256: en un mandelbrot unos hilos dan 3
+      // vueltas y otros 500, y con trozos fijos un núcleo de la CPU acaba
+      // mucho antes que el otro. No cambia ningún resultado: cada índice se
+      // calcula igual lo haga quien lo haga.
+      `#pragma omp parallel for schedule(dynamic, 256) if (n > 2048)\n` +
+      `  for (int64_t i = 0; i < n; i++) {\n` +
+      `    int64_t c = c1en_cuerpo(${llamada0.join(', ')});\n` +
+      `    if (c != 0) {\n      uint64_t k = ((uint64_t)i << 24) | (uint64_t)c;\n` +
+      `#pragma omp critical (c1en_err)\n      { if (k < c1en_err[0]) c1en_err[0] = k; }\n    }\n  }\n}\n`;
+  }
+  const todosDesemp = ['*(long long*)p[0]'].concat(desemp.map(s => s.replace(/p\[(\d+)\]/, (_, q) => `p[${+q + 1}]`)))
+    .concat([`*(unsigned long long**)p[${desemp.length + 1}]`]).join(', ');
+  return titulo + cab + '\n' + fCuerpo + '\n' +
+    `extern "C" __global__ void c1en_nucleo(long long n${firmaNucleo.length ? ', ' + firmaNucleo.join(', ') : ''}, unsigned long long* c1en_err) {\n` +
+    `  for (long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (long long)blockDim.x * gridDim.x) {\n` +
+    `    long long c = c1en_cuerpo(${llamada0.join(', ')});\n` +
+    `    if (c != 0) atomicMin(c1en_err, ((unsigned long long)i << 24) | (unsigned long long)c);\n  }\n}\n` +
+    c1enEmulador('c1en_nucleo', todosDesemp);
+}
+
+
+// ============================================================================
+//  Ñ v4 — NEÑ, parte «cálculo»: la matemática de pizarra
+//  Parte 15.
+//
+//  Se importa con:  usar "nen"     (o  usar derivar, integrar de "nen")
+//
+//  Esta parte es lo que se escribe en una pizarra antes de tocar un tensor:
+//  derivar, integrar, despejar, minimizar, resolver una ecuación diferencial,
+//  jugar con polinomios, las funciones especiales que salen en cualquier libro
+//  de física o de estadística, y la teoría de números que cabe en 53 bits.
+//
+//  QUÉ NO ESTÁ AQUÍ, A PROPÓSITO. El eDSL «numerico» ya tiene factorial,
+//  combinaciones, mcd/mcm, esPrimo, primos, regresion lineal, «resolver» de
+//  sistemas lineales, LU/QR/SVD, Fourier y el azar sembrable. Nada de eso se
+//  repite: cuando una función de aquí lo necesita (la integral de Montecarlo
+//  necesita azar), lo PIDE a «numerico» para que «semilla(7)» siga mandando
+//  sobre todo el azar del programa.
+//
+//  DOS CAPAS. Todo el cálculo de verdad vive en tres bloques de JavaScript
+//  puro —NEN_CALCULO (cálculo, ecuaciones, optimización), NEN_CALCULO2
+//  (EDOs, polinomios, interpolación) y NEN_ESPECIALES (funciones especiales,
+//  probabilidad, números)—: reciben funciones de JavaScript y números, y no
+//  saben nada de la VM. La
+//  segunda capa, «instalarNenCalculo», es la aduana: convierte listas, arreglos
+//  y funciones de Ñ en eso, y convierte de vuelta. Separarlo así tiene dos
+//  ventajas que se notan: los métodos numéricos se pueden probar sueltos, y el
+//  día que C1EÑ quiera uno de ellos no tiene que arrastrar la VM.
+//
+//  LOS POLINOMIOS son listas de coeficientes EN ORDEN CRECIENTE de potencia:
+//      [c0, c1, c2]  es  c0 + c1·x + c2·x²
+//  Se eligió así (y no como NumPy, que va de la potencia mayor a la menor)
+//  porque entonces el índice ES la potencia: p[2] es el coeficiente de x², y
+//  sumar dos polinomios es sumar posición a posición sin alinear por la cola.
+// ============================================================================
+
+// Los errores de la capa pura. La aduana los convierte en un «vm.error» con el
+// nombre de la función delante; cualquier otro error (por ejemplo, uno que
+// lanzó la función de Ñ que se estaba integrando) pasa sin tocarlo.
+class ErrorNenCalculo extends Error {
+  constructor(mensaje, pista) { super(mensaje); this.pista = pista || null; }
+}
+
+const NEN_CALCULO = (function () {
+  const EPS = 2.220446049250313e-16;
+  const RAIZ_PI = Math.sqrt(Math.PI);
+  const LN_RAIZ_2PI = 0.5 * Math.log(2 * Math.PI);
+  const falla = (m, p) => { throw new ErrorNenCalculo(m, p); };
+  // Un número para un mensaje: seis cifras bastan para reconocerlo.
+  const fmt = x => (typeof x !== 'number' ? String(x) : !isFinite(x) ? (isNaN(x) ? 'NaN' : (x > 0 ? 'infinito' : '-infinito'))
+    : Number.isInteger(x) ? String(x) : String(Number(x.toPrecision(6))));
+  const normaInf = v => { let m = 0; for (const x of v) { const a = Math.abs(x); if (a > m) m = a; } return m; };
+
+  // ══════════════════════════════════════════════════════════════════ CÁLCULO
+
+  // ── Ridders: Richardson sobre una sucesión de pasos ───────────────────────
+  // Toda derivada numérica tiene el mismo dilema: con h grande manda el error
+  // de truncamiento, con h pequeño manda el redondeo (restar dos números casi
+  // iguales). No hay un h bueno para todas las funciones. Ridders no elige uno:
+  // calcula la aproximación con h, h/1.4, h/1.4², … y extrapola a h = 0 con la
+  // tabla de Richardson, quedándose con la casilla de menor error estimado y
+  // parando en cuanto el redondeo empieza a ganar. Da 10–13 cifras donde una
+  // diferencia central a pelo da 7–8.
+  //
+  // «p» es el orden de la expansión del error: 2 para fórmulas centradas (el
+  // error solo tiene potencias pares de h) y 1 para las de un solo lado.
+  function ridders(estim, h0, p) {
+    const CON = 1.4, CONP = Math.pow(CON, p), NTAB = 10, SEGURO = 2;
+    let h = h0, a00 = estim(h), intentos = 0;
+    // Si en h0 la función no está definida (log cerca de 0, raíz de un
+    // negativo), se achica el paso antes de rendirse.
+    while (!isFinite(a00) && intentos++ < 12) { h /= 10; a00 = estim(h); }
+    if (!isFinite(a00)) return { valor: NaN, error: Infinity };
+    const a = [[a00]];
+    let err = Infinity, mejor = a00;
+    for (let i = 1; i < NTAB; i++) {
+      h /= CON;
+      a[0][i] = estim(h);
+      if (!isFinite(a[0][i])) break;
+      let fac = CONP;
+      for (let j = 1; j <= i; j++) {
+        if (!a[j]) a[j] = [];
+        a[j][i] = (a[j - 1][i] * fac - a[j - 1][i - 1]) / (fac - 1);
+        fac *= CONP;
+        const errt = Math.max(Math.abs(a[j][i] - a[j - 1][i]), Math.abs(a[j][i] - a[j - 1][i - 1]));
+        if (errt <= err) { err = errt; mejor = a[j][i]; }
+      }
+      // Cuando la diagonal empeora de golpe, lo que sigue ya es ruido.
+      if (Math.abs(a[i][i] - a[i - 1][i - 1]) >= SEGURO * err) break;
+    }
+    return { valor: mejor, error: err };
+  }
+  // La misma tabla para vectores (columnas de un jacobiano): una sola tabla
+  // con la norma máxima como error, para no evaluar F una vez por componente.
+  function riddersVec(estim, h0) {
+    const CON = 1.4, CON2 = CON * CON, NTAB = 10, SEGURO = 2;
+    let h = h0, a00 = estim(h), intentos = 0;
+    const malo = v => v.some(x => !isFinite(x));
+    while (malo(a00) && intentos++ < 12) { h /= 10; a00 = estim(h); }
+    if (malo(a00)) return a00.map(() => NaN);
+    const a = [[a00]];
+    let err = Infinity, mejor = a00;
+    const comb = (u, v, fac) => u.map((x, k) => (x * fac - v[k]) / (fac - 1));
+    const dist = (u, v) => { let m = 0; for (let k = 0; k < u.length; k++) m = Math.max(m, Math.abs(u[k] - v[k])); return m; };
+    for (let i = 1; i < NTAB; i++) {
+      h /= CON;
+      a[0][i] = estim(h);
+      if (malo(a[0][i])) break;
+      let fac = CON2;
+      for (let j = 1; j <= i; j++) {
+        if (!a[j]) a[j] = [];
+        a[j][i] = comb(a[j - 1][i], a[j - 1][i - 1], fac);
+        fac *= CON2;
+        const errt = Math.max(dist(a[j][i], a[j - 1][i]), dist(a[j][i], a[j - 1][i - 1]));
+        if (errt <= err) { err = errt; mejor = a[j][i]; }
+      }
+      if (dist(a[i][i], a[i - 1][i - 1]) >= SEGURO * err) break;
+    }
+    return mejor;
+  }
+  // El paso de partida escala con |x|: derivar en x = 10⁶ con h = 0.1 sería
+  // pedirle a la resta 13 cifras que no tiene.
+  const escala = x => Math.max(1, Math.abs(x));
+
+  function derivar(f, x) {
+    const r = ridders(h => (f(x + h) - f(x - h)) / (2 * h), 0.1 * escala(x), 2);
+    if (!isFinite(r.valor)) falla(`la función no es derivable (o no está definida) cerca de x = ${fmt(x)}`,
+      'mira que la función esté definida a los dos lados del punto');
+    return r.valor;
+  }
+  // Derivada n-ésima: la diferencia central de orden n,
+  //     Δⁿf(x)/hⁿ = Σ (−1)ᵏ C(n,k) f(x + (n/2 − k)·h) / hⁿ,
+  // que es simétrica y por eso tiene error en h², h⁴…: justo lo que Ridders
+  // sabe extrapolar. El paso de partida crece con n porque el redondeo se
+  // divide entre hⁿ: con n = 4 y h = 0.01 ya no queda ni una cifra.
+  function derivarN(f, x, n) {
+    if (n === 0) return f(x);
+    if (n === 1) return derivar(f, x);
+    const c = [1];
+    for (let k = 1; k <= n; k++) c[k] = c[k - 1] * (n - k + 1) / k;
+    const est = h => {
+      let s = 0;
+      for (let k = 0; k <= n; k++) s += (k % 2 ? -1 : 1) * c[k] * f(x + (n / 2 - k) * h);
+      return s / Math.pow(h, n);
+    };
+    const r = ridders(est, (0.1 + 0.15 * n) * escala(x), 2);
+    if (!isFinite(r.valor)) falla(`no se pudo derivar ${n} veces cerca de x = ${fmt(x)}`,
+      'la función tiene que estar definida y ser suave alrededor del punto');
+    return r.valor;
+  }
+  // Parcial i-ésima de f: Rⁿ → R.
+  function parcial(f, x, i) {
+    const est = h => {
+      const xp = x.slice(), xm = x.slice();
+      xp[i] += h; xm[i] -= h;
+      return (f(xp) - f(xm)) / (2 * h);
+    };
+    return ridders(est, 0.1 * escala(x[i]), 2).valor;
+  }
+  function gradiente(f, x) {
+    const g = x.map((_, i) => parcial(f, x, i));
+    if (g.some(v => !isFinite(v))) falla('la función no es derivable en ese punto', 'mira que esté definida alrededor del punto');
+    return g;
+  }
+  function jacobiano(F, x) {
+    const n = x.length;
+    const cols = [];
+    let m = -1;
+    for (let j = 0; j < n; j++) {
+      const est = h => {
+        const xp = x.slice(), xm = x.slice();
+        xp[j] += h; xm[j] -= h;
+        const a = F(xp), b = F(xm);
+        if (m < 0) m = a.length;
+        return a.map((v, k) => (v - b[k]) / (2 * h));
+      };
+      cols.push(riddersVec(est, 0.1 * escala(x[j])));
+    }
+    const J = [];
+    for (let i = 0; i < m; i++) J.push(cols.map(c => c[i]));
+    if (J.some(f => f.some(v => !isFinite(v)))) falla('la función no es derivable en ese punto', 'mira que esté definida alrededor del punto');
+    return J;
+  }
+  // Hessiano: la diagonal con la segunda diferencia central y lo de fuera con
+  // la diferencia cruzada de cuatro puntos; las dos tienen error en h², así
+  // que Ridders las mejora igual. Se simetriza al final: la matriz exacta es
+  // simétrica y el ruido de una casilla no tiene por qué serlo.
+  function hessiano(f, x) {
+    const n = x.length;
+    const H = [];
+    for (let i = 0; i < n; i++) H.push(new Array(n).fill(0));
+    for (let i = 0; i < n; i++) {
+      const si = escala(x[i]);
+      const f0 = f(x);
+      H[i][i] = ridders(h => {
+        const xp = x.slice(), xm = x.slice();
+        xp[i] += h; xm[i] -= h;
+        return (f(xp) - 2 * f0 + f(xm)) / (h * h);
+      }, 0.2 * si, 2).valor;
+      for (let j = i + 1; j < n; j++) {
+        const sj = escala(x[j]);
+        const v = ridders(h => {
+          const hi = h * si, hj = h * sj;
+          const pp = x.slice(), pm = x.slice(), mp = x.slice(), mm = x.slice();
+          pp[i] += hi; pp[j] += hj; pm[i] += hi; pm[j] -= hj;
+          mp[i] -= hi; mp[j] += hj; mm[i] -= hi; mm[j] -= hj;
+          return (f(pp) - f(pm) - f(mp) + f(mm)) / (4 * hi * hj);
+        }, 0.2, 2).valor;
+        H[i][j] = H[j][i] = v;
+      }
+    }
+    if (H.some(f => f.some(v => !isFinite(v)))) falla('la función no es dos veces derivable en ese punto');
+    return H;
+  }
+
+  // ── integrales: Gauss–Kronrod 7-15 adaptativo ─────────────────────────────
+  // Por qué Gauss–Kronrod y no Simpson: con 15 evaluaciones integra exacto un
+  // polinomio de grado 29, y la regla de Gauss de 7 puntos va ANIDADA dentro
+  // (comparte los nodos), así que la estimación del error sale gratis. Es la
+  // regla de QUADPACK y de scipy.integrate.quad. Ninguno de sus nodos cae en
+  // los extremos, y por eso aguanta singularidades integrables en un borde
+  // (1/√x en 0) y los cambios de variable que mandan el infinito a t = 1.
+  const XGK = [0.991455371120812639206854697526329, 0.949107912342758524526189684047851,
+    0.864864423359769072789712788640926, 0.741531185599394439863864773280788,
+    0.586087235467691130294144845693013, 0.405845151377397166906606412076961,
+    0.207784955007898467600689403773245, 0];
+  const WGK = [0.022935322010529224963732008058970, 0.063092092629978553290700663189204,
+    0.104790010322250183839876322541518, 0.140653259715525918745189590510238,
+    0.169004726639267902826583426598550, 0.190350578064785409913256402421014,
+    0.204432940075298892414161999234649, 0.209482141084727828012999174891714];
+  const WG = [0.129484966168869693270611432679082, 0.279705391489276667901467771423780,
+    0.381830050505118944950369775488975, 0.417959183673469387755102040816327];
+  function gk15(f, a, b) {
+    const c = 0.5 * (a + b), hl = 0.5 * (b - a);
+    const fc = f(c);
+    let resk = fc * WGK[7], resg = fc * WG[3], resabs = Math.abs(resk);
+    const f1s = new Array(7), f2s = new Array(7);
+    for (let j = 0; j < 7; j++) {
+      const dx = hl * XGK[j];
+      const f1 = f(c - dx), f2 = f(c + dx);
+      f1s[j] = f1; f2s[j] = f2;
+      resk += WGK[j] * (f1 + f2);
+      resabs += WGK[j] * (Math.abs(f1) + Math.abs(f2));
+      if (j % 2 === 1) resg += WG[(j - 1) / 2] * (f1 + f2);
+    }
+    const media = resk * 0.5;
+    let resasc = WGK[7] * Math.abs(fc - media);
+    for (let j = 0; j < 7; j++) resasc += WGK[j] * (Math.abs(f1s[j] - media) + Math.abs(f2s[j] - media));
+    const ah = Math.abs(hl);
+    resasc *= ah; resabs *= ah;
+    // La fórmula de QUADPACK para el error: |K − G| a secas es la precisión
+    // de la regla de Gauss, mucho peor que la de Kronrod, y sobrestima tanto
+    // que obligaría a partir intervalos que ya estaban bien.
+    let err = Math.abs((resk - resg) * hl);
+    if (resasc !== 0 && err !== 0) err = resasc * Math.min(1, Math.pow(200 * err / resasc, 1.5));
+    if (resabs > 1e-290) err = Math.max(50 * EPS * resabs, err);
+    return { valor: resk * hl, error: err };
+  }
+  // Adaptativo GLOBAL: siempre se parte el intervalo con más error, no el
+  // primero que falle. Así el trabajo va a donde está la dificultad (el pico,
+  // la singularidad) y no se reparte a ciegas.
+  function integrarAdapt(f, a, b, rtol, atol, maxSub) {
+    const ivs = [Object.assign({ a, b, fin: false }, gk15(f, a, b))];
+    let total = ivs[0].valor, err = ivs[0].error;
+    while (true) {
+      const tol = Math.max(atol, rtol * Math.abs(total));
+      if (err <= tol) break;
+      if (ivs.length >= maxSub) return { valor: total, error: err, ok: false };
+      let k = -1, max = -1;
+      for (let i = 0; i < ivs.length; i++) if (!ivs[i].fin && ivs[i].error > max) { max = ivs[i].error; k = i; }
+      if (k < 0) return { valor: total, error: err, ok: false };
+      const iv = ivs[k];
+      const m = 0.5 * (iv.a + iv.b);
+      // Un intervalo que ya no se puede partir en coma flotante se da por
+      // cerrado: seguir solo repetiría las mismas evaluaciones.
+      if (!(m > Math.min(iv.a, iv.b) && m < Math.max(iv.a, iv.b)) ||
+          Math.abs(iv.b - iv.a) < 8 * EPS * Math.max(Math.abs(iv.a), Math.abs(iv.b))) { iv.fin = true; continue; }
+      const i1 = Object.assign({ a: iv.a, b: m, fin: false }, gk15(f, iv.a, m));
+      const i2 = Object.assign({ a: m, b: iv.b, fin: false }, gk15(f, m, iv.b));
+      total += i1.valor + i2.valor - iv.valor;
+      err += i1.error + i2.error - iv.error;
+      ivs[k] = i1; ivs.push(i2);
+    }
+    // Se suma de nuevo al final: las restas acumuladas arrastran redondeo.
+    total = 0; err = 0;
+    for (const iv of ivs) { total += iv.valor; err += iv.error; }
+    return { valor: total, error: err, ok: true };
+  }
+  // Los límites infinitos se llevan a un intervalo finito con un cambio de
+  // variable, y el jacobiano del cambio va dentro del integrando:
+  //   [a, ∞)    x = a + t/(1−t),   dx = dt/(1−t)²,        t ∈ [0, 1)
+  //   (−∞, b]   x = b − (1−t)/t,   dx = dt/t²,            t ∈ (0, 1]
+  //   (−∞, ∞)   x = t/(1−t²),      dx = (1+t²)/(1−t²)² dt, t ∈ (−1, 1)
+  // Gauss–Kronrod nunca evalúa en los extremos, así que t = 1 (x = ∞) no se
+  // toca. El precio es que una función que decae despacio (1/x²) se concentra
+  // cerca de t = 1, y ahí el adaptativo trabaja más.
+  function integrar(f, a, b, opciones) {
+    const o = opciones || {};
+    const rtol = o.rtol || 1e-10, atol = o.atol || 1e-13, maxSub = o.maxSub || 1000;
+    if (isNaN(a) || isNaN(b)) falla('los límites no pueden ser NaN');
+    if (a === b) return { valor: 0, error: 0, ok: true };
+    if (a > b) { const r = integrar(f, b, a, o); r.valor = -r.valor; return r; }
+    const seguro = g => t => {
+      const v = g(t);
+      if (!isFinite(v)) {
+        const x = !isFinite(a) || !isFinite(b) ? '(tras el cambio de variable) t' : 'x';
+        falla(`la función vale ${fmt(v)} en ${x} = ${fmt(t)}`,
+          'si tiene una singularidad dentro del intervalo, parte la integral en ese punto');
+      }
+      return v;
+    };
+    let g, ta, tb;
+    if (isFinite(a) && isFinite(b)) { g = f; ta = a; tb = b; }
+    else if (isFinite(a)) { g = t => { const u = 1 - t; const v = f(a + t / u); return v === 0 ? 0 : v / (u * u); }; ta = 0; tb = 1; }
+    else if (isFinite(b)) { g = t => { const v = f(b - (1 - t) / t); return v === 0 ? 0 : v / (t * t); }; ta = 0; tb = 1; }
+    else { g = t => { const u = 1 - t * t; const v = f(t / u); return v === 0 ? 0 : v * (1 + t * t) / (u * u); }; ta = -1; tb = 1; }
+    return integrarAdapt(seguro(g), ta, tb, rtol, atol, maxSub);
+  }
+  // La que ven los usuarios: si no llega a la precisión pedida pero el error
+  // es razonable se devuelve igual (es lo que haría cualquiera con la cifra en
+  // la mano); si el error es grande, se dice en vez de devolver un número falso.
+  function integral(f, a, b) {
+    const r = integrar(f, a, b);
+    if (!r.ok && r.error > 1e-6 * Math.max(1, Math.abs(r.valor)))
+      falla(`la integral no converge: tras partir el intervalo 1000 veces el resultado es ${fmt(r.valor)} ± ${fmt(r.error)}`,
+        'puede que la integral diverja (1/x en 0), o que la función oscile o salte; prueba partir el intervalo');
+    return r.valor;
+  }
+  // Integral doble ∫ₐᵇ ∫_{c(x)}^{d(x)} f(x, y) dy dx. Es una integral de
+  // integrales: la de dentro, más exigente que la de fuera, porque su error
+  // es el ruido que ve la de fuera y con ruido no hay adaptativo que converja.
+  function integrarDoble(f, a, b, c, d) {
+    const r = integrar(x => {
+      const lo = c(x), hi = d(x);
+      const ri = integrar(y => f(x, y), lo, hi, { rtol: 1e-11, atol: 1e-14, maxSub: 400 });
+      return ri.valor;
+    }, a, b, { rtol: 1e-9, atol: 1e-12, maxSub: 400 });
+    if (!r.ok && r.error > 1e-6 * Math.max(1, Math.abs(r.valor)))
+      falla(`la integral doble no converge: ${fmt(r.valor)} ± ${fmt(r.error)}`, 'mira que la función no tenga singularidades dentro de la región');
+    return r.valor;
+  }
+  // Montecarlo: el valor y su error estándar, que es lo que lo hace útil. El
+  // error baja como 1/√n sea cual sea la dimensión —por eso existe—, pero con
+  // n = 10⁴ son dos cifras, no diez.
+  function integrarMontecarlo(f, lims, n, azar) {
+    const d = lims.length;
+    let vol = 1;
+    for (const [a, b] of lims) vol *= (b - a);
+    let s = 0, s2 = 0;
+    const x = new Array(d);
+    for (let k = 0; k < n; k++) {
+      for (let i = 0; i < d; i++) x[i] = lims[i][0] + (lims[i][1] - lims[i][0]) * azar();
+      const v = f(x.slice());
+      if (!isFinite(v)) falla(`la función vale ${fmt(v)} en el punto [${x.map(fmt).join(', ')}]`);
+      s += v; s2 += v * v;
+    }
+    const media = s / n;
+    const varianza = Math.max(0, s2 / n - media * media);
+    return { valor: vol * media, error: vol * Math.sqrt(varianza / n) };
+  }
+  // Datos tabulados: Simpson con espaciado irregular, por parejas de
+  // intervalos (la parábola por tres puntos, integrada exacta). Si el número
+  // de intervalos es impar, el último se cubre con la MISMA parábola por los
+  // tres últimos puntos, integrada solo en su último tramo —es lo que hace
+  // scipy—: así todo sigue siendo exacto para cuadráticas.
+  function integrarDatos(xs, ys, metodo) {
+    const n = xs.length;
+    if (n !== ys.length) falla(`hay ${n} valores de x y ${ys.length} de y`, 'tienen que ir por parejas');
+    if (n < 2) falla('hacen falta al menos dos puntos');
+    for (let i = 1; i < n; i++) if (!(xs[i] > xs[i - 1])) falla('las x tienen que ir en orden creciente y sin repetirse');
+    if (metodo === 'trapecio' || n === 2) {
+      let s = 0;
+      for (let i = 1; i < n; i++) s += 0.5 * (xs[i] - xs[i - 1]) * (ys[i] + ys[i - 1]);
+      return s;
+    }
+    const h = [];
+    for (let i = 0; i < n - 1; i++) h.push(xs[i + 1] - xs[i]);
+    const nint = n - 1;
+    const pares = nint % 2 === 0 ? nint : nint - 1;
+    let s = 0;
+    for (let i = 0; i < pares; i += 2) {
+      const h0 = h[i], h1 = h[i + 1], hs = h0 + h1;
+      s += hs / 6 * (ys[i] * (2 - h1 / h0) + ys[i + 1] * hs * hs / (h0 * h1) + ys[i + 2] * (2 - h0 / h1));
+    }
+    if (pares < nint) {
+      const h0 = h[n - 3], h1 = h[n - 2];
+      const alfa = (2 * h1 * h1 + 3 * h0 * h1) / (6 * (h0 + h1));
+      const beta = (h1 * h1 + 3 * h0 * h1) / (6 * h0);
+      const eta = h1 * h1 * h1 / (6 * h0 * (h0 + h1));
+      s += alfa * ys[n - 1] + beta * ys[n - 2] - eta * ys[n - 3];
+    }
+    return s;
+  }
+  function integrarAcumulado(xs, ys) {
+    const n = xs.length;
+    if (n !== ys.length) falla(`hay ${n} valores de x y ${ys.length} de y`, 'tienen que ir por parejas');
+    const out = [0];
+    for (let i = 1; i < n; i++) {
+      if (!(xs[i] > xs[i - 1])) falla('las x tienen que ir en orden creciente y sin repetirse');
+      out.push(out[i - 1] + 0.5 * (xs[i] - xs[i - 1]) * (ys[i] + ys[i - 1]));
+    }
+    return out;
+  }
+  // Derivada de datos: centrada de segundo orden con espaciado irregular por
+  // dentro y fórmulas de un lado, también de segundo orden, en los bordes. Es
+  // numpy.gradient con edge_order=2: exacta para parábolas en todos lados.
+  function derivarDatos(xs, ys) {
+    const n = xs.length;
+    if (n !== ys.length) falla(`hay ${n} valores de x y ${ys.length} de y`, 'tienen que ir por parejas');
+    if (n < 3) falla('hacen falta al menos tres puntos para derivar con segundo orden');
+    for (let i = 1; i < n; i++) if (!(xs[i] > xs[i - 1])) falla('las x tienen que ir en orden creciente y sin repetirse');
+    const d = new Array(n);
+    for (let i = 1; i < n - 1; i++) {
+      const a = xs[i] - xs[i - 1], b = xs[i + 1] - xs[i];
+      d[i] = (a * a * ys[i + 1] - b * b * ys[i - 1] + (b * b - a * a) * ys[i]) / (a * b * (a + b));
+    }
+    let a = xs[1] - xs[0], b = xs[2] - xs[1];
+    d[0] = -(2 * a + b) / (a * (a + b)) * ys[0] + (a + b) / (a * b) * ys[1] - a / (b * (a + b)) * ys[2];
+    a = xs[n - 2] - xs[n - 3]; b = xs[n - 1] - xs[n - 2];
+    d[n - 1] = b / (a * (a + b)) * ys[n - 3] - (a + b) / (a * b) * ys[n - 2] + (2 * b + a) / (b * (a + b)) * ys[n - 1];
+    return d;
+  }
+
+  // ── series: transformada u de Levin ───────────────────────────────────────
+  // Sumar términos hasta que sean pequeños funciona con 1/2ᵏ y fracasa con
+  // 1/k²: para 10 cifras harían falta 10¹⁰ términos. La transformada u de
+  // Levin estima la cola a partir de cómo decrecen los términos, y converge
+  // tanto con series alternadas como con las de convergencia lenta
+  // («logarítmica») en unas decenas de términos. Se para cuando dos
+  // estimaciones seguidas coinciden; Levin se vuelve inestable pasados unos
+  // sesenta términos, así que ahí se deja de alimentar y se sigue solo con la
+  // suma directa, por si es de las que convergen a lo bruto.
+  function sumaSerie(term, desde) {
+    // Levin se alimenta con los primeros 40 términos. Pasado eso, en series
+    // lentas el redondeo se come la extrapolación (se probó: con 1/k² da 11
+    // cifras hacia el término 12 y ninguna hacia el 30).
+    const NMAX_LEVIN = 40, NMAX = 20000, BETA = 1;
+    const num = [], den = [];
+    let nL = 0, ultimo = NaN, cuentaConv = 0, mejor = NaN, mejorDif = Infinity;
+    let S = 0, pequenos = 0, primero = NaN;
+    for (let k = 0; k < NMAX; k++) {
+      const a = term(desde + k);
+      if (!isFinite(a)) falla(`el término ${desde + k} vale ${fmt(a)}`);
+      if (k === 0) primero = Math.abs(a);
+      S += a;
+      if (!isFinite(S)) falla('la suma se desborda: la serie diverge');
+      // Convergencia a lo bruto: varios términos seguidos que ya no mueven la suma.
+      if (Math.abs(a) <= EPS * Math.abs(S) || a === 0) { if (++pequenos >= 4) return S; } else pequenos = 0;
+      if (nL < NMAX_LEVIN && a !== 0) {
+        const omega = (BETA + nL) * a;
+        let t = 1 / (BETA + nL);
+        den[nL] = t / omega;
+        num[nL] = S * den[nL];
+        if (nL > 0) {
+          const r = (BETA + nL - 1) * t;
+          for (let j = 1; j <= nL; j++) {
+            const fact = (nL - j + BETA) * t;
+            num[nL - j] = num[nL - j + 1] - fact * num[nL - j];
+            den[nL - j] = den[nL - j + 1] - fact * den[nL - j];
+            t *= r;
+          }
+        }
+        nL++;
+        const v = Math.abs(den[0]) < 1e-300 ? NaN : num[0] / den[0];   // degenerada: sin estimación
+        if (nL > 3 && isFinite(v) && isFinite(ultimo)) {
+          const dif = Math.abs(v - ultimo);
+          if (dif < mejorDif) { mejorDif = dif; mejor = v; }
+          if (dif <= 1e-13 * Math.max(1, Math.abs(v))) { if (++cuentaConv >= 2 && Math.abs(a) < primero) return v; } else cuentaConv = 0;
+        } else cuentaConv = 0;
+        ultimo = v;
+        // Fin de la zona útil de Levin: se acepta su mejor estimación si dos
+        // seguidas coincidían en 9 cifras Y los términos de verdad iban a cero
+        // (sin esto, Levin «suma» series divergentes como 1 − 2 + 3 − 4…).
+        if (nL === NMAX_LEVIN && mejorDif <= 1e-9 * Math.max(1, Math.abs(mejor)) && Math.abs(a) < 0.1 * primero) return mejor;
+      }
+    }
+    falla(`la serie no converge (o converge demasiado despacio): tras ${NMAX} términos la suma va por ${fmt(S)}`,
+      'mira que los términos tiendan a cero lo bastante rápido; Σ 1/k, por ejemplo, diverge');
+  }
+
+  // ── límites ───────────────────────────────────────────────────────────────
+  // Se evalúa f en x ± h para h cada vez más pequeño y se extrapola a h = 0
+  // con la misma tabla de Ridders, ahora con error en TODAS las potencias de
+  // h (p = 1), porque a un solo lado no hay simetría que anule las impares.
+  // Nunca se evalúa en el punto mismo: ahí es donde suele estar el 0/0.
+  // Hacia el infinito se cambia x por 1/t y se mira t → 0⁺.
+  function limiteLado(f, x0, s) {
+    let g, h0;
+    if (x0 === Infinity) { g = t => f(1 / t); h0 = 0.1; }
+    else if (x0 === -Infinity) { g = t => f(-1 / t); h0 = 0.1; }
+    else { g = h => f(x0 + s * h); h0 = 0.1 * escala(x0); }
+    return ridders(g, h0, 1);
+  }
+  function limite(f, x0, lado) {
+    const malo = r => !isFinite(r.valor) || Math.abs(r.valor) > 1e12 || r.error > 1e-5 * Math.max(1, Math.abs(r.valor));
+    const noExiste = 'el límite no parece existir: la función crece sin cota u oscila cerca del punto';
+    if (!isFinite(x0) || lado === 'derecha' || lado === 'izquierda') {
+      const r = limiteLado(f, x0, lado === 'izquierda' ? -1 : 1);
+      if (malo(r)) falla(noExiste);
+      return r.valor;
+    }
+    const i = limiteLado(f, x0, -1), d = limiteLado(f, x0, 1);
+    if (malo(i) || malo(d)) {
+      if (!malo(i) || !malo(d)) falla(`el límite por un lado existe y por el otro no`, 'pide uno solo con limite(f, x, "derecha") o "izquierda"');
+      falla(noExiste);
+    }
+    if (Math.abs(i.valor - d.valor) > 1e-7 * Math.max(1, Math.abs(d.valor)) + 10 * (i.error + d.error))
+      falla(`los límites laterales no coinciden: por la izquierda tiende a ${fmt(i.valor)} y por la derecha a ${fmt(d.valor)}`,
+        'pide uno solo con limite(f, x, "derecha") o "izquierda"');
+    return i.error < d.error ? i.valor : d.valor;
+  }
+
+  // ════════════════════════════════════════════════════════════════ ECUACIONES
+
+  // Brent: la seguridad de la bisección (nunca sale del intervalo y siempre lo
+  // achica) con la velocidad de la interpolación cuadrática inversa cuando la
+  // función se deja. Es el método que usan fzero de MATLAB y brentq de scipy.
+  // Exige un cambio de signo porque es lo que GARANTIZA que haya raíz.
+  function raizBrent(f, a, b) {
+    let fa = f(a), fb = f(b);
+    if (!isFinite(fa) || !isFinite(fb)) falla(`la función no está definida en un extremo: f(${fmt(a)}) = ${fmt(fa)}, f(${fmt(b)}) = ${fmt(fb)}`);
+    if (fa === 0) return a;
+    if (fb === 0) return b;
+    if ((fa > 0) === (fb > 0))
+      falla(`en [${fmt(a)}, ${fmt(b)}] la función no cambia de signo: f(${fmt(a)}) = ${fmt(fa)} y f(${fmt(b)}) = ${fmt(fb)}`,
+        'elige un intervalo donde pase de positiva a negativa (o al revés), o usa raizNewton con un punto de partida');
+    const tol = 1e-300;
+    let c = b, fc = fb, d = b - a, e = d;
+    for (let it = 0; it < 300; it++) {
+      if ((fb > 0 && fc > 0) || (fb < 0 && fc < 0)) { c = a; fc = fa; e = d = b - a; }
+      if (Math.abs(fc) < Math.abs(fb)) { a = b; b = c; c = a; fa = fb; fb = fc; fc = fa; }
+      const tol1 = 2 * EPS * Math.abs(b) + 0.5 * tol, xm = 0.5 * (c - b);
+      if (Math.abs(xm) <= tol1 || fb === 0) return b;
+      if (Math.abs(e) >= tol1 && Math.abs(fa) > Math.abs(fb)) {
+        const s = fb / fa;
+        let p, q;
+        if (a === c) { p = 2 * xm * s; q = 1 - s; }
+        else {
+          const qq = fa / fc, r = fb / fc;
+          p = s * (2 * xm * qq * (qq - r) - (b - a) * (r - 1));
+          q = (qq - 1) * (r - 1) * (s - 1);
+        }
+        if (p > 0) q = -q;
+        p = Math.abs(p);
+        const min1 = 3 * xm * q - Math.abs(tol1 * q), min2 = Math.abs(e * q);
+        if (2 * p < Math.min(min1, min2)) { e = d; d = p / q; } else { d = xm; e = d; }
+      } else { d = xm; e = d; }
+      a = b; fa = fb;
+      b += Math.abs(d) > tol1 ? d : (xm >= 0 ? tol1 : -tol1);
+      fb = f(b);
+      if (!isFinite(fb)) falla(`la función no está definida en x = ${fmt(b)}, dentro del intervalo`);
+    }
+    falla('no converge en 300 iteraciones', 'la función puede ser discontinua en el intervalo');
+  }
+  // Newton con derivada numérica y AMORTIGUADO: si un paso empeora |f|, se
+  // parte a la mitad. Sin esto, un arranque lejos de la raíz (arctan desde
+  // x = 2) sale disparado y diverge.
+  function raizNewton(f, x0, df) {
+    let x = x0, fx = f(x);
+    if (!isFinite(fx)) falla(`la función no está definida en el punto de partida x = ${fmt(x0)}`);
+    for (let it = 0; it < 100; it++) {
+      if (fx === 0) return x;
+      let d;
+      if (df) d = df(x);
+      else { const h = 6e-6 * escala(x); d = (f(x + h) - f(x - h)) / (2 * h); }
+      if (d === 0 || !isFinite(d))
+        falla(`la derivada se anula (o no existe) en x = ${fmt(x)}`, 'prueba otro punto de partida, o resolverEcuacion con un intervalo');
+      const paso = fx / d;
+      let lam = 1, xn = x - paso, fn = f(xn);
+      for (let k = 0; k < 40 && !(isFinite(fn) && Math.abs(fn) < Math.abs(fx)); k++) { lam /= 2; xn = x - lam * paso; fn = f(xn); }
+      if (!(isFinite(fn) && Math.abs(fn) < Math.abs(fx))) {
+        // Ya no se puede bajar |f|: o estamos en la raíz hasta el redondeo, o atascados.
+        if (Math.abs(paso) <= 1e-9 * escala(x)) return x;
+        falla(`se atascó en x = ${fmt(x)} con f(x) = ${fmt(fx)}`, 'puede que no haya raíz cerca; prueba otro punto de partida');
+      }
+      const dx = Math.abs(xn - x);
+      x = xn; fx = fn;
+      if (dx <= 4 * EPS * escala(x)) return x;
+    }
+    if (Math.abs(fx) < 1e-10) return x;
+    falla(`no converge en 100 iteraciones; va por x = ${fmt(x)} con f(x) = ${fmt(fx)}`, 'prueba otro punto de partida');
+  }
+
+  // ── raíces de polinomios: Aberth–Ehrlich ───────────────────────────────────
+  // Busca TODAS las raíces a la vez, complejas incluidas. Cada aproximación se
+  // corrige con Newton y además se aparta de las demás (el término Σ 1/(zᵢ−zⱼ)),
+  // y por eso no convergen dos a la misma raíz. Converge con orden 3 en
+  // raíces simples; en una raíz de multiplicidad k la precisión cae a unas
+  // 16/k cifras —eso es del problema, no del método: la raíz doble de (x−1)²
+  // se mueve √ε cuando el coeficiente se mueve ε—.
+  function raicesPoli(coef) {
+    let n = coef.length - 1;
+    while (n > 0 && coef[n] === 0) n--;
+    if (n < 1) falla('un polinomio constante no tiene raíces que buscar', 'la lista va de la potencia 0 hacia arriba: [c0, c1, c2] es c0 + c1·x + c2·x²');
+    let ceros = 0;
+    while (coef[ceros] === 0) ceros++;
+    const a = coef.slice(ceros, n + 1);      // a[0] ≠ 0 y a[m] ≠ 0
+    const m = a.length - 1;
+    const re = [], im = [];
+    for (let i = 0; i < ceros; i++) { re.push(0); im.push(0); }
+    if (m === 0) return { re, im };
+    // Punto de partida: un círculo con el radio de la media geométrica de las
+    // raíces (|a0/am|^(1/m)), con un desfase para no caer en simetrías.
+    const r0 = Math.pow(Math.abs(a[0] / a[m]), 1 / m);
+    const zr = [], zi = [];
+    for (let k = 0; k < m; k++) { const t = 2 * Math.PI * k / m + 0.4; zr.push(r0 * Math.cos(t)); zi.push(r0 * Math.sin(t)); }
+    const listo = new Array(m).fill(false);
+    for (let it = 0; it < 500; it++) {
+      let todos = true;
+      for (let i = 0; i < m; i++) {
+        if (listo[i]) continue;
+        // p(z) y p'(z) por Horner, en complejos.
+        let pr = a[m], pi = 0, dr = 0, di = 0;
+        for (let k = m - 1; k >= 0; k--) {
+          const ndr = dr * zr[i] - di * zi[i] + pr, ndi = dr * zi[i] + di * zr[i] + pi;
+          dr = ndr; di = ndi;
+          const npr = pr * zr[i] - pi * zi[i] + a[k], npi = pr * zi[i] + pi * zr[i];
+          pr = npr; pi = npi;
+        }
+        if (pr === 0 && pi === 0) { listo[i] = true; continue; }
+        // cociente = p/p'
+        const dd = dr * dr + di * di;
+        let qr, qi;
+        if (dd === 0) { qr = 1e-8 * escala(zr[i]); qi = 0; }
+        else { qr = (pr * dr + pi * di) / dd; qi = (pi * dr - pr * di) / dd; }
+        // suma = Σ 1/(zi − zj)
+        let sr = 0, si = 0;
+        for (let j = 0; j < m; j++) {
+          if (j === i) continue;
+          const xr = zr[i] - zr[j], xi = zi[i] - zi[j];
+          const d2 = xr * xr + xi * xi;
+          if (d2 === 0) continue;
+          sr += xr / d2; si += -xi / d2;
+        }
+        // w = q / (1 − q·s)
+        const br = 1 - (qr * sr - qi * si), bi = -(qr * si + qi * sr);
+        const b2 = br * br + bi * bi;
+        const wr = (qr * br + qi * bi) / b2, wi = (qi * br - qr * bi) / b2;
+        zr[i] -= wr; zi[i] -= wi;
+        const mag = Math.hypot(zr[i], zi[i]);
+        if (Math.hypot(wr, wi) <= 2 * EPS * Math.max(mag, 1e-300)) listo[i] = true;
+        else todos = false;
+      }
+      if (todos) break;
+    }
+    // Limpieza: una parte imaginaria al nivel del redondeo es un real.
+    for (let i = 0; i < m; i++) {
+      if (Math.abs(zi[i]) <= 1e-12 * Math.max(1, Math.hypot(zr[i], zi[i]))) zi[i] = 0;
+      re.push(zr[i]); im.push(zi[i]);
+    }
+    const orden = re.map((_, k) => k).sort((p, q) => (re[p] - re[q]) || (im[p] - im[q]));
+    return { re: orden.map(k => re[k]), im: orden.map(k => im[k]) };
+  }
+  // Las reales: las que tienen parte imaginaria despreciable, pulidas con
+  // Newton real. La tolerancia es generosa (10⁻⁷) para no perder las raíces
+  // dobles, que Aberth solo puede dar con la mitad de las cifras.
+  function raicesRealesPoli(coef) {
+    const r = raicesPoli(coef);
+    const out = [];
+    for (let k = 0; k < r.re.length; k++) {
+      if (Math.abs(r.im[k]) > 1e-7 * Math.max(1, Math.abs(r.re[k]))) continue;
+      let x = r.re[k];
+      for (let it = 0; it < 3; it++) {
+        let p = 0, dp = 0;
+        for (let j = coef.length - 1; j >= 0; j--) { dp = dp * x + p; p = p * x + coef[j]; }
+        if (dp === 0 || p === 0) break;
+        const xn = x - p / dp;
+        if (Math.abs(xn - x) > 1e-6 * Math.max(1, Math.abs(x))) break;   // no saltar a otra raíz
+        x = xn;
+      }
+      out.push(x);
+    }
+    return out.sort((p, q) => p - q);
+  }
+
+  // ── sistemas no lineales: Newton con búsqueda lineal ──────────────────────
+  // Eliminación gaussiana con pivoteo parcial, la pieza que necesitan Newton,
+  // Levenberg–Marquardt y BFGS para sistemas pequeños. Devuelve null si la
+  // matriz es singular, y quien llama decide qué mensaje dar.
+  function resolverLineal(A, b) {
+    const n = b.length;
+    const M = A.map((f, i) => f.slice().concat([b[i]]));
+    let escalaM = 0;
+    for (const f of A) for (const v of f) escalaM = Math.max(escalaM, Math.abs(v));
+    for (let k = 0; k < n; k++) {
+      let p = k;
+      for (let i = k + 1; i < n; i++) if (Math.abs(M[i][k]) > Math.abs(M[p][k])) p = i;
+      if (Math.abs(M[p][k]) <= 1e-14 * escalaM || escalaM === 0) return null;
+      if (p !== k) { const t = M[p]; M[p] = M[k]; M[k] = t; }
+      for (let i = k + 1; i < n; i++) {
+        const f = M[i][k] / M[k][k];
+        if (f === 0) continue;
+        for (let j = k; j <= n; j++) M[i][j] -= f * M[k][j];
+      }
+    }
+    const x = new Array(n);
+    for (let i = n - 1; i >= 0; i--) {
+      let s = M[i][n];
+      for (let j = i + 1; j < n; j++) s -= M[i][j] * x[j];
+      x[i] = s / M[i][i];
+    }
+    return x;
+  }
+  // El jacobiano para Newton va con diferencias centrales de paso fijo
+  // (h ≈ ε^⅓): Ridders costaría diez veces más y Newton no lo necesita, porque
+  // un jacobiano con 10 cifras ya da convergencia casi cuadrática.
+  function jacobianoRapido(F, x, Fx) {
+    const n = x.length, m = Fx.length;
+    const J = [];
+    for (let i = 0; i < m; i++) J.push(new Array(n));
+    for (let j = 0; j < n; j++) {
+      const h = 6e-6 * escala(x[j]);
+      const xp = x.slice(), xm = x.slice();
+      xp[j] += h; xm[j] -= h;
+      const a = F(xp), b = F(xm);
+      for (let i = 0; i < m; i++) J[i][j] = (a[i] - b[i]) / (2 * h);
+    }
+    return J;
+  }
+  function resolverNoLineal(F, x0) {
+    let x = x0.slice(), Fx = F(x);
+    const n = x.length;
+    if (Fx.length !== n) falla(`la función recibe ${n} incógnitas y devuelve ${Fx.length} ecuaciones: tienen que ser tantas ecuaciones como incógnitas`);
+    const mitad = v => 0.5 * v.reduce((s, y) => s + y * y, 0);
+    let fx = mitad(Fx);
+    for (let it = 0; it < 200; it++) {
+      if (normaInf(Fx) <= 1e-13) return x;
+      const J = jacobianoRapido(F, x, Fx);
+      const dx = resolverLineal(J, Fx.map(v => -v));
+      if (!dx) falla(`el jacobiano es singular en [${x.map(fmt).join(', ')}]`, 'prueba otro punto de partida; puede que dos ecuaciones digan lo mismo');
+      // Búsqueda lineal hacia atrás sobre ½|F|²: el paso de Newton es una
+      // dirección de descenso, así que con λ pequeño SIEMPRE baja. Es lo que
+      // convierte a Newton, que solo converge cerca, en algo que arranca lejos.
+      let lam = 1, xn, Fn, fn;
+      for (let k = 0; k < 50; k++) {
+        xn = x.map((v, i) => v + lam * dx[i]);
+        Fn = F(xn); fn = mitad(Fn);
+        if (isFinite(fn) && fn <= (1 - 1e-4 * lam) * fx) break;
+        lam /= 2;
+      }
+      if (!(isFinite(fn) && fn < fx)) {
+        if (normaInf(Fx) <= 1e-9 * Math.max(1, normaInf(x))) return x;
+        falla(`se atascó en [${x.map(fmt).join(', ')}], donde |F| = ${fmt(Math.sqrt(2 * fx))}`,
+          'es un mínimo local de |F| que no es solución; prueba otro punto de partida');
+      }
+      const paso = normaInf(xn.map((v, i) => v - x[i]));
+      x = xn; Fx = Fn; fx = fn;
+      if (paso <= 4 * EPS * Math.max(1, normaInf(x)) && normaInf(Fx) <= 1e-8) return x;
+    }
+    if (normaInf(Fx) <= 1e-9) return x;
+    falla(`no converge en 200 iteraciones; |F| va por ${fmt(Math.sqrt(2 * fx))}`, 'prueba otro punto de partida');
+  }
+  function puntoFijo(g, x0) {
+    let x = x0.slice();
+    for (let it = 0; it < 10000; it++) {
+      const xn = g(x);
+      if (xn.length !== x.length) falla('la función tiene que devolver tantos valores como recibe');
+      if (xn.some(v => !isFinite(v))) falla(`la iteración diverge: en la vuelta ${it + 1} sale ${fmt(xn.find(v => !isFinite(v)))}`,
+        'el punto fijo solo atrae si |g\'(x)| < 1 cerca de él; despeja la ecuación de otra forma');
+      const d = normaInf(xn.map((v, i) => v - x[i]));
+      x = xn;
+      if (d <= 4 * EPS * Math.max(1, normaInf(x))) return x;
+    }
+    falla('no converge en 10000 iteraciones', 'el punto fijo solo atrae si |g\'(x)| < 1 cerca de él; despeja la ecuación de otra forma');
+  }
+
+  // ══════════════════════════════════════════════════════════════ OPTIMIZACIÓN
+
+  // Brent para minimizar en un intervalo: sección áurea (segura, lenta) más
+  // interpolación parabólica (rápida cerca del mínimo). La precisión en x no
+  // pasa de √ε ≈ 1.5·10⁻⁸ relativo, y no es culpa del método: cerca de un
+  // mínimo f(x) es plana y f(x ± δ) − f(x) ≈ δ², que se pierde en el redondeo
+  // en cuanto δ < √ε. Se miran también los extremos, porque Brent no los toca.
+  function minimizar1D(f, a, b) {
+    if (a > b) { const t = a; a = b; b = t; }
+    const C = (3 - Math.sqrt(5)) / 2, SQ = Math.sqrt(EPS), tol = 1e-12;
+    let x = a + C * (b - a), w = x, v = x, fx = f(x), fw = fx, fv = fx, d = 0, e = 0;
+    const lo0 = a, hi0 = b;
+    for (let it = 0; it < 500; it++) {
+      const xm = 0.5 * (a + b), tol1 = SQ * Math.abs(x) + tol / 3, tol2 = 2 * tol1;
+      if (Math.abs(x - xm) <= tol2 - 0.5 * (b - a)) break;
+      let usarAurea = true;
+      if (Math.abs(e) > tol1) {
+        let r = (x - w) * (fx - fv), q = (x - v) * (fx - fw), p = (x - v) * q - (x - w) * r;
+        q = 2 * (q - r);
+        if (q > 0) p = -p;
+        q = Math.abs(q);
+        const etemp = e;
+        e = d;
+        if (!(Math.abs(p) >= Math.abs(0.5 * q * etemp) || p <= q * (a - x) || p >= q * (b - x))) {
+          d = p / q;
+          const u = x + d;
+          if (u - a < tol2 || b - u < tol2) d = xm - x >= 0 ? tol1 : -tol1;
+          usarAurea = false;
+        }
+      }
+      if (usarAurea) { e = (x < xm ? b : a) - x; d = C * e; }
+      const u = x + (Math.abs(d) >= tol1 ? d : (d >= 0 ? tol1 : -tol1));
+      const fu = f(u);
+      if (fu <= fx) {
+        if (u < x) b = x; else a = x;
+        v = w; fv = fw; w = x; fw = fx; x = u; fx = fu;
+      } else {
+        if (u < x) a = u; else b = u;
+        if (fu <= fw || w === x) { v = w; fv = fw; w = u; fw = fu; }
+        else if (fu <= fv || v === x || v === w) { v = u; fv = fu; }
+      }
+    }
+    const fa = f(lo0), fb = f(hi0);
+    if (fa < fx) { x = lo0; fx = fa; }
+    if (fb < fx) { x = hi0; fx = fb; }
+    return { x, valor: fx };
+  }
+  // Nelder–Mead con los coeficientes adaptativos de Gao y Han (2012): los
+  // clásicos (1, 2, ½, ½) se estancan a partir de unas 10 dimensiones; estos
+  // dependen de n y no. No necesita derivadas, que es su razón de ser: vale
+  // para funciones con ruido o con esquinas. Se reinicia una vez desde el
+  // mínimo hallado, porque el símplex a veces se aplasta antes de tiempo.
+  function nelderMead(f, x0) {
+    const n = x0.length;
+    const alfa = 1, gam = 1 + 2 / n, rho = 0.75 - 1 / (2 * n), sig = 1 - 1 / n;
+    let evals = 0;
+    const F = x => { evals++; const v = f(x); return isFinite(v) ? v : Infinity; };
+    const correr = inicio => {
+      let S = [inicio.slice()];
+      for (let i = 0; i < n; i++) {
+        const y = inicio.slice();
+        y[i] = y[i] !== 0 ? y[i] * 1.05 : 0.00025;
+        S.push(y);
+      }
+      let fS = S.map(F);
+      let it = 0;
+      for (; it < 2000 * n; it++) {
+        const ord = fS.map((_, k) => k).sort((p, q) => fS[p] - fS[q]);
+        S = ord.map(k => S[k]); fS = ord.map(k => fS[k]);
+        let dx = 0;
+        for (let k = 1; k <= n; k++) for (let i = 0; i < n; i++) dx = Math.max(dx, Math.abs(S[k][i] - S[0][i]));
+        const df = Math.abs(fS[n] - fS[0]);
+        if (dx <= 1e-11 * Math.max(1, normaInf(S[0])) && df <= 1e-14 * Math.max(1, Math.abs(fS[0]))) break;
+        if (evals > 20000 * n) break;
+        const c = new Array(n).fill(0);
+        for (let k = 0; k < n; k++) for (let i = 0; i < n; i++) c[i] += S[k][i] / n;
+        const xr = c.map((v, i) => v + alfa * (v - S[n][i])), fr = F(xr);
+        if (fr < fS[0]) {
+          const xe = c.map((v, i) => v + gam * (xr[i] - v)), fe = F(xe);
+          if (fe < fr) { S[n] = xe; fS[n] = fe; } else { S[n] = xr; fS[n] = fr; }
+        } else if (fr < fS[n - 1]) { S[n] = xr; fS[n] = fr; }
+        else {
+          const fuera = fr < fS[n];
+          const xc = fuera ? c.map((v, i) => v + rho * (xr[i] - v)) : c.map((v, i) => v + rho * (S[n][i] - v));
+          const fc = F(xc);
+          if (fc < (fuera ? fr : fS[n])) { S[n] = xc; fS[n] = fc; }
+          else {
+            for (let k = 1; k <= n; k++) { S[k] = S[k].map((v, i) => S[0][i] + sig * (v - S[0][i])); fS[k] = F(S[k]); }
+          }
+        }
+      }
+      let b = 0;
+      for (let k = 1; k <= n; k++) if (fS[k] < fS[b]) b = k;
+      return { x: S[b], valor: fS[b], it };
+    };
+    let r = correr(x0.slice());
+    const r2 = correr(r.x);
+    if (r2.valor <= r.valor) r = { x: r2.x, valor: r2.valor, it: r.it + r2.it };
+    if (!isFinite(r.valor)) falla('la función no tiene un valor finito en ningún punto que se probó', 'mira el punto de partida');
+    return { x: r.x, valor: r.valor, iteraciones: r.it };
+  }
+  function gradienteRapido(f, x) {
+    return x.map((_, i) => {
+      const h = 6e-6 * escala(x[i]);
+      const xp = x.slice(), xm = x.slice();
+      xp[i] += h; xm[i] -= h;
+      return (f(xp) - f(xm)) / (2 * h);
+    });
+  }
+  // BFGS: cuasi-Newton. Va aprendiendo la inversa del hessiano con los
+  // gradientes de cada paso, sin calcularlo nunca, y converge superlinealmente
+  // en funciones suaves. Usa el gradiente numérico central si no se le da uno.
+  // La búsqueda lineal es de retroceso con Armijo: la más simple que garantiza
+  // descenso; si la curvatura sale mala (sᵀy ≤ 0) la actualización se salta.
+  function bfgs(f, x0, gradF) {
+    const n = x0.length;
+    const grad = gradF || (x => gradienteRapido(f, x));
+    let x = x0.slice(), fx = f(x), g = grad(x);
+    if (!isFinite(fx)) falla('la función no es finita en el punto de partida');
+    let H = null;
+    const ident = () => { const M = []; for (let i = 0; i < n; i++) { M.push(new Array(n).fill(0)); M[i][i] = 1; } return M; };
+    H = ident();
+    let it = 0, reinicio = false;
+    for (; it < 1000; it++) {
+      if (normaInf(g) <= 1e-9 * Math.max(1, Math.abs(fx))) break;
+      let p = H.map(f => -f.reduce((s, v, j) => s + v * g[j], 0));
+      let gp = p.reduce((s, v, i) => s + v * g[i], 0);
+      if (!(gp < 0)) { H = ident(); p = g.map(v => -v); gp = -g.reduce((s, v) => s + v * v, 0); }
+      let a = 1, xn, fn, ok = false;
+      for (let k = 0; k < 60; k++) {
+        xn = x.map((v, i) => v + a * p[i]);
+        fn = f(xn);
+        if (isFinite(fn) && fn <= fx + 1e-4 * a * gp) { ok = true; break; }
+        a *= 0.5;
+      }
+      if (!ok) {
+        if (reinicio) break;           // ni con descenso puro: es lo mejor que hay
+        H = ident(); reinicio = true; continue;
+      }
+      reinicio = false;
+      const s = xn.map((v, i) => v - x[i]);
+      const gn = grad(xn);
+      const y = gn.map((v, i) => v - g[i]);
+      const sy = s.reduce((t, v, i) => t + v * y[i], 0);
+      const df = fx - fn;
+      x = xn; fx = fn; g = gn;
+      if (sy > 1e-12 * Math.sqrt(s.reduce((t, v) => t + v * v, 0) * y.reduce((t, v) => t + v * v, 0))) {
+        if (it === 0) {
+          // Primera vuelta: se escala la identidad con sᵀy/yᵀy para que el
+          // primer paso cuasi-Newton tenga el tamaño correcto.
+          const yy = y.reduce((t, v) => t + v * v, 0);
+          H = ident().map(f => f.map(v => v * sy / yy));
+        }
+        const rho = 1 / sy;
+        const Hy = H.map(f => f.reduce((t, v, j) => t + v * y[j], 0));
+        const yHy = y.reduce((t, v, i) => t + v * Hy[i], 0);
+        for (let i = 0; i < n; i++) for (let j = 0; j < n; j++)
+          H[i][j] += -rho * (Hy[i] * s[j] + s[i] * Hy[j]) + (rho * rho * yHy + rho) * s[i] * s[j];
+      }
+      if (normaInf(s) <= 1e-15 * Math.max(1, normaInf(x)) && Math.abs(df) <= 1e-16 * Math.max(1, Math.abs(fx))) break;
+    }
+    return { x, valor: fx, iteraciones: it };
+  }
+  // Levenberg–Marquardt: mínimos cuadrados no lineales. Es Gauss–Newton
+  // (rápido cerca de la solución) con un amortiguamiento μ que lo convierte en
+  // descenso por gradiente cuando el paso no ayuda. μ se ajusta con la regla de
+  // Nielsen, según cuánto se parecía la bajada real a la que predecía el
+  // modelo lineal. Además de los parámetros devuelve su error estándar,
+  // √diag(s²·(JᵀJ)⁻¹), que es lo que separa un ajuste de un número cualquiera.
+  function levenbergMarquardt(modelo, xs, ys, p0) {
+    const m = xs.length, n = p0.length;
+    if (ys.length !== m) falla(`hay ${m} valores de x y ${ys.length} de y`, 'tienen que ir por parejas');
+    if (m < n) falla(`con ${m} datos no se pueden ajustar ${n} parámetros`, 'hacen falta al menos tantos datos como parámetros');
+    const res = p => xs.map((x, i) => ys[i] - modelo(x, p));
+    const jac = p => {
+      const J = [];
+      for (let i = 0; i < m; i++) J.push(new Array(n));
+      for (let j = 0; j < n; j++) {
+        const h = 1.5e-8 * Math.max(Math.abs(p[j]), 1e-3);
+        const pp = p.slice(); pp[j] += h;
+        for (let i = 0; i < m; i++) J[i][j] = (modelo(xs[i], pp) - modelo(xs[i], p)) / h;
+      }
+      return J;
+    };
+    let p = p0.slice(), r = res(p);
+    if (r.some(v => !isFinite(v))) falla('el modelo no da un número finito con los parámetros de partida', 'cambia los parámetros iniciales');
+    let S = r.reduce((s, v) => s + v * v, 0);
+    let J = jac(p);
+    const JtJ = J => { const A = []; for (let a = 0; a < n; a++) { A.push(new Array(n).fill(0)); for (let b = 0; b < n; b++) for (let i = 0; i < m; i++) A[a][b] += J[i][a] * J[i][b]; } return A; };
+    const Jtr = (J, r) => { const g = new Array(n).fill(0); for (let a = 0; a < n; a++) for (let i = 0; i < m; i++) g[a] += J[i][a] * r[i]; return g; };
+    let A = JtJ(J), g = Jtr(J, r);
+    let mu = 1e-3 * Math.max(...A.map((f, i) => f[i])), nu = 2;
+    if (!(mu > 0)) mu = 1e-3;
+    let it = 0;
+    for (; it < 500; it++) {
+      if (normaInf(g) <= 1e-15 * Math.max(1, S)) break;
+      const Am = A.map((f, i) => f.map((v, j) => (i === j ? v + mu : v)));
+      const d = resolverLineal(Am, g);
+      if (!d) { mu *= nu; nu *= 2; continue; }
+      if (normaInf(d) <= 1e-14 * (normaInf(p) + 1e-14)) break;
+      const pn = p.map((v, i) => v + d[i]);
+      const rn = res(pn);
+      const Sn = rn.reduce((s, v) => s + (isFinite(v) ? v * v : Infinity), 0);
+      const pred = d.reduce((s, v, i) => s + v * (mu * v + g[i]), 0);
+      const rho = (S - Sn) / pred;
+      if (isFinite(Sn) && rho > 0) {
+        const bajada = S - Sn;
+        p = pn; r = rn; S = Sn; J = jac(p); A = JtJ(J); g = Jtr(J, r);
+        mu *= Math.max(1 / 3, 1 - Math.pow(2 * rho - 1, 3)); nu = 2;
+        if (bajada <= 1e-15 * Math.max(S, 1e-300)) break;
+      } else { mu *= nu; nu *= 2; if (mu > 1e300) break; }
+    }
+    const libres = m - n;
+    let errores = new Array(n).fill(NaN);
+    if (libres > 0) {
+      const s2 = S / libres;
+      const cov = [];
+      for (let j = 0; j < n; j++) {
+        const e = new Array(n).fill(0); e[j] = 1;
+        const col = resolverLineal(A, e);
+        if (!col) { cov.length = 0; break; }
+        cov.push(col);
+      }
+      if (cov.length) errores = cov.map((c, j) => Math.sqrt(Math.max(0, s2 * c[j])));
+    }
+    return { parametros: p, errores, residuo: S, rmse: Math.sqrt(S / m), iteraciones: it };
+  }
+  // Símplex en dos fases, con la regla de Bland (el menor índice que mejora,
+  // el menor índice en los empates). Bland es más lento que el criterio de
+  // Dantzig pero no CICLA nunca, y en problemas de pizarra (decenas de
+  // variables) la velocidad no importa y un ciclo infinito sí.
+  //   minimizar cᵀx   sujeto a   A·x ≤ b,  x ≥ 0
+  // Las b negativas (restricciones del tipo «≥») se resuelven con la fase 1,
+  // que busca un punto factible con variables artificiales.
+  function simplex(c, A, b, maximizar) {
+    const m = A.length, n = c.length;
+    for (const f of A) if (f.length !== n) falla(`cada fila de A tiene que tener ${n} coeficientes, uno por variable`);
+    if (b.length !== m) falla(`A tiene ${m} filas y b tiene ${b.length} valores`, 'una cota por restricción');
+    const cc = maximizar ? c.map(v => -v) : c.slice();
+    const artificiales = [];
+    for (let i = 0; i < m; i++) if (b[i] < 0) artificiales.push(i);
+    const N = n + m + artificiales.length;     // originales, holguras, artificiales
+    const T = [], base = [];
+    for (let i = 0; i < m; i++) {
+      const fila = new Array(N + 1).fill(0);
+      const sg = b[i] < 0 ? -1 : 1;
+      for (let j = 0; j < n; j++) fila[j] = sg * A[i][j];
+      fila[n + i] = sg;                       // holgura (o exceso, si se dio la vuelta)
+      fila[N] = sg * b[i];
+      const k = artificiales.indexOf(i);
+      if (k >= 0) { fila[n + m + k] = 1; base.push(n + m + k); } else base.push(n + i);
+      T.push(fila);
+    }
+    const TOL = 1e-9;
+    const pivotar = (obj, r, j) => {
+      const fr = T[r], pv = fr[j];
+      for (let k = 0; k <= N; k++) fr[k] /= pv;
+      for (let i = 0; i < T.length; i++) {
+        if (i === r) continue;
+        const f = T[i][j];
+        if (f !== 0) for (let k = 0; k <= N; k++) T[i][k] -= f * fr[k];
+      }
+      const f = obj[j];
+      if (f !== 0) for (let k = 0; k <= N; k++) obj[k] -= f * fr[k];
+      base[r] = j;
+    };
+    const objetivo = costos => {
+      const obj = costos.slice(); obj.push(0);
+      for (let i = 0; i < T.length; i++) {
+        const cb = costos[base[i]];
+        if (cb !== 0) for (let k = 0; k <= N; k++) obj[k] -= cb * T[i][k];
+      }
+      return obj;
+    };
+    const correr = (obj, permitidas) => {
+      for (let it = 0; it < 50000; it++) {
+        let j = -1;
+        for (let k = 0; k < permitidas; k++) if (obj[k] < -TOL) { j = k; break; }
+        if (j < 0) return 'optimo';
+        let r = -1, mejor = Infinity;
+        for (let i = 0; i < T.length; i++) {
+          if (T[i][j] > TOL) {
+            const q = T[i][N] / T[i][j];
+            if (q < mejor - 1e-12 || (Math.abs(q - mejor) <= 1e-12 && base[i] < base[r])) { mejor = q; r = i; }
+          }
+        }
+        if (r < 0) return 'noAcotado';
+        pivotar(obj, r, j);
+      }
+      falla('el símplex no terminó en 50000 pivotes');
+    };
+    if (artificiales.length) {
+      const c1 = new Array(N).fill(0);
+      for (let k = 0; k < artificiales.length; k++) c1[n + m + k] = 1;
+      const obj1 = objetivo(c1);
+      correr(obj1, N);
+      if (-obj1[N] > 1e-7 * Math.max(1, normaInf(b)))
+        falla('el problema no es factible: ningún punto cumple todas las restricciones a la vez',
+          'revisa los signos de A y b; recuerda que se pide A·x ≤ b con x ≥ 0');
+      // Las artificiales que quedaron en la base (a valor 0) se sacan; si en
+      // su fila no hay con qué cambiarlas, la restricción era redundante.
+      for (let i = T.length - 1; i >= 0; i--) {
+        if (base[i] < n + m) continue;
+        let j = -1;
+        for (let k = 0; k < n + m; k++) if (Math.abs(T[i][k]) > TOL) { j = k; break; }
+        if (j >= 0) pivotar(new Array(N + 1).fill(0), i, j);
+        else { T.splice(i, 1); base.splice(i, 1); }
+      }
+    }
+    const c2 = new Array(N).fill(0);
+    for (let j = 0; j < n; j++) c2[j] = cc[j];
+    const obj2 = objetivo(c2);
+    if (correr(obj2, n + m) === 'noAcotado')
+      falla(`el problema no está acotado: se puede ${maximizar ? 'subir' : 'bajar'} el objetivo sin límite`,
+        'falta una restricción que encierre la región factible');
+    const x = new Array(n).fill(0);
+    for (let i = 0; i < T.length; i++) if (base[i] < n) x[base[i]] = T[i][N];
+    const valor = c.reduce((s, v, j) => s + v * x[j], 0);
+    return { x: x.map(v => (Math.abs(v) < 1e-12 ? 0 : v)), valor };
+  }
+
+  return {
+    EPS, RAIZ_PI, LN_RAIZ_2PI, falla, fmt, normaInf, escala, ridders,
+    derivar, derivarN, gradiente, jacobiano, hessiano, integrar, integral, integrarDoble, integrarMontecarlo,
+    integrarDatos, integrarAcumulado, derivarDatos, sumaSerie, limite,
+    raizBrent, raizNewton, raicesPoli, raicesRealesPoli, resolverLineal, resolverNoLineal, puntoFijo,
+    minimizar1D, nelderMead, bfgs, levenbergMarquardt, simplex,
+  };
+})();
+// La segunda mitad de la capa pura: ecuaciones diferenciales, polinomios e
+// interpolación. Usa las piezas de la primera (la eliminación gaussiana, el
+// jacobiano rápido), así que va detrás.
+const NEN_CALCULO2 = (function (B) {
+  const { EPS, falla, fmt, normaInf, escala, resolverLineal } = B;
+
+  // ══════════════════════════════════════════════════ ECUACIONES DIFERENCIALES
+
+  // Dormand–Prince 5(4): siete etapas que dan a la vez una solución de orden 5
+  // y otra de orden 4; su diferencia estima el error del paso, y el paso se
+  // agranda o se achica para mantenerlo bajo la tolerancia. Es el «ode45» de
+  // MATLAB y el RK45 de scipy. La última etapa se evalúa en el punto nuevo y
+  // sirve de primera del paso siguiente (FSAL), así que cuesta 6 evaluaciones
+  // por paso, no 7. Además trae una «salida densa» de orden 4: un polinomio
+  // que da la solución en cualquier t dentro del paso sin volver a integrar,
+  // que es lo que se usa cuando se piden tiempos concretos.
+  const A2 = [1 / 5], A3 = [3 / 40, 9 / 40], A4 = [44 / 45, -56 / 15, 32 / 9];
+  const A5 = [19372 / 6561, -25360 / 2187, 64448 / 6561, -212 / 729];
+  const A6 = [9017 / 3168, -355 / 33, 46732 / 5247, 49 / 176, -5103 / 18656];
+  const B5 = [35 / 384, 0, 500 / 1113, 125 / 192, -2187 / 6784, 11 / 84];
+  const E = [71 / 57600, 0, -71 / 16695, 71 / 1920, -17253 / 339200, 22 / 525, -1 / 40];
+  const D = [-12715105075 / 11282082432, 0, 87487479700 / 32700410799, -10690763975 / 1880347072,
+    701980252875 / 199316789632, -1453857185 / 822651844, 69997945 / 29380423];
+  const comb = (y, h, ks, cs) => y.map((v, i) => { let s = 0; for (let k = 0; k < cs.length; k++) if (cs[k]) s += cs[k] * ks[k][i]; return v + h * s; });
+
+  function dopri(f, t0, y0, t1, puntos, opc) {
+    const o = opc || {};
+    const rtol = o.rtol || 1e-9, atol = o.atol || 1e-12;
+    const n = y0.length;
+    const F = (t, y) => {
+      const r = f(t, y);
+      if (r.length !== n) falla(`la función devuelve ${r.length} valor(es) y el estado tiene ${n} componente(s): hace falta una derivada por cada componente`);
+      return r;
+    };
+    const ts = [], ys = [];
+    if (t1 === t0) return { t: [t0], y: [y0.slice()] };
+    const dir = t1 > t0 ? 1 : -1;
+    let pi = 0;
+    if (puntos) {
+      for (const p of puntos) if ((p - t0) * dir < -1e-12 * escala(t0) || (p - t1) * dir > 1e-12 * escala(t1))
+        falla(`el tiempo ${fmt(p)} está fuera de [${fmt(Math.min(t0, t1))}, ${fmt(Math.max(t0, t1))}]`);
+      while (pi < puntos.length && puntos[pi] === t0) { ts.push(t0); ys.push(y0.slice()); pi++; }
+    } else { ts.push(t0); ys.push(y0.slice()); }
+    const norma = (v, y, yn) => {
+      let s = 0;
+      for (let i = 0; i < n; i++) { const sc = atol + rtol * Math.max(Math.abs(y[i]), Math.abs(yn[i])); s += (v[i] / sc) * (v[i] / sc); }
+      return Math.sqrt(s / n);
+    };
+    let t = t0, y = y0.slice(), k1 = F(t, y);
+    // El paso inicial de Hairer: del tamaño de y y de y' se deduce una escala
+    // de tiempo, y con una evaluación más se tantea la segunda derivada.
+    let h;
+    {
+      const d0 = norma(y, y, y), d1 = norma(k1, y, y);
+      let h0 = d0 < 1e-5 || d1 < 1e-5 ? 1e-6 : 0.01 * d0 / d1;
+      h0 = Math.min(h0, Math.abs(t1 - t0));
+      const y1 = y.map((v, i) => v + dir * h0 * k1[i]);
+      const f1 = F(t + dir * h0, y1);
+      const d2 = norma(f1.map((v, i) => v - k1[i]), y, y) / h0;
+      const h1 = Math.max(d1, d2) <= 1e-15 ? Math.max(1e-6, h0 * 1e-3) : Math.pow(0.01 / Math.max(d1, d2), 1 / 5);
+      h = dir * Math.min(100 * h0, h1, Math.abs(t1 - t0));
+    }
+    let rechazado = false, pasos = 0;
+    while (dir * (t1 - t) > 0) {
+      if (++pasos > 200000) falla(`hicieron falta más de 200000 pasos y solo se llegó a t = ${fmt(t)}`,
+        'si el sistema es rígido (escalas de tiempo muy distintas), usa resolverEDORigida');
+      if (dir * (t + h - t1) > 0) h = t1 - t;
+      const ks = [k1];
+      ks.push(F(t + h / 5, comb(y, h, ks, A2)));
+      ks.push(F(t + 3 * h / 10, comb(y, h, ks, A3)));
+      ks.push(F(t + 4 * h / 5, comb(y, h, ks, A4)));
+      ks.push(F(t + 8 * h / 9, comb(y, h, ks, A5)));
+      ks.push(F(t + h, comb(y, h, ks, A6)));
+      const yn = comb(y, h, ks, B5);
+      const k7 = F(t + h, yn);
+      ks.push(k7);
+      const ev = y.map((_, i) => { let s = 0; for (let k = 0; k < 7; k++) s += E[k] * ks[k][i]; return h * s; });
+      let err = norma(ev, y, yn);
+      if (!isFinite(err) || yn.some(v => !isFinite(v))) err = Infinity;
+      if (err <= 1) {
+        const tn = t + h;
+        if (puntos) {
+          // Salida densa de Hairer (dopri5): el polinomio de grado 4 en θ.
+          const r2 = yn.map((v, i) => v - y[i]);
+          const r3 = r2.map((v, i) => h * k1[i] - v);
+          const r4 = r2.map((v, i) => v - h * k7[i] - r3[i]);
+          const r5 = y.map((_, i) => { let s = 0; for (let k = 0; k < 7; k++) s += D[k] * ks[k][i]; return h * s; });
+          while (pi < puntos.length && dir * (puntos[pi] - tn) <= 0) {
+            const th = (puntos[pi] - t) / h, th1 = 1 - th;
+            ts.push(puntos[pi]);
+            ys.push(y.map((v, i) => v + th * (r2[i] + th1 * (r3[i] + th * (r4[i] + th1 * r5[i])))));
+            pi++;
+          }
+        } else { ts.push(tn); ys.push(yn.slice()); }
+        t = tn; y = yn; k1 = k7;
+        let fac = Math.min(10, Math.max(0.2, 0.9 * Math.pow(Math.max(err, 1e-10), -0.2)));
+        if (rechazado) fac = Math.min(1, fac);
+        h *= fac; rechazado = false;
+      } else {
+        h *= isFinite(err) ? Math.max(0.2, 0.9 * Math.pow(err, -0.2)) : 0.1;
+        rechazado = true;
+      }
+      if (Math.abs(h) < 1e-14 * escala(t))
+        falla(`el paso se hizo demasiado pequeño en t = ${fmt(t)}`,
+          'la solución puede explotar ahí (una singularidad), o el sistema es rígido: prueba resolverEDORigida');
+    }
+    // Los puntos pedidos que coinciden con t1 (por redondeo) se cierran aquí.
+    while (puntos && pi < puntos.length) { ts.push(puntos[pi]); ys.push(y.slice()); pi++; }
+    return { t: ts, y: ys };
+  }
+  // RK4 clásico de paso fijo: el de los libros. Sin control de error, así que
+  // el resultado es tan bueno como el número de pasos; está para enseñar y
+  // para comparar, no para fiarse sin mirar.
+  function rk4(f, t0, y0, t1, pasos) {
+    const n = y0.length, h = (t1 - t0) / pasos;
+    const ts = [t0], ys = [y0.slice()];
+    let y = y0.slice();
+    for (let k = 0; k < pasos; k++) {
+      const t = t0 + k * h;
+      const k1 = f(t, y);
+      if (k1.length !== n) falla(`la función devuelve ${k1.length} valor(es) y el estado tiene ${n} componente(s): hace falta una derivada por cada componente`);
+      const k2 = f(t + h / 2, y.map((v, i) => v + h / 2 * k1[i]));
+      const k3 = f(t + h / 2, y.map((v, i) => v + h / 2 * k2[i]));
+      const k4 = f(t + h, y.map((v, i) => v + h * k3[i]));
+      y = y.map((v, i) => v + h / 6 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]));
+      if (y.some(v => !isFinite(v))) falla(`la solución explota en t = ${fmt(t + h)}`, 'prueba con más pasos, o mira si el sistema es rígido');
+      ts.push(t0 + (k + 1) * h); ys.push(y.slice());
+    }
+    return { t: ts, y: ys };
+  }
+  // Para sistemas RÍGIDOS (una parte que cambia en milisegundos y otra en
+  // horas), un método explícito necesita pasos del tamaño de la escala rápida
+  // aunque ya no pase nada en ella. Los implícitos no: BDF2 (diferencias hacia
+  // atrás de orden 2, A-estable) arrancado con un paso de Euler implícito.
+  // Cada paso resuelve una ecuación no lineal con Newton y el jacobiano
+  // numérico. Es de paso FIJO: sencillo y robusto, pero sin control de error;
+  // compáralo con el doble de pasos si necesitas saber cuánto te puedes fiar.
+  function bdf2(f, t0, y0, t1, pasos) {
+    const n = y0.length, h = (t1 - t0) / pasos;
+    const ts = [t0], ys = [y0.slice()];
+    const paso = (tn, rhs, c, guess) => {
+      // Resolver  y − c·h·f(tn, y) = rhs  con Newton simplificado.
+      let y = guess.slice();
+      let J = null, ok = false;
+      for (let it = 0; it < 40; it++) {
+        const fy = f(tn, y);
+        if (fy.length !== n) falla(`la función devuelve ${fy.length} valor(es) y el estado tiene ${n} componente(s): hace falta una derivada por cada componente`);
+        const G = y.map((v, i) => v - c * h * fy[i] - rhs[i]);
+        if (!J || it % 5 === 4) {
+          const Jf = jacobianoRapido((yy) => f(tn, yy), y, fy);
+          J = Jf.map((fila, i) => fila.map((v, j) => (i === j ? 1 : 0) - c * h * v));
+        }
+        const d = resolverLineal(J, G.map(v => -v));
+        if (!d) falla(`el sistema de Newton es singular en t = ${fmt(tn)}`, 'prueba con otro número de pasos');
+        y = y.map((v, i) => v + d[i]);
+        if (normaInf(d) <= 1e-12 * (1 + normaInf(y))) { ok = true; break; }
+      }
+      if (!ok || y.some(v => !isFinite(v))) falla(`Newton no converge en t = ${fmt(tn)}`, 'prueba con más pasos');
+      return y;
+    };
+    let yPrev = y0.slice();
+    let y = paso(t0 + h, y0, 1, y0.map((v, i) => v + h * f(t0, y0)[i]));
+    ts.push(t0 + h); ys.push(y.slice());
+    for (let k = 2; k <= pasos; k++) {
+      const tn = t0 + k * h;
+      const rhs = y.map((v, i) => 4 / 3 * v - 1 / 3 * yPrev[i]);
+      const guess = y.map((v, i) => 2 * v - yPrev[i]);
+      const yn = paso(tn, rhs, 2 / 3, guess);
+      yPrev = y; y = yn;
+      ts.push(tn); ys.push(y.slice());
+    }
+    return { t: ts, y: ys };
+  }
+  function jacobianoRapido(F, x, Fx) {
+    const n = x.length, m = Fx.length;
+    const J = [];
+    for (let i = 0; i < m; i++) J.push(new Array(n));
+    for (let j = 0; j < n; j++) {
+      const h = 1.5e-8 * escala(x[j]);
+      const xp = x.slice(); xp[j] += h;
+      const a = F(xp);
+      for (let i = 0; i < m; i++) J[i][j] = (a[i] - Fx[i]) / h;
+    }
+    return J;
+  }
+
+  // ═══════════════════════════════════════════════════════════════ POLINOMIOS
+  // Recordatorio: [c0, c1, c2] es c0 + c1·x + c2·x².
+  const recortar = p => { const q = p.slice(); while (q.length > 1 && q[q.length - 1] === 0) q.pop(); return q.length ? q : [0]; };
+  // Horner: n multiplicaciones y n sumas, y el menor error de redondeo posible
+  // para evaluar un polinomio. Nunca se calculan potencias sueltas.
+  const evaluarPoli = (p, x) => { let s = 0; for (let k = p.length - 1; k >= 0; k--) s = s * x + p[k]; return s; };
+  const derivarPoli = p => p.length <= 1 ? [0] : p.slice(1).map((c, k) => c * (k + 1));
+  const integrarPoli = (p, c0) => [c0 || 0].concat(p.map((c, k) => c / (k + 1)));
+  const sumarPoli = (p, q) => recortar(Array.from({ length: Math.max(p.length, q.length) }, (_, k) => (p[k] || 0) + (q[k] || 0)));
+  const restarPoli = (p, q) => recortar(Array.from({ length: Math.max(p.length, q.length) }, (_, k) => (p[k] || 0) - (q[k] || 0)));
+  const multPoli = (p, q) => {
+    const r = new Array(p.length + q.length - 1).fill(0);
+    for (let i = 0; i < p.length; i++) for (let j = 0; j < q.length; j++) r[i + j] += p[i] * q[j];
+    return recortar(r);
+  };
+  // División larga, de la potencia mayor hacia abajo, como en la pizarra.
+  function dividirPoli(p, q) {
+    q = recortar(q);
+    if (q.length === 1 && q[0] === 0) falla('no se puede dividir entre el polinomio cero');
+    const r = recortar(p).slice();
+    const dq = q.length - 1, lider = q[dq];
+    if (r.length - 1 < dq) return { cociente: [0], resto: recortar(r) };
+    const c = new Array(r.length - dq).fill(0);
+    for (let k = r.length - 1; k >= dq; k--) {
+      const f = r[k] / lider;
+      c[k - dq] = f;
+      for (let j = 0; j <= dq; j++) r[k - dq + j] -= f * q[j];
+      r[k] = 0;
+    }
+    return { cociente: recortar(c), resto: recortar(r.slice(0, Math.max(1, dq))) };
+  }
+  const poliDesdeRaices = rs => rs.reduce((p, r) => multPoli(p, [-r, 1]), [1]);
+  // Mínimos cuadrados con QR de Householder, no con las ecuaciones normales:
+  // (AᵀA) eleva al cuadrado el número de condición, y con una Vandermonde de
+  // grado 8 eso ya son todas las cifras. Además las x se centran y escalan a
+  // [−1, 1] antes de montar la matriz, y el polinomio se devuelve a las x de
+  // verdad al final.
+  function minimosCuadradosQR(A, b) {
+    const m = A.length, n = A[0].length;
+    const R = A.map(f => f.slice()), y = b.slice();
+    for (let k = 0; k < n; k++) {
+      let nrm = 0;
+      for (let i = k; i < m; i++) nrm = Math.hypot(nrm, R[i][k]);
+      if (nrm === 0) falla('los datos no alcanzan para ese grado', 'baja el grado o da más puntos distintos');
+      const alfa = R[k][k] > 0 ? -nrm : nrm;
+      const v = new Array(m).fill(0);
+      v[k] = R[k][k] - alfa;
+      for (let i = k + 1; i < m; i++) v[i] = R[i][k];
+      const vv = v.reduce((s, t) => s + t * t, 0);
+      if (vv === 0) continue;
+      for (let j = k; j < n; j++) {
+        let s = 0;
+        for (let i = k; i < m; i++) s += v[i] * R[i][j];
+        s = 2 * s / vv;
+        for (let i = k; i < m; i++) R[i][j] -= s * v[i];
+      }
+      let s = 0;
+      for (let i = k; i < m; i++) s += v[i] * y[i];
+      s = 2 * s / vv;
+      for (let i = k; i < m; i++) y[i] -= s * v[i];
+    }
+    const x = new Array(n);
+    for (let i = n - 1; i >= 0; i--) {
+      let s = y[i];
+      for (let j = i + 1; j < n; j++) s -= R[i][j] * x[j];
+      if (Math.abs(R[i][i]) <= 1e-13 * Math.abs(R[0][0])) falla('los datos no alcanzan para ese grado', 'baja el grado o da más puntos distintos');
+      x[i] = s / R[i][i];
+    }
+    return x;
+  }
+  function ajustePolinomico(xs, ys, grado) {
+    const m = xs.length;
+    if (ys.length !== m) falla(`hay ${m} valores de x y ${ys.length} de y`, 'tienen que ir por parejas');
+    if (grado < 0) falla('el grado no puede ser negativo');
+    if (m < grado + 1) falla(`para un polinomio de grado ${grado} hacen falta al menos ${grado + 1} puntos y hay ${m}`);
+    const lo = Math.min(...xs), hi = Math.max(...xs);
+    const c = (lo + hi) / 2, s = (hi - lo) / 2 || 1;
+    const A = xs.map(x => { const t = (x - c) / s; const f = [1]; for (let k = 1; k <= grado; k++) f.push(f[k - 1] * t); return f; });
+    const bt = minimosCuadradosQR(A, ys);
+    // p(x) = Σ bₖ·((x − c)/s)ᵏ, desarrollado por Horner en polinomios.
+    const u = [-c / s, 1 / s];
+    let p = [0];
+    for (let k = grado; k >= 0; k--) p = sumarPoli(multPoli(p, u), [bt[k]]);
+    return p;
+  }
+  // Para leerlo en la pizarra: «3x² − 2x + 1», con los exponentes como
+  // superíndices y sin los «1·x» ni los «+ −» de una impresión a lo bruto.
+  function textoPoli(p, v) {
+    v = v || 'x';
+    const SUP = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+    const sup = k => String(k).split('').map(d => SUP[+d]).join('');
+    const num = x => (Number.isInteger(x) ? String(x) : String(Number(x.toPrecision(10))));
+    const partes = [];
+    for (let k = p.length - 1; k >= 0; k--) {
+      const c = p[k];
+      if (c === 0) continue;
+      const a = Math.abs(c);
+      const coef = (a === 1 && k > 0) ? '' : num(a);
+      const pot = k === 0 ? '' : k === 1 ? v : v + sup(k);
+      partes.push({ neg: c < 0, txt: coef + pot });
+    }
+    if (!partes.length) return '0';
+    return partes.map((t, i) => (i === 0 ? (t.neg ? '−' : '') + t.txt : (t.neg ? ' − ' : ' + ') + t.txt)).join('');
+  }
+
+  // ═════════════════════════════════════════════════════════════ INTERPOLACIÓN
+  function exigeCrecientes(xs, ys) {
+    if (xs.length !== ys.length) falla(`hay ${xs.length} valores de x y ${ys.length} de y`, 'tienen que ir por parejas');
+    if (xs.length < 2) falla('hacen falta al menos dos puntos');
+    for (let i = 1; i < xs.length; i++) if (!(xs[i] > xs[i - 1])) falla('las x tienen que ir en orden creciente y sin repetirse', 'ordénalas junto con sus y');
+  }
+  // El intervalo [xs[i], xs[i+1]] que contiene a x, por bisección.
+  function tramo(xs, x) {
+    const n = xs.length;
+    if (!(x >= xs[0] && x <= xs[n - 1]))
+      falla(`x = ${fmt(x)} está fuera del rango de los datos, [${fmt(xs[0])}, ${fmt(xs[n - 1])}]`,
+        'interpolar fuera de los datos es extrapolar, y eso no se hace a escondidas');
+    let lo = 0, hi = n - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (xs[m] <= x) lo = m; else hi = m; }
+    return lo;
+  }
+  const interpLineal = (xs, ys, x) => {
+    const i = tramo(xs, x);
+    const t = (x - xs[i]) / (xs[i + 1] - xs[i]);
+    return ys[i] + t * (ys[i + 1] - ys[i]);
+  };
+  // Lagrange en forma BARICÉNTRICA: la misma recta que la fórmula de los
+  // libros, pero en O(n) por punto en vez de O(n²) y numéricamente estable
+  // (la fórmula ingenua resta productos enormes). Los pesos se calculan una vez.
+  function pesosBaricentricos(xs) {
+    const n = xs.length;
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++)
+      if (xs[i] === xs[j]) falla(`la x ${fmt(xs[i])} está repetida`, 'un polinomio no puede pasar por dos alturas en la misma x');
+    return xs.map((xi, j) => { let p = 1; for (let k = 0; k < n; k++) if (k !== j) p *= (xi - xs[k]); return 1 / p; });
+  }
+  function interpLagrange(xs, ys, w, x) {
+    let num = 0, den = 0;
+    for (let j = 0; j < xs.length; j++) {
+      if (x === xs[j]) return ys[j];
+      const t = w[j] / (x - xs[j]);
+      num += t * ys[j]; den += t;
+    }
+    return num / den;
+  }
+  // El mismo polinomio, pero con sus coeficientes: diferencias divididas de
+  // Newton y desarrollo por Horner.
+  function poliInterpolante(xs, ys) {
+    pesosBaricentricos(xs);
+    const n = xs.length, c = ys.slice();
+    for (let j = 1; j < n; j++) for (let i = n - 1; i >= j; i--) c[i] = (c[i] - c[i - 1]) / (xs[i] - xs[i - j]);
+    let p = [c[n - 1]];
+    for (let k = n - 2; k >= 0; k--) p = sumarPoli(multPoli(p, [-xs[k], 1]), [c[k]]);
+    return p;
+  }
+  // Spline cúbico: por cada tramo una cúbica, con valor, pendiente y
+  // curvatura continuos. Se plantea con las PENDIENTES sᵢ en los nodos (como
+  // scipy): sale un sistema tridiagonal que se resuelve en O(n) con Thomas.
+  // Dos finales posibles:
+  //   "natural"  curvatura cero en los extremos (el de los libros; por defecto)
+  //   "noNodo"   la tercera derivada no salta en el segundo ni en el penúltimo
+  //              nodo («not-a-knot», el de MATLAB y scipy): suele ajustar mejor
+  //              cerca de los bordes.
+  function spline(xs, ys, tipo) {
+    exigeCrecientes(xs, ys);
+    const n = xs.length;
+    const h = [], m = [];
+    for (let i = 0; i < n - 1; i++) { h.push(xs[i + 1] - xs[i]); m.push((ys[i + 1] - ys[i]) / h[i]); }
+    let s;
+    if (n === 2) s = [m[0], m[0]];
+    else if (n === 3 && tipo === 'noNodo') {
+      // Con tres puntos, «sin nodo» es la parábola que pasa por los tres.
+      const p = poliInterpolante(xs, ys), dp = derivarPoli(p);
+      s = xs.map(x => evaluarPoli(dp, x));
+    } else {
+      const sub = new Array(n).fill(0), dia = new Array(n).fill(0), sup = new Array(n).fill(0), r = new Array(n).fill(0);
+      for (let i = 1; i < n - 1; i++) {
+        sub[i] = h[i]; dia[i] = 2 * (h[i - 1] + h[i]); sup[i] = h[i - 1];
+        r[i] = 3 * (h[i] * m[i - 1] + h[i - 1] * m[i]);
+      }
+      if (tipo === 'noNodo') {
+        const d0 = xs[2] - xs[0];
+        dia[0] = h[1]; sup[0] = d0;
+        r[0] = ((h[0] + 2 * d0) * h[1] * m[0] + h[0] * h[0] * m[1]) / d0;
+        const dn = xs[n - 1] - xs[n - 3];
+        dia[n - 1] = h[n - 3]; sub[n - 1] = dn;
+        r[n - 1] = (h[n - 2] * h[n - 2] * m[n - 3] + (2 * dn + h[n - 2]) * h[n - 3] * m[n - 2]) / dn;
+      } else {
+        dia[0] = 2; sup[0] = 1; r[0] = 3 * m[0];
+        sub[n - 1] = 1; dia[n - 1] = 2; r[n - 1] = 3 * m[n - 2];
+      }
+      // Thomas: eliminación hacia delante y sustitución hacia atrás.
+      for (let i = 1; i < n; i++) {
+        const w = sub[i] / dia[i - 1];
+        dia[i] -= w * sup[i - 1];
+        r[i] -= w * r[i - 1];
+      }
+      s = new Array(n);
+      s[n - 1] = r[n - 1] / dia[n - 1];
+      for (let i = n - 2; i >= 0; i--) s[i] = (r[i] - sup[i] * s[i + 1]) / dia[i];
+    }
+    // Cada tramo como cúbica de Hermite con los valores y las pendientes.
+    const evaluar = x => {
+      const i = tramo(xs, x);
+      const hh = h[i], t = (x - xs[i]) / hh, t2 = t * t, t3 = t2 * t;
+      return (2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * hh * s[i] + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * hh * s[i + 1];
+    };
+    return { evaluar, pendientes: s };
+  }
+
+  return { dopri, rk4, bdf2, evaluarPoli, derivarPoli, integrarPoli, sumarPoli, restarPoli, multPoli, dividirPoli,
+    poliDesdeRaices, ajustePolinomico, textoPoli, exigeCrecientes, interpLineal, pesosBaricentricos, interpLagrange,
+    poliInterpolante, spline, recortar };
+})(NEN_CALCULO);
+
+// La tercera: funciones especiales, distribuciones y teoría de números.
+const NEN_ESPECIALES = (function (B) {
+  const { EPS, RAIZ_PI, LN_RAIZ_2PI, falla, fmt, raizBrent } = B;
+
+  // ═══════════════════════════════════════════════════════ FUNCIONES ESPECIALES
+
+  // Γ con la aproximación de Lanczos (g = 7, 9 términos): unas 15 cifras en
+  // todo el semieje positivo con nueve divisiones. Para x < ½ se usa la
+  // reflexión Γ(x)Γ(1−x) = π/sen(πx), porque Lanczos pierde precisión ahí.
+  // En los enteros se multiplica directamente: así Γ(5) da 24 y no 23.999…
+  const LANCZOS = [0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313,
+    -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+  function gamma(x) {
+    if (isNaN(x)) return NaN;
+    if (x <= 0 && Number.isInteger(x)) falla(`Γ tiene un polo en ${fmt(x)}: no existe en 0 ni en los enteros negativos`);
+    if (Number.isInteger(x) && x <= 171) { let p = 1; for (let k = 2; k < x; k++) p *= k; return p; }
+    if (x > 171.62) falla(`Γ(${fmt(x)}) no cabe en un número (pasa de 10³⁰⁸)`, 'usa lnGamma, que da su logaritmo');
+    if (x < 0.5) return Math.PI / (Math.sin(Math.PI * x) * gamma(1 - x));
+    x -= 1;
+    let a = LANCZOS[0];
+    const t = x + 7.5;
+    for (let i = 1; i < 9; i++) a += LANCZOS[i] / (x + i);
+    // t^(x+½) se hace en dos mitades para no desbordar antes de multiplicar por e^(−t).
+    const p = Math.pow(t, (x + 0.5) / 2);
+    return Math.sqrt(2 * Math.PI) * p * (p * Math.exp(-t)) * a;
+  }
+  // ln Γ: con la serie de Stirling para x ≥ 15 (donde cinco términos ya dan
+  // el redondeo) y con el logaritmo de Γ por debajo. Para negativos, ln|Γ|.
+  function lnGamma(x) {
+    if (x <= 0 && Number.isInteger(x)) falla(`Γ tiene un polo en ${fmt(x)}: no existe en 0 ni en los enteros negativos`);
+    if (x < 0) return Math.log(Math.PI / Math.abs(Math.sin(Math.PI * x))) - lnGamma(1 - x);
+    if (x < 15) return Math.log(gamma(x));
+    const x2 = 1 / (x * x);
+    const serie = (1 / 12 - x2 * (1 / 360 - x2 * (1 / 1260 - x2 * (1 / 1680 - x2 * (1 / 1188 - x2 * 691 / 360360))))) / x;
+    return (x - 0.5) * Math.log(x) - x + LN_RAIZ_2PI + serie;
+  }
+  function beta(a, b) {
+    if (a > 0 && b > 0 && a + b < 170) return gamma(a) * gamma(b) / gamma(a + b);
+    if (a > 0 && b > 0) return Math.exp(lnGamma(a) + lnGamma(b) - lnGamma(a + b));
+    return gamma(a) * gamma(b) / gamma(a + b);
+  }
+  // ψ = Γ'/Γ: se sube con ψ(x) = ψ(x+1) − 1/x hasta x ≥ 10 y ahí la serie
+  // asintótica con los números de Bernoulli ya está en el redondeo.
+  function digamma(x) {
+    if (x <= 0 && Number.isInteger(x)) falla(`ψ tiene un polo en ${fmt(x)}`);
+    if (x < 0) return digamma(1 - x) - Math.PI / Math.tan(Math.PI * x);
+    let r = 0;
+    while (x < 10) { r -= 1 / x; x += 1; }
+    const x2 = 1 / (x * x);
+    return r + Math.log(x) - 0.5 / x - x2 * (1 / 12 - x2 * (1 / 120 - x2 * (1 / 252 - x2 * (1 / 240 - x2 * (1 / 132 - x2 * (691 / 32760 - x2 / 12))))));
+  }
+  // Gamma incompleta regularizada P(a, x) = γ(a, x)/Γ(a): la serie converge
+  // rápido para x < a + 1 y la fracción continua (Lentz) para x > a + 1; se
+  // usa cada una donde es buena y la otra se saca como 1 − la primera.
+  function gammaSerie(a, x) {
+    let ap = a, del = 1 / a, sum = del;
+    for (let n = 0; n < 100000; n++) {
+      ap += 1; del *= x / ap; sum += del;
+      if (Math.abs(del) < Math.abs(sum) * EPS) return sum * Math.exp(-x + a * Math.log(x) - lnGamma(a));
+    }
+    falla('la serie de la gamma incompleta no converge (a demasiado grande)');
+  }
+  // La fracción continua de Γ(a, x), por Lentz modificado; devuelve solo la
+  // fracción, sin el prefactor, para que erfc pueda poner el suyo con cuidado.
+  function lentzGamma(a, x) {
+    const MIN = 1e-300;
+    let b = x + 1 - a, c = 1 / MIN, d = 1 / b, h = d;
+    for (let i = 1; i < 100000; i++) {
+      const an = -i * (i - a);
+      b += 2;
+      d = an * d + b; if (Math.abs(d) < MIN) d = MIN;
+      c = b + an / c; if (Math.abs(c) < MIN) c = MIN;
+      d = 1 / d;
+      const del = d * c;
+      h *= del;
+      if (Math.abs(del - 1) < EPS) return h;
+    }
+    falla('la fracción continua de la gamma incompleta no converge (a demasiado grande)');
+  }
+  const gammaFraccion = (a, x) => Math.exp(-x + a * Math.log(x) - lnGamma(a)) * lentzGamma(a, x);
+  function gammaP(a, x) {
+    if (!(a > 0)) falla('el parámetro a tiene que ser positivo');
+    if (x < 0) falla('x no puede ser negativo');
+    if (x === 0) return 0;
+    if (x === Infinity) return 1;
+    return x < a + 1 ? gammaSerie(a, x) : 1 - gammaFraccion(a, x);
+  }
+  function gammaQ(a, x) {
+    if (!(a > 0)) falla('el parámetro a tiene que ser positivo');
+    if (x < 0) falla('x no puede ser negativo');
+    if (x === 0) return 1;
+    if (x === Infinity) return 0;
+    return x < a + 1 ? 1 - gammaSerie(a, x) : gammaFraccion(a, x);
+  }
+  // erf: para |x| < 2, la serie de términos TODOS positivos
+  //     erf(x) = (2/√π)·e^(−x²)·Σ 2ⁿ x^(2n+1) / (1·3·5···(2n+1)),
+  // que no cancela nada (la de Taylor alterna y pierde cifras ya en x = 3).
+  // Más allá, 1 − erfc, con erfc de la fracción continua de Γ(½, x²). Así cada
+  // una tiene error relativo de pocas ε, incluso erfc(5) ≈ 1.5·10⁻¹².
+  function erfSerie(x) {
+    const x2 = x * x;
+    let term = x, sum = x;
+    for (let n = 1; n < 500; n++) {
+      term *= 2 * x2 / (2 * n + 1);
+      sum += term;
+      if (term < EPS * sum) break;
+    }
+    return 2 / RAIZ_PI * Math.exp(-x2) * sum;
+  }
+  function erfc(x) {
+    if (isNaN(x)) return NaN;
+    if (x < 0) return 2 - erfc(-x);
+    if (x < 2) return 1 - erfSerie(x);
+    if (x > 27) return 0;
+    // erfc(x) = x·e^(−x²)/√π · (fracción de Γ(½, x²)). El cuidado está en
+    // e^(−x²): x² redondeado lleva un error absoluto de x²·ε, que la
+    // exponencial convierte en relativo (10⁻¹⁴ en x = 10). Se parte x en una
+    // parte corta xh, cuyo cuadrado es exacto, y el resto (x − xh)(x + xh).
+    const xh = Math.round(x * 16) / 16, del = (x - xh) * (x + xh);
+    return x / RAIZ_PI * Math.exp(-xh * xh) * Math.exp(-del) * lentzGamma(0.5, x * x);
+  }
+  function erf(x) {
+    if (isNaN(x)) return NaN;
+    if (x < 0) return -erf(-x);
+    if (x < 2) return erfSerie(x);
+    return 1 - erfc(x);
+  }
+  // Inversa de erf: arranque con el cuantil normal (Acklam) y tres pasos de
+  // Halley sobre la propia erf (o sobre erfc cerca de ±1, donde 1 − y es lo
+  // que lleva la información). Halley converge con orden 3: dos pasos ya dan
+  // el redondeo; el tercero es seguro.
+  function erfInversa(y) {
+    if (y < -1 || y > 1) falla(`erfInversa solo existe entre −1 y 1, y llegó ${fmt(y)}`);
+    if (y === 1) return Infinity;
+    if (y === -1) return -Infinity;
+    if (y === 0) return 0;
+    if (y < 0) return -erfInversa(-y);
+    let x = Math.abs(y) < 0.5 ? y * RAIZ_PI / 2 * (1 + Math.PI * y * y / 12) : acklam((1 + y) / 2) / Math.SQRT2;
+    for (let it = 0; it < 6; it++) {
+      const r = y < 0.5 ? erf(x) - y : (1 - y) - erfc(x);
+      const u = r / (2 / RAIZ_PI * Math.exp(-x * x));
+      const dx = u / (1 + x * u);
+      x -= dx;
+      if (Math.abs(dx) <= EPS * Math.abs(x)) break;
+    }
+    return x;
+  }
+  // Acklam: una racional por tramos para el cuantil normal, con error
+  // relativo 1.15·10⁻⁹. Sola no basta; como arranque de Halley, sobra.
+  function acklam(p) {
+    const a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00];
+    const b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01];
+    const c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00];
+    const d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00];
+    const bajo = 0.02425;
+    if (p < bajo) {
+      const q = Math.sqrt(-2 * Math.log(p));
+      return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+    }
+    if (p > 1 - bajo) {
+      const q = Math.sqrt(-2 * Math.log(1 - p));
+      return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+    }
+    const q = p - 0.5, r = q * q;
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+  }
+  // Beta incompleta regularizada Iₓ(a, b) por la fracción continua de
+  // Lentz, que converge rápido para x < (a+1)/(a+b+2); del otro lado se usa la
+  // simetría Iₓ(a, b) = 1 − I₁₋ₓ(b, a).
+  function betaFraccion(a, b, x) {
+    const MIN = 1e-300;
+    const qab = a + b, qap = a + 1, qam = a - 1;
+    let c = 1, d = 1 - qab * x / qap;
+    if (Math.abs(d) < MIN) d = MIN;
+    d = 1 / d;
+    let h = d;
+    for (let m = 1; m < 100000; m++) {
+      const m2 = 2 * m;
+      let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+      d = 1 + aa * d; if (Math.abs(d) < MIN) d = MIN;
+      c = 1 + aa / c; if (Math.abs(c) < MIN) c = MIN;
+      d = 1 / d; h *= d * c;
+      aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+      d = 1 + aa * d; if (Math.abs(d) < MIN) d = MIN;
+      c = 1 + aa / c; if (Math.abs(c) < MIN) c = MIN;
+      d = 1 / d;
+      const del = d * c;
+      h *= del;
+      if (Math.abs(del - 1) < EPS) return h;
+    }
+    falla('la fracción continua de la beta incompleta no converge (a o b demasiado grandes)');
+  }
+  function betaIncompleta(a, b, x) {
+    if (!(a > 0) || !(b > 0)) falla('a y b tienen que ser positivos');
+    if (x < 0 || x > 1) falla(`x tiene que estar entre 0 y 1, y llegó ${fmt(x)}`);
+    if (x === 0) return 0;
+    if (x === 1) return 1;
+    const lbt = lnGamma(a + b) - lnGamma(a) - lnGamma(b) + a * Math.log(x) + b * Math.log1p(-x);
+    const bt = Math.exp(lbt);
+    if (x < (a + 1) / (a + b + 2)) return bt * betaFraccion(a, b, x) / a;
+    return 1 - bt * betaFraccion(b, a, 1 - x) / b;
+  }
+  // Bessel J de orden ENTERO. Dos caminos:
+  //  · x pequeña frente al orden: la serie de potencias, que ahí no cancela.
+  //  · si no: la integral de Bessel  Jₙ(x) = (1/2π) ∫₀^{2π} cos(nτ − x·sen τ) dτ
+  //    con la regla del trapecio. Parece ingenuo y es lo contrario: para un
+  //    integrando periódico y analítico el trapecio converge EXPONENCIALMENTE,
+  //    y con N > |x| + n + 40 puntos ya está en el redondeo.
+  // El error es absoluto (~10⁻¹⁶), así que cerca de un cero de Jₙ las cifras
+  // relativas bajan, como en cualquier implementación.
+  function besselJ(n, x) {
+    if (!Number.isInteger(n)) falla('besselJ solo está para órdenes enteros', 'redondea el orden');
+    if (n < 0) return (n % 2 ? -1 : 1) * besselJ(-n, x);
+    if (x < 0) return (n % 2 ? -1 : 1) * besselJ(n, -x);
+    if (x === 0) return n === 0 ? 1 : 0;
+    if (x * x < 4 * (n + 1) || x < 6) {
+      const h = x / 2;
+      let term = Math.exp(n * Math.log(h) - lnGamma(n + 1)), sum = term;
+      for (let k = 1; k < 500; k++) {
+        term *= -h * h / (k * (k + n));
+        sum += term;
+        if (Math.abs(term) < EPS * Math.abs(sum) * 1e-2) break;
+      }
+      return sum;
+    }
+    const N = 2 * Math.ceil((x + n) / 2 + 40);
+    let s = 0;
+    for (let k = 0; k < N; k++) { const t = 2 * Math.PI * k / N; s += Math.cos(n * t - x * Math.sin(t)); }
+    return s / N;
+  }
+  // ζ de Riemann por el algoritmo de Borwein sobre la función eta alternada,
+  // ζ(s) = η(s)/(1 − 2^(1−s)), con n = 50 términos: error teórico ~(3+√8)⁻⁵⁰,
+  // muy por debajo del redondeo. Vale para todo s > 0 (salvo el polo en 1);
+  // para s < 0, la ecuación funcional de Riemann.
+  const ZD = (() => {
+    const n = 50, d = [];
+    let sum = 0, num = 1, den = 1;   // num = (n+i−1)!/(n−i)! · 4^i, den = (2i)!
+    for (let i = 0; i <= n; i++) {
+      if (i > 0) { num *= (n + i - 1) * (n - i + 1) * 4; den *= (2 * i - 1) * (2 * i); }
+      sum += num / den;
+      d.push(n * sum);
+    }
+    return d;
+  })();
+  function zeta(s) {
+    if (s === 1) falla('ζ tiene un polo en s = 1: la serie armónica diverge');
+    if (s === 0) return -0.5;
+    if (s < 0) {
+      if (Number.isInteger(s) && s % 2 === 0) return 0;     // los ceros triviales
+      return Math.pow(2, s) * Math.pow(Math.PI, s - 1) * Math.sin(Math.PI * s / 2) * gamma(1 - s) * zeta(1 - s);
+    }
+    if (s > 60) return 1 + Math.pow(2, -s) + Math.pow(3, -s);
+    const n = ZD.length - 1;
+    let sum = 0;
+    for (let k = 0; k < n; k++) sum += (k % 2 ? -1 : 1) * (ZD[k] - ZD[n]) / Math.pow(k + 1, s);
+    return -sum / (ZD[n] * (1 - Math.pow(2, 1 - s)));
+  }
+
+  // ═════════════════════════════════════════════════════════════ PROBABILIDAD
+  const exigeSigma = s => { if (!(s > 0)) falla(`la desviación tiene que ser positiva, y llegó ${fmt(s)}`); };
+  const exigeP = p => { if (!(p >= 0 && p <= 1)) falla(`una probabilidad va de 0 a 1, y llegó ${fmt(p)}`); };
+  const normalDensidad = (x, mu, s) => { exigeSigma(s); const z = (x - mu) / s; return Math.exp(-0.5 * z * z) / (s * Math.sqrt(2 * Math.PI)); };
+  // Con erfc y no con ½(1 + erf): en la cola izquierda la resta 1 + erf(−6)
+  // se come todas las cifras, y erfc(6/√2) las conserva.
+  const normalAcumulada = (x, mu, s) => { exigeSigma(s); return 0.5 * erfc(-(x - mu) / (s * Math.SQRT2)); };
+  function normalInversa(p, mu, s) {
+    exigeSigma(s); exigeP(p);
+    if (p === 0) return -Infinity;
+    if (p === 1) return Infinity;
+    // Se trabaja siempre en la cola izquierda (p ≤ ½) y se refleja: en la
+    // derecha, la acumulada está pegada a 1 y su resta con p ya no tiene cifras.
+    if (p > 0.5) return mu - s * normalInversa(1 - p, 0, 1);
+    let x = acklam(p);
+    // Un paso de Halley sobre la acumulada lleva Acklam (9 cifras) al redondeo.
+    for (let k = 0; k < 2; k++) {
+      const e = 0.5 * erfc(-x / Math.SQRT2) - p;
+      const u = e * Math.sqrt(2 * Math.PI) * Math.exp(x * x / 2);
+      x -= u / (1 + x * u / 2);
+    }
+    return mu + s * x;
+  }
+  const exigeGL = (v, q) => { if (!(v > 0)) falla(`los grados de libertad${q || ''} tienen que ser positivos, y llegó ${fmt(v)}`); };
+  function tStudentAcumulada(t, v) {
+    exigeGL(v);
+    if (t === Infinity) return 1;
+    if (t === -Infinity) return 0;
+    const x = v / (v + t * t);
+    const cola = 0.5 * betaIncompleta(v / 2, 0.5, x);
+    return t > 0 ? 1 - cola : cola;
+  }
+  // Las inversas que no tienen fórmula se despejan con Brent sobre la
+  // acumulada (que es monótona), después de abrir un intervalo que la encierre.
+  function invertir(F, p, lo, hi, minimo) {
+    let a = lo, b = hi;
+    for (let k = 0; k < 200 && F(b) < p; k++) b = b * 2 + 1;
+    if (minimo === undefined) for (let k = 0; k < 200 && F(a) > p; k++) a = a * 2 - 1;
+    return raizBrent(x => F(x) - p, a, b);
+  }
+  function tStudentInversa(p, v) {
+    exigeGL(v); exigeP(p);
+    if (p === 0) return -Infinity;
+    if (p === 1) return Infinity;
+    if (p === 0.5) return 0;
+    const z = acklam(p);
+    return invertir(t => tStudentAcumulada(t, v), p, Math.min(-1, 2 * z), Math.max(1, 2 * z));
+  }
+  const chiCuadradoAcumulada = (x, k) => { exigeGL(k); return x <= 0 ? 0 : gammaP(k / 2, x / 2); };
+  function chiCuadradoInversa(p, k) {
+    exigeGL(k); exigeP(p);
+    if (p === 0) return 0;
+    if (p === 1) return Infinity;
+    return invertir(x => chiCuadradoAcumulada(x, k), p, 0, k + 10, 0);
+  }
+  function fisherAcumulada(x, d1, d2) {
+    exigeGL(d1, ' del numerador'); exigeGL(d2, ' del denominador');
+    if (x <= 0) return 0;
+    if (x === Infinity) return 1;
+    return betaIncompleta(d1 / 2, d2 / 2, d1 * x / (d1 * x + d2));
+  }
+  // ln C(n, k) por lnGamma: así binomialProb(500, 1000, 0.5) no pasa por
+  // números de 300 cifras.
+  const lnComb = (n, k) => lnGamma(n + 1) - lnGamma(k + 1) - lnGamma(n - k + 1);
+  function binomialProb(k, n, p) {
+    exigeP(p);
+    if (!Number.isInteger(n) || n < 0) falla('n tiene que ser un entero no negativo');
+    if (!Number.isInteger(k) || k < 0 || k > n) return 0;
+    if (p === 0) return k === 0 ? 1 : 0;
+    if (p === 1) return k === n ? 1 : 0;
+    return Math.exp(lnComb(n, k) + k * Math.log(p) + (n - k) * Math.log1p(-p));
+  }
+  // P(X ≤ k) = I₁₋ₚ(n − k, k + 1): una beta incompleta en vez de k + 1 sumandos.
+  function binomialAcumulada(k, n, p) {
+    exigeP(p);
+    if (!Number.isInteger(n) || n < 0) falla('n tiene que ser un entero no negativo');
+    k = Math.floor(k);
+    if (k < 0) return 0;
+    if (k >= n) return 1;
+    if (p === 0) return 1;
+    if (p === 1) return 0;
+    return betaIncompleta(n - k, k + 1, 1 - p);
+  }
+  function poissonProb(k, l) {
+    if (!(l > 0)) falla(`la tasa λ tiene que ser positiva, y llegó ${fmt(l)}`);
+    if (!Number.isInteger(k) || k < 0) return 0;
+    return Math.exp(k * Math.log(l) - l - lnGamma(k + 1));
+  }
+  // P(X ≤ k) = Q(k + 1, λ), la gamma incompleta superior.
+  function poissonAcumulada(k, l) {
+    if (!(l > 0)) falla(`la tasa λ tiene que ser positiva, y llegó ${fmt(l)}`);
+    k = Math.floor(k);
+    if (k < 0) return 0;
+    return gammaQ(k + 1, l);
+  }
+  const exponencialAcumulada = (x, l) => {
+    if (!(l > 0)) falla(`la tasa λ tiene que ser positiva, y llegó ${fmt(l)}`);
+    return x <= 0 ? 0 : -Math.expm1(-l * x);
+  };
+
+  // ═════════════════════════════════════════════════════════ TEORÍA DE NÚMEROS
+  // Todo se hace con BigInt por dentro: un producto de dos números de 30 bits
+  // ya no cabe exacto en un double, y la aritmética modular no admite «casi».
+  // Por fuera, los números de Ñ son exactos hasta 2⁵³, y ese es el límite.
+  const MAXSEG = Number.MAX_SAFE_INTEGER;
+  const exigeEntero = (x, que) => {
+    if (!Number.isInteger(x)) falla(`${que} tiene que ser entero, y llegó ${fmt(x)}`);
+    if (Math.abs(x) > MAXSEG) falla(`${que} pasa de 2⁵³ y ya no es exacto en un número de Ñ`);
+    return x;
+  };
+  const modB = (a, m) => ((a % m) + m) % m;
+  function potenciaModular(b, e, m) {
+    exigeEntero(b, 'la base'); exigeEntero(e, 'el exponente'); exigeEntero(m, 'el módulo');
+    if (m < 1) falla('el módulo tiene que ser al menos 1');
+    if (e < 0) return potenciaModular(inversoModular(b, m), -e, m);
+    let r = 1n, x = modB(BigInt(b), BigInt(m)), k = BigInt(e);
+    const M = BigInt(m);
+    // Exponenciación binaria: log₂(e) cuadrados en vez de e productos.
+    while (k > 0n) { if (k & 1n) r = r * x % M; x = x * x % M; k >>= 1n; }
+    return Number(r % M);
+  }
+  function mcdExtendido(a, b) {
+    exigeEntero(a, 'a'); exigeEntero(b, 'b');
+    let [r0, r1] = [BigInt(a), BigInt(b)], [s0, s1] = [1n, 0n], [t0, t1] = [0n, 1n];
+    while (r1 !== 0n) {
+      const q = r0 / r1;
+      [r0, r1] = [r1, r0 - q * r1]; [s0, s1] = [s1, s0 - q * s1]; [t0, t1] = [t1, t0 - q * t1];
+    }
+    if (r0 < 0n) { r0 = -r0; s0 = -s0; t0 = -t0; }
+    return { mcd: Number(r0), x: Number(s0), y: Number(t0) };
+  }
+  function inversoModular(a, m) {
+    exigeEntero(a, 'el número'); exigeEntero(m, 'el módulo');
+    if (m < 2) falla('el módulo tiene que ser al menos 2');
+    const r = mcdExtendido(modB(a, m), m);
+    if (r.mcd !== 1) falla(`${a} no tiene inverso módulo ${m}: comparten el factor ${r.mcd}`,
+      'solo tienen inverso los números primos relativos con el módulo');
+    return ((r.x % m) + m) % m;
+  }
+  // Resto chino en su versión general: los módulos no tienen que ser primos
+  // entre sí, solo los restos compatibles. Se van juntando de dos en dos.
+  function restoChino(rs, ms) {
+    if (rs.length !== ms.length) falla(`hay ${rs.length} restos y ${ms.length} módulos`, 'uno por uno');
+    if (!rs.length) falla('hace falta al menos una congruencia');
+    let R = 0n, M = 1n;
+    for (let i = 0; i < rs.length; i++) {
+      exigeEntero(rs[i], 'cada resto'); exigeEntero(ms[i], 'cada módulo');
+      if (ms[i] < 1) falla('los módulos tienen que ser positivos');
+      const m = BigInt(ms[i]), r = modB(BigInt(rs[i]), m);
+      // x ≡ R (mod M) y x ≡ r (mod m):  x = R + M·t  con  M·t ≡ r − R (mod m)
+      let [a, b] = [M, m], [s0, s1] = [1n, 0n];
+      while (b !== 0n) { const q = a / b; [a, b] = [b, a - q * b]; [s0, s1] = [s1, s0 - q * s1]; }
+      const g = a;
+      if ((r - R) % g !== 0n) falla(`las congruencias se contradicen: ningún número deja resto ${rs[i]} módulo ${ms[i]} y cumple las anteriores`);
+      const mg = m / g;
+      const t = modB(((r - R) / g) * s0, mg);
+      R = R + M * t; M = M * mg; R = modB(R, M);
+    }
+    if (R > BigInt(MAXSEG)) falla('la solución pasa de 2⁵³ y no cabe exacta en un número de Ñ');
+    // El módulo puede pasar de 2⁵³ aunque el resto quepa: se da como real (aproximado).
+    return { resto: Number(R), modulo: Number(M) };
+  }
+  // Fibonacci por «duplicación»: F(2k) = F(k)·(2F(k+1) − F(k)) y
+  // F(2k+1) = F(k)² + F(k+1)², en log₂(n) pasos y con BigInt. Exacto hasta
+  // F(78), el último que cabe en 2⁵³; de ahí a F(1476) se devuelve el real más
+  // cercano (16 cifras buenas), y después no cabe en un número.
+  function fibonacci(n) {
+    exigeEntero(n, 'n');
+    if (n < 0) return (n % 2 ? 1 : -1) * fibonacci(-n);
+    if (n > 1476) falla(`F(${n}) no cabe en un número (pasa de 10³⁰⁸)`);
+    const par = k => {
+      if (k === 0) return [0n, 1n];
+      const [a, b] = par(Math.floor(k / 2));
+      const c = a * (2n * b - a), d = a * a + b * b;
+      return k % 2 ? [d, c + d] : [c, d];
+    };
+    return Number(par(n)[0]);
+  }
+  const mulmod = (a, b, m) => a * b % m;
+  function potB(b, e, m) { let r = 1n; b %= m; while (e > 0n) { if (e & 1n) r = mulmod(r, b, m); b = mulmod(b, b, m); e >>= 1n; } return r; }
+  // Miller–Rabin con las bases primas hasta 37: es DETERMINISTA para todo
+  // n < 3.3·10²⁴, y por tanto para todo entero de Ñ.
+  function esPrimoMR(n) {
+    if (n < 2) return false;
+    for (const p of [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]) { if (n === p) return true; if (n % p === 0) return false; }
+    const N = BigInt(n);
+    let d = N - 1n, s = 0;
+    while (d % 2n === 0n) { d /= 2n; s++; }
+    for (const a of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n]) {
+      let x = potB(a, d, N);
+      if (x === 1n || x === N - 1n) continue;
+      let comp = true;
+      for (let r = 1; r < s; r++) { x = mulmod(x, x, N); if (x === N - 1n) { comp = false; break; } }
+      if (comp) return false;
+    }
+    return true;
+  }
+  // Rho de Pollard con la mejora de Brent: encuentra un factor de n en unas
+  // n^(1/4) vueltas, contra las √n de probar divisores. Con n ~ 2⁵³ es la
+  // diferencia entre 10⁴ y 10⁸.
+  function rhoPollard(n) {
+    const N = BigInt(n);
+    if (N % 2n === 0n) return 2;
+    for (let c = 1n; c < 50n; c++) {
+      let y = 2n, x = 2n, g = 1n, q = 1n, ys = 2n, r = 1, m = 64;
+      const f = v => (v * v + c) % N;
+      do {
+        x = y;
+        for (let i = 0; i < r; i++) y = f(y);
+        let k = 0;
+        while (k < r && g === 1n) {
+          ys = y;
+          for (let i = 0; i < Math.min(m, r - k); i++) { y = f(y); q = q * (x > y ? x - y : y - x) % N; }
+          g = gcdB(q, N); k += m;
+        }
+        r *= 2;
+      } while (g === 1n);
+      if (g === N) { do { ys = f(ys); g = gcdB(x > ys ? x - ys : ys - x, N); } while (g === 1n); }
+      if (g !== N) return Number(g);
+    }
+    return n;
+  }
+  const gcdB = (a, b) => { while (b) [a, b] = [b, a % b]; return a; };
+  function factorizar(n) {
+    exigeEntero(n, 'el número');
+    if (n < 1) falla(`solo se factorizan enteros positivos, y llegó ${n}`);
+    const out = [];
+    for (const p of [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47]) while (n % p === 0) { out.push(p); n /= p; }
+    const pila = n > 1 ? [n] : [];
+    while (pila.length) {
+      const m = pila.pop();
+      if (m === 1) continue;
+      if (esPrimoMR(m)) { out.push(m); continue; }
+      const d = rhoPollard(m);
+      pila.push(d, m / d);
+    }
+    return out.sort((a, b) => a - b);
+  }
+  function totiente(n) {
+    exigeEntero(n, 'el número');
+    if (n < 1) falla('φ(n) está definida para n ≥ 1');
+    let r = n;
+    for (const p of new Set(factorizar(n))) r = r / p * (p - 1);
+    return r;
+  }
+  function esCuadradoPerfecto(n) {
+    exigeEntero(n, 'el número');
+    if (n < 0) return false;
+    let r = Math.round(Math.sqrt(n));
+    const N = BigInt(n);
+    // √ en coma flotante puede fallar por uno cerca de 2⁵³: se corrige en BigInt.
+    for (const c of [r - 1, r, r + 1]) if (c >= 0 && BigInt(c) * BigInt(c) === N) return true;
+    return false;
+  }
+  function siguientePrimo(n) {
+    exigeEntero(n, 'el número');
+    let k = Math.max(2, Math.floor(n) + 1);
+    while (!esPrimoMR(k)) { k++; if (k > MAXSEG) falla('el siguiente primo pasa de 2⁵³'); }
+    return k;
+  }
+
+  return { gamma, lnGamma, beta, digamma, gammaP, gammaQ, erf, erfc, erfInversa, betaIncompleta, besselJ, zeta,
+    normalDensidad, normalAcumulada, normalInversa, tStudentAcumulada, tStudentInversa, chiCuadradoAcumulada,
+    chiCuadradoInversa, fisherAcumulada, binomialProb, binomialAcumulada, poissonProb, poissonAcumulada,
+    exponencialAcumulada, potenciaModular, mcdExtendido, inversoModular, restoChino, fibonacci, factorizar,
+    totiente, esCuadradoPerfecto, siguientePrimo, esPrimoMR };
+})(NEN_CALCULO);
+
+// ════════════════════════════════════════════════════════════════════ ADUANA
+// Lo que ve Ñ. Cada «def» convierte los argumentos (listas, arreglos y
+// funciones de Ñ) en lo que entiende la capa pura, llama, y convierte el
+// resultado de vuelta. Los vectores vuelven con la MISMA forma con la que
+// llegaron: quien da una lista recibe listas y quien da un arreglo, arreglos.
+function instalarNenCalculo(vm, def) {
+  const N = NEN_CALCULO, C = NEN_CALCULO2, Z = NEN_ESPECIALES;
+  const L = items => vm.nuevaLista(items);
+  const num = (v, n, f) => vm.exigeNum(v, n, f);
+  const ent = (v, n, f) => {
+    const x = vm.exigeNum(v, n, f);
+    if (!Number.isInteger(x)) vm.error(`«${f}»: el argumento ${n} tiene que ser entero y es ${x}`);
+    return x;
+  };
+  const txt = (v, n, f) => vm.exigeTexto(v, n, f);
+  const dic = obj => { const d = vm.nuevoDic(); for (const k of Object.keys(obj)) d.mapa.set(k, obj[k]); return d; };
+  const arrDe = xs => { const a = vm.arrNuevo([xs.length], 'real'); for (let i = 0; i < xs.length; i++) a.datos[i] = xs[i]; return a; };
+  const arr2De = filas => {
+    const r = filas.length, c = r ? filas[0].length : 0;
+    const a = vm.arrNuevo([r, c], 'real');
+    for (let i = 0; i < r; i++) for (let j = 0; j < c; j++) a.datos[i * c + j] = filas[i][j];
+    return a;
+  };
+  // Una lista de números o un arreglo de una dimensión, como Array de JS.
+  const nums = (v, n, f) => {
+    if (v instanceof ObjArreglo) {
+      if (v.forma.length !== 1) vm.error(`«${f}»: el argumento ${n} tiene que ser un arreglo de una dimensión y tiene ${v.forma.length}`);
+      return vm.arrValores(v);
+    }
+    return vm.exigeNums(v, n, f).slice();
+  };
+  const matriz = (v, n, f) => {
+    if (v instanceof ObjArreglo) {
+      if (v.forma.length !== 2) vm.error(`«${f}»: el argumento ${n} tiene que ser una matriz (dos dimensiones)`);
+      const xs = vm.arrValores(v), c = v.forma[1];
+      const out = [];
+      for (let i = 0; i < v.forma[0]; i++) out.push(xs.slice(i * c, (i + 1) * c));
+      return out;
+    }
+    const l = vm.exigeLista(v, n, f);
+    return l.items.map(fila => nums(fila, n, f));
+  };
+  const leerNums = (r, f, que) => {
+    if (typeof r === 'number') return [r];
+    if (r instanceof ObjArreglo) return vm.arrValores(r);
+    if (r instanceof ObjLista) {
+      for (const x of r.items) if (typeof x !== 'number')
+        vm.error(`«${f}»: ${que} tiene que devolver números y en la lista hay ${tipoDe(x)}`);
+      return r.items.slice();
+    }
+    vm.error(`«${f}»: ${que} tiene que devolver un número, una lista de números o un arreglo, y devolvió ${tipoDe(r)}`);
+  };
+  // Las funciones de Ñ, vistas desde JavaScript. Cada llamada se cobra: un
+  // método numérico puede hacer miles, y el límite de instrucciones tiene que
+  // poder pararlo igual que pararía un bucle escrito en Ñ.
+  const fun = (v, n, f) => vm.exigeFuncion(v, n, f);
+  const llamarNum = (g, args, f) => {
+    vm.cobrar(1);
+    const r = vm.invocar(g, args);
+    if (typeof r !== 'number')
+      vm.error(`«${f}»: la función tiene que devolver un número y devolvió ${tipoDe(r)}`, 'revisa el «devolver» de la función que pasaste');
+    return r;
+  };
+  const fn1 = (v, n, f) => { const g = fun(v, n, f); return x => llamarNum(g, [x], f); };
+  const fn2 = (v, n, f) => { const g = fun(v, n, f); return (x, y) => llamarNum(g, [x, y], f); };
+  // El «molde» de un vector: cómo llegó (número, lista o arreglo), sus
+  // valores, y cómo devolverle a Ñ un vector con esa misma forma.
+  const molde = (v, n, f) => {
+    if (typeof v === 'number') return { x: [v], dar: x => x[0], tipo: 'num' };
+    if (v instanceof ObjArreglo) {
+      if (v.forma.length !== 1) vm.error(`«${f}»: el punto tiene que ser un arreglo de una dimensión`);
+      return { x: vm.arrValores(v), dar: x => arrDe(x), tipo: 'arr' };
+    }
+    if (v instanceof ObjLista) return { x: nums(v, n, f), dar: x => L(x.slice()), tipo: 'lista' };
+    vm.error(`«${f}»: el argumento ${n} tiene que ser un número, una lista de números o un arreglo, y es ${tipoDe(v)}`);
+  };
+  const fnVecNum = (v, n, f, m) => { const g = fun(v, n, f); return x => llamarNum(g, [m.dar(x)], f); };
+  const fnVecVec = (v, n, f, m, que) => {
+    const g = fun(v, n, f);
+    return x => { vm.cobrar(1); return leerNums(vm.invocar(g, [m.dar(x)]), f, que || 'la función'); };
+  };
+  // Para derivar y para los límites: si la función de Ñ falla en un punto
+  // (log de un negativo, raíz de un negativo, un spline fuera de su rango),
+  // ese punto cuenta como «no definido» —NaN— y el método achica el paso, que
+  // es lo que habría hecho con un NaN de verdad. Se restaura el estado de la
+  // VM igual que hace «aislado» en el eDSL probar. Si al final no sale nada,
+  // se relanza el error ORIGINAL, que explica mejor que un «no es derivable».
+  // El límite de instrucciones y los «lanzar» del programa no se tocan.
+  const tolerante = llamar => {
+    const st = { error: null };
+    st.f = (...xs) => {
+      const sp = vm.sp, marcos = vm.frames.length, prof = vm.profJS;
+      try { return llamar(...xs); }
+      catch (e) {
+        if (!(e instanceof ErrorTiempoEjecucion) || e.fatal || e.limite) throw e;
+        vm.cerrarUpvalues(sp); vm.frames.length = marcos; vm.sp = sp; vm.profJS = prof;
+        st.error = e;
+        return NaN;
+      }
+    };
+    st.correr = cuerpo => {
+      try { return cuerpo(); }
+      catch (e) { if (e instanceof ErrorNenCalculo && st.error) throw st.error; throw e; }
+    };
+    return st;
+  };
+  const vecNaN = v => v.map(() => NaN);
+  const matrizComo = (M, m) => (m.tipo === 'arr' ? arr2De(M) : L(M.map(fila => L(fila))));
+  const sentido = (v, n, f, ops) => {
+    const t = txt(v, n, f);
+    if (!ops.includes(t)) vm.error(`«${f}»: «${t}» no es una opción`, `vale ${ops.map(o => '"' + o + '"').join(' o ')}`);
+    return t;
+  };
+  // Los errores de la capa pura llevan el nombre de la función delante.
+  const d = (nombre, firma, fn, doc) => def(nombre, firma, a => {
+    try { return fn(a); }
+    catch (e) { if (e instanceof ErrorNenCalculo) vm.error(`«${nombre}»: ${e.message}`, e.pista); throw e; }
+  }, doc);
+  const aridad = (a, f, min, max) => {
+    if (a.length < min || a.length > max)
+      vm.error(`«${f}» recibe ${min === max ? min : `de ${min} a ${max}`} argumentos y llegaron ${a.length}`);
+  };
+
+  // ── cálculo ────────────────────────────────────────────────────────────────
+  d('derivar', 'funcion, real -> real', a => {
+    const t = tolerante(fn1(a[0], 1, 'derivar'));
+    return t.correr(() => N.derivar(t.f, num(a[1], 2, 'derivar')));
+  },
+    'derivar(f, x) — f′(x) por diferencias centrales con extrapolación de Richardson (Ridders) · 10 a 13 cifras');
+  d('derivarN', 'funcion, real, entero -> real', a => {
+    const n = ent(a[2], 3, 'derivarN');
+    if (n < 0 || n > 8) vm.error(`«derivarN»: el orden tiene que estar entre 0 y 8, y es ${n}`, 'cada derivada numérica cuesta unas dos cifras: con más de 8 no queda ninguna');
+    const t = tolerante(fn1(a[0], 1, 'derivarN'));
+    return t.correr(() => N.derivarN(t.f, num(a[1], 2, 'derivarN'), n));
+  }, 'derivarN(f, x, n) — la derivada n-ésima en x · n hasta 8, perdiendo unas dos cifras por orden');
+  d('gradiente', 'funcion, lista|arreglo -> cualquiera', a => {
+    const m = molde(a[1], 2, 'gradiente');
+    const t = tolerante(fnVecNum(a[0], 1, 'gradiente', m));
+    return m.dar(t.correr(() => N.gradiente(t.f, m.x)));
+  }, 'gradiente(f, punto) — el vector de derivadas parciales de f en el punto · f recibe una lista (o un arreglo) y devuelve un número');
+  d('jacobiano', 'funcion, lista|arreglo -> cualquiera', a => {
+    const m = molde(a[1], 2, 'jacobiano');
+    const g = fnVecVec(a[0], 1, 'jacobiano', m);
+    let largo = null;
+    // Un punto que falla devuelve un vector de NaN del largo de los demás.
+    const t = tolerante(x => { const r = g(x); largo = r; return r; });
+    const F = x => { const r = t.f(x); return typeof r === 'number' ? (largo ? vecNaN(largo) : [NaN]) : r; };
+    return matrizComo(t.correr(() => N.jacobiano(F, m.x)), m);
+  }, 'jacobiano(F, punto) — la matriz J[i][j] = ∂Fᵢ/∂xⱼ · F recibe y devuelve listas (o arreglos)');
+  d('hessiano', 'funcion, lista|arreglo -> cualquiera', a => {
+    const m = molde(a[1], 2, 'hessiano');
+    const t = tolerante(fnVecNum(a[0], 1, 'hessiano', m));
+    return matrizComo(t.correr(() => N.hessiano(t.f, m.x)), m);
+  }, 'hessiano(f, punto) — la matriz de segundas derivadas, simétrica · de f que recibe una lista y devuelve un número');
+  d('integrar', 'funcion, real, real -> real', a => N.integral(fn1(a[0], 1, 'integrar'), num(a[1], 2, 'integrar'), num(a[2], 3, 'integrar')),
+    'integrar(f, a, b) — ∫ₐᵇ f(x) dx con Gauss–Kronrod adaptativo · los límites pueden ser |INFINITO o -|INFINITO');
+  d('integrarDoble', 'funcion, real, real, cualquiera, cualquiera -> real', a => {
+    const f = fn2(a[0], 1, 'integrarDoble');
+    const lim = (v, n) => (typeof v === 'number' ? () => v : fn1(v, n, 'integrarDoble'));
+    return N.integrarDoble(f, num(a[1], 2, 'integrarDoble'), num(a[2], 3, 'integrarDoble'), lim(a[3], 4), lim(a[4], 5));
+  }, 'integrarDoble(f, a, b, c, d) — ∫ₐᵇ ∫_c^d f(x, y) dy dx · c y d pueden ser números o funciones de x');
+  d('integrarMontecarlo', 'funcion, lista, entero -> dic', a => {
+    const f = 'integrarMontecarlo';
+    const g = fun(a[0], 1, f);
+    const l = vm.exigeLista(a[1], 2, f);
+    const n = ent(a[2], 3, f);
+    if (n < 2) vm.error(`«${f}»: hacen falta al menos 2 muestras`);
+    // [a, b] es una dimensión y la función recibe un número; [[a, b], [c, d]…]
+    // son varias y recibe una lista.
+    const unaDim = l.items.length === 2 && typeof l.items[0] === 'number';
+    const lims = unaDim ? [nums(l, 2, f)] : l.items.map(p => nums(p, 2, f));
+    for (const p of lims) if (p.length !== 2 || !(p[1] >= p[0]))
+      vm.error(`«${f}»: cada límite es un par [desde, hasta] con desde ≤ hasta`, 'para una dimensión, [0, 1]; para dos, [[0, 1], [0, 2]]');
+    // El azar es el de «numerico»: así «semilla(n)» manda también aquí.
+    const azar = vm.globals.get(nombreGlobalModulo(claveEdsl('numerico'), 'azar'));
+    const r = N.integrarMontecarlo(x => llamarNum(g, [unaDim ? x[0] : L(x)], f), lims, n, () => azar.fn([], vm));
+    return dic({ valor: r.valor, error: r.error });
+  }, 'integrarMontecarlo(f, limites, n) — {"valor", "error"} con n puntos al azar · limites = [a, b] o [[a, b], [c, d], …]; semilla() lo hace repetible');
+  d('integrarDatos', '... -> real', a => {
+    aridad(a, 'integrarDatos', 2, 3);
+    const m = a.length > 2 ? sentido(a[2], 3, 'integrarDatos', ['simpson', 'trapecio']) : 'simpson';
+    return N.integrarDatos(nums(a[0], 1, 'integrarDatos'), nums(a[1], 2, 'integrarDatos'), m);
+  }, 'integrarDatos(xs, ys, metodo?) — el área bajo unos datos tabulados · Simpson (exacto en parábolas, admite x irregulares) o "trapecio"');
+  d('integrarAcumulado', 'lista<real>|arreglo, lista<real>|arreglo -> lista<real>', a =>
+    L(N.integrarAcumulado(nums(a[0], 1, 'integrarAcumulado'), nums(a[1], 2, 'integrarAcumulado'))),
+    'integrarAcumulado(xs, ys) — la integral desde el primer punto hasta cada uno, por trapecios · empieza en 0');
+  d('derivarDatos', 'lista<real>|arreglo, lista<real>|arreglo -> lista<real>', a =>
+    L(N.derivarDatos(nums(a[0], 1, 'derivarDatos'), nums(a[1], 2, 'derivarDatos'))),
+    'derivarDatos(xs, ys) — la pendiente en cada punto, con diferencias de segundo orden · exacta en parábolas');
+  d('sumaSerie', 'funcion, entero -> real', a => N.sumaSerie(fn1(a[0], 1, 'sumaSerie'), ent(a[1], 2, 'sumaSerie')),
+    'sumaSerie(termino, desde) — Σ termino(k) para k desde «desde» hasta infinito · acelerada con la transformada de Levin');
+  d('limite', '... -> real', a => {
+    aridad(a, 'limite', 2, 3);
+    const lado = a.length > 2 ? sentido(a[2], 3, 'limite', ['izquierda', 'derecha']) : null;
+    const t = tolerante(fn1(a[0], 1, 'limite'));
+    return t.correr(() => N.limite(t.f, num(a[1], 2, 'limite'), lado));
+  }, 'limite(f, x, lado?) — lím f cuando se acerca a x, sin evaluar en x · x puede ser |INFINITO; lado "izquierda" o "derecha"');
+  d('longitudArco', 'funcion, real, real -> real', a => {
+    // Tolerante: cerca de un borde del dominio (√(1 − x²) en x ≈ 1) la
+    // derivada numérica asoma fuera y tiene que poder achicar el paso.
+    const t = tolerante(fn1(a[0], 1, 'longitudArco'));
+    return t.correr(() => N.integral(x => { const p = N.derivar(t.f, x); return Math.sqrt(1 + p * p); },
+      num(a[1], 2, 'longitudArco'), num(a[2], 3, 'longitudArco')));
+  }, 'longitudArco(f, a, b) — la longitud de la curva y = f(x) entre a y b · ∫ √(1 + f′²)');
+  d('volumenRevolucion', 'funcion, real, real -> real', a => {
+    const f = fn1(a[0], 1, 'volumenRevolucion');
+    return Math.PI * N.integral(x => { const y = f(x); return y * y; }, num(a[1], 2, 'volumenRevolucion'), num(a[2], 3, 'volumenRevolucion'));
+  }, 'volumenRevolucion(f, a, b) — el volumen al girar y = f(x) alrededor del eje x · π ∫ f²');
+  d('areaEntre', 'funcion, funcion, real, real -> real', a => {
+    const f = fn1(a[0], 1, 'areaEntre'), g = fn1(a[1], 2, 'areaEntre');
+    return N.integral(x => Math.abs(f(x) - g(x)), num(a[2], 3, 'areaEntre'), num(a[3], 4, 'areaEntre'));
+  }, 'areaEntre(f, g, a, b) — el área entre dos curvas, contando positiva aunque se crucen · ∫ |f − g|');
+  d('polinomioTaylor', 'funcion, real, entero -> lista<real>', a => {
+    const f = fn1(a[0], 1, 'polinomioTaylor'), x0 = num(a[1], 2, 'polinomioTaylor'), g = ent(a[2], 3, 'polinomioTaylor');
+    if (g < 0 || g > 8) vm.error(`«polinomioTaylor»: el grado tiene que estar entre 0 y 8, y es ${g}`, 'las derivadas numéricas de orden alto no tienen cifras');
+    // Σ f⁽ᵏ⁾(x0)/k!·(x − x0)ᵏ, desarrollado en potencias de x para que se
+    // pueda pasar tal cual a evaluarPolinomio.
+    let p = [0], fact = 1, pot = [1];
+    for (let k = 0; k <= g; k++) {
+      if (k > 0) { fact *= k; pot = C.multPoli(pot, [-x0, 1]); }
+      const ck = N.derivarN(f, x0, k) / fact;
+      p = C.sumarPoli(p, pot.map(c => c * ck));
+    }
+    return L(p);
+  }, 'polinomioTaylor(f, x0, grado) — el polinomio de Taylor alrededor de x0, como coeficientes [c0, c1, …] en potencias de x');
+
+  // ── ecuaciones ─────────────────────────────────────────────────────────────
+  d('resolverEcuacion', 'funcion, real, real -> real', a =>
+    N.raizBrent(fn1(a[0], 1, 'resolverEcuacion'), num(a[1], 2, 'resolverEcuacion'), num(a[2], 3, 'resolverEcuacion')),
+    'resolverEcuacion(f, a, b) — la x de [a, b] con f(x) = 0, por el método de Brent · f(a) y f(b) tienen que tener signos distintos');
+  d('raizNewton', '... -> real', a => {
+    aridad(a, 'raizNewton', 2, 3);
+    return N.raizNewton(fn1(a[0], 1, 'raizNewton'), num(a[1], 2, 'raizNewton'), a.length > 2 ? fn1(a[2], 3, 'raizNewton') : null);
+  }, 'raizNewton(f, x0, derivada?) — una raíz de f cerca de x0 por Newton amortiguado · la derivada es opcional');
+  d('raices', 'lista<real>|arreglo -> arreglo', a => {
+    const r = N.raicesPoli(nums(a[0], 1, 'raices'));
+    const z = vm.arrNuevo([r.re.length], 'complejo');
+    for (let i = 0; i < r.re.length; i++) { z.datos[2 * i] = r.re[i]; z.datos[2 * i + 1] = r.im[i]; }
+    return z;
+  }, 'raices(coeficientes) — TODAS las raíces del polinomio, complejas incluidas, como arreglo complejo · [c0, c1, c2] es c0 + c1·x + c2·x²');
+  d('raicesReales', 'lista<real>|arreglo -> lista<real>', a => L(N.raicesRealesPoli(nums(a[0], 1, 'raicesReales'))),
+    'raicesReales(coeficientes) — las raíces reales del polinomio, de menor a mayor · [c0, c1, c2] es c0 + c1·x + c2·x²');
+  d('resolverNoLineal', 'funcion, cualquiera -> cualquiera', a => {
+    const m = molde(a[1], 2, 'resolverNoLineal');
+    return m.dar(N.resolverNoLineal(fnVecVec(a[0], 1, 'resolverNoLineal', m), m.x));
+  }, 'resolverNoLineal(F, x0) — un x con F(x) = 0 (todas las componentes), por Newton con búsqueda lineal · x0 número, lista o arreglo');
+  d('puntoFijo', 'funcion, cualquiera -> cualquiera', a => {
+    const m = molde(a[1], 2, 'puntoFijo');
+    return m.dar(N.puntoFijo(fnVecVec(a[0], 1, 'puntoFijo', m), m.x));
+  }, 'puntoFijo(g, x0) — un x con g(x) = x, iterando x ← g(x) desde x0 · converge si |g′| < 1 cerca');
+
+  // ── optimización ───────────────────────────────────────────────────────────
+  d('minimizar1D', 'funcion, real, real -> dic', a => {
+    const r = N.minimizar1D(fn1(a[0], 1, 'minimizar1D'), num(a[1], 2, 'minimizar1D'), num(a[2], 3, 'minimizar1D'));
+    return dic({ x: r.x, valor: r.valor });
+  }, 'minimizar1D(f, a, b) — {"x", "valor"}: el mínimo de f en [a, b] por el método de Brent · x con unas 8 cifras');
+  d('minimizar', 'funcion, cualquiera -> dic', a => {
+    const m = molde(a[1], 2, 'minimizar');
+    const r = N.nelderMead(fnVecNum(a[0], 1, 'minimizar', m), m.x);
+    return dic({ x: m.dar(r.x), valor: r.valor, iteraciones: r.iteraciones });
+  }, 'minimizar(f, x0) — {"x", "valor", "iteraciones"} por Nelder–Mead, sin derivadas · x0 número, lista o arreglo');
+  d('minimizarBFGS', '... -> dic', a => {
+    aridad(a, 'minimizarBFGS', 2, 3);
+    const m = molde(a[1], 2, 'minimizarBFGS');
+    const grad = a.length > 2 ? fnVecVec(a[2], 3, 'minimizarBFGS', m, 'el gradiente') : null;
+    const r = N.bfgs(fnVecNum(a[0], 1, 'minimizarBFGS', m), m.x, grad);
+    return dic({ x: m.dar(r.x), valor: r.valor, iteraciones: r.iteraciones });
+  }, 'minimizarBFGS(f, x0, gradiente?) — {"x", "valor", "iteraciones"} por BFGS (cuasi-Newton) · para funciones suaves; gradiente numérico si no se da');
+  d('maximizar', '... -> dic', a => {
+    aridad(a, 'maximizar', 2, 3);
+    if (a.length === 3) {
+      const f = fn1(a[0], 1, 'maximizar');
+      const r = N.minimizar1D(x => -f(x), num(a[1], 2, 'maximizar'), num(a[2], 3, 'maximizar'));
+      return dic({ x: r.x, valor: -r.valor });
+    }
+    const m = molde(a[1], 2, 'maximizar');
+    const f = fnVecNum(a[0], 1, 'maximizar', m);
+    const r = N.nelderMead(x => -f(x), m.x);
+    return dic({ x: m.dar(r.x), valor: -r.valor, iteraciones: r.iteraciones });
+  }, 'maximizar(f, a, b) o maximizar(f, x0) — {"x", "valor"}: el máximo en [a, b] (Brent) o cerca de x0 (Nelder–Mead)');
+  d('ajustarCurva', 'funcion, lista<real>|arreglo, lista<real>|arreglo, lista<real>|arreglo -> dic', a => {
+    const f = 'ajustarCurva';
+    const g = fun(a[0], 1, f);
+    const r = N.levenbergMarquardt((x, p) => llamarNum(g, [x, L(p.slice())], f), nums(a[1], 2, f), nums(a[2], 3, f), nums(a[3], 4, f));
+    return dic({ parametros: L(r.parametros), errores: L(r.errores), residuo: r.residuo, rmse: r.rmse, iteraciones: r.iteraciones });
+  }, 'ajustarCurva(modelo, xs, ys, p0) — Levenberg–Marquardt: {"parametros", "errores", "residuo", "rmse"} · modelo(x, p) con p una lista');
+  d('optimizarLineal', '... -> dic', a => {
+    const f = 'optimizarLineal';
+    aridad(a, f, 3, 4);
+    const max = a.length > 3 && sentido(a[3], 4, f, ['minimizar', 'maximizar']) === 'maximizar';
+    const r = N.simplex(nums(a[0], 1, f), matriz(a[1], 2, f), nums(a[2], 3, f), max);
+    return dic({ x: L(r.x), valor: r.valor });
+  }, 'optimizarLineal(c, A, b, sentido?) — {"x", "valor"}: optimiza c·x con A·x ≤ b y x ≥ 0 por el símplex · sentido "minimizar" (por defecto) o "maximizar"');
+
+  // ── ecuaciones diferenciales ───────────────────────────────────────────────
+  // y' = f(t, y). y0 puede ser un número (una ecuación), una lista o un
+  // arreglo (un sistema); f recibe y devuelve lo mismo.
+  const edo = (a, f, metodo) => {
+    const g = fun(a[0], 1, f);
+    const t0 = num(a[1], 2, f), t1 = num(a[3], 4, f);
+    const m = molde(a[2], 3, f);
+    const F = (t, y) => { vm.cobrar(1); return leerNums(vm.invocar(g, [t, m.dar(y)]), f, 'la función'); };
+    const r = metodo(F, t0, m.x, t1);
+    const ys = m.tipo === 'num' ? L(r.y.map(v => v[0])) : m.tipo === 'arr' ? arr2De(r.y) : L(r.y.map(v => L(v)));
+    return dic({ t: L(r.t), y: ys });
+  };
+  d('resolverEDO', '... -> dic', a => {
+    const f = 'resolverEDO';
+    aridad(a, f, 4, 5);
+    let puntos = null;
+    if (a.length > 4) {
+      const t0 = num(a[1], 2, f), t1 = num(a[3], 4, f);
+      if (typeof a[4] === 'number') {
+        const k = ent(a[4], 5, f);
+        if (k < 1) vm.error(`«${f}»: el número de intervalos tiene que ser al menos 1`);
+        puntos = [];
+        for (let i = 0; i <= k; i++) puntos.push(i === k ? t1 : t0 + (t1 - t0) * i / k);
+      } else {
+        puntos = nums(a[4], 5, f);
+        const dir = t1 >= t0 ? 1 : -1;
+        for (let i = 1; i < puntos.length; i++) if (dir * (puntos[i] - puntos[i - 1]) < 0)
+          vm.error(`«${f}»: los tiempos pedidos tienen que ir en orden, de t0 hacia t1`);
+      }
+    }
+    return edo(a, f, (F, t0, y0, t1) => C.dopri(F, t0, y0, t1, puntos));
+  }, 'resolverEDO(f, t0, y0, t1, puntos?) — {"t", "y"} de y′ = f(t, y) por Dormand–Prince adaptativo · puntos: lista de tiempos o cuántos tramos iguales');
+  d('rk4', 'funcion, real, cualquiera, real, entero -> dic', a => {
+    const pasos = ent(a[4], 5, 'rk4');
+    if (pasos < 1) vm.error('«rk4»: hace falta al menos un paso');
+    return edo(a, 'rk4', (F, t0, y0, t1) => C.rk4(F, t0, y0, t1, pasos));
+  }, 'rk4(f, t0, y0, t1, pasos) — {"t", "y"} con Runge–Kutta clásico de paso fijo · el de los libros, sin control de error');
+  d('resolverEDORigida', '... -> dic', a => {
+    aridad(a, 'resolverEDORigida', 4, 5);
+    const pasos = a.length > 4 ? ent(a[4], 5, 'resolverEDORigida') : 1000;
+    if (pasos < 2) vm.error('«resolverEDORigida»: hacen falta al menos dos pasos');
+    return edo(a, 'resolverEDORigida', (F, t0, y0, t1) => C.bdf2(F, t0, y0, t1, pasos));
+  }, 'resolverEDORigida(f, t0, y0, t1, pasos?) — {"t", "y"} con BDF2 implícito de paso fijo (1000 por defecto) · para sistemas rígidos');
+
+  // ── polinomios: [c0, c1, c2] es c0 + c1·x + c2·x² ──────────────────────────
+  const poli = (v, n, f) => {
+    const p = nums(v, n, f);
+    if (!p.length) vm.error(`«${f}»: el polinomio está vacío`, 'el polinomio cero es [0]');
+    return p;
+  };
+  const mapear = (v, n, f, g) => {
+    if (typeof v === 'number') return g(v);
+    if (v instanceof ObjArreglo) return arrDe(nums(v, n, f).map(g));
+    if (v instanceof ObjLista) return L(nums(v, n, f).map(g));
+    vm.error(`«${f}»: el argumento ${n} tiene que ser un número, una lista o un arreglo, y es ${tipoDe(v)}`);
+  };
+  d('evaluarPolinomio', 'lista<real>|arreglo, cualquiera -> cualquiera', a => {
+    const p = poli(a[0], 1, 'evaluarPolinomio');
+    return mapear(a[1], 2, 'evaluarPolinomio', x => C.evaluarPoli(p, x));
+  }, 'evaluarPolinomio(p, x) — p(x) por Horner · x puede ser un número, una lista o un arreglo');
+  d('derivarPolinomio', 'lista<real>|arreglo -> lista<real>', a => L(C.derivarPoli(poli(a[0], 1, 'derivarPolinomio'))),
+    'derivarPolinomio(p) — los coeficientes de p′ · derivarPolinomio([1, 2, 3]) es [2, 6]');
+  d('integrarPolinomio', '... -> lista<real>', a => {
+    aridad(a, 'integrarPolinomio', 1, 2);
+    return L(C.integrarPoli(poli(a[0], 1, 'integrarPolinomio'), a.length > 1 ? num(a[1], 2, 'integrarPolinomio') : 0));
+  }, 'integrarPolinomio(p, constante?) — una primitiva de p, con la constante que digas (0 si no)');
+  d('sumarPolinomios', 'lista<real>|arreglo, lista<real>|arreglo -> lista<real>', a =>
+    L(C.sumarPoli(poli(a[0], 1, 'sumarPolinomios'), poli(a[1], 2, 'sumarPolinomios'))), 'sumarPolinomios(p, q) — p + q');
+  d('restarPolinomios', 'lista<real>|arreglo, lista<real>|arreglo -> lista<real>', a =>
+    L(C.restarPoli(poli(a[0], 1, 'restarPolinomios'), poli(a[1], 2, 'restarPolinomios'))), 'restarPolinomios(p, q) — p − q');
+  d('multiplicarPolinomios', 'lista<real>|arreglo, lista<real>|arreglo -> lista<real>', a =>
+    L(C.multPoli(poli(a[0], 1, 'multiplicarPolinomios'), poli(a[1], 2, 'multiplicarPolinomios'))), 'multiplicarPolinomios(p, q) — p·q');
+  d('dividirPolinomios', 'lista<real>|arreglo, lista<real>|arreglo -> dic', a => {
+    const r = C.dividirPoli(poli(a[0], 1, 'dividirPolinomios'), poli(a[1], 2, 'dividirPolinomios'));
+    return dic({ cociente: L(r.cociente), resto: L(r.resto) });
+  }, 'dividirPolinomios(p, q) — {"cociente", "resto"} de la división larga · p = cociente·q + resto');
+  d('polinomioDesdeRaices', 'lista<real>|arreglo -> lista<real>', a => L(C.poliDesdeRaices(nums(a[0], 1, 'polinomioDesdeRaices'))),
+    'polinomioDesdeRaices(raices) — el polinomio mónico (x − r1)(x − r2)… · [1, 2] da [2, −3, 1]');
+  d('ajustePolinomico', 'lista<real>|arreglo, lista<real>|arreglo, entero -> lista<real>', a =>
+    L(C.ajustePolinomico(nums(a[0], 1, 'ajustePolinomico'), nums(a[1], 2, 'ajustePolinomico'), ent(a[2], 3, 'ajustePolinomico'))),
+    'ajustePolinomico(xs, ys, grado) — el polinomio de ese grado más cercano a los datos (mínimos cuadrados con QR)');
+  d('textoPolinomio', '... -> texto', a => {
+    aridad(a, 'textoPolinomio', 1, 2);
+    return C.textoPoli(poli(a[0], 1, 'textoPolinomio'), a.length > 1 ? txt(a[1], 2, 'textoPolinomio') : 'x');
+  }, 'textoPolinomio(p, variable?) — el polinomio escrito como en la pizarra · [1, -2, 3] da «3x² − 2x + 1»');
+
+  // ── interpolación ──────────────────────────────────────────────────────────
+  d('interpolarLineal', 'lista<real>|arreglo, lista<real>|arreglo, cualquiera -> cualquiera', a => {
+    const f = 'interpolarLineal';
+    const xs = nums(a[0], 1, f), ys = nums(a[1], 2, f);
+    try { C.exigeCrecientes(xs, ys); } catch (e) { if (e instanceof ErrorNenCalculo) vm.error(`«${f}»: ${e.message}`, e.pista); throw e; }
+    return mapear(a[2], 3, f, x => C.interpLineal(xs, ys, x));
+  }, 'interpolarLineal(xs, ys, x) — une los puntos con rectas y lee en x · x número, lista o arreglo, dentro del rango');
+  d('interpolarLagrange', 'lista<real>|arreglo, lista<real>|arreglo, cualquiera -> cualquiera', a => {
+    const f = 'interpolarLagrange';
+    const xs = nums(a[0], 1, f), ys = nums(a[1], 2, f);
+    if (xs.length !== ys.length || !xs.length) vm.error(`«${f}»: hay ${xs.length} valores de x y ${ys.length} de y`, 'tienen que ir por parejas');
+    const w = C.pesosBaricentricos(xs);
+    return mapear(a[2], 3, f, x => C.interpLagrange(xs, ys, w, x));
+  }, 'interpolarLagrange(xs, ys, x) — el polinomio que pasa por todos los puntos, evaluado en x (forma baricéntrica)');
+  d('polinomioInterpolante', 'lista<real>|arreglo, lista<real>|arreglo -> lista<real>', a => {
+    const f = 'polinomioInterpolante';
+    const xs = nums(a[0], 1, f), ys = nums(a[1], 2, f);
+    if (xs.length !== ys.length || !xs.length) vm.error(`«${f}»: hay ${xs.length} valores de x y ${ys.length} de y`, 'tienen que ir por parejas');
+    return L(C.poliInterpolante(xs, ys));
+  }, 'polinomioInterpolante(xs, ys) — los coeficientes del polinomio que pasa por todos los puntos (diferencias divididas)');
+  let splines = 0;
+  d('splineCubico', '... -> funcion(real): real', a => {
+    const f = 'splineCubico';
+    aridad(a, f, 2, 3);
+    const tipo = a.length > 2 ? sentido(a[2], 3, f, ['natural', 'noNodo']) : 'natural';
+    const s = C.spline(nums(a[0], 1, f), nums(a[1], 2, f), tipo);
+    // Lo que se devuelve es una FUNCIÓN de Ñ: «fijo s = splineCubico(xs, ys)»
+    // y luego «s(2.5)». Se crea como nativa con el mismo mecanismo que usa
+    // «espia» en el eDSL probar, y se quita del ámbito global en el acto.
+    const nombre = ' nenSpline' + (splines++);
+    vm.definirNativa(nombre, 'real -> real', b => {
+      try { return s.evaluar(num(b[0], 1, 'spline')); }
+      catch (e) { if (e instanceof ErrorNenCalculo) vm.error(`«spline»: ${e.message}`, e.pista); throw e; }
+    }, 'un spline cúbico');
+    const obj = vm.globals.get(nombre);
+    vm.globals.delete(nombre);
+    return obj;
+  }, 'splineCubico(xs, ys, tipo?) — una FUNCIÓN s con s(x) suave por los puntos · tipo "natural" (por defecto) o "noNodo"');
+  d('interpolar', '... -> cualquiera', a => {
+    const f = 'interpolar';
+    aridad(a, f, 3, 4);
+    const metodo = a.length > 3 ? sentido(a[3], 4, f, ['lineal', 'lagrange', 'spline']) : 'lineal';
+    const xs = nums(a[0], 1, f), ys = nums(a[1], 2, f);
+    let g;
+    if (metodo === 'lagrange') {
+      if (xs.length !== ys.length) vm.error(`«${f}»: hay ${xs.length} valores de x y ${ys.length} de y`);
+      const w = C.pesosBaricentricos(xs);
+      g = x => C.interpLagrange(xs, ys, w, x);
+    } else if (metodo === 'spline') g = C.spline(xs, ys, 'natural').evaluar;
+    else { C.exigeCrecientes(xs, ys); g = x => C.interpLineal(xs, ys, x); }
+    return mapear(a[2], 3, f, g);
+  }, 'interpolar(xs, ys, x, metodo?) — el valor entre datos · metodo "lineal" (por defecto), "lagrange" o "spline"');
+
+  // ── funciones especiales ───────────────────────────────────────────────────
+  const r1 = (nombre, fn, doc) => d(nombre, 'real -> real', a => fn(num(a[0], 1, nombre)), doc);
+  r1('gamma', Z.gamma, 'gamma(x) — Γ(x), el factorial continuo: gamma(n) = (n−1)! · Lanczos, unas 15 cifras');
+  r1('lnGamma', Z.lnGamma, 'lnGamma(x) — ln |Γ(x)|, para cuando Γ(x) no cabe en un número');
+  d('beta', 'real, real -> real', a => Z.beta(num(a[0], 1, 'beta'), num(a[1], 2, 'beta')), 'beta(a, b) — B(a, b) = Γ(a)Γ(b)/Γ(a+b)');
+  r1('digamma', Z.digamma, 'digamma(x) — ψ(x) = Γ′(x)/Γ(x)');
+  r1('erf', Z.erf, 'erf(x) — la función error, (2/√π) ∫₀ˣ e^(−t²) dt');
+  r1('erfc', Z.erfc, 'erfc(x) — 1 − erf(x), calculada sin restar: conserva las cifras en la cola');
+  r1('erfInversa', Z.erfInversa, 'erfInversa(y) — la x con erf(x) = y, para y entre −1 y 1');
+  d('gammaIncompleta', '... -> real', a => {
+    aridad(a, 'gammaIncompleta', 2, 3);
+    const s = a.length > 2 ? sentido(a[2], 3, 'gammaIncompleta', ['inferior', 'superior']) : 'inferior';
+    const x = num(a[0], 1, 'gammaIncompleta'), y = num(a[1], 2, 'gammaIncompleta');
+    return s === 'superior' ? Z.gammaQ(x, y) : Z.gammaP(x, y);
+  }, 'gammaIncompleta(a, x, cola?) — la gamma incompleta REGULARIZADA P(a, x) = γ(a, x)/Γ(a) · "superior" da Q = 1 − P');
+  d('betaIncompleta', 'real, real, real -> real', a =>
+    Z.betaIncompleta(num(a[0], 1, 'betaIncompleta'), num(a[1], 2, 'betaIncompleta'), num(a[2], 3, 'betaIncompleta')),
+    'betaIncompleta(a, b, x) — la beta incompleta regularizada Iₓ(a, b), entre 0 y 1');
+  d('besselJ', 'entero, real -> real', a => Z.besselJ(ent(a[0], 1, 'besselJ'), num(a[1], 2, 'besselJ')),
+    'besselJ(n, x) — la función de Bessel de primera especie Jₙ(x), de orden entero');
+  r1('zeta', Z.zeta, 'zeta(s) — la ζ de Riemann · zeta(2) = π²/6');
+
+  // ── probabilidad ───────────────────────────────────────────────────────────
+  // normal(x) o normal(x, media, desviacion): la estándar si no se dice.
+  const normal = (nombre, fn, doc) => d(nombre, '... -> real', a => {
+    if (a.length !== 1 && a.length !== 3) vm.error(`«${nombre}» recibe 1 argumento (normal estándar) o 3 (con media y desviación), y llegaron ${a.length}`);
+    return fn(num(a[0], 1, nombre), a.length > 1 ? num(a[1], 2, nombre) : 0, a.length > 1 ? num(a[2], 3, nombre) : 1);
+  }, doc);
+  normal('normalDensidad', Z.normalDensidad, 'normalDensidad(x, media?, desviacion?) — la campana de Gauss en x · estándar si solo das x');
+  normal('normalAcumulada', Z.normalAcumulada, 'normalAcumulada(x, media?, desviacion?) — P(X ≤ x) de una normal');
+  normal('normalInversa', Z.normalInversa, 'normalInversa(p, media?, desviacion?) — el x con P(X ≤ x) = p · normalInversa(0.975) ≈ 1.96');
+  const r2 = (nombre, firma, fn, doc) => d(nombre, firma, a => fn(...a.map((v, i) => num(v, i + 1, nombre))), doc);
+  r2('tStudentAcumulada', 'real, real -> real', Z.tStudentAcumulada, 'tStudentAcumulada(t, gl) — P(T ≤ t) de una t de Student con gl grados de libertad');
+  r2('tStudentInversa', 'real, real -> real', Z.tStudentInversa, 'tStudentInversa(p, gl) — el t con P(T ≤ t) = p · el valor crítico de un intervalo de confianza');
+  r2('chiCuadradoAcumulada', 'real, real -> real', Z.chiCuadradoAcumulada, 'chiCuadradoAcumulada(x, gl) — P(X ≤ x) de una χ² con gl grados de libertad');
+  r2('chiCuadradoInversa', 'real, real -> real', Z.chiCuadradoInversa, 'chiCuadradoInversa(p, gl) — el x con P(X ≤ x) = p de una χ²');
+  r2('fisherAcumulada', 'real, real, real -> real', Z.fisherAcumulada, 'fisherAcumulada(x, gl1, gl2) — P(X ≤ x) de una F de Fisher–Snedecor');
+  r2('binomialProb', 'entero, entero, real -> real', Z.binomialProb, 'binomialProb(k, n, p) — P(X = k): k éxitos en n intentos con probabilidad p');
+  r2('binomialAcumulada', 'entero, entero, real -> real', Z.binomialAcumulada, 'binomialAcumulada(k, n, p) — P(X ≤ k) de una binomial');
+  r2('poissonProb', 'entero, real -> real', Z.poissonProb, 'poissonProb(k, lambda) — P(X = k) de una Poisson de media lambda');
+  r2('poissonAcumulada', 'entero, real -> real', Z.poissonAcumulada, 'poissonAcumulada(k, lambda) — P(X ≤ k) de una Poisson');
+  r2('exponencialAcumulada', 'real, real -> real', Z.exponencialAcumulada, 'exponencialAcumulada(x, lambda) — P(X ≤ x) = 1 − e^(−λx)');
+
+  // ── teoría de números ──────────────────────────────────────────────────────
+  const e2 = (nombre, firma, fn, doc) => d(nombre, firma, a => fn(...a.map((v, i) => ent(v, i + 1, nombre))), doc);
+  e2('potenciaModular', 'entero, entero, entero -> entero', Z.potenciaModular, 'potenciaModular(b, e, m) — bᵉ mod m, exacto aunque bᵉ tenga millones de cifras');
+  e2('inversoModular', 'entero, entero -> entero', Z.inversoModular, 'inversoModular(a, m) — el x con a·x ≡ 1 (mod m) · solo existe si mcd(a, m) = 1');
+  d('mcdExtendido', 'entero, entero -> dic', a => dic(Z.mcdExtendido(ent(a[0], 1, 'mcdExtendido'), ent(a[1], 2, 'mcdExtendido'))),
+    'mcdExtendido(a, b) — {"mcd", "x", "y"} con a·x + b·y = mcd (identidad de Bézout)');
+  d('restoChino', 'lista<entero>, lista<entero> -> dic', a => {
+    const r = Z.restoChino(nums(a[0], 1, 'restoChino'), nums(a[1], 2, 'restoChino'));
+    return dic({ resto: r.resto, modulo: r.modulo });
+  }, 'restoChino(restos, modulos) — {"resto", "modulo"}: el x que deja esos restos, y cada cuánto se repite');
+  e2('fibonacci', 'entero -> entero', Z.fibonacci, 'fibonacci(n) — el n-ésimo de Fibonacci · exacto hasta F(78); después, aproximado');
+  e2('totiente', 'entero -> entero', Z.totiente, 'totiente(n) — φ(n): cuántos de 1…n son primos relativos con n');
+  d('factorizar', 'entero -> lista<entero>', a => L(Z.factorizar(ent(a[0], 1, 'factorizar'))),
+    'factorizar(n) — los factores primos con repetición, de menor a mayor · factorizar(12) es [2, 2, 3]');
+  e2('esCuadradoPerfecto', 'entero -> bool', Z.esCuadradoPerfecto, 'esCuadradoPerfecto(n) — si n = k² para algún entero k');
+  e2('siguientePrimo', 'entero -> entero', Z.siguientePrimo, 'siguientePrimo(n) — el menor primo mayor que n');
+}
+
+
+// ============================================================================
+//  Ñ v4 — NEÑ, parte C: el resolucionador de fórmulas
+//  Parte 16.
+//
+//  Se importa con:  usar simplificarFormula, derivarFormula de "nen"
+//
+//  Un sistema de álgebra computacional pequeño. Las fórmulas entran como TEXTO
+//  en la notación que se escribe a mano —«3x^2 + 2(x - 1)», «seno(x)/x»,
+//  «x^2 - 5x + 6 = 0»— y salen como texto canónico que se puede volver a leer,
+//  como números, como listas o como una función de Ñ.
+//
+//  Por qué texto y no un tipo nuevo: una fórmula se lee, se imprime, se guarda
+//  en un CSV y se manda por la red; el texto ya sabe hacer todo eso. El costo es
+//  volver a analizarla en cada llamada, que para fórmulas de una línea es
+//  despreciable frente a lo que cuesta simplificarla.
+//
+//  La tubería es la de siempre: léxico → análisis (con las precedencias del
+//  papel: «-x^2» es «-(x^2)», «^» asocia a la derecha) → árbol CANÓNICO →
+//  impresor que pone solo los paréntesis necesarios.
+//
+//  LA DECISIÓN DE FONDO: el árbol se construye ya en forma normal. No hay un
+//  «simplificador» que se aplique después por reglas hasta que nada cambie (eso
+//  es lo que a veces no termina); hay cuatro constructores —suma, producto,
+//  potencia y función— que reciben hijos ya canónicos y devuelven un nodo
+//  canónico. Cada uno solo llama a los otros con cosas estrictamente más
+//  pequeñas, así que termina siempre. «simplificarFormula» encima de eso solo
+//  ELIGE: prueba la forma canónica, la expandida y la de fracción única, y se
+//  queda con la más corta.
+//
+//  Los números son racionales EXACTOS con BigInt: 1/3 + 1/6 es 1/2 y no
+//  0.49999…, y 2^100 no se desborda. Los decimales de la entrada se leen como
+//  fracciones decimales exactas (0.1 es 1/10, no el doble más cercano).
+// ============================================================================
+
+const nucleoNenFormulas = (function () {
+  // ── errores ───────────────────────────────────────────────────────────────
+  // El núcleo no conoce la VM: lanza ErrorFormula y el instalador lo traduce a
+  // vm.error con el nombre de la función. «indefinido» es un tipo aparte porque
+  // hay quien lo atrapa a propósito —los límites, el que verifica raíces—: una
+  // división entre cero al sustituir no es un error del usuario, es información.
+  class ErrorFormula extends Error {
+    constructor(msg, sug, tipo) { super(msg); this.sug = sug || null; this.tipo = tipo || 'formula'; }
+  }
+  const fallo = (m, s) => new ErrorFormula(m, s);
+  const indefinido = m => new ErrorFormula(m, null, 'indefinido');
+
+  // El instalador cambia esto por vm.cobrar: así una expansión gigante agota el
+  // presupuesto de instrucciones como cualquier bucle de Ñ, en vez de colgar.
+  let gastar = () => {};
+
+  // ── racionales exactos ────────────────────────────────────────────────────
+  const bAbs = a => (a < 0n ? -a : a);
+  function bMcd(a, b) { a = bAbs(a); b = bAbs(b); while (b) { const t = a % b; a = b; b = t; } return a; }
+  const bBits = a => (a === 0n ? 0 : bAbs(a).toString(2).length);
+  // Raíz k-ésima entera (piso) por Newton. El punto de partida 2^⌈bits/k⌉ está
+  // siempre por ENCIMA de la raíz, y desde arriba Newton baja monótono: por eso
+  // la condición de parada es «dejó de bajar».
+  function bRaiz(n, k) {
+    if (n < 2n) return n;
+    const kb = BigInt(k);
+    let x = 1n << BigInt(Math.ceil(bBits(n) / k));
+    for (;;) {
+      const y = ((kb - 1n) * x + n / (x ** (kb - 1n))) / kb;
+      if (y >= x) return x;
+      x = y;
+    }
+  }
+  class Rac { constructor(n, d) { this.n = n; this.d = d; } }
+  function R(n, d) {
+    n = BigInt(n); d = d === undefined ? 1n : BigInt(d);
+    if (d === 0n) throw indefinido('la fórmula divide entre cero');
+    if (d < 0n) { n = -n; d = -d; }
+    const g = bMcd(n, d);
+    if (g > 1n) { n /= g; d /= g; }
+    return new Rac(n, d);
+  }
+  const R0 = R(0), R1 = R(1);
+  const rSuma = (a, b) => (a.d === b.d ? R(a.n + b.n, a.d) : R(a.n * b.d + b.n * a.d, a.d * b.d));
+  const rResta = (a, b) => rSuma(a, new Rac(-b.n, b.d));
+  const rMul = (a, b) => R(a.n * b.n, a.d * b.d);
+  const rDiv = (a, b) => { if (b.n === 0n) throw indefinido('la fórmula divide entre cero'); return R(a.n * b.d, a.d * b.n); };
+  const rNeg = a => new Rac(-a.n, a.d);
+  const rCero = a => a.n === 0n;
+  const rUno = a => a.n === 1n && a.d === 1n;
+  const rEnt = a => a.d === 1n;
+  const rCmp = (a, b) => { const x = a.n * b.d - b.n * a.d; return x < 0n ? -1 : x > 0n ? 1 : 0; };
+  const rIgual = (a, b) => a.n === b.n && a.d === b.d;
+  const rAbs = a => (a.n < 0n ? rNeg(a) : a);
+  function rPotEnt(a, k) {
+    k = BigInt(k);
+    if (k < 0n) { if (a.n === 0n) throw indefinido('la fórmula divide entre cero'); a = new Rac(a.d, a.n); k = -k; if (a.d < 0n) a = new Rac(-a.n, -a.d); }
+    // Un tope a ojo: más de un millón de bits ya no es un número que alguien
+    // quiera ver, y calcularlo bloquearía la máquina sin pasar por «cobrar».
+    if (Number(k) * Math.max(bBits(a.n), bBits(a.d)) > 1e6)
+      throw fallo('el número resultante es demasiado grande (más de un millón de bits)', 'usa evaluarFormula para una aproximación decimal');
+    gastar(Number(k) > 64 ? 64 : 1);
+    return new Rac(a.n ** k, a.d ** k);
+  }
+  // A real sin desbordar: si numerador o denominador pasan de ~1e300, Number()
+  // da infinito y el cociente NaN; se reescala antes por potencias de 2.
+  function rANum(a) {
+    const nb = bBits(a.n), db = bBits(a.d);
+    if (nb < 1000 && db < 1000) return Number(a.n) / Number(a.d);
+    const sh = nb - db - 64;
+    const v = sh >= 0 ? Number(a.n / (a.d << BigInt(sh))) : Number((a.n << BigInt(-sh)) / a.d);
+    return v * Math.pow(2, sh);
+  }
+  // De un real de Ñ a racional por su representación decimal más corta: 0.1
+  // entra como 1/10, que es lo que la persona escribió, no como
+  // 3602879701896397/36028797018963968, que es lo que hay en memoria.
+  function deNumero(x) {
+    if (!isFinite(x)) throw fallo('no se puede usar un valor infinito o NaN dentro de una fórmula');
+    if (Number.isInteger(x)) return R(BigInt(x));
+    const m = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/.exec(String(x));
+    if (!m) throw fallo(`no sé convertir ${x} en un número exacto`);
+    const frac = m[3] || '';
+    let e10 = (m[4] ? Number(m[4]) : 0) - frac.length;
+    let n = BigInt(m[2] + frac); if (m[1]) n = -n;
+    return e10 >= 0 ? R(n * 10n ** BigInt(e10)) : R(n, 10n ** BigInt(-e10));
+  }
+
+  // ── factorización de enteros (para radicales y raíces racionales) ─────────
+  // División por tentativa con los primos hasta 10^5: alcanza para todo lo que
+  // aparece al simplificar radicales escritos a mano. Lo que sobra sin
+  // factorizar se trata como si fuera primo; si no lo es, el único efecto es
+  // que una raíz quede menos simplificada, nunca un resultado falso.
+  let PRIMOS = null;
+  function primos() {
+    if (PRIMOS) return PRIMOS;
+    const N = 100000, criba = new Uint8Array(N + 1), out = [];
+    for (let i = 2; i <= N; i++) if (!criba[i]) { out.push(BigInt(i)); for (let j = i * i; j <= N; j += i) criba[j] = 1; }
+    return (PRIMOS = out);
+  }
+  const memoFact = new Map();
+  function factorizarEntero(m) {
+    m = bAbs(m);
+    const k = m.toString();
+    if (memoFact.has(k)) return memoFact.get(k);
+    const fs = new Map();
+    let resto = m;
+    if (bBits(m) <= 4000) {
+      for (const p of primos()) {
+        if (p * p > resto) break;
+        if (resto % p === 0n) { let e = 0; while (resto % p === 0n) { resto /= p; e++; } fs.set(p, e); }
+      }
+      gastar(200);
+    }
+    // Lo que queda tras quitar los primos pequeños: si es menor que 10^10 ya es
+    // primo seguro (no tiene divisores hasta su raíz).
+    if (resto > 1n && resto < 10000000000n) { fs.set(resto, (fs.get(resto) || 0) + 1); resto = 1n; }
+    const r = { fs, resto };
+    if (memoFact.size > 2000) memoFact.clear();
+    memoFact.set(k, r);
+    return r;
+  }
+
+  // ── nodos ─────────────────────────────────────────────────────────────────
+  //   {t:'n', q}            número racional
+  //   {t:'v', n}            variable
+  //   {t:'c', n}            constante: 'pi', 'e', 'i'
+  //   {t:'+', a:[...]}      suma n-aria
+  //   {t:'*', a:[...]}      producto n-ario (el número, si lo hay, va primero)
+  //   {t:'^', b, e}         potencia
+  //   {t:'f', f, a}         función de un argumento
+  // No hay resta ni división: a − b es a + (−1)·b y a/b es a·b^(−1). Así las
+  // reglas de agrupar se escriben una vez y no tres.
+  const N = q => ({ t: 'n', q });
+  const V = n => ({ t: 'v', n });
+  const C = n => ({ t: 'c', n });
+  const CERO = N(R0), UNO = N(R1), MENOS_UNO = N(R(-1)), DOS = N(R(2)), MEDIO = N(R(1, 2));
+  const PI = C('pi'), E = C('e'), I = C('i');
+  const esNum = e => e.t === 'n';
+  const esCero = e => e.t === 'n' && e.q.n === 0n;
+  const esUno = e => e.t === 'n' && rUno(e.q);
+
+  // La clave es la forma escrita del árbol canónico: dos fórmulas son iguales
+  // si y solo si tienen la misma clave. Se calcula una vez y se guarda en el nodo.
+  function clave(e) {
+    if (e.k !== undefined) return e.k;
+    let k;
+    switch (e.t) {
+      case 'n': k = e.q.d === 1n ? e.q.n.toString() : e.q.n + '/' + e.q.d; break;
+      case 'v': k = 'v:' + e.n; break;
+      case 'c': k = 'c:' + e.n; break;
+      case '+': k = '+(' + e.a.map(clave).join(',') + ')'; break;
+      case '*': k = '*(' + e.a.map(clave).join(',') + ')'; break;
+      case '^': k = '^(' + clave(e.b) + ',' + clave(e.e) + ')'; break;
+      case 'f': k = e.f + '(' + clave(e.a) + ')'; break;
+    }
+    e.k = k;
+    return k;
+  }
+  const igual = (a, b) => a === b || clave(a) === clave(b);
+
+  function variablesDe(e) {
+    if (e.vs) return e.vs;
+    let s;
+    switch (e.t) {
+      case 'n': case 'c': s = new Set(); break;
+      case 'v': s = new Set([e.n]); break;
+      case '+': case '*': s = new Set(); for (const h of e.a) for (const v of variablesDe(h)) s.add(v); break;
+      case '^': s = new Set(variablesDe(e.b)); for (const v of variablesDe(e.e)) s.add(v); break;
+      case 'f': s = variablesDe(e.a); break;
+    }
+    e.vs = s;
+    return s;
+  }
+  const depende = (e, x) => variablesDe(e).has(x);
+  const tieneI = e => {
+    switch (e.t) {
+      case 'c': return e.n === 'i';
+      case '+': case '*': return e.a.some(tieneI);
+      case '^': return tieneI(e.b) || tieneI(e.e);
+      case 'f': return tieneI(e.a);
+      default: return false;
+    }
+  };
+  function tamano(e) {
+    switch (e.t) {
+      case '+': case '*': return 1 + e.a.reduce((s, h) => s + tamano(h), 0);
+      case '^': return 1 + tamano(e.b) + tamano(e.e);
+      case 'f': return 1 + tamano(e.a);
+      default: return 1;
+    }
+  }
+
+  // ── orden canónico ────────────────────────────────────────────────────────
+  // Dentro de un producto: radicales numéricos, constantes, variables (en orden
+  // alfabético), funciones, sumas, y la «i» al final: «2π·r», «raiz(3)·i».
+  function claseFactor(f) {
+    const b = f.t === '^' ? f.b : f;
+    switch (b.t) {
+      case 'n': return 0;
+      case 'c': return b.n === 'i' ? 6 : 1;
+      case 'v': return 2;
+      case 'f': return 3;
+      default: return 4;
+    }
+  }
+  const cmpTxt = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  function cmpFactor(f, g) {
+    const cf = claseFactor(f), cg = claseFactor(g);
+    if (cf !== cg) return cf - cg;
+    const bf = f.t === '^' ? f.b : f, bg = g.t === '^' ? g.b : g;
+    if (bf.t === 'v' && bg.t === 'v' && bf.n !== bg.n) return cmpTxt(bf.n, bg.n);
+    const c = cmpTxt(clave(bf), clave(bg));
+    return c || cmpTxt(clave(f), clave(g));
+  }
+  // Dentro de una suma: primero lo que tiene variables, de mayor a menor grado
+  // (como se escribe un polinomio: x^2 + 3x + 1); luego el número suelto; y al
+  // final las constantes no numéricas. Así «-1 + raiz(5)» y «x^2 + seno(x) + 1»
+  // salen como se escriben en el papel.
+  function grado(t) {
+    switch (t.t) {
+      case 'v': return 1;
+      case '*': return t.a.reduce((s, f) => s + grado(f), 0);
+      case '^': return t.e.t === 'n' ? rANum(t.e.q) * grado(t.b) : 0;
+      case '+': return Math.max(...t.a.map(grado));
+      default: return 0;
+    }
+  }
+  function firmaMonomio(t) {
+    const fs = t.t === '*' ? t.a : [t], out = [];
+    for (const f of fs) {
+      if (f.t === 'v') out.push([f.n, 1]);
+      else if (f.t === '^' && f.b.t === 'v' && f.e.t === 'n') out.push([f.b.n, rANum(f.e.q)]);
+    }
+    return out;
+  }
+  function cmpTermino(a, b) {
+    const ga = a.t === 'n' ? 1 : variablesDe(a).size ? 0 : 2;
+    const gb = b.t === 'n' ? 1 : variablesDe(b).size ? 0 : 2;
+    if (ga !== gb) return ga - gb;
+    if (ga === 0) {
+      const da = grado(a), db = grado(b);
+      if (da !== db) return db - da;
+      const fa = firmaMonomio(a), fb = firmaMonomio(b);
+      for (let i = 0; i < Math.min(fa.length, fb.length); i++) {
+        if (fa[i][0] !== fb[i][0]) return cmpTxt(fa[i][0], fb[i][0]);
+        if (fa[i][1] !== fb[i][1]) return fb[i][1] - fa[i][1];
+      }
+      if (fa.length !== fb.length) return fb.length - fa.length;
+    }
+    const c = cmpTxt(clave(sinCoef(a)), clave(sinCoef(b)));
+    return c || cmpTxt(clave(a), clave(b));
+  }
+  function partirCoef(t) {
+    if (t.t === 'n') return [t.q, UNO];
+    if (t.t === '*' && t.a[0].t === 'n') return [t.a[0].q, t.a.length === 2 ? t.a[1] : { t: '*', a: t.a.slice(1) }];
+    return [R1, t];
+  }
+  const sinCoef = t => partirCoef(t)[1];
+  function conCoef(c, resto) {
+    if (rCero(c)) return CERO;
+    if (resto.t === 'n') return N(rMul(c, resto.q));
+    if (rUno(c)) return resto;
+    if (resto.t === '*') return { t: '*', a: [N(c), ...resto.a] };
+    return { t: '*', a: [N(c), resto] };
+  }
+  const esNegativo = t => (t.t === 'n' && t.q.n < 0n) || (t.t === '*' && t.a[0].t === 'n' && t.a[0].q.n < 0n) ||
+    (t.t === '+' && esNegativo(t.a[0]));
+
+  // ── constructores canónicos ───────────────────────────────────────────────
+  function mkAdd(ts) {
+    gastar(ts.length);
+    let c = R0;
+    const mapa = new Map();
+    const plano = [];
+    for (const t of ts) if (t.t === '+') plano.push(...t.a); else plano.push(t);
+    for (let i = 0; i < plano.length; i++) {
+      const t = plano[i];
+      if (t.t === 'n') { c = rSuma(c, t.q); continue; }
+      const [k, resto] = partirCoef(t);
+      // Dentro de una suma, c·(a + b) se reparte: x − (y − 1) es x − y + 1.
+      // Fuera de una suma no se toca, y así «2(x + 1)» y «-(x + 1)» se
+      // conservan tal cual se escribieron.
+      if (resto.t === '+') { for (const u of resto.a) plano.push(conCoef(k, u).t === '*' ? mkMul([N(k), u]) : conCoef(k, u)); continue; }
+      const ck = clave(resto);
+      const p = mapa.get(ck);
+      if (p) p.c = rSuma(p.c, k); else mapa.set(ck, { c: k, resto });
+    }
+    let terms = [];
+    for (const { c: k, resto } of mapa.values()) if (!rCero(k)) terms.push(conCoef(k, resto));
+    const p = pitagoras(terms);
+    if (p) return mkAdd([...p, N(c)]);
+    terms.sort(cmpTermino);
+    // El número suelto va después de lo que tiene variables y antes de las
+    // constantes no numéricas: x + 1, pero -1 + raiz(5).
+    if (!rCero(c)) {
+      let k = terms.length;
+      while (k > 0 && !variablesDe(terms[k - 1]).size) k--;
+      terms.splice(k, 0, N(c));
+    }
+    if (!terms.length) return CERO;
+    if (terms.length === 1) return terms[0];
+    return { t: '+', a: terms };
+  }
+  // seno(u)^2 + coseno(u)^2 = 1, con el mismo coeficiente y el mismo resto de
+  // factores. Es la única identidad trigonométrica que se aplica sola: sin
+  // ella la derivada de tangente no se reconoce como 1 + tangente^2 ni al revés.
+  function pitagoras(terms) {
+    const info = [];
+    for (const t of terms) {
+      const [c, resto] = partirCoef(t);
+      const fs = resto.t === '*' ? resto.a : [resto];
+      let hallado = null;
+      fs.forEach((f, i) => {
+        if (!hallado && f.t === '^' && f.e.t === 'n' && rIgual(f.e.q, R(2)) && f.b.t === 'f' && (f.b.f === 'seno' || f.b.f === 'coseno')) {
+          const otros = fs.filter((_, j) => j !== i);
+          hallado = { c, tipo: f.b.f, u: clave(f.b.a), otros, ko: clave({ t: '*', a: otros }) };
+        }
+      });
+      info.push(hallado);
+    }
+    for (let i = 0; i < terms.length; i++) {
+      const a = info[i];
+      if (!a || a.tipo !== 'seno') continue;
+      for (let j = 0; j < terms.length; j++) {
+        const b = info[j];
+        if (!b || b.tipo !== 'coseno' || b.u !== a.u || b.ko !== a.ko || !rIgual(a.c, b.c)) continue;
+        const resto = a.otros.length === 0 ? UNO : a.otros.length === 1 ? a.otros[0] : { t: '*', a: a.otros };
+        const out = terms.filter((_, k) => k !== i && k !== j);
+        out.push(conCoef(a.c, resto));
+        return out;
+      }
+    }
+    return null;
+  }
+
+  function mkMul(fs, prof) {
+    prof = prof || 0;
+    gastar(fs.length);
+    let coef = R1;
+    const grupos = new Map();
+    const rad = [];
+    const argsExp = [];
+    const agregar = (base, ex) => {
+      const k = clave(base);
+      const g = grupos.get(k);
+      if (g) g.exps.push(ex); else grupos.set(k, { base, exps: [ex] });
+    };
+    const pila = fs.slice();
+    while (pila.length) {
+      const f = pila.pop();
+      switch (f.t) {
+        case 'n': coef = rMul(coef, f.q); break;
+        case '*': for (const g of f.a) pila.push(g); break;
+        case 'c': if (f.n === 'e') argsExp.push(UNO); else agregar(f, UNO); break;
+        case 'f': if (f.f === 'exp') argsExp.push(f.a); else agregar(f, UNO); break;
+        case '^': if (f.b.t === 'n' && f.e.t === 'n') rad.push(f); else agregar(f.b, f.e); break;
+        default: agregar(f, UNO);
+      }
+    }
+    if (rCero(coef)) return CERO;
+    const fuera = [];
+    let rehacer = false;
+    const meter = (p, base) => {
+      if (p.t === 'n') { coef = rMul(coef, p.q); return; }
+      if (p.t === '^' && p.b.t === 'n' && p.e.t === 'n') { rad.push(p); return; }
+      const b = p.t === '^' ? p.b : p;
+      if (!base || clave(b) !== clave(base)) rehacer = true;
+      fuera.push(p);
+    };
+    for (const { base, exps } of grupos.values()) {
+      const ex = exps.length === 1 ? exps[0] : mkAdd(exps);
+      meter(mkPow(base, ex), base);
+    }
+    if (argsExp.length) {
+      const a = argsExp.length === 1 ? argsExp[0] : mkAdd(argsExp);
+      const p = mkFn('exp', a);
+      if (p.t === 'n') coef = rMul(coef, p.q);
+      else if ((p.t === 'f' && p.f === 'exp') || (p.t === 'c' && p.n === 'e')) fuera.push(p);
+      else { rehacer = true; fuera.push(p); }
+    }
+    // Radicales numéricos: se juntan todos en uno, √6·√2 = √12 = 2√3. Se lleva
+    // todo a un índice común L y se extrae de nuevo; así la forma no depende de
+    // en qué orden se multiplicaron.
+    if (rad.length) {
+      const pos = rad.filter(r => r.b.q.n > 0n), neg = rad.filter(r => r.b.q.n < 0n);
+      for (const r of neg) fuera.push(r);
+      if (pos.length === 1) fuera.push(pos[0]);
+      else if (pos.length > 1) {
+        let L = 1n;
+        for (const r of pos) L = L / bMcd(L, r.e.q.d) * r.e.q.d;
+        let M = R1, cabe = true;
+        for (const r of pos) {
+          const k = r.e.q.n * (L / r.e.q.d);
+          if (Number(k) * bBits(r.b.q.n + r.b.q.d) > 20000) { cabe = false; break; }
+          M = rMul(M, rPotEnt(r.b.q, k));
+        }
+        if (!cabe) for (const r of pos) fuera.push(r);
+        else {
+          const res = numPow(M, R(1n, L));
+          const piezas = res.t === '*' ? res.a : [res];
+          for (const p of piezas) if (p.t === 'n') coef = rMul(coef, p.q); else fuera.push(p);
+        }
+      }
+    }
+    if (rehacer && prof < 8) return mkMul([N(coef), ...fuera], prof + 1);
+    const planos = [];
+    for (const f of fuera) if (f.t === '*') { for (const g of f.a) if (g.t === 'n') coef = rMul(coef, g.q); else planos.push(g); } else planos.push(f);
+    if (rCero(coef)) return CERO;
+    planos.sort(cmpFactor);
+    if (!planos.length) return N(coef);
+    if (rUno(coef) && planos.length === 1) return planos[0];
+    return { t: '*', a: rUno(coef) ? planos : [N(coef), ...planos] };
+  }
+
+  function mkPow(b, e) {
+    if (e.t === 'n') {
+      const q = e.q;
+      if (rCero(q)) return UNO;                 // incluso 0^0: la convención de los polinomios
+      if (rUno(q)) return b;
+      switch (b.t) {
+        case 'n': return numPow(b.q, q);
+        case 'c':
+          if (b.n === 'i' && rEnt(q)) {
+            const m = Number(((q.n % 4n) + 4n) % 4n);
+            return [UNO, I, MENOS_UNO, { t: '*', a: [MENOS_UNO, I] }][m];
+          }
+          if (b.n === 'e') return mkFn('exp', e);
+          break;
+        case '^':
+          if (rEnt(q)) return mkPow(b.b, mkMul([b.e, e]));
+          if (b.e.t === 'n') {
+            const prod = rMul(b.e.q, q);
+            // (u^k)^(1/k): |u| si k es par, u si es impar —para u real—.
+            if (rEnt(b.e.q) && rUno(prod)) return b.e.q.n % 2n === 0n ? mkFn('abs', b.b) : b.b;
+            // (u^(p/q))^r con q par: u ya tenía que ser ≥ 0 para que la raíz
+            // fuera real, y entonces los exponentes se multiplican sin miedo.
+            if (b.e.q.d % 2n === 0n) return mkPow(b.b, N(prod));
+          }
+          break;
+        case '*':
+          if (rEnt(q)) return mkMul(b.a.map(f => mkPow(f, e)));
+          // (4x)^(1/2) = 2·x^(1/2): solo se saca el coeficiente si es positivo,
+          // que es cuando la regla vale para todo x.
+          if (b.a[0].t === 'n' && b.a[0].q.n > 0n) {
+            const resto = b.a.length === 2 ? b.a[1] : { t: '*', a: b.a.slice(1) };
+            return mkMul([numPow(b.a[0].q, q), { t: '^', b: resto, e }]);
+          }
+          // (−c·r)^q con r una constante positiva (√2, π…): = (−c)^q · r^q,
+          // y así √(−√2) es i·2^(1/4) y no una raíz de un negativo a medias.
+          if (b.a[0].t === 'n' && b.a[0].q.n < 0n && !variablesDe(b).size && !tieneI(b)) {
+            const resto = b.a.length === 2 ? b.a[1] : { t: '*', a: b.a.slice(1) };
+            if (valorDe(resto) > 0) return mkMul([numPow(b.a[0].q, q), mkPow(resto, e)]);
+          }
+          break;
+        case 'f':
+          if (b.f === 'exp') return mkFn('exp', mkMul([b.a, e]));
+          if (b.f === 'abs' && rEnt(q) && q.n % 2n === 0n) return mkPow(b.a, e);
+          break;
+      }
+    } else {
+      if (b.t === 'n' && rUno(b.q)) return UNO;
+      if (b.t === 'c' && b.n === 'e') return mkFn('exp', e);
+    }
+    return { t: '^', b, e };
+  }
+
+  // Potencia de un racional con exponente racional, en forma normal: el
+  // coeficiente racional delante y los radicales con exponente en (0, 1).
+  // 2^(-1/2) = (1/2)·√2: el denominador queda racionalizado, como en el colegio.
+  function numPow(b, ex) {
+    if (rEnt(ex)) return N(rPotEnt(b, ex.n));
+    if (rCero(b)) { if (ex.n < 0n) throw indefinido('la fórmula divide entre cero'); return CERO; }
+    if (rUno(b)) return UNO;
+    if (b.n < 0n) {
+      const pos = rNeg(b);
+      // Índice impar: la raíz real de un negativo existe y es negativa, como
+      // la de «raizN» en «numerico». (−8)^(1/3) = −2.
+      if (ex.d % 2n === 1n) { const r = numPow(pos, ex); return ex.n % 2n === 0n ? r : mkMul([MENOS_UNO, r]); }
+      // Raíz cuadrada de un negativo: la unidad imaginaria. √(−4) = 2i.
+      if (ex.d === 2n) return mkMul([mkPow(I, N(R(ex.n))), numPow(pos, ex)]);
+      return { t: '^', b: N(b), e: N(ex) };
+    }
+    let coef = R1;
+    const grupos = new Map();
+    const extraer = (m, p, q) => {        // m^(p/q), m entero positivo, q > 1
+      if (m === 1n) return;
+      let k = p / q; if (p % q !== 0n && p < 0n) k -= 1n;     // piso
+      const r = p - k * q;                                    // 0 ≤ r < q
+      coef = rMul(coef, rPotEnt(R(m), k));
+      if (r === 0n) return;
+      const { fs, resto } = factorizarEntero(m);
+      const poner = (base, num) => {
+        const w = num / q, fr = num % q;
+        if (w) coef = rMul(coef, rPotEnt(R(base), w));
+        if (fr) {
+          const f = R(fr, q), kf = f.n + '/' + f.d;
+          const g = grupos.get(kf);
+          if (g) g.base *= base; else grupos.set(kf, { base, f });
+        }
+      };
+      for (const [pr, a] of fs) poner(pr, BigInt(a) * r);
+      if (resto > 1n) {
+        const rz = bRaiz(resto, Number(q));
+        if (rz ** q === resto) coef = rMul(coef, rPotEnt(R(rz), r));
+        else poner(resto, r);
+      }
+    };
+    extraer(b.n, ex.n, ex.d);
+    extraer(b.d, -ex.n, ex.d);
+    const rads = [];
+    for (const { base, f } of grupos.values()) rads.push({ t: '^', b: N(R(base)), e: N(f) });
+    rads.sort(cmpFactor);
+    if (!rads.length) return N(coef);
+    if (rUno(coef) && rads.length === 1) return rads[0];
+    return { t: '*', a: rUno(coef) ? rads : [N(coef), ...rads] };
+  }
+
+  // −e: dentro de una suma se reparte (lo hace mkAdd); suelto queda −(…).
+  const neg = e => (e.t === '+' ? mkAdd([mkMul([MENOS_UNO, e])]) : mkMul([MENOS_UNO, e]));
+  const resta = (a, b) => mkAdd([a, neg(b)]);
+  const div = (a, b) => mkMul([a, mkPow(b, MENOS_UNO)]);
+  const num = (n, d) => N(R(n, d));
+
+  // ── funciones ─────────────────────────────────────────────────────────────
+  // Valores exactos de seno en los ángulos de la tabla del colegio, como
+  // fracción de π en [0, 1/2]. Lo demás se reduce a estos por cuadrante.
+  const TABLA_SENO = () => new Map([
+    ['0', CERO], ['1/6', MEDIO], ['1/4', mkMul([MEDIO, numPow(R(2), R(1, 2))])],
+    ['1/3', mkMul([MEDIO, numPow(R(3), R(1, 2))])], ['1/2', UNO]]);
+  let tablaSeno = null;
+  function senoDePi(t) {                 // seno(π·t) exacto o null
+    tablaSeno = tablaSeno || TABLA_SENO();
+    t = R(((t.n % (2n * t.d)) + 2n * t.d) % (2n * t.d), t.d);   // t en [0, 2)
+    let signo = 1;
+    if (rCmp(t, R1) >= 0) { t = rResta(t, R1); signo = -1; }
+    if (rCmp(t, R(1, 2)) > 0) t = rResta(R1, t);
+    const v = tablaSeno.get(t.d === 1n ? t.n.toString() : t.n + '/' + t.d);
+    if (!v) return null;
+    return signo > 0 ? v : neg(v);
+  }
+  function fraccionDePi(a) {           // a = k·π → k, si no null
+    if (a.t === 'c' && a.n === 'pi') return R1;
+    if (a.t === '*' && a.a.length === 2 && a.a[0].t === 'n' && a.a[1].t === 'c' && a.a[1].n === 'pi') return a.a[0].q;
+    if (a.t === 'n' && rCero(a.q)) return R0;
+    return null;
+  }
+  let tablaArco = null;
+  function arcoDeTabla(v) {            // arcoseno exacto de los valores de la tabla, o null
+    if (!tablaArco) {
+      tablaSeno = tablaSeno || TABLA_SENO();
+      tablaArco = new Map();
+      for (const [k, val] of tablaSeno) {
+        const [n, d] = k.split('/');
+        tablaArco.set(clave(val), mkMul([N(R(BigInt(n), BigInt(d || 1))), PI]));
+      }
+    }
+    return tablaArco.get(clave(v)) || null;
+  }
+  const IMPARES = new Set(['seno', 'tangente', 'arcoseno', 'arcotangente']);
+  function mkFn(f, a) {
+    gastar(1);
+    if (esNegativo(a)) {
+      if (IMPARES.has(f)) return neg(mkFn(f, neg(a)));
+      if (f === 'coseno' || f === 'abs') return mkFn(f, neg(a));
+      if (f === 'arcocoseno') return resta(PI, mkFn('arcocoseno', neg(a)));
+    }
+    switch (f) {
+      case 'seno': case 'coseno': case 'tangente': {
+        const k = fraccionDePi(a);
+        if (k) {
+          const s = senoDePi(k), c = senoDePi(rSuma(k, R(1, 2)));
+          if (f === 'seno' && s) return s;
+          if (f === 'coseno' && c) return c;
+          if (f === 'tangente' && s && c) {
+            if (esCero(c)) throw indefinido('la tangente no está definida en π/2 + kπ');
+            return div(s, c);
+          }
+        }
+        if (f === 'seno' && a.t === 'f' && a.f === 'arcoseno') return a.a;
+        if (f === 'coseno' && a.t === 'f' && a.f === 'arcocoseno') return a.a;
+        if (f === 'tangente' && a.t === 'f' && a.f === 'arcotangente') return a.a;
+        break;
+      }
+      case 'arcoseno': case 'arcocoseno': {
+        if (a.t === 'n' && rCmp(rAbs(a.q), R1) > 0) throw indefinido(`${f}(${imprimir(a)}) no existe: el argumento tiene que estar entre -1 y 1`);
+        const v = arcoDeTabla(a);
+        if (v) return f === 'arcoseno' ? v : resta(mkMul([MEDIO, PI]), v);
+        break;
+      }
+      case 'arcotangente': {
+        if (esCero(a)) return CERO;
+        if (esUno(a)) return mkMul([num(1, 4), PI]);
+        const r3 = numPow(R(3), R(1, 2));
+        if (igual(a, r3)) return mkMul([num(1, 3), PI]);
+        if (igual(a, mkMul([num(1, 3), r3]))) return mkMul([num(1, 6), PI]);
+        break;
+      }
+      case 'ln':
+        if (a.t === 'n') {
+          if (a.q.n <= 0n) throw indefinido(`ln(${imprimir(a)}) no existe: el logaritmo pide un número positivo`);
+          if (rUno(a.q)) return CERO;
+          // ln(8) = 3·ln(2), ln(1/4) = −2·ln(2): sin esto log(8; 2) no daría 3.
+          if (a.q.n === 1n || a.q.d === 1n) {
+            const m = a.q.d === 1n ? a.q.n : a.q.d, sg = a.q.d === 1n ? 1n : -1n;
+            const { fs, resto } = factorizarEntero(m);
+            if (resto === 1n) {
+              let g = 0n;
+              for (const e of fs.values()) g = bMcd(g, BigInt(e));
+              if (g > 1n || sg < 0n) {
+                let base = 1n;
+                for (const [pr, e] of fs) base *= pr ** (BigInt(e) / g);
+                return mkMul([N(R(g * sg)), { t: 'f', f: 'ln', a: N(R(base)) }]);
+              }
+            }
+          }
+        }
+        if (a.t === 'c' && a.n === 'e') return UNO;
+        if (a.t === 'f' && a.f === 'exp') return a.a;
+        break;
+      case 'exp': {
+        if (esCero(a)) return UNO;
+        if (esUno(a)) return E;
+        if (a.t === 'f' && a.f === 'ln') return a.a;
+        // exp(k·ln u + resto) = u^k · exp(resto): así se deshace lo que hace
+        // la regla de la cadena al derivar a^x, y «despejar» queda limpio.
+        const ts = a.t === '+' ? a.a : [a];
+        const lns = [], resto = [];
+        for (const t of ts) {
+          const [k, r] = partirCoef(t);
+          if (r.t === 'f' && r.f === 'ln') lns.push(mkPow(r.a, N(k))); else resto.push(t);
+        }
+        if (lns.length) return mkMul([...lns, resto.length ? mkFn('exp', mkAdd(resto)) : UNO]);
+        break;
+      }
+      case 'abs': {
+        if (a.t === 'n') return N(rAbs(a.q));
+        if (a.t === 'c' && a.n !== 'i') return a;
+        if (a.t === 'f' && (a.f === 'abs' || a.f === 'exp')) return a;
+        if (a.t === '^' && a.e.t === 'n' && rEnt(a.e.q) && a.e.q.n % 2n === 0n) return a;
+        if (a.t === '*' && a.a[0].t === 'n') {
+          const resto = a.a.length === 2 ? a.a[1] : { t: '*', a: a.a.slice(1) };
+          return mkMul([N(rAbs(a.a[0].q)), mkFn('abs', resto)]);
+        }
+        break;
+      }
+    }
+    return { t: 'f', f, a };
+  }
+
+  // Reconstruye un árbol pasando por los constructores; con «hoja» se cambia lo
+  // que se quiera en las hojas (sustituir variables, por ejemplo).
+  function reconstruir(e, hoja) {
+    switch (e.t) {
+      case 'n': case 'c': return e;
+      case 'v': return hoja(e);
+      case '+': return mkAdd(e.a.map(h => reconstruir(h, hoja)));
+      case '*': return mkMul(e.a.map(h => reconstruir(h, hoja)));
+      case '^': return mkPow(reconstruir(e.b, hoja), reconstruir(e.e, hoja));
+      case 'f': return mkFn(e.f, reconstruir(e.a, hoja));
+    }
+  }
+  const sustituirVars = (e, mapa) => reconstruir(e, v => (mapa.has(v.n) ? mapa.get(v.n) : v));
+  // Cambia un subárbol entero (por clave) por otro. Lo usa la integración por
+  // sustitución: u = x^2 se reemplaza por una variable nueva.
+  function reemplazarSub(e, k, por) {
+    if (clave(e) === k) return por;
+    switch (e.t) {
+      case '+': return mkAdd(e.a.map(h => reemplazarSub(h, k, por)));
+      case '*': return mkMul(e.a.map(h => reemplazarSub(h, k, por)));
+      case '^': return mkPow(reemplazarSub(e.b, k, por), reemplazarSub(e.e, k, por));
+      case 'f': return mkFn(e.f, reemplazarSub(e.a, k, por));
+      default: return e;
+    }
+  }
+
+  // ── léxico y análisis ─────────────────────────────────────────────────────
+  // Decisiones de notación (están también en la documentación):
+  //  · «log» es el logaritmo NATURAL, igual que «log» de «numerico»: si en una
+  //    fórmula significara otra cosa que en el resto de Ñ, formulaAFuncion("log(x)")
+  //    y log(x) darían distinto. Para base 10 está «log10(x)» y para otra base
+  //    «log(x; b)».
+  //  · La coma decimal vale SOLO pegada entre dígitos: «3,5» es 3.5. Por eso
+  //    los argumentos se separan con «;» o con «, » (coma y espacio).
+  //  · Los nombres se leen enteros: «xy» es UNA variable; el producto es «x y»
+  //    o «x*y». «3x» sí es 3·x, porque un nombre no empieza por dígito.
+  //  · «1/2x» es (1/2)·x: la multiplicación implícita tiene la misma fuerza
+  //    que «*» y «/», y se agrupa de izquierda a derecha.
+  //  · «e», «pi» (o «π») e «i» son constantes, no variables.
+  const FUNCIONES = {
+    seno: 'seno', sen: 'seno', sin: 'seno', coseno: 'coseno', cos: 'coseno',
+    tangente: 'tangente', tan: 'tangente', tg: 'tangente',
+    arcoseno: 'arcoseno', arcsen: 'arcoseno', arcsin: 'arcoseno', asin: 'arcoseno',
+    arcocoseno: 'arcocoseno', arccos: 'arcocoseno', acos: 'arcocoseno',
+    arcotangente: 'arcotangente', arctan: 'arcotangente', arctg: 'arcotangente', atan: 'arcotangente',
+    raiz: 'raiz', sqrt: 'raiz', ln: 'ln', log: 'log', log10: 'log10', exp: 'exp', abs: 'abs', absoluto: 'abs',
+  };
+  const CONSTANTES = { pi: PI, 'π': PI, e: E, i: I };
+  const SUPER_A_DIGITO = { '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9' };
+  const esLetra = c => /[A-Za-z_À-ÖØ-öø-ɏͰ-Ͽ]/.test(c);
+  const esDigito = c => c >= '0' && c <= '9';
+
+  function lexer(src) {
+    const toks = [];
+    let i = 0;
+    const err = (pos, m) => { throw fallo(`en la posición ${pos + 1} de «${src}»: ${m}`); };
+    while (i < src.length) {
+      const ch = src[i];
+      if (/\s/.test(ch)) { i++; continue; }
+      const pos = i;
+      if (esDigito(ch) || (ch === '.' && esDigito(src[i + 1] || ''))) {
+        let j = i;
+        while (j < src.length && esDigito(src[j])) j++;
+        const ent = src.slice(i, j);
+        let dec = '';
+        if ((src[j] === '.' || src[j] === ',') && esDigito(src[j + 1] || '')) {
+          let k = j + 1;
+          while (k < src.length && esDigito(src[k])) k++;
+          dec = src.slice(j + 1, k);
+          j = k;
+        } else if (src[j] === '.' && !esDigito(src[j + 1] || '')) err(j, 'un número no puede terminar en punto');
+        toks.push({ t: 'num', q: R(BigInt((ent || '0') + dec), 10n ** BigInt(dec.length)), pos });
+        i = j;
+        continue;
+      }
+      if (ch === 'π') { toks.push({ t: 'id', v: 'π', pos }); i++; continue; }
+      // Superíndices: «x²», «x¹⁰». Es lo que escribe formulaATexto, así que
+      // su salida se puede volver a leer.
+      if (SUPER_A_DIGITO[ch] !== undefined) {
+        let j = i, d = '';
+        while (j < src.length && SUPER_A_DIGITO[src[j]] !== undefined) d += SUPER_A_DIGITO[src[j++]];
+        toks.push({ t: 'sup', q: R(BigInt(d)), pos });
+        i = j;
+        continue;
+      }
+      if (esLetra(ch)) {
+        let j = i + 1;
+        while (j < src.length && src[j] !== 'π' && (esLetra(src[j]) || esDigito(src[j]))) j++;
+        toks.push({ t: 'id', v: src.slice(i, j), pos });
+        i = j;
+        continue;
+      }
+      i++;
+      switch (ch) {
+        case '+': toks.push({ t: '+', pos }); break;
+        case '-': case '−': case '–': toks.push({ t: '-', pos }); break;
+        case '*':
+          if (src[i] === '*') { i++; toks.push({ t: '^', pos }); } else toks.push({ t: '*', pos });
+          break;
+        case '·': case '×': case '⋅': toks.push({ t: '*', pos }); break;
+        case '/': case '÷': toks.push({ t: '/', pos }); break;
+        case '^': toks.push({ t: '^', pos }); break;
+        case '(': case '[': case '{': toks.push({ t: '(', pos }); break;
+        case ')': case ']': case '}': toks.push({ t: ')', pos }); break;
+        case ',': case ';': toks.push({ t: ',', pos }); break;
+        case '=': toks.push({ t: '=', pos }); break;
+        case '|': toks.push({ t: '|', pos }); break;
+        case '√': toks.push({ t: '√', pos }); break;
+        case '∛': toks.push({ t: '∛', pos }); break;
+        default: err(pos, `no entiendo el carácter «${ch}»`);
+      }
+    }
+    toks.push({ t: 'fin', pos: src.length });
+    return toks;
+  }
+
+  const describir = t => (t.t === 'fin' ? 'el final' : t.t === 'num' ? 'un número' : t.t === 'id' ? `«${t.v}»` : t.t === 'sup' ? '«²»' : `«${t.t}»`);
+
+  // Devuelve {izq, der} si hay «=», o {izq} si no.
+  function analizar(src) {
+    if (typeof src !== 'string') throw fallo('la fórmula tiene que ser texto');
+    if (!src.trim()) throw fallo('la fórmula está vacía');
+    const toks = lexer(src);
+    let p = 0, enAbs = 0;
+    const ver = () => toks[p];
+    const err = (t, m) => { throw fallo(`en la posición ${t.pos + 1} de «${src}»: ${m}`); };
+    const esperar = (tipo, que) => {
+      const t = ver();
+      if (t.t !== tipo) err(t, `esperaba ${que} y encontré ${describir(t)}`);
+      p++;
+      return t;
+    };
+    function expr() {
+      let a = termino();
+      for (;;) {
+        const t = ver();
+        if (t.t === '+') { p++; a = mkAdd([a, termino()]); }
+        else if (t.t === '-') { p++; a = resta(a, termino()); }
+        else return a;
+      }
+    }
+    // Lo que puede empezar un factor sin operador delante: «3x», «2(x+1)», «x y».
+    const empiezaFactor = t => t.t === 'id' || t.t === '(' || t.t === '√' || t.t === '∛' || (t.t === '|' && enAbs === 0);
+    function termino() {
+      let a = unario();
+      for (;;) {
+        const t = ver();
+        if (t.t === '*') { p++; a = mkMul([a, unario()]); }
+        else if (t.t === '/') {
+          p++;
+          const tb = ver();
+          const b = unario();
+          if (esCero(b)) err(tb, 'la fórmula divide entre cero');
+          a = div(a, b);
+        }
+        else if (empiezaFactor(t)) a = mkMul([a, potencia()]);
+        else if (t.t === 'num') err(t, 'un número no puede ir pegado detrás de otra cosa; escribe «*» entre los dos');
+        else return a;
+      }
+    }
+    function unario() {
+      const t = ver();
+      if (t.t === '-') { p++; return mkMul([MENOS_UNO, unario()]); }
+      if (t.t === '+') { p++; return unario(); }
+      return potencia();
+    }
+    function potencia() {
+      let b = primario();
+      while (ver().t === 'sup') b = mkPow(b, N(toks[p++].q));
+      if (ver().t === '^') { p++; return mkPow(b, unario()); }
+      return b;
+    }
+    function primario() {
+      const t = ver();
+      if (t.t === 'num') { p++; return N(t.q); }
+      if (t.t === '(') { p++; const a = expr(); esperar(')', '«)»'); return a; }
+      if (t.t === '|') { p++; enAbs++; const a = expr(); enAbs--; esperar('|', '«|» para cerrar el valor absoluto'); return mkFn('abs', a); }
+      if (t.t === '√') { p++; return mkPow(potencia(), MEDIO); }
+      if (t.t === '∛') { p++; return mkPow(potencia(), num(1, 3)); }
+      if (t.t === 'id') {
+        p++;
+        const nombre = t.v;
+        if (Object.prototype.hasOwnProperty.call(CONSTANTES, nombre)) return CONSTANTES[nombre];
+        const f = Object.prototype.hasOwnProperty.call(FUNCIONES, nombre) ? FUNCIONES[nombre] : null;
+        const sigue = ver();
+        if (f) {
+          if (sigue.t !== '(') err(sigue, `«${nombre}» es una función: escribe ${nombre}(…) con paréntesis`);
+          p++;
+          const args = [expr()];
+          while (ver().t === ',') { p++; args.push(expr()); }
+          esperar(')', '«)» para cerrar los argumentos');
+          return aplicar(f, args, t);
+        }
+        // Un nombre de varias letras pegado a «(» es casi seguro una función que
+        // no existe (sinh, f…); tomarlo como producto escondería el error.
+        if (sigue.t === '(' && sigue.pos === t.pos + nombre.length && nombre.length > 1)
+          err(t, `no conozco la función «${nombre}»`);
+        return V(nombre);
+      }
+      err(t, `esperaba un número, una variable o «(» y encontré ${describir(t)}`);
+    }
+    function aplicar(f, args, t) {
+      const n = args.length;
+      const exigir = k => { if (n !== k) err(t, `«${t.v}» lleva ${k} argumento${k > 1 ? 's' : ''} y recibió ${n}`); };
+      switch (f) {
+        case 'raiz': exigir(1); return mkPow(args[0], MEDIO);
+        case 'log':
+          if (n === 2) return div(mkFn('ln', args[0]), mkFn('ln', args[1]));
+          exigir(1); return mkFn('ln', args[0]);
+        case 'log10': exigir(1); return div(mkFn('ln', args[0]), mkFn('ln', num(10)));
+        default: exigir(1); return mkFn(f, args[0]);
+      }
+    }
+    const izq = expr();
+    if (ver().t === '=') {
+      p++;
+      const der = expr();
+      if (ver().t === '=') err(ver(), 'una ecuación lleva un solo «=»');
+      if (ver().t !== 'fin') err(ver(), `sobra ${describir(ver())}`);
+      return { izq, der };
+    }
+    if (ver().t !== 'fin') err(ver(), ver().t === ')' ? 'sobra un «)»' : `sobra ${describir(ver())}`);
+    return { izq };
+  }
+  // Envuelve «indefinido» al leer: «1/0» escrito a mano es un error de quien
+  // escribe, no una pregunta.
+  function leer(src) {
+    try { return analizar(src); }
+    catch (e) { if (e instanceof ErrorFormula && e.tipo === 'indefinido') throw fallo(`«${src}»: ${e.message}`); throw e; }
+  }
+  function leerExpr(src) {
+    const r = leer(src);
+    if (r.der) throw fallo(`«${src}» es una ecuación y aquí se espera una expresión sin «=»`, 'quita el «=» o usa resolverFormula');
+    return r.izq;
+  }
+  // Una ecuación se guarda como «izquierda − derecha = 0». Sin «=», la fórmula
+  // misma se iguala a cero.
+  function leerEcuacion(src) {
+    const r = leer(src);
+    return r.der ? resta(r.izq, r.der) : r.izq;
+  }
+  // Las variables tal como se escribieron, antes de restar los dos lados:
+  // «x + 1 = x» sí tiene x (y no tiene solución); «y^2 = 4» resuelta en x no.
+  function variablesEscritas(src) {
+    const r = leer(src);
+    const s = new Set(variablesDe(r.izq));
+    if (r.der) for (const v of variablesDe(r.der)) s.add(v);
+    return s;
+  }
+  function exigirVariable(x) {
+    if (typeof x !== 'string' || !/^[A-Za-z_À-ÖØ-öø-ɏͰ-Ͽ][A-Za-z0-9_À-ÖØ-öø-ɏͰ-Ͽ]*$/.test(x))
+      throw fallo(`«${x}» no es un nombre de variable válido`);
+    if (CONSTANTES[x] || FUNCIONES[x]) throw fallo(`«${x}» no puede ser una variable: es ${CONSTANTES[x] ? 'una constante' : 'una función'}`);
+    return x;
+  }
+
+  // ── impresión ─────────────────────────────────────────────────────────────
+  // Una sola rutina con dos estilos: el canónico (ASCII, se puede volver a
+  // leer y es lo que devuelven las demás funciones) y el bonito (², √, π, ·).
+  // pr devuelve [texto, precedencia]: 1 suma, 2 producto, 4 potencia, 5 átomo.
+  const ESTILO_TEXTO = { mul: '*', menos: '-', pi: 'pi', sup: false, raiz: s => `raiz(${s})`, raiz3: null, abs: s => `abs(${s})`, juntarRaiz: false };
+  const ESTILO_BONITO = { mul: '·', menos: '−', pi: 'π', sup: true, raiz: (s, prec) => (prec >= 5 ? '√' + s : `√(${s})`), raiz3: (s, prec) => (prec >= 5 ? '∛' + s : `∛(${s})`), abs: s => `|${s}|`, juntarRaiz: true };
+  const SUPER = { 0: '⁰', 1: '¹', 2: '²', 3: '³', 4: '⁴', 5: '⁵', 6: '⁶', 7: '⁷', 8: '⁸', 9: '⁹' };
+  const par = (s, prec, min) => (prec < min ? '(' + s + ')' : s);
+
+  function imprimir(e, est) {
+    est = est || ESTILO_TEXTO;
+    return pr(e, est)[0];
+  }
+  function pr(e, est) {
+    switch (e.t) {
+      case 'n': {
+        const q = e.q;
+        const s = (q.n < 0n ? est.menos : '') + bAbs(q.n).toString() + (q.d === 1n ? '' : '/' + q.d);
+        return [s, q.n < 0n ? 1 : q.d === 1n ? 5 : 2];
+      }
+      case 'v': return [e.n, 5];
+      case 'c': return [e.n === 'pi' ? est.pi : e.n, 5];
+      case '+': {
+        let s = pr(e.a[0], est)[0];
+        for (let i = 1; i < e.a.length; i++) {
+          const t = e.a[i];
+          if (esNegativo(t)) s += ` ${est.menos} ` + par(...pr(neg(t), est), 2);
+          else s += ' + ' + pr(t, est)[0];
+        }
+        return [s, 1];
+      }
+      case '*': return prMul(e.a, est);
+      case '^': {
+        if (e.e.t === 'n' && e.e.q.n < 0n) return prMul([e], est);
+        if (e.b.t === 'c' && e.b.n === 'e') break;
+        if (e.e.t === 'n' && rIgual(e.e.q, R(1, 2))) { const [s, p] = pr(e.b, est); return [est.sup ? est.raiz(s, p) : est.raiz(s), 5]; }
+        if (est.raiz3 && e.e.t === 'n' && rIgual(e.e.q, R(1, 3))) { const [s, p] = pr(e.b, est); return [est.raiz3(s, p), 5]; }
+        const base = par(...pr(e.b, est), 5);
+        return [base + exponente(e.e, est), 4];
+      }
+      case 'f': {
+        if (e.f === 'exp') return ['e' + exponente(e.a, est), 4];
+        if (e.f === 'abs') return [est.abs(pr(e.a, est)[0]), 5];
+        return [`${e.f}(${pr(e.a, est)[0]})`, 5];
+      }
+    }
+    return ['?', 5];
+  }
+  function exponente(x, est) {
+    if (est.sup && x.t === 'n' && rEnt(x.q) && x.q.n >= 0n) return x.q.n.toString().split('').map(d => SUPER[d]).join('');
+    const [s, p] = pr(x, est);
+    if ((x.t === 'n' && rEnt(x.q) && x.q.n >= 0n) || x.t === 'v' || x.t === 'c') return '^' + s;
+    return '^(' + s + ')';
+  }
+  // Un producto se imprime como fracción: lo de exponente negativo va abajo.
+  // El coeficiente se pega a lo que sigue cuando no hay ambigüedad («3x»,
+  // «2(x + 1)»), y entre lo demás va «*» (o «·» en el estilo bonito).
+  function prMul(fs, est) {
+    let coef = R1;
+    const arriba = [], abajo = [];
+    for (const f of fs) {
+      if (f.t === 'n') coef = rMul(coef, f.q);
+      else if (f.t === '^' && f.e.t === 'n' && f.e.q.n < 0n) abajo.push(mkPowCrudo(f.b, rNeg(f.e.q)));
+      else arriba.push(f);
+    }
+    const signo = coef.n < 0n ? est.menos : '';
+    const cn = bAbs(coef.n), cd = coef.d;
+    const juntar = (numeral, factores) => {
+      let s = numeral, prev = numeral ? 'num' : null;
+      for (const f of factores) {
+        const [t, p] = pr(f, est);
+        const str = par(t, p, f.t === '^' ? 4 : 3);
+        let pegado = false;
+        if (prev === 'num') pegado = f.t === 'v' || (f.t === 'c' && f.n !== 'i') || (f.t === '^' && (f.b.t === 'v' || f.b.t === 'c') && !str.startsWith('raiz')) || str.startsWith('(') || (est.juntarRaiz && (str.startsWith('√') || str.startsWith('∛')));
+        else if (prev) pegado = str.startsWith('(') && (prev.endsWith(')') || /^[A-Za-z]$/.test(prev)) && !est.sup;
+        s = s ? s + (pegado ? '' : est.mul) + str : str;
+        prev = str;
+      }
+      return s;
+    };
+    let sArr = juntar(cn !== 1n || !arriba.length ? cn.toString() : '', arriba);
+    if (!abajo.length && cd === 1n) {
+      const prec = arriba.length === 1 && cn === 1n ? pr(arriba[0], est)[1] : 2;
+      return [signo + sArr, signo ? 1 : prec];
+    }
+    const piezasAbajo = (cd !== 1n ? 1 : 0) + abajo.length;
+    let sAb = juntar(cd !== 1n ? cd.toString() : '', abajo);
+    if (piezasAbajo > 1) sAb = '(' + sAb + ')';
+    else if (abajo.length === 1) {
+      const [t, p] = pr(abajo[0], est);
+      sAb = par(t, p, 3);
+    }
+    if (arriba.length === 1 && cn === 1n) { const [t, p] = pr(arriba[0], est); sArr = par(t, p, 3); }
+    return [signo + sArr + '/' + sAb, signo ? 1 : 2];
+  }
+  function mkPowCrudo(b, q) { return rUno(q) ? b : { t: '^', b, e: N(q) }; }
+
+  // LaTeX: \frac para lo de abajo, \sqrt, y los nombres de función de siempre.
+  const LATEX_FN = { seno: '\\sin', coseno: '\\cos', tangente: '\\tan', arcoseno: '\\arcsin', arcocoseno: '\\arccos', arcotangente: '\\arctan', ln: '\\ln' };
+  function latex(e) { return lx(e)[0]; }
+  function lx(e) {
+    switch (e.t) {
+      case 'n': {
+        const q = e.q;
+        if (q.d === 1n) return [q.n.toString(), q.n < 0n ? 1 : 5];
+        return [(q.n < 0n ? '-' : '') + `\\frac{${bAbs(q.n)}}{${q.d}}`, q.n < 0n ? 1 : 2];
+      }
+      case 'v': return [e.n.length > 1 ? `\\mathrm{${e.n}}` : e.n, 5];
+      case 'c': return [e.n === 'pi' ? '\\pi' : e.n, 5];
+      case '+': {
+        let s = lx(e.a[0])[0];
+        for (let i = 1; i < e.a.length; i++) {
+          const t = e.a[i];
+          if (esNegativo(t)) s += ' - ' + lpar(...lx(neg(t)), 2);
+          else s += ' + ' + lx(t)[0];
+        }
+        return [s, 1];
+      }
+      case '*': return lxMul(e.a);
+      case '^': {
+        if (e.e.t === 'n' && e.e.q.n < 0n) return lxMul([e]);
+        if (e.e.t === 'n' && rIgual(e.e.q, R(1, 2))) return [`\\sqrt{${lx(e.b)[0]}}`, 5];
+        if (e.e.t === 'n' && e.e.q.n === 1n) return [`\\sqrt[${e.e.q.d}]{${lx(e.b)[0]}}`, 5];
+        return [lpar(...lx(e.b), 5) + `^{${lx(e.e)[0]}}`, 4];
+      }
+      case 'f': {
+        if (e.f === 'exp') return [`e^{${lx(e.a)[0]}}`, 4];
+        if (e.f === 'abs') return [`\\left|${lx(e.a)[0]}\\right|`, 5];
+        return [`${LATEX_FN[e.f]}\\left(${lx(e.a)[0]}\\right)`, 5];
+      }
+    }
+  }
+  const lpar = (s, p, min) => (p < min ? `\\left(${s}\\right)` : s);
+  function lxMul(fs) {
+    let coef = R1;
+    const arriba = [], abajo = [];
+    for (const f of fs) {
+      if (f.t === 'n') coef = rMul(coef, f.q);
+      else if (f.t === '^' && f.e.t === 'n' && f.e.q.n < 0n) abajo.push(mkPowCrudo(f.b, rNeg(f.e.q)));
+      else arriba.push(f);
+    }
+    const signo = coef.n < 0n ? '-' : '';
+    const cn = bAbs(coef.n), cd = coef.d;
+    const juntar = (numeral, fs2) => {
+      let s = numeral;
+      for (const f of fs2) {
+        const [t, p] = lx(f);
+        const str = lpar(t, p, f.t === '^' ? 4 : 3);
+        s = s ? s + (/^[0-9]/.test(str) || /^\\sqrt/.test(str) && /[0-9]$/.test(s) ? ' \\cdot ' : ' ') + str : str;
+      }
+      return s;
+    };
+    let sArr = juntar(cn !== 1n || !arriba.length ? cn.toString() : '', arriba);
+    if (!abajo.length && cd === 1n) return [signo + sArr, signo ? 1 : 2];
+    let sAb = juntar(cd !== 1n ? cd.toString() : '', abajo);
+    // Dentro de \frac las llaves ya agrupan: sin paréntesis de más.
+    if (cn === 1n && arriba.length === 1) sArr = lx(arriba[0])[0];
+    if (cd === 1n && abajo.length === 1) sAb = lx(abajo[0])[0];
+    return [`${signo}\\frac{${sArr}}{${sAb}}`, signo ? 1 : 2];
+  }
+
+  // ── expansión ─────────────────────────────────────────────────────────────
+  const TOPE_TERMINOS = 3000;
+  function expandir(e) {
+    switch (e.t) {
+      case '+': return mkAdd(e.a.map(expandir));
+      case '*': {
+        let acc = UNO;
+        for (const f of e.a) acc = distribuir(acc, expandir(f));
+        return acc;
+      }
+      case '^': {
+        const b = expandir(e.b), x = expandir(e.e);
+        if (b.t === '+' && x.t === 'n' && rEnt(x.q) && x.q.n !== 0n) {
+          const k = bAbs(x.q.n);
+          if (k > 200n) throw fallo('la potencia es demasiado grande para expandirla');
+          // Potencia por cuadrados: (a+b)^8 son tres multiplicaciones, no siete.
+          let r = UNO, base = b, n = k;
+          while (n > 0n) {
+            if (n & 1n) r = distribuir(r, base);
+            n >>= 1n;
+            if (n) base = distribuir(base, base);
+          }
+          return x.q.n < 0n ? mkPow(r, MENOS_UNO) : r;
+        }
+        return mkPow(b, x);
+      }
+      case 'f': return mkFn(e.f, expandir(e.a));
+      default: return e;
+    }
+  }
+
+  // Producto de dos expresiones ya expandidas, término a término. No pasa por
+  // mkMul con las sumas enteras: (a+b)·(a+b) volvería a ser (a+b)^2.
+  function distribuir(x, y) {
+    const tx = x.t === '+' ? x.a : [x], ty = y.t === '+' ? y.a : [y];
+    if (tx.length * ty.length > TOPE_TERMINOS) throw fallo('al expandir salen demasiados términos (más de ' + TOPE_TERMINOS + ')', 'deja la fórmula factorizada o usa evaluarFormula');
+    const out = [];
+    for (const a of tx) for (const b of ty) {
+      const m = mkMul([a, b]);
+      // a·b puede volver a ser una potencia de suma (√(x+1)·√(x+1) = x + 1):
+      out.push(m.t === '+' || (m.t === '^' && m.b.t === '+') || m.t === '*' && m.a.some(f => f.t === '+' || (f.t === '^' && f.b.t === '+' && f.e.t === 'n' && rEnt(f.e.q) && f.e.q.n > 0n)) ? expandir(m) : m);
+    }
+    gastar(out.length);
+    return mkAdd(out);
+  }
+
+  // ── polinomios de una variable con coeficientes racionales ────────────────
+  // Arreglos de Rac, índice = grado. Sirven para el máximo común divisor, las
+  // raíces racionales, factorizar y las fracciones parciales.
+  const pRecortar = p => { while (p.length && rCero(p[p.length - 1])) p.pop(); return p; };
+  const pGrado = p => p.length - 1;
+  function pSuma(a, b) { const r = []; for (let i = 0; i < Math.max(a.length, b.length); i++) r.push(rSuma(a[i] || R0, b[i] || R0)); return pRecortar(r); }
+  function pMul(a, b) {
+    if (!a.length || !b.length) return [];
+    const r = new Array(a.length + b.length - 1).fill(R0);
+    for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length; j++) r[i + j] = rSuma(r[i + j], rMul(a[i], b[j]));
+    gastar(a.length * b.length);
+    return pRecortar(r);
+  }
+  const pEscalar = (a, c) => pRecortar(a.map(x => rMul(x, c)));
+  function pDivMod(a, b) {
+    a = a.slice();
+    const q = new Array(Math.max(0, a.length - b.length + 1)).fill(R0);
+    const lb = b[b.length - 1];
+    while (a.length >= b.length && a.length) {
+      const k = a.length - b.length, c = rDiv(a[a.length - 1], lb);
+      q[k] = c;
+      for (let i = 0; i < b.length; i++) a[i + k] = rResta(a[i + k], rMul(c, b[i]));
+      a.pop();
+      pRecortar(a);
+    }
+    return [pRecortar(q), a];
+  }
+  function pMcd(a, b) {
+    a = pRecortar(a.slice()); b = pRecortar(b.slice());
+    while (b.length) { const r = pDivMod(a, b)[1]; a = b; b = r; }
+    return a.length ? pEscalar(a, rDiv(R1, a[a.length - 1])) : a;
+  }
+  const pDerivar = p => pRecortar(p.slice(1).map((c, i) => rMul(c, R(i + 1))));
+  function pEval(p, x) { let r = R0; for (let i = p.length - 1; i >= 0; i--) r = rSuma(rMul(r, x), p[i]); return r; }
+  function pAExpr(p, x) {
+    const ts = [];
+    p.forEach((c, k) => { if (!rCero(c)) ts.push(mkMul([N(c), mkPow(V(x), num(k))])); });
+    return mkAdd(ts);
+  }
+  // Coeficientes enteros primitivos y el factor que se sacó: p = c · prim.
+  function pPrimitivo(p) {
+    let l = 1n;
+    for (const c of p) l = l / bMcd(l, c.d) * c.d;
+    let g = 0n;
+    const ent = p.map(c => c.n * (l / c.d));
+    for (const v of ent) g = bMcd(g, v);
+    if (g === 0n) return { c: R0, p: ent.map(() => R0) };
+    let s = ent[ent.length - 1] < 0n ? -1n : 1n;
+    return { c: R(g * s, l), p: ent.map(v => R(v / (g * s))) };
+  }
+  function divisores(m) {
+    m = bAbs(m);
+    if (m === 0n) return [];
+    const { fs, resto } = factorizarEntero(m);
+    let ds = [1n];
+    const todos = [...fs];
+    if (resto > 1n) todos.push([resto, 1]);
+    for (const [pr, e] of todos) {
+      const nuevo = [];
+      for (const d of ds) { let x = d; for (let k = 0; k <= e; k++) { nuevo.push(x); x *= pr; } }
+      ds = nuevo;
+      if (ds.length > 20000) throw fallo('el polinomio tiene coeficientes con demasiados divisores para buscar raíces racionales');
+    }
+    return ds;
+  }
+  // Raíces racionales por el teorema de la raíz racional: p/q con p que divide
+  // al término independiente y q al principal. Devuelve las raíces con su
+  // multiplicidad y lo que queda sin factorizar (con su coeficiente principal).
+  function raicesRacionales(p) {
+    let resto = pRecortar(p.slice());
+    const raices = [];
+    let ceros = 0;
+    while (resto.length > 1 && rCero(resto[0])) { resto.shift(); ceros++; }
+    if (ceros) raices.push({ r: R0, m: ceros });
+    if (resto.length <= 1) return { raices, resto };
+    const prim = pPrimitivo(resto).p;
+    const ps = divisores(prim[0].n), qs = divisores(prim[prim.length - 1].n);
+    const cands = new Map();
+    for (const a of ps) for (const b of qs) { const r = R(a, b); cands.set(r.n + '/' + r.d, r); }
+    for (const c0 of cands.values()) {
+      for (const c of [c0, rNeg(c0)]) {
+        gastar(resto.length);
+        let m = 0;
+        while (resto.length > 1 && rCero(pEval(resto, c))) { resto = pDivMod(resto, [rNeg(c), R1])[0]; m++; }
+        if (m) raices.push({ r: c, m });
+        if (resto.length <= 1) break;
+      }
+      if (resto.length <= 1) break;
+    }
+    raices.sort((a, b) => rCmp(a.r, b.r));
+    return { raices, resto };
+  }
+
+  // Ve una expresión como polinomio en x: lista de coeficientes (expresiones
+  // que no dependen de x), o null si x aparece de otra forma (en un seno, en
+  // un denominador, con exponente fraccionario…).
+  function comoPolinomio(e, x) {
+    const ex = expandir(e);
+    const ts = ex.t === '+' ? ex.a : [ex];
+    const cs = [];
+    for (const t of ts) {
+      const fs = t.t === '*' ? t.a : [t];
+      let g = 0;
+      const otros = [];
+      for (const f of fs) {
+        if (!depende(f, x)) otros.push(f);
+        else if (f.t === 'v') g += 1;
+        else if (f.t === '^' && f.b.t === 'v' && f.b.n === x && f.e.t === 'n' && rEnt(f.e.q) && f.e.q.n > 0n && f.e.q.n < 10000n) g += Number(f.e.q.n);
+        else return null;
+      }
+      (cs[g] = cs[g] || []).push(mkMul(otros));
+    }
+    const out = [];
+    for (let k = 0; k < cs.length; k++) out.push(cs[k] ? mkAdd(cs[k]) : CERO);
+    while (out.length > 1 && esCero(out[out.length - 1])) out.pop();
+    return out;
+  }
+  const polyQ = cs => (cs && cs.every(esNum) ? pRecortar(cs.map(c => c.q)) : null);
+  function polyQDe(e, x) { return polyQ(comoPolinomio(e, x)); }
+
+  // ── fracción única (juntar) ───────────────────────────────────────────────
+  // Lleva la expresión a numerador/denominador, ambos expandidos, y cancela lo
+  // común: potencias de cada base, el contenido numérico y, si es de una sola
+  // variable con coeficientes racionales, el máximo común divisor polinómico.
+  // Es lo que reconoce que (x^2 − 1)/(x − 1) es x + 1 y que una resta es cero.
+  function juntar(e) {
+    switch (e.t) {
+      case 'n': return e.q.d === 1n ? { num: e, den: UNO } : { num: N(R(e.q.n)), den: N(R(e.q.d)) };
+      case 'v': case 'c': return { num: e, den: UNO };
+      case 'f': {
+        // Para reconocer identidades, la trigonometría se lleva a seno y
+        // coseno de un solo ángulo: tangente = seno/coseno y el ángulo doble
+        // se abre. Es solo para comparar: si la forma resultante es más larga,
+        // «simplificar» no la elige.
+        const u = juntarExpr(e.a);
+        if (e.f === 'tangente') return juntar(div(mkFn('seno', u), mkFn('coseno', u)));
+        if ((e.f === 'seno' || e.f === 'coseno') && u.t === '*' && u.a[0].t === 'n' && rIgual(u.a[0].q, R(2))) {
+          const v = u.a.length === 2 ? u.a[1] : { t: '*', a: u.a.slice(1) };
+          const sv = mkFn('seno', v), cv = mkFn('coseno', v);
+          return juntar(e.f === 'seno' ? mkMul([DOS, sv, cv]) : resta(mkPow(cv, DOS), mkPow(sv, DOS)));
+        }
+        return { num: mkFn(e.f, u), den: UNO };
+      }
+      case '+': {
+        let acc = juntar(e.a[0]);
+        for (let i = 1; i < e.a.length; i++) {
+          const b = juntar(e.a[i]);
+          if (igual(acc.den, b.den)) acc = { num: expandir(mkAdd([acc.num, b.num])), den: acc.den };
+          else acc = { num: expandir(mkAdd([mkMul([acc.num, b.den]), mkMul([b.num, acc.den])])), den: expandir(mkMul([acc.den, b.den])) };
+        }
+        return cancelar(acc.num, acc.den);
+      }
+      case '*': {
+        let n = UNO, d = UNO;
+        for (const f of e.a) { const j = juntar(f); n = expandir(mkMul([n, j.num])); d = expandir(mkMul([d, j.den])); }
+        return cancelar(n, d);
+      }
+      case '^': {
+        // coseno(u)^(2k) = (1 − seno(u)^2)^k: con eso seno^2 + coseno^2 se
+        // reconoce aunque los coeficientes no coincidan.
+        if (e.e.t === 'n' && rEnt(e.e.q) && e.e.q.n > 0n && e.e.q.n % 2n === 0n && e.b.t === 'f' && e.b.f === 'coseno')
+          return juntar(mkPow(resta(UNO, mkPow(mkFn('seno', e.b.a), DOS)), N(R(e.e.q.n / 2n))));
+        if (e.e.t === 'n' && rEnt(e.e.q)) {
+          const j = juntar(e.b);
+          const k = N(R(bAbs(e.e.q.n)));
+          const n = expandir(mkPow(j.num, k)), d = expandir(mkPow(j.den, k));
+          return e.e.q.n > 0n ? cancelar(n, d) : cancelar(d, n);
+        }
+        const b = juntarExpr(e.b);
+        if (e.e.t === 'n' && e.e.q.n < 0n) return { num: UNO, den: mkPow(b, N(rNeg(e.e.q))) };
+        return { num: mkPow(b, juntarExpr(e.e)), den: UNO };
+      }
+    }
+  }
+  function terminosDe(e) { return e.t === '+' ? e.a : [e]; }
+  function cancelar(n, d) {
+    if (esCero(d)) throw indefinido('la fórmula divide entre cero');
+    if (esCero(n)) return { num: CERO, den: UNO };
+    if (d.t === 'n') return { num: expandir(mkMul([n, N(rDiv(R1, d.q))])), den: UNO };
+    // Potencias comunes de cada base, por el mínimo exponente numérico.
+    const minimo = new Map();
+    let primero = true;
+    for (const t of [...terminosDe(n), ...terminosDe(d)]) {
+      const fs = (t.t === '*' ? t.a : [t]).filter(f => f.t !== 'n');
+      const aqui = new Map();
+      for (const f of fs) {
+        const b = f.t === '^' ? f.b : f, ex = f.t === '^' ? f.e : UNO;
+        if (ex.t !== 'n' || b.t === 'n') continue;
+        aqui.set(clave(b), { b, q: ex.q });
+      }
+      if (primero) { for (const [k, v] of aqui) if (v.q.n > 0n) minimo.set(k, v); primero = false; }
+      else for (const [k, v] of minimo) {
+        const a = aqui.get(k);
+        if (!a || a.q.n <= 0n) minimo.delete(k);
+        else if (rCmp(a.q, v.q) < 0) minimo.set(k, a);
+      }
+    }
+    if (minimo.size) {
+      const quitar = mkMul([...minimo.values()].map(({ b, q }) => mkPow(b, N(rNeg(q)))));
+      n = expandir(mkMul([n, quitar]));
+      d = expandir(mkMul([d, quitar]));
+    }
+    // Una sola variable y coeficientes racionales: máximo común divisor.
+    const vs = new Set([...variablesDe(n), ...variablesDe(d)]);
+    if (vs.size === 1) {
+      const x = [...vs][0];
+      const pn = polyQDe(n, x), pd = polyQDe(d, x);
+      if (pn && pd && pd.length > 1) {
+        const g = pMcd(pn, pd);
+        if (g.length > 1) {
+          n = pAExpr(pDivMod(pn, g)[0], x);
+          d = pAExpr(pDivMod(pd, g)[0], x);
+        }
+      }
+    }
+    // El denominador con coeficientes enteros primitivos y principal positivo.
+    const cont = contenido(d);
+    if (!rUno(cont)) { n = expandir(mkMul([n, N(rDiv(R1, cont))])); d = expandir(mkMul([d, N(rDiv(R1, cont))])); }
+    if (d.t === 'n') return { num: expandir(mkMul([n, N(rDiv(R1, d.q))])), den: UNO };
+    return { num: n, den: d };
+  }
+  // Contenido racional de una suma: mcd de numeradores / mcm de denominadores,
+  // con el signo del primer término.
+  function contenido(e) {
+    const qs = terminosDe(e).map(t => partirCoef(t)[0]);
+    let g = 0n, l = 1n;
+    for (const q of qs) { g = bMcd(g, q.n); l = l / bMcd(l, q.d) * q.d; }
+    if (g === 0n) return R1;
+    return R(qs[0].n < 0n ? -g : g, l);
+  }
+  function juntarExpr(e) {
+    const { num: n, den: d } = juntar(e);
+    if (esUno(d)) return n;
+    // Para mostrar, el contenido del numerador va fuera: 3(x + 1)/(2x).
+    const c = contenido(n);
+    const n2 = rUno(c) ? n : expandir(mkMul([n, N(rDiv(R1, c))]));
+    return mkMul([N(c), n2, mkPow(d, MENOS_UNO)]);
+  }
+
+  // ── simplificar: elegir la forma más corta ────────────────────────────────
+  function intentar(fn) {
+    try { return fn(); }
+    catch (e) { if (e instanceof ErrorFormula) return null; throw e; }
+  }
+  function simplificar(e) {
+    // En empate gana la expandida: «-x - 1» antes que «-(x + 1)», como se
+    // escribe un resultado; la factorizada solo si es más corta de verdad.
+    const cands = [];
+    const ex = intentar(() => expandir(e));
+    if (ex) cands.push(ex);
+    cands.push(e);
+    const jx = intentar(() => juntarExpr(e));
+    if (jx) cands.push(jx);
+    let mejor = cands[0], tm = tamano(mejor);
+    for (const c of cands.slice(1)) { const t = tamano(c); if (t < tm) { mejor = c; tm = t; } }
+    return mejor;
+  }
+  const esCeroSimbolico = e => esCero(simplificar(e));
+
+  // ── factorizar ────────────────────────────────────────────────────────────
+  function factorizar(e) {
+    const j = intentar(() => juntar(e));
+    if (j && !esUno(j.den)) return mkMul([factorizarPoli(j.num), mkPow(factorizarPoli(j.den), MENOS_UNO)]);
+    return factorizarPoli(expandir(e));
+  }
+  function factorizarPoli(e) {
+    if (e.t !== '+') return e;
+    // 1) contenido numérico y monomio común
+    const c = contenido(e);
+    const minimo = new Map();
+    e.a.forEach((t, i) => {
+      const fs = (t.t === '*' ? t.a : [t]).filter(f => f.t !== 'n');
+      const aqui = new Map();
+      for (const f of fs) {
+        const b = f.t === '^' ? f.b : f, ex = f.t === '^' ? f.e : UNO;
+        if (ex.t === 'n' && ex.q.n > 0n) aqui.set(clave(b), { b, q: ex.q });
+      }
+      if (i === 0) for (const [k, v] of aqui) minimo.set(k, v);
+      else for (const [k, v] of [...minimo]) {
+        const a = aqui.get(k);
+        if (!a) minimo.delete(k); else if (rCmp(a.q, v.q) < 0) minimo.set(k, a);
+      }
+    });
+    const mono = mkMul([...minimo.values()].map(({ b, q }) => mkPow(b, N(q))));
+    let resto = expandir(mkMul([e, N(rDiv(R1, c)), mkPow(mono, MENOS_UNO)]));
+    const factores = factoresDe(resto);
+    return mkMul([N(c), mono, ...factores]);
+  }
+  // Factores de un polinomio primitivo (sin contenido ni monomio común).
+  function factoresDe(p) {
+    const vs = [...variablesDe(p)];
+    if (vs.length === 1) {
+      const x = vs[0], q = polyQDe(p, x);
+      if (q && q.length > 2) return factoresUni(q, x, V(x));
+    }
+    // Dos variables y homogéneo: se fija y = 1, se factoriza en x y se vuelve
+    // a homogeneizar. Es lo que da x^2 − y^2 = (x − y)(x + y).
+    if (vs.length === 2 && p.t === '+') {
+      const [x, y] = vs.sort();
+      const cx = comoPolinomio(p, x);
+      if (cx) {
+        const n = cx.length - 1;
+        let homog = true;
+        const q = [];
+        for (let k = 0; k <= n && homog; k++) {
+          const cy = cx[k];
+          if (esCero(cy)) { q.push(R0); continue; }
+          const py = polyQDe(cy, y);
+          if (!py) { homog = false; break; }
+          const nz = py.map((v, i) => (rCero(v) ? -1 : i)).filter(i => i >= 0);
+          if (nz.length !== 1 || nz[0] !== n - k) homog = false;
+          else q.push(py[n - k]);
+        }
+        if (homog && n >= 2) {
+          const fs = factoresUni(q, x, V(x));
+          // homogeneizar cada factor: sustituir x por x/y y multiplicar por y^grado
+          return fs.map(f => {
+            const base = f.t === '^' ? f.b : f, ex = f.t === '^' ? f.e : UNO;
+            const pq = polyQDe(base, x);
+            if (!pq) return f;
+            const g = pq.length - 1;
+            const h = mkAdd(pq.map((cf, k) => mkMul([N(cf), mkPow(V(x), num(k)), mkPow(V(y), num(g - k))])));
+            return mkPow(h, ex);
+          });
+        }
+      }
+    }
+    return [p];
+  }
+  function factoresUni(q, x, vx) {
+    const out = [];
+    const { raices, resto } = raicesRacionales(q);
+    for (const { r, m } of raices) {
+      // (q·x − p) con enteros, no (x − p/q): 2x − 1 en vez de x − 1/2.
+      const f = mkAdd([mkMul([N(R(r.d)), vx]), N(R(-r.n))]);
+      out.push(mkPow(f, num(m)));
+    }
+    if (resto.length > 1) {
+      const pr = pPrimitivo(resto);
+      // Si solo tiene potencias pares, se prueba en t = x^2: x^4 − 4 = (x^2 − 2)(x^2 + 2).
+      const pares = pr.p.every((c, k) => k % 2 === 0 || rCero(c));
+      if (pares && pr.p.length > 3) {
+        const t = pr.p.filter((_, k) => k % 2 === 0);
+        const sub = factoresUni(t, x, mkPow(vx, DOS));
+        out.push(...sub);
+      } else out.push(pAExprCon(pr.p, vx));
+    }
+    return out;
+  }
+  function pAExprCon(p, vx) { return mkAdd(p.map((c, k) => mkMul([N(c), mkPow(vx, num(k))]))); }
+
+  // ── derivar ───────────────────────────────────────────────────────────────
+  function derivar(e, x) {
+    if (!depende(e, x)) return CERO;
+    gastar(2);
+    switch (e.t) {
+      case 'v': return UNO;
+      case '+': return mkAdd(e.a.map(t => derivar(t, x)));
+      case '*': {
+        const ts = [];
+        for (let i = 0; i < e.a.length; i++) {
+          const d = derivar(e.a[i], x);
+          if (!esCero(d)) ts.push(mkMul([d, ...e.a.filter((_, j) => j !== i)]));
+        }
+        return mkAdd(ts);
+      }
+      case '^': {
+        const b = e.b, ex = e.e;
+        if (!depende(ex, x)) return mkMul([ex, mkPow(b, mkAdd([ex, MENOS_UNO])), derivar(b, x)]);
+        if (!depende(b, x)) return mkMul([e, mkFn('ln', b), derivar(ex, x)]);
+        return mkMul([e, mkAdd([mkMul([derivar(ex, x), mkFn('ln', b)]), mkMul([ex, derivar(b, x), mkPow(b, MENOS_UNO)])])]);
+      }
+      case 'f': {
+        const u = e.a;
+        if (e.f === 'ln' && u.t === 'f' && u.f === 'abs') return mkMul([derivar(u.a, x), mkPow(u.a, MENOS_UNO)]);
+        let g;
+        switch (e.f) {
+          case 'seno': g = mkFn('coseno', u); break;
+          case 'coseno': g = neg(mkFn('seno', u)); break;
+          case 'tangente': g = mkPow(mkFn('coseno', u), num(-2)); break;
+          case 'arcoseno': g = mkPow(resta(UNO, mkPow(u, DOS)), num(-1, 2)); break;
+          case 'arcocoseno': g = neg(mkPow(resta(UNO, mkPow(u, DOS)), num(-1, 2))); break;
+          case 'arcotangente': g = mkPow(mkAdd([UNO, mkPow(u, DOS)]), MENOS_UNO); break;
+          case 'ln': g = mkPow(u, MENOS_UNO); break;
+          case 'exp': g = e; break;
+          case 'abs': g = mkMul([u, mkPow(e, MENOS_UNO)]); break;
+        }
+        return mkMul([g, derivar(u, x)]);
+      }
+    }
+    return CERO;
+  }
+
+  // ── integrar ──────────────────────────────────────────────────────────────
+  // Por reglas, en este orden: linealidad, tabla con argumento lineal a·x + b,
+  // por partes tabular (polinomio · exp/seno/coseno), por partes con logaritmo
+  // y arcotangente, fracciones racionales (fracciones parciales con raíces
+  // racionales y a lo sumo un factor cuadrático irreducible), expandir, y
+  // sustitución u = g(x) cuando el integrando es f(g(x))·g'(x) salvo constante.
+  // Si nada de eso sirve, devuelve null y quien llama dice que use «integrar»
+  // numérico. No hay algoritmo de Risch: hay integrales elementales que no saca.
+  function lineal(u, x) {
+    const cs = comoPolinomio(u, x);
+    if (!cs || cs.length !== 2 || esCero(cs[1])) return null;
+    return { a: cs[1], b: cs[0] };
+  }
+  function integrar(f, x, prof) {
+    prof = prof || 0;
+    if (prof > 6) return null;
+    gastar(5);
+    if (!depende(f, x)) return mkMul([f, V(x)]);
+    if (f.t === '+') {
+      const out = [];
+      for (const t of f.a) { const r = integrar(t, x, prof); if (!r) return null; out.push(r); }
+      return mkAdd(out);
+    }
+    if (f.t === '*') {
+      const ctes = f.a.filter(g => !depende(g, x));
+      if (ctes.length) {
+        const r = integrar(mkMul(f.a.filter(g => depende(g, x))), x, prof);
+        return r && mkMul([...ctes, r]);
+      }
+    }
+    let r = tablaIntegrales(f, x) || porPartes(f, x, prof) || racional(f, x);
+    if (r) return r;
+    const ex = intentar(() => expandir(f));
+    if (ex && !igual(ex, f)) { r = integrar(ex, x, prof + 1); if (r) return r; }
+    r = sustitucion(f, x, prof);
+    if (r) return r;
+    const jx = intentar(() => juntarExpr(f));
+    if (jx && !igual(jx, f) && !(ex && igual(jx, ex))) { r = integrar(jx, x, prof + 1); if (r) return r; }
+    return null;
+  }
+  function tablaIntegrales(f, x) {
+    const X = V(x);
+    if (f.t === 'v') return mkMul([MEDIO, mkPow(X, DOS)]);
+    if (f.t === '^') {
+      if (!depende(f.e, x)) {
+        const L = lineal(f.b, x), n = f.e;
+        if (L) {
+          if (esUno(neg(n))) return div(mkFn('ln', mkFn('abs', f.b)), L.a);
+          const n1 = mkAdd([n, UNO]);
+          return div(mkPow(f.b, n1), mkMul([L.a, n1]));
+        }
+        // 1/raiz(c − d·x^2) → arcoseno, 1/raiz(d·x^2 + c) → ln
+        if (n.t === 'n' && rIgual(n.q, R(-1, 2))) {
+          const q = polyQDe(f.b, x);
+          if (q && q.length === 3 && rCero(q[1])) {
+            const c = q[0], d = q[2];
+            if (d.n < 0n && c.n > 0n) {
+              const k = numPow(rDiv(rNeg(d), c), R(1, 2));
+              return div(mkFn('arcoseno', mkMul([k, X])), numPow(rNeg(d), R(1, 2)));
+            }
+            if (d.n > 0n) {
+              const rd = numPow(d, R(1, 2));
+              return div(mkFn('ln', mkFn('abs', mkAdd([mkMul([rd, X]), mkPow(f.b, MEDIO)]))), rd);
+            }
+          }
+        }
+        // 1/coseno^2, 1/seno^2, 1/coseno, 1/seno
+        if (n.t === 'n' && (rIgual(n.q, R(-2)) || rIgual(n.q, R(-1))) && f.b.t === 'f' && (f.b.f === 'seno' || f.b.f === 'coseno')) {
+          const L2 = lineal(f.b.a, x);
+          if (L2) {
+            const u = f.b.a;
+            if (rIgual(n.q, R(-2))) return f.b.f === 'coseno' ? div(mkFn('tangente', u), L2.a) : div(MENOS_UNO, mkMul([L2.a, mkFn('tangente', u)]));
+            if (f.b.f === 'coseno') return div(mkFn('ln', mkFn('abs', div(mkAdd([UNO, mkFn('seno', u)]), mkFn('coseno', u)))), L2.a);
+            return div(mkFn('ln', mkFn('abs', mkFn('tangente', mkMul([MEDIO, u])))), L2.a);
+          }
+        }
+        // seno(L)^2 y coseno(L)^2 por el ángulo doble
+        if (n.t === 'n' && rIgual(n.q, R(2)) && f.b.t === 'f' && (f.b.f === 'seno' || f.b.f === 'coseno')) {
+          const L2 = lineal(f.b.a, x);
+          if (L2) {
+            const s = div(mkFn('seno', mkMul([DOS, f.b.a])), mkMul([num(4), L2.a]));
+            return mkAdd([mkMul([MEDIO, X]), f.b.f === 'seno' ? neg(s) : s]);
+          }
+        }
+      }
+      if (!depende(f.b, x)) {
+        const L = lineal(f.e, x);
+        if (L) return div(f, mkMul([L.a, mkFn('ln', f.b)]));
+      }
+      return null;
+    }
+    if (f.t === 'f') {
+      const L = lineal(f.a, x);
+      if (!L) return null;
+      const u = f.a, a = L.a;
+      switch (f.f) {
+        case 'exp': return div(f, a);
+        case 'seno': return div(neg(mkFn('coseno', u)), a);
+        case 'coseno': return div(mkFn('seno', u), a);
+        case 'tangente': return div(neg(mkFn('ln', mkFn('abs', mkFn('coseno', u)))), a);
+        case 'ln': return div(resta(mkMul([u, f]), u), a);
+        case 'arcotangente': return div(resta(mkMul([u, f]), mkMul([MEDIO, mkFn('ln', mkAdd([UNO, mkPow(u, DOS)]))])), a);
+        case 'arcoseno': return div(mkAdd([mkMul([u, f]), mkPow(resta(UNO, mkPow(u, DOS)), MEDIO)]), a);
+        case 'arcocoseno': return div(resta(mkMul([u, f]), mkPow(resta(UNO, mkPow(u, DOS)), MEDIO)), a);
+      }
+    }
+    return null;
+  }
+  // P(x)·g(L) con P polinomio: tabular para g = exp, seno, coseno, c^L (las que
+  // se integran sin fin), y una vez por partes para g = ln, arcotangente,
+  // arcoseno (las que se derivan a algo algebraico).
+  function porPartes(f, x, prof) {
+    const fs = f.t === '*' ? f.a : [f];
+    let g = null;
+    const pol = [];
+    for (const h of fs) {
+      // ln(u)^n cuenta como trascendente: se integra por partes bajando n.
+      const trasc = h.t === 'f' || (h.t === '^' && depende(h.e, x)) ||
+        (h.t === '^' && h.b.t === 'f' && h.b.f === 'ln' && h.e.t === 'n' && rEnt(h.e.q) && h.e.q.n > 0n);
+      if (trasc) { if (g) return expTrig(fs, x); g = h; } else pol.push(h);
+    }
+    if (!g) return expTrig(fs, x);
+    const P = mkMul(pol);
+    const cs = comoPolinomio(P, x);
+    if (!cs) return null;
+    const ciclica = (g.t === 'f' && (g.f === 'exp' || g.f === 'seno' || g.f === 'coseno')) || (g.t === '^' && depende(g.e, x));
+    if (ciclica) {
+      if (!pol.length) return null;
+      if (g.t === 'f' && !lineal(g.a, x)) return null;
+      if (g.t === '^' && !lineal(g.e, x)) return null;
+      const ts = [];
+      let d = P, G = g, signo = 1;
+      for (let k = 0; k < cs.length; k++) {
+        G = integrar(G, x, prof + 1);
+        if (!G) return null;
+        const t = mkMul([d, G]);
+        ts.push(signo > 0 ? t : neg(t));
+        d = derivar(d, x);
+        signo = -signo;
+        if (esCero(d)) break;
+      }
+      return mkAdd(ts);
+    }
+    const esLn = g.t === '^' || (g.t === 'f' && g.f === 'ln');
+    if (esLn || (g.t === 'f' && (g.f === 'arcotangente' || g.f === 'arcoseno'))) {
+      // ∫ P·g = Q·g − ∫ Q·g'. Con P = 1 solo vale la pena si g no es de la
+      // tabla (ln(x^2), ln(x)^3…): la tabla ya sabe ln(a·x + b).
+      if (!pol.length && g.t === 'f' && lineal(g.a, x)) return null;
+      const Q = integrar(P, x, prof + 1);
+      if (!Q) return null;
+      const resto = integrar(simplificar(mkMul([Q, derivar(g, x)])), x, prof + 1);
+      if (!resto) return null;
+      return resta(mkMul([Q, g]), resto);
+    }
+    return null;
+  }
+  // e^(a·x + c)·seno(b·x + d) y con coseno: la integración por partes da
+  // vueltas en círculo, así que se usa la fórmula cerrada de siempre.
+  function expTrig(fs, x) {
+    const ctes = fs.filter(f => !depende(f, x)), resto = fs.filter(f => depende(f, x));
+    if (resto.length !== 2) return null;
+    const ex = resto.find(f => f.t === 'f' && f.f === 'exp'), tr = resto.find(f => f.t === 'f' && (f.f === 'seno' || f.f === 'coseno'));
+    if (!ex || !tr) return null;
+    const L1 = lineal(ex.a, x), L2 = lineal(tr.a, x);
+    if (!L1 || !L2) return null;
+    const a = L1.a, b = L2.a, den = mkAdd([mkPow(a, DOS), mkPow(b, DOS)]);
+    const s = mkFn('seno', tr.a), c = mkFn('coseno', tr.a);
+    const dentro = tr.f === 'seno' ? resta(mkMul([a, s]), mkMul([b, c])) : mkAdd([mkMul([a, c]), mkMul([b, s])]);
+    return mkMul([...ctes, ex, dentro, mkPow(den, MENOS_UNO)]);
+  }
+  // Fracciones parciales para P/D de una variable con coeficientes racionales.
+  function racional(f, x) {
+    const vs = variablesDe(f);
+    if (vs.size !== 1 || !vs.has(x) || tieneI(f)) return null;
+    const j = intentar(() => juntar(f));
+    if (!j || esUno(j.den)) return null;
+    const P = polyQDe(j.num, x), D = polyQDe(j.den, x);
+    if (!P || !D || D.length < 2) return null;
+    const X = V(x);
+    const [cociente, r] = pDivMod(P, D);
+    const partes = [];
+    cociente.forEach((c, k) => { if (!rCero(c)) partes.push(mkMul([N(rDiv(c, R(k + 1))), mkPow(X, num(k + 1))])); });
+    if (!r.length) return mkAdd(partes);
+    const { raices, resto: L } = raicesRacionales(D);
+    if (L.length > 3) return null;          // queda un factor de grado ≥ 3 sin raíces racionales
+    const bases = [], tipos = [];
+    for (const { r: raiz, m } of raices) {
+      for (let k = 1; k <= m; k++) {
+        let dk = D;
+        for (let i = 0; i < k; i++) dk = pDivMod(dk, [rNeg(raiz), R1])[0];
+        bases.push(dk); tipos.push({ raiz, k });
+      }
+    }
+    if (L.length === 3) {
+      const dL = pDivMod(D, L)[0];
+      bases.push(pMul(dL, [R0, R1])); tipos.push({ cuad: 'B' });
+      bases.push(dL); tipos.push({ cuad: 'C' });
+    }
+    const n = D.length - 1;
+    if (bases.length !== n) return null;
+    // Sistema: Σ c_j·base_j = r, coeficiente a coeficiente.
+    const A = [];
+    for (let fila = 0; fila < n; fila++) A.push([...bases.map(b => b[fila] || R0), r[fila] || R0]);
+    const sol = gaussRac(A, n);
+    if (!sol) return null;
+    let B = R0, Cc = R0;
+    sol.forEach((c, idx) => {
+      const t = tipos[idx];
+      if (t.cuad === 'B') { B = c; return; }
+      if (t.cuad === 'C') { Cc = c; return; }
+      if (rCero(c)) return;
+      const lin = mkAdd([X, N(rNeg(t.raiz))]);
+      if (t.k === 1) partes.push(mkMul([N(c), mkFn('ln', mkFn('abs', lin))]));
+      else partes.push(mkMul([N(rDiv(c, R(1 - t.k))), mkPow(lin, num(1 - t.k))]));
+    });
+    if (L.length === 3) {
+      // (B·x + C)/(p·x^2 + q·x + s) = B/(2p)·(2px + q)/L + (C − Bq/(2p))/L
+      const [s, q, p] = L;
+      const Lx = pAExpr(L, x);
+      const disc = rResta(rMul(q, q), rMul(R(4), rMul(p, s)));
+      const k1 = rDiv(B, rMul(R(2), p));
+      const k2 = rResta(Cc, rMul(k1, q));
+      if (!rCero(k1)) partes.push(mkMul([N(k1), mkFn('ln', disc.n < 0n && p.n > 0n ? Lx : mkFn('abs', Lx))]));
+      if (!rCero(k2)) {
+        const lin = mkAdd([mkMul([N(rMul(R(2), p)), X]), N(q)]);
+        if (disc.n < 0n) {
+          const rd = numPow(rNeg(disc), R(1, 2));
+          partes.push(mkMul([N(rMul(k2, R(2))), mkPow(rd, MENOS_UNO), mkFn('arcotangente', div(lin, rd))]));
+        } else {
+          const rd = numPow(disc, R(1, 2));
+          partes.push(mkMul([N(k2), mkPow(rd, MENOS_UNO), mkFn('ln', mkFn('abs', div(resta(lin, rd), mkAdd([lin, rd]))))]));
+        }
+      }
+    }
+    return mkAdd(partes);
+  }
+  // Eliminación de Gauss con racionales exactos; null si es singular.
+  function gaussRac(A, n) {
+    A = A.map(f => f.slice());
+    for (let c = 0; c < n; c++) {
+      let piv = -1;
+      for (let f = c; f < A.length; f++) if (!rCero(A[f][c])) { piv = f; break; }
+      if (piv < 0) return null;
+      [A[c], A[piv]] = [A[piv], A[c]];
+      const inv = rDiv(R1, A[c][c]);
+      for (let k = c; k <= n; k++) A[c][k] = rMul(A[c][k], inv);
+      for (let f = 0; f < A.length; f++) {
+        if (f === c || rCero(A[f][c])) continue;
+        const m = A[f][c];
+        for (let k = c; k <= n; k++) A[f][k] = rResta(A[f][k], rMul(m, A[c][k]));
+      }
+      gastar(n * n);
+    }
+    return A.slice(0, n).map(f => f[n]);
+  }
+  // u = g(x): si f/g'(x), escrito con u, ya no tiene x, se integra en u.
+  function sustitucion(f, x, prof) {
+    const cands = new Map();
+    const recoger = e => {
+      if (!depende(e, x) || e.t === 'v') return;
+      if (e.t === 'f') { cands.set(clave(e), e); cands.set(clave(e.a), e.a); recoger(e.a); }
+      else if (e.t === '^') { cands.set(clave(e), e); cands.set(clave(e.b), e.b); recoger(e.b); recoger(e.e); }
+      else if (e.t === '+' || e.t === '*') { if (e !== f) cands.set(clave(e), e); for (const h of e.a) recoger(h); }
+    };
+    recoger(f);
+    let n = 0;
+    for (const u of cands.values()) {
+      if (u.t === 'v' || ++n > 16) continue;
+      if (u.t === '^' && u.b.t === 'v' && u.e.t === 'n' && rIgual(u.e.q, R1)) continue;
+      const du = derivar(u, x);
+      if (esCero(du)) continue;
+      const t = '\u0000t' + prof;
+      const T = V(t);
+      for (const forma of [() => simplificar(div(f, du)), () => expandir(div(f, du))]) {
+        const cociente = intentar(forma);
+        if (!cociente) continue;
+        const g = intentar(() => reemplazarSub(cociente, clave(u), T));
+        if (!g || depende(g, x)) continue;
+        const G = integrar(g, t, prof + 1);
+        if (G) return sustituirVars(G, new Map([[t, u]]));
+      }
+    }
+    return null;
+  }
+
+  // ── evaluar con números de verdad ─────────────────────────────────────────
+  // Se compila a clausuras de JavaScript una vez: formulaAFuncion la llama
+  // miles de veces dentro de un «mapear» y recorrer el árbol en cada llamada
+  // costaría el triple.
+  function compilar(e, indice) {
+    switch (e.t) {
+      case 'n': { const v = rANum(e.q); return () => v; }
+      case 'c':
+        if (e.n === 'i') throw fallo('la fórmula tiene la unidad imaginaria «i» y su valor no es un número real');
+        { const v = e.n === 'pi' ? Math.PI : Math.E; return () => v; }
+      case 'v': {
+        if (!indice.has(e.n)) throw fallo(`falta el valor de la variable «${e.n}»`);
+        const k = indice.get(e.n);
+        return vs => vs[k];
+      }
+      case '+': { const fs = e.a.map(h => compilar(h, indice)); return vs => { let s = 0; for (const f of fs) s += f(vs); return s; }; }
+      case '*': { const fs = e.a.map(h => compilar(h, indice)); return vs => { let s = 1; for (const f of fs) s *= f(vs); return s; }; }
+      case '^': {
+        const b = compilar(e.b, indice), x = compilar(e.e, indice);
+        // Exponente racional de denominador impar: la raíz real de un negativo
+        // existe ((−8)^(1/3) = −2), y Math.pow daría NaN.
+        if (e.e.t === 'n' && e.e.q.d % 2n === 1n && !rEnt(e.e.q)) {
+          const ex = rANum(e.e.q), par = e.e.q.n % 2n === 0n;
+          return vs => { const v = b(vs); return v >= 0 ? Math.pow(v, ex) : (par ? 1 : -1) * Math.pow(-v, ex); };
+        }
+        return vs => Math.pow(b(vs), x(vs));
+      }
+      case 'f': {
+        const a = compilar(e.a, indice);
+        const F = { seno: Math.sin, coseno: Math.cos, tangente: Math.tan, arcoseno: Math.asin, arcocoseno: Math.acos, arcotangente: Math.atan, ln: Math.log, exp: Math.exp, abs: Math.abs }[e.f];
+        return vs => F(a(vs));
+      }
+    }
+  }
+  function evaluar(e, valores) {
+    const indice = new Map(), vs = [];
+    for (const [k, v] of valores) { indice.set(k, vs.length); vs.push(v); }
+    return compilar(e, indice)(vs);
+  }
+  // Valor numérico de una expresión SIN variables, o NaN.
+  function valorDe(e) {
+    try { return evaluar(e, new Map()); } catch (err) { if (err instanceof ErrorFormula) return NaN; throw err; }
+  }
+  // Complejo aproximado (para ordenar y verificar raíces con «i»).
+  function valorComplejo(e) {
+    if (!tieneI(e)) return [valorDe(e), 0];
+    const ex = intentar(() => expandir(e));
+    if (!ex) return [NaN, NaN];
+    let re = 0, im = 0;
+    for (const t of terminosDe(ex)) {
+      const fs = t.t === '*' ? t.a : [t];
+      const conI = fs.some(f => f.t === 'c' && f.n === 'i');
+      const v = valorDe(mkMul(fs.filter(f => !(f.t === 'c' && f.n === 'i'))));
+      if (conI) im += v; else re += v;
+    }
+    return [re, im];
+  }
+
+  // ── resolver ──────────────────────────────────────────────────────────────
+  // Devuelve {exactas: [expr], numericas: [número o texto]}.
+  function resolver(E, x, vsOriginales) {
+    if (!depende(E, x)) {
+      if (vsOriginales && vsOriginales.size && !vsOriginales.has(x)) throw fallo(`la ecuación no tiene la variable «${x}»`, `sus variables son ${[...vsOriginales].sort().map(v => '«' + v + '»').join(', ')}`);
+      if (esCeroSimbolico(E)) throw fallo(`la ecuación no depende de «${x}» y se cumple siempre`, 'es una identidad: cualquier valor sirve');
+      return { exactas: [], numericas: [] };
+    }
+    const j = intentar(() => juntar(E)) || { num: E, den: UNO };
+    const P = j.num, D = j.den;
+    let r = resolverPolinomio(P, x) || resolverPorAtomo(P, x) || resolverAislando(P, x) || resolverNumerico(E, x);
+    if (!r) throw fallo(`no sé despejar «${x}» de esta ecuación de forma exacta`, 'si solo tiene esa variable, prueba con valores numéricos o con «raiz» numérico de NEÑ');
+    // Fuera las que anulan el denominador: (x^2 − 1)/(x − 1) = 0 no tiene x = 1.
+    if (!esUno(D)) r.exactas = r.exactas.filter(s => { const v = intentar(() => simplificar(sustituirVars(D, new Map([[x, s]])))); return !v || !esCero(v); });
+    // Sin repetidas y ordenadas por valor (las complejas al final).
+    const vistas = new Set();
+    r.exactas = r.exactas.map(s => simplificar(s)).filter(s => { const k = clave(s); if (vistas.has(k)) return false; vistas.add(k); return true; });
+    r.exactas.sort((a, b) => {
+      const [ra, ia] = valorComplejo(a), [rb, ib] = valorComplejo(b);
+      const ca = Math.abs(ia) > 1e-12 ? 1 : 0, cb = Math.abs(ib) > 1e-12 ? 1 : 0;
+      if (ca !== cb) return ca - cb;
+      if (isNaN(ra) || isNaN(rb)) return cmpTxt(clave(a), clave(b));
+      return ra - rb || ia - ib;
+    });
+    return r;
+  }
+  function resolverPolinomio(P, x) {
+    const cs = comoPolinomio(P, x);
+    if (!cs || cs.length < 2) return null;
+    const q = polyQ(cs);
+    if (q) return resolverPolyQ(q, x);
+    if (cs.length === 2) return { exactas: [neg(div(cs[0], cs[1]))], numericas: [] };
+    if (cs.length === 3) return { exactas: cuadratica(cs[2], cs[1], cs[0]), numericas: [] };
+    return null;
+  }
+  function cuadratica(a, b, c) {
+    if (esCero(b)) {
+      const r = mkPow(neg(div(c, a)), MEDIO);
+      return [r, neg(r)];
+    }
+    const disc = simplificar(resta(mkPow(b, DOS), mkMul([num(4), a, c])));
+    const rd = mkPow(disc, MEDIO);
+    const den = mkMul([DOS, a]);
+    if (esCero(disc)) return [div(neg(b), den)];
+    return [div(mkAdd([neg(b), neg(rd)]), den), div(mkAdd([neg(b), rd]), den)];
+  }
+  function resolverPolyQ(q, x) {
+    const { raices, resto } = raicesRacionales(q);
+    const exactas = raices.map(r => N(r.r));
+    const numericas = [];
+    const g = resto.length - 1;
+    if (g === 1) exactas.push(N(rDiv(rNeg(resto[0]), resto[1])));
+    else if (g === 2) exactas.push(...cuadratica(N(resto[2]), N(resto[1]), N(resto[0])));
+    else if (g > 2 && resto.slice(1, g).every(rCero)) {
+      // x^n = c: la raíz real exacta y, para n = 3 y n = 4, también las
+      // complejas exactas; para n mayor, las complejas van aproximadas.
+      const c = rDiv(rNeg(resto[0]), resto[g]);
+      const r = numPow(rAbs(c), R(1, g));
+      const raicesExactas = [];
+      if (g % 2 === 1) raicesExactas.push(c.n < 0n ? neg(r) : r);
+      else if (c.n > 0n) raicesExactas.push(r, neg(r));
+      if (g === 3) {
+        const real = c.n < 0n ? neg(r) : r;
+        const w = mkAdd([num(-1, 2), mkMul([MEDIO, numPow(R(3), R(1, 2)), I])]);
+        raicesExactas.push(simplificar(expandir(mkMul([real, w]))), simplificar(expandir(mkMul([real, conjugar(w)]))));
+      } else if (g === 4) {
+        if (c.n > 0n) raicesExactas.push(mkMul([r, I]), neg(mkMul([r, I])));
+        else { const w = mkMul([numPow(R(2), R(1, 2)), MEDIO]); for (const s1 of [1, -1]) for (const s2 of [1, -1]) raicesExactas.push(mkMul([r, mkAdd([mkMul([N(R(s1)), w]), mkMul([N(R(s2)), w, I])])])); }
+      } else {
+        for (const [re, im] of raicesNumericas(resto.map(rANum))) if (Math.abs(im) > 1e-9 * Math.max(1, Math.abs(re))) numericas.push({ re, im });
+      }
+      exactas.push(...raicesExactas);
+    } else if (g === 4 && rCero(resto[1]) && rCero(resto[3])) {
+      // bicuadrada: t = x^2
+      for (const t of cuadratica(N(resto[4]), N(resto[2]), N(resto[0]))) {
+        const r = mkPow(t, MEDIO);
+        exactas.push(r, neg(r));
+      }
+    } else if (g > 2) {
+      for (const [re, im] of raicesNumericas(resto.map(rANum))) {
+        if (Math.abs(im) < 1e-9 * Math.max(1, Math.abs(re))) numericas.push(re);
+        else numericas.push({ re, im });
+      }
+    }
+    return { exactas, numericas };
+  }
+  const conjugar = e => reconstruirConI(e);
+  function reconstruirConI(e) {
+    switch (e.t) {
+      case 'c': return e.n === 'i' ? neg(I) : e;
+      case '+': return mkAdd(e.a.map(reconstruirConI));
+      case '*': return mkMul(e.a.map(reconstruirConI));
+      case '^': return mkPow(reconstruirConI(e.b), reconstruirConI(e.e));
+      case 'f': return mkFn(e.f, reconstruirConI(e.a));
+      default: return e;
+    }
+  }
+  // Durand–Kerner: todas las raíces complejas a la vez, sin necesidad de
+  // buenos puntos de partida. Después un pulido de Newton con el polinomio
+  // original para recuperar los dígitos que se pierden al iterar en conjunto.
+  function raicesNumericas(c) {
+    const n = c.length - 1;
+    const a = c.map(v => v / c[n]);
+    const ev = (re, im) => {
+      let sr = 0, si = 0;
+      for (let k = n; k >= 0; k--) { const tr = sr * re - si * im + a[k], ti = sr * im + si * re; sr = tr; si = ti; }
+      return [sr, si];
+    };
+    const z = [];
+    // Puntos de partida en un círculo de radio la cota de Cauchy (todas las
+    // raíces están dentro), girado para no empezar simétrico respecto al eje
+    // real: con coeficientes reales, la simetría haría que nunca se separaran.
+    const radio = 1 + Math.max(...a.slice(0, n).map(Math.abs));
+    for (let k = 0; k < n; k++) z.push([radio * Math.cos(2 * Math.PI * k / n + 0.4), radio * Math.sin(2 * Math.PI * k / n + 0.4)]);
+    for (let it = 0; it < 2000; it++) {
+      let cambio = 0;
+      for (let i = 0; i < n; i++) {
+        let [nr, ni] = ev(z[i][0], z[i][1]);
+        let dr = 1, di = 0;
+        for (let j = 0; j < n; j++) if (j !== i) { const er = z[i][0] - z[j][0], ei = z[i][1] - z[j][1]; const tr = dr * er - di * ei; di = dr * ei + di * er; dr = tr; }
+        const m = dr * dr + di * di || 1e-300;
+        const qr = (nr * dr + ni * di) / m, qi = (ni * dr - nr * di) / m;
+        z[i][0] -= qr; z[i][1] -= qi;
+        cambio = Math.max(cambio, Math.hypot(qr, qi));
+      }
+      gastar(n * n);
+      if (cambio < 1e-15) break;
+    }
+    return z.map(([re, im]) => [Math.abs(re) < 1e-14 ? 0 : re, Math.abs(im) < 1e-14 ? 0 : im]).sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  }
+  // Polinomio en UNA subexpresión: seno(x)^2 − 1/4 = 0 es cuadrática en seno(x).
+  function resolverPorAtomo(P, x) {
+    // e^(2x) y e^x son la misma incógnita T = e^x: se reescribe e^(k·w) como
+    // T^k antes de buscar el átomo.
+    const exps = [];
+    const buscarExp = e => {
+      if (e.t === 'f' && e.f === 'exp' && depende(e.a, x)) { exps.push(e); return; }
+      if (e.t === '+' || e.t === '*') e.a.forEach(buscarExp);
+      else if (e.t === '^') { buscarExp(e.b); buscarExp(e.e); }
+      else if (e.t === 'f') buscarExp(e.a);
+    };
+    buscarExp(P);
+    if (exps.length > 1) {
+      const partes = exps.map(e => partirCoef(e.a));
+      const w = partes[0][1];
+      if (partes.every(([k, r]) => rEnt(k) && igual(r, w))) {
+        let g = 0n;
+        for (const [k] of partes) g = bMcd(g, k.n);
+        const base = mkFn('exp', mkMul([N(R(g)), w]));
+        const T = V('\u0000T');
+        let Q = P;
+        exps.forEach((e, i) => { Q = reemplazarSub(Q, clave(e), mkPow(T, N(R(partes[i][0].n / g)))); });
+        if (!depende(Q, x)) {
+          const sub = resolverPolinomio(Q, T.n);
+          if (sub) {
+            const exactas = [];
+            for (const v of sub.exactas) { const r = intentar(() => aislar(resta(base, v), x)); if (r) exactas.push(...r); }
+            return { exactas, numericas: [] };
+          }
+        }
+      }
+    }
+    const atomos = new Map();
+    const recoger = e => {
+      if (!depende(e, x)) return;
+      if (e.t === 'f' || (e.t === '^' && (depende(e.e, x) || !(e.e.t === 'n' && rEnt(e.e.q))))) { atomos.set(clave(e), e); return; }
+      if (e.t === '^') return recoger(e.b);
+      if (e.t === '+' || e.t === '*') for (const h of e.a) recoger(h);
+    };
+    recoger(P);
+    if (atomos.size !== 1) return null;
+    const A = [...atomos.values()][0];
+    const t = '\u0000u';
+    const Q = reemplazarSub(P, clave(A), V(t));
+    if (depende(Q, x)) return null;
+    const cs = comoPolinomio(Q, t);
+    if (!cs || cs.length < 3) return null;        // lineal en el átomo: mejor aislar
+    const sub = resolverPolinomio(Q, t);
+    if (!sub) return null;
+    const exactas = [];
+    for (const v of sub.exactas) {
+      const r = intentar(() => aislar(resta(A, v), x));
+      if (r) exactas.push(...r);
+    }
+    return { exactas, numericas: [] };
+  }
+  function cuentaApariciones(e, x) {
+    switch (e.t) {
+      case 'v': return e.n === x ? 1 : 0;
+      case '+': case '*': return e.a.reduce((s, h) => s + cuentaApariciones(h, x), 0);
+      case '^': return cuentaApariciones(e.b, x) + cuentaApariciones(e.e, x);
+      case 'f': return cuentaApariciones(e.a, x);
+      default: return 0;
+    }
+  }
+  function resolverAislando(P, x) {
+    if (cuentaApariciones(P, x) !== 1) return null;
+    const r = intentar(() => aislar(P, x));
+    if (!r) return null;
+    return { exactas: r, numericas: [] };
+  }
+  // lhs = 0 con x en un solo sitio: se deshacen las operaciones de fuera
+  // hacia dentro. Las funciones periódicas dan solo los valores principales
+  // (sin el «+ 2kπ»), y se descartan las que no cumplen la ecuación original
+  // cuando se puede comprobar con números.
+  function aislar(P, x) {
+    const sols = [];
+    const paso = (lhs, rhs, prof) => {
+      if (prof > 40) return;
+      if (lhs.t === 'v' && lhs.n === x) { sols.push(rhs); return; }
+      switch (lhs.t) {
+        case '+': {
+          const con = lhs.a.filter(t => depende(t, x)), sin = lhs.a.filter(t => !depende(t, x));
+          if (con.length !== 1) return;
+          return paso(con[0], resta(rhs, mkAdd(sin)), prof + 1);
+        }
+        case '*': {
+          const con = lhs.a.filter(t => depende(t, x)), sin = lhs.a.filter(t => !depende(t, x));
+          if (con.length !== 1) return;
+          return paso(con[0], div(rhs, mkMul(sin)), prof + 1);
+        }
+        case '^': {
+          if (depende(lhs.b, x) && !depende(lhs.e, x)) {
+            if (lhs.e.t === 'n' && rEnt(lhs.e.q) && lhs.e.q.n % 2n === 0n) {
+              const r = mkPow(rhs, mkPow(lhs.e, MENOS_UNO));
+              paso(lhs.b, r, prof + 1);
+              paso(lhs.b, neg(r), prof + 1);
+              return;
+            }
+            return paso(lhs.b, mkPow(rhs, mkPow(lhs.e, MENOS_UNO)), prof + 1);
+          }
+          if (!depende(lhs.b, x)) return paso(lhs.e, div(mkFn('ln', rhs), mkFn('ln', lhs.b)), prof + 1);
+          return;
+        }
+        case 'f': {
+          const u = lhs.a, sig = r => { const v = intentar(() => r()); if (v) paso(u, v, prof + 1); };
+          switch (lhs.f) {
+            case 'seno': sig(() => mkFn('arcoseno', rhs)); sig(() => resta(PI, mkFn('arcoseno', rhs))); return;
+            case 'coseno': sig(() => mkFn('arcocoseno', rhs)); sig(() => neg(mkFn('arcocoseno', rhs))); return;
+            case 'tangente': sig(() => mkFn('arcotangente', rhs)); return;
+            case 'arcoseno': sig(() => mkFn('seno', rhs)); return;
+            case 'arcocoseno': sig(() => mkFn('coseno', rhs)); return;
+            case 'arcotangente': sig(() => mkFn('tangente', rhs)); return;
+            case 'ln': sig(() => mkFn('exp', rhs)); return;
+            case 'exp': sig(() => mkFn('ln', rhs)); return;
+            case 'abs': sig(() => rhs); sig(() => neg(rhs)); return;
+          }
+        }
+      }
+    };
+    paso(P, CERO, 0);
+    // Comprobación numérica cuando no hay otras variables: elevar al cuadrado
+    // y el valor absoluto meten soluciones falsas.
+    const soloX = [...variablesDe(P)].every(v => v === x);
+    return sols.filter(s => {
+      if (!soloX || variablesDe(s).size) return true;
+      const v = valorDe(s);
+      if (!isFinite(v)) return tieneI(s);
+      const r = evaluar(P, new Map([[x, v]]));
+      return isFinite(r) && Math.abs(r) <= 1e-9 * (1 + Math.abs(v));
+    });
+  }
+  // Último recurso: raíces reales en [−100, 100] por cambio de signo y
+  // bisección. Solo encuentra las que cruzan el eje (no x^2 = 0 tocando) y se
+  // descartan los «cruces» que en realidad son polos (tangente, 1/x).
+  function resolverNumerico(E, x) {
+    const vs = variablesDe(E);
+    if (vs.size !== 1) return null;
+    const f = compilar(E, new Map([[x, 0]]));
+    const F = v => f([v]);
+    const raices = [];
+    const n = 20000, a = -100, b = 100, h = (b - a) / n;
+    let x0 = a, f0 = F(x0);
+    for (let k = 1; k <= n; k++) {
+      const x1 = a + k * h, f1 = F(x1);
+      if (f0 === 0) raices.push(x0);
+      else if (isFinite(f0) && isFinite(f1) && f0 * f1 < 0) {
+        let lo = x0, hi = x1, flo = f0;
+        for (let it = 0; it < 200; it++) {
+          const m = (lo + hi) / 2, fm = F(m);
+          if (fm === 0 || hi - lo < 1e-15 * Math.max(1, Math.abs(m))) { lo = hi = m; break; }
+          if (flo * fm < 0) hi = m; else { lo = m; flo = fm; }
+        }
+        const r = (lo + hi) / 2, fr = Math.abs(F(r));
+        if (fr < 1e-8 * (1 + Math.abs(f0) + Math.abs(f1))) raices.push(r);
+      }
+      x0 = x1; f0 = f1;
+    }
+    gastar(n);
+    const out = [];
+    for (const r of raices) if (!out.length || Math.abs(out[out.length - 1] - r) > 1e-9) out.push(r);
+    return { exactas: [], numericas: out };
+  }
+
+  // ── sistemas lineales ─────────────────────────────────────────────────────
+  // Eliminación de Gauss–Jordan con COEFICIENTES SIMBÓLICOS: cada operación
+  // pasa por «simplificar», que reconoce el cero. Con números es aritmética
+  // racional exacta; con letras (a·x + b·y = c) también funciona.
+  function sistema(ecs, incs) {
+    const n = incs.length;
+    const filas = ecs.map(E => {
+      const cs = [];
+      let resto = E;
+      for (const v of incs) {
+        const p = comoPolinomio(E, v);
+        if (!p || p.length > 2) throw fallo('el sistema no es lineal en las incógnitas', 'resolverSistemaFormulas solo resuelve sistemas lineales; para uno no lineal despeja una variable y sustituye');
+        const c = p.length === 2 ? p[1] : CERO;
+        if (incs.some(w => depende(c, w))) throw fallo('el sistema no es lineal: hay productos entre incógnitas');
+        cs.push(c);
+      }
+      for (const v of incs) resto = sustituirVars(resto, new Map([[v, CERO]]));
+      cs.push(simplificar(neg(resto)));
+      return cs;
+    });
+    let fila = 0;
+    const pivotes = [];
+    for (let c = 0; c < n && fila < filas.length; c++) {
+      let piv = -1;
+      for (let f = fila; f < filas.length; f++) { const v = simplificar(filas[f][c]); filas[f][c] = v; if (!esCero(v)) { piv = f; if (esNum(v)) break; } }
+      if (piv < 0) continue;
+      [filas[fila], filas[piv]] = [filas[piv], filas[fila]];
+      const p = filas[fila][c];
+      for (let k = c; k <= n; k++) filas[fila][k] = simplificar(div(filas[fila][k], p));
+      for (let f = 0; f < filas.length; f++) {
+        if (f === fila) continue;
+        const m = simplificar(filas[f][c]);
+        if (esCero(m)) continue;
+        for (let k = c; k <= n; k++) filas[f][k] = simplificar(resta(filas[f][k], mkMul([m, filas[fila][k]])));
+      }
+      pivotes.push(c);
+      fila++;
+    }
+    for (let f = fila; f < filas.length; f++)
+      if (!esCero(simplificar(filas[f][n]))) throw fallo('el sistema es incompatible: no tiene solución', 'hay ecuaciones que se contradicen');
+    if (pivotes.length < n) {
+      const libres = incs.filter((_, i) => !pivotes.includes(i));
+      throw fallo(`el sistema es indeterminado: tiene infinitas soluciones (${libres.map(v => '«' + v + '»').join(', ')} queda${libres.length > 1 ? 'n' : ''} libre${libres.length > 1 ? 's' : ''})`, 'faltan ecuaciones independientes');
+    }
+    const sol = new Map();
+    pivotes.forEach((c, f) => sol.set(incs[c], simplificar(filas[f][n])));
+    return sol;
+  }
+
+  // ── Taylor y límites ──────────────────────────────────────────────────────
+  function taylor(e, x, a, n) {
+    const X = V(x);
+    const terminos = [];
+    let d = e, fact = R1;
+    for (let k = 0; k <= n; k++) {
+      if (k > 0) { d = simplificar(derivar(d, x)); fact = rMul(fact, R(k)); }
+      let v;
+      try { v = simplificar(sustituirVars(d, new Map([[x, a]]))); }
+      catch (err) {
+        if (err instanceof ErrorFormula && err.tipo === 'indefinido') throw fallo(`la ${k === 0 ? 'función' : 'derivada ' + k} no está definida en ${x} = ${imprimir(a)}`, 'el desarrollo de Taylor necesita que la función sea derivable en ese punto');
+        throw err;
+      }
+      if (esCero(v)) continue;
+      const pot = esCero(a) ? mkPow(X, num(k)) : mkPow(resta(X, a), num(k));
+      terminos.push(mkMul([v, N(rDiv(R1, fact)), pot]));
+    }
+    return terminos;
+  }
+  // Une términos en orden de grado ascendente, como se escribe una serie.
+  function unirAscendente(ts, est) {
+    if (!ts.length) return '0';
+    let s = imprimir(ts[0], est);
+    for (let i = 1; i < ts.length; i++) {
+      const t = ts[i];
+      if (esNegativo(t)) s += ` ${(est || ESTILO_TEXTO).menos} ` + par(...pr(neg(t), est || ESTILO_TEXTO), 2);
+      else s += ' + ' + pr(t, est || ESTILO_TEXTO)[0];
+    }
+    return s;
+  }
+  // Límite por sustitución directa, simplificando la fracción y, si queda 0/0,
+  // L'Hôpital simbólico (hasta 10 veces). En el infinito solo para funciones
+  // racionales, comparando grados.
+  const INF = { t: 'inf', s: 1 }, MINF = { t: 'inf', s: -1 };
+  function limite(e, x, a) {
+    if (a.t === 'inf') return limiteInfinito(e, x, a.s);
+    const sub = expr => simplificar(sustituirVars(expr, new Map([[x, a]])));
+    const directo = intentarIndef(() => sub(e));
+    if (directo) return directo;
+    // «null» al sustituir es una división entre cero o un logaritmo de cero:
+    // un infinito, a efectos de decidir la forma indeterminada.
+    let { num: n, den: d } = intentar(() => juntar(e)) || partirFraccion(e);
+    // 0·∞ dentro del numerador: u·v con u → 0 y v → ∞ se reescribe v/(1/u),
+    // que es ∞/∞ y ya sirve para L'Hôpital (x·ln(x) = ln(x)/(1/x)).
+    if (n.t === '*') {
+      const malos = n.a.filter(f => !intentarIndef(() => sub(f)));
+      const buenos = n.a.filter(f => !malos.includes(f));
+      if (malos.length && buenos.some(f => esCero(sub(f)))) { n = mkMul(malos); d = mkMul([d, mkPow(mkMul(buenos), MENOS_UNO)]); }
+    }
+    for (let k = 0; k < 12; k++) {
+      const vn = intentarIndef(() => sub(n)), vd = intentarIndef(() => sub(d));
+      if (vn && vd && !esCero(vd)) return simplificar(div(vn, vd));
+      if (vn && !vd) return CERO;                                   // finito / ∞
+      if ((vn && !esCero(vn) && vd && esCero(vd)) || (!vn && vd)) return divergente(e, x, a);
+      // 0/0 o ∞/∞: L'Hôpital, y el cociente nuevo se vuelve a juntar para que
+      // se cancele lo que se pueda antes de la vuelta siguiente.
+      const r = simplificar(div(derivar(n, x), derivar(d, x)));
+      const v = intentarIndef(() => sub(r));
+      if (v) return v;
+      ({ num: n, den: d } = intentar(() => juntar(r)) || partirFraccion(r));
+    }
+    throw fallo('no sé calcular este límite de forma exacta (L\'Hôpital no lo resolvió en 12 pasos)', 'prueba acercándote con evaluarFormula');
+  }
+  function partirFraccion(e) {
+    const fs = e.t === '*' ? e.a : [e];
+    const arriba = [], abajo = [];
+    for (const f of fs) if (f.t === '^' && f.e.t === 'n' && f.e.q.n < 0n) abajo.push(mkPow(f.b, N(rNeg(f.e.q)))); else arriba.push(f);
+    return { num: mkMul(arriba), den: mkMul(abajo) };
+  }
+  function intentarIndef(fn) {
+    try { return fn(); }
+    catch (e) { if (e instanceof ErrorFormula && e.tipo === 'indefinido') return null; throw e; }
+  }
+  function divergente(e, x, a) {
+    const av = valorDe(a);
+    const f = compilar(e, new Map([[x, 0]]));
+    const h = 1e-7 * Math.max(1, Math.abs(av));
+    const izq = f([av - h]), der = f([av + h]);
+    if (!isFinite(av) || isNaN(izq) || isNaN(der)) throw fallo('no sé calcular este límite de forma exacta', 'prueba acercándote con evaluarFormula');
+    if (izq > 0 && der > 0) return INF;
+    if (izq < 0 && der < 0) return MINF;
+    throw fallo(`el límite no existe: por la izquierda tiende a ${izq > 0 ? '+' : '-'}infinito y por la derecha a ${der > 0 ? '+' : '-'}infinito`);
+  }
+  function limiteInfinito(e, x, s) {
+    const j = intentar(() => juntar(e));
+    const P = j && polyQDe(j.num, x), D = j && polyQDe(j.den, x);
+    if (!P || !D) throw fallo('en el infinito solo sé calcular límites de funciones racionales (cociente de polinomios)', 'prueba con evaluarFormula en valores grandes');
+    if (!P.length) return CERO;
+    const gp = P.length - 1, gd = D.length - 1;
+    if (gp < gd) return CERO;
+    const r = rDiv(P[gp], D[gd]);
+    if (gp === gd) return N(r);
+    const signo = (r.n > 0n ? 1 : -1) * (s < 0 && (gp - gd) % 2 === 1 ? -1 : 1);
+    return signo > 0 ? INF : MINF;
+  }
+
+  return {
+    ErrorFormula, R, N, V, deNumero, rANum, leer, leerExpr, leerEcuacion, exigirVariable,
+    variablesEscritas, imprimir, latex, ESTILO_BONITO, ESTILO_TEXTO, simplificar, expandir, factorizar, derivar, integrar,
+    resolver, sistema, evaluar, compilar, sustituirVars, variablesDe, depende, taylor, unirAscendente,
+    limite, INF, MINF, clave, igual, tieneI, valorDe, esCero, mkAdd, mkMul, resta, juntarExpr,
+    setGastar: g => { gastar = g; },
+  };
+})();
+
+// ============================================================================
+//  El instalador: traduce entre Ñ y el núcleo.
+// ============================================================================
+function instalarNenFormulas(vm, def) {
+  const K = nucleoNenFormulas;
+  const L = items => vm.nuevaLista(items);
+  const txt = (v, n, f) => vm.exigeTexto(v, n, f);
+  // Cada función pasa por aquí: el costo va al presupuesto de la VM y los
+  // errores del núcleo salen como errores de Ñ, con el nombre de quien falló.
+  const envolver = (nombre, fn) => a => {
+    K.setGastar(n => vm.cobrar(n));
+    try { return fn(a); }
+    catch (e) {
+      if (e instanceof K.ErrorFormula) vm.error(`«${nombre}»: ${e.message}`, e.sug);
+      if (typeof ErrorTiempoEjecucion !== 'undefined' && e instanceof ErrorTiempoEjecucion) throw e;
+      if (e instanceof RangeError) vm.error(`«${nombre}»: la fórmula es demasiado grande o está demasiado anidada`, 'pártela en trozos más pequeños');
+      vm.error(`«${nombre}»: fallo interno del resolucionador de fórmulas`, `es un error de NEÑ, no tuyo; avísalo con la fórmula que lo produjo (${e && e.message})`);
+    }
+  };
+  const d = (nombre, firma, fn, doc) => def(nombre, firma, envolver(nombre, fn), doc);
+  const variable = (v, n, f) => K.exigirVariable(txt(v, n, f));
+  const salida = e => K.imprimir(e);
+  // Un punto puede venir como número de Ñ o como texto de fórmula («pi/2»).
+  const punto = (v, n, f) => {
+    if (typeof v === 'number') return K.N(K.deNumero(v));
+    if (typeof v === 'string') {
+      const s = v.trim().toLowerCase();
+      if (s === 'infinito' || s === '+infinito' || s === '∞' || s === '+∞') return K.INF;
+      if (s === '-infinito' || s === '-∞' || s === '−infinito' || s === '−∞') return K.MINF;
+      return K.leerExpr(v);
+    }
+    vm.error(`«${f}»: el argumento ${n} debe ser un número o una fórmula en texto y es ${tipoDe(v)}`);
+  };
+  const listaTextos = (v, n, f) => {
+    const l = vm.exigeLista(v, n, f);
+    return l.items.map((x, i) => { if (typeof x !== 'string') vm.error(`«${f}»: el elemento ${i} de la lista ${n} debe ser texto`); return x; });
+  };
+  const valoresDe = (v, n, f) => {
+    if (!(v instanceof ObjDic)) vm.error(`«${f}»: el argumento ${n} debe ser un diccionario {"x": valor} y es ${tipoDe(v)}`);
+    return v.mapa;
+  };
+
+  d('simplificarFormula', 'texto -> texto', a => salida(K.simplificar(K.leerExpr(txt(a[0], 1, 'simplificarFormula')))),
+    'simplificarFormula("2x + 3x - x^2/x") → "4x" · fracciones exactas, términos semejantes, potencias de la misma base y fracciones algebraicas; se queda con la forma más corta');
+  d('expandirFormula', 'texto -> texto', a => salida(K.expandir(K.leerExpr(txt(a[0], 1, 'expandirFormula')))),
+    'expandirFormula("(x + 1)^2") → "x^2 + 2x + 1" · reparte productos y potencias enteras de sumas');
+  d('factorizarFormula', 'texto -> texto', a => salida(K.factorizar(K.leerExpr(txt(a[0], 1, 'factorizarFormula')))),
+    'factorizarFormula("x^2 - 5x + 6") → "(x - 3)*(x - 2)" · factor común y raíces racionales; lo que no se puede, queda expandido');
+  d('derivarFormula', '... -> texto', a => {
+    if (a.length < 2 || a.length > 3) vm.error('«derivarFormula» lleva 2 o 3 argumentos: (fórmula, "x") o (fórmula, "x", n)');
+    let e = K.leerExpr(txt(a[0], 1, 'derivarFormula'));
+    const x = variable(a[1], 2, 'derivarFormula');
+    const n = a.length > 2 ? vm.exigeEnt(a[2], 3, 'derivarFormula') : 1;
+    if (n < 0) vm.error('«derivarFormula»: el orden de la derivada no puede ser negativo');
+    for (let k = 0; k < n; k++) e = K.simplificar(K.derivar(e, x));
+    return salida(e);
+  }, 'derivarFormula("x^3 + seno(x)", "x") → "3x^2 + coseno(x)" · con un tercer argumento n, la derivada n-ésima; con otras letras, la parcial');
+  d('gradienteFormula', 'texto, lista<texto> -> lista<texto>', a => {
+    const e = K.leerExpr(txt(a[0], 1, 'gradienteFormula'));
+    return L(listaTextos(a[1], 2, 'gradienteFormula').map(v => salida(K.simplificar(K.derivar(e, K.exigirVariable(v))))));
+  }, 'gradienteFormula("x^2 y", ["x", "y"]) → ["2x*y", "x^2"] · las derivadas parciales, una por variable');
+  d('integrarFormula', '... -> texto', a => {
+    if (a.length !== 2 && a.length !== 4) vm.error('«integrarFormula» lleva 2 argumentos (fórmula, "x") o 4 (fórmula, "x", desde, hasta)');
+    const f = K.leerExpr(txt(a[0], 1, 'integrarFormula'));
+    const x = variable(a[1], 2, 'integrarFormula');
+    const F = K.integrar(K.simplificar(f), x) || K.integrar(f, x);
+    if (!F) vm.error(`«integrarFormula»: no sé integrar «${txt(a[0], 1, 'integrarFormula')}» de forma simbólica`,
+      'no toda función tiene primitiva elemental; para el valor de una integral definida usa «integrar» numérico de NEÑ');
+    if (a.length === 2) return salida(K.simplificar(F));
+    const lo = punto(a[2], 3, 'integrarFormula'), hi = punto(a[3], 4, 'integrarFormula');
+    if (lo.t === 'inf' || hi.t === 'inf') vm.error('«integrarFormula»: los límites tienen que ser finitos', 'una integral impropia se calcula con limiteFormula sobre la primitiva');
+    // Si el integrando no es finito en algún punto del intervalo, la regla de
+    // Barrow daría un número falso (∫ de −1 a 1 de 1/x no es 0).
+    const vlo = K.valorDe(lo), vhi = K.valorDe(hi);
+    if (K.variablesDe(f).size === 1 && isFinite(vlo) && isFinite(vhi)) {
+      const g = K.compilar(f, new Map([[x, 0]]));
+      for (let k = 0; k <= 2000; k++) {
+        const t = vlo + (vhi - vlo) * k / 2000;
+        if (!isFinite(g([t]))) vm.error(`«integrarFormula»: la función no es finita cerca de ${x} = ${t}, dentro del intervalo`, 'la integral es impropia; estúdiala con limiteFormula');
+      }
+    }
+    const val = (p) => K.simplificar(K.sustituirVars(F, new Map([[x, p]])));
+    return salida(K.simplificar(K.resta(val(hi), val(lo))));
+  }, 'integrarFormula("3x^2", "x") → "x^3" (sin la constante) · integrarFormula(f, "x", desde, hasta) da el valor exacto por la regla de Barrow');
+  // Las soluciones exactas salen como texto; las aproximadas, como número real
+  // (o como texto «a + b*i» con decimales si son complejas aproximadas).
+  const solucionesALista = r => {
+    const out = r.exactas.map(salida);
+    for (const v of r.numericas) if (typeof v === 'number') out.push(v);
+    for (const v of r.numericas) if (typeof v !== 'number') out.push(`${v.re} ${v.im < 0 ? '-' : '+'} ${Math.abs(v.im)}*i`);
+    return L(out);
+  };
+  d('resolverFormula', 'texto, texto -> lista', a => {
+    const src = txt(a[0], 1, 'resolverFormula');
+    return solucionesALista(K.resolver(K.leerEcuacion(src), variable(a[1], 2, 'resolverFormula'), K.variablesEscritas(src)));
+  }, 'resolverFormula("x^2 - 5x + 6 = 0", "x") → ["2", "3"] · exactas como texto (radicales y complejas incluidas); las solo numéricas, como real');
+  d('despejar', 'texto, texto -> texto', a => {
+    const src = txt(a[0], 1, 'despejar');
+    const y = variable(a[1], 2, 'despejar');
+    const r = K.resolver(K.leerEcuacion(src), y, K.variablesEscritas(src));
+    if (r.numericas.length || !r.exactas.length) vm.error(`«despejar»: no pude despejar «${y}» de forma exacta`, 'prueba con resolverFormula, que también da soluciones numéricas');
+    if (r.exactas.length === 1) return `${y} = ${salida(r.exactas[0])}`;
+    if (r.exactas.length === 2 && K.igual(K.simplificar(K.mkAdd(r.exactas)), K.N(K.R(0)))) {
+      const pos = r.exactas.find(s => !salida(s).startsWith('-')) || r.exactas[1];
+      return `${y} = ±${/^[A-Za-z0-9_]+(\(.*\))?$/.test(salida(pos)) ? salida(pos) : '(' + salida(pos) + ')'}`;
+    }
+    return r.exactas.map(s => `${y} = ${salida(s)}`).join('  o  ');
+  }, 'despejar("2y + x = 4", "y") → "y = -x/2 + 2" · si hay dos con signo opuesto escribe «±», si hay varias las une con «o»');
+  d('resolverSistemaFormulas', 'lista<texto>, lista<texto> -> dic<texto,texto>', a => {
+    const ecs = listaTextos(a[0], 1, 'resolverSistemaFormulas').map(K.leerEcuacion);
+    const incs = listaTextos(a[1], 2, 'resolverSistemaFormulas').map(K.exigirVariable);
+    if (!ecs.length) vm.error('«resolverSistemaFormulas»: la lista de ecuaciones está vacía');
+    if (!incs.length) vm.error('«resolverSistemaFormulas»: la lista de incógnitas está vacía');
+    const sol = K.sistema(ecs, incs);
+    const dic = vm.nuevoDic();
+    for (const v of incs) dic.mapa.set(v, salida(sol.get(v)));
+    return dic;
+  }, 'resolverSistemaFormulas(["x + y = 3", "x - y = 1"], ["x", "y"]) → {"x": "2", "y": "1"} · exacto, también con coeficientes con letras');
+  d('evaluarFormula', '... -> real', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«evaluarFormula» lleva la fórmula y, si tiene variables, un diccionario con sus valores');
+    const e = K.leerExpr(txt(a[0], 1, 'evaluarFormula'));
+    const vals = new Map();
+    if (a.length > 1) for (const [k, v] of valoresDe(a[1], 2, 'evaluarFormula')) vals.set(k, vm.exigeNum(v, 2, 'evaluarFormula'));
+    const r = K.evaluar(e, vals);
+    if (isNaN(r)) vm.error('«evaluarFormula»: el resultado no es un número real', 'suele ser la raíz de un negativo, el logaritmo de algo no positivo o un arcoseno fuera de [-1, 1]');
+    return r;
+  }, 'evaluarFormula("x^2 + y", {"x": 2, "y": 3}) → 7 · con números de coma flotante, no exacto');
+  d('sustituirEnFormula', 'texto, dic -> texto', a => {
+    const e = K.leerExpr(txt(a[0], 1, 'sustituirEnFormula'));
+    const m = new Map();
+    for (const [k, v] of valoresDe(a[1], 2, 'sustituirEnFormula')) {
+      if (typeof v === 'number') m.set(K.exigirVariable(k), K.N(K.deNumero(v)));
+      else if (typeof v === 'string') m.set(K.exigirVariable(k), K.leerExpr(v));
+      else vm.error(`«sustituirEnFormula»: el valor de «${k}» debe ser un número o una fórmula en texto`);
+    }
+    return salida(K.simplificar(K.sustituirVars(e, m)));
+  }, 'sustituirEnFormula("x^2 + 1", {"x": "y + 1"}) → "(y + 1)^2 + 1" · los valores pueden ser números (exactos) o fórmulas');
+  d('variablesDeFormula', 'texto -> lista<texto>', a => {
+    const r = K.leer(txt(a[0], 1, 'variablesDeFormula'));
+    const s = new Set(K.variablesDe(r.izq));
+    if (r.der) for (const v of K.variablesDe(r.der)) s.add(v);
+    return L([...s].sort());
+  }, 'variablesDeFormula("a x^2 + b x + c") → ["a", "b", "c", "x"] · ordenadas; pi, e e i son constantes y no cuentan');
+  d('formulaAFuncion', '... -> funcion', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«formulaAFuncion» lleva la fórmula y, opcionalmente, la lista de variables en orden');
+    const src = txt(a[0], 1, 'formulaAFuncion');
+    const e = K.leerExpr(src);
+    const vars = a.length > 1 ? listaTextos(a[1], 2, 'formulaAFuncion').map(K.exigirVariable) : [...K.variablesDe(e)].sort();
+    for (const v of K.variablesDe(e)) if (!vars.includes(v))
+      vm.error(`«formulaAFuncion»: la fórmula usa «${v}» y no está en la lista de variables`, `añádela: [${[...vars, v].map(x => '"' + x + '"').join(', ')}]`);
+    const indice = new Map(vars.map((v, i) => [v, i]));
+    const fn = K.compilar(e, indice);
+    const nombre = `formula(${vars.join(', ')})`;
+    return new ObjNativa(nombre, vars.length, args => {
+      const vs = new Array(args.length);
+      for (let i = 0; i < args.length; i++) vs[i] = vm.exigeNum(args[i], i + 1, nombre);
+      const r = fn(vs);
+      if (isNaN(r)) vm.error(`«${src}» no da un número real en (${vs.join(', ')})`, 'raíz de un negativo, logaritmo de algo no positivo o arcoseno fuera de [-1, 1]');
+      return r;
+    }, `${src} como función de ${vars.join(', ') || 'nada'}`);
+  }, 'formulaAFuncion("x^2 + 1", ["x"]) → una función de Ñ: g(3) da 10 y se puede pasar a mapear · sin lista, las variables en orden alfabético');
+  d('taylorFormula', 'texto, texto, cualquiera, entero -> texto', a => {
+    const e = K.leerExpr(txt(a[0], 1, 'taylorFormula'));
+    const x = variable(a[1], 2, 'taylorFormula');
+    const p = punto(a[2], 3, 'taylorFormula');
+    if (p.t === 'inf') vm.error('«taylorFormula»: el punto tiene que ser finito');
+    const n = vm.exigeEnt(a[3], 4, 'taylorFormula');
+    if (n < 0 || n > 60) vm.error('«taylorFormula»: el orden tiene que estar entre 0 y 60');
+    return K.unirAscendente(K.taylor(e, x, p, n));
+  }, 'taylorFormula("exp(x)", "x", 0, 3) → "1 + x + x^2/2 + x^3/6" · en potencias de (x - a), de menor a mayor grado');
+  d('limiteFormula', 'texto, texto, cualquiera -> texto', a => {
+    const e = K.leerExpr(txt(a[0], 1, 'limiteFormula'));
+    const x = variable(a[1], 2, 'limiteFormula');
+    const r = K.limite(e, x, punto(a[2], 3, 'limiteFormula'));
+    return r.t === 'inf' ? (r.s > 0 ? 'infinito' : '-infinito') : salida(r);
+  }, 'limiteFormula("seno(x)/x", "x", 0) → "1" · sustitución, simplificación y L\'Hôpital; el punto puede ser "infinito" para cocientes de polinomios');
+  d('formulaALatex', 'texto -> texto', a => {
+    const r = K.leer(txt(a[0], 1, 'formulaALatex'));
+    return K.latex(r.izq) + (r.der ? ' = ' + K.latex(r.der) : '');
+  }, 'formulaALatex("x^2/2 + raiz(x)") → "\\\\frac{x^{2}}{2} + \\\\sqrt{x}" · para pegar en un documento o en MathJax');
+  d('formulaATexto', 'texto -> texto', a => {
+    const r = K.leer(txt(a[0], 1, 'formulaATexto'));
+    return K.imprimir(r.izq, K.ESTILO_BONITO) + (r.der ? ' = ' + K.imprimir(r.der, K.ESTILO_BONITO) : '');
+  }, 'formulaATexto("3x^2 + raiz(2)*pi") → "3x² + √2·π" · para leer: superíndices, √, π, |x|, · y «−»; también se puede volver a leer');
+}
+
+
+// ============================================================================
+//  Ñ v4 — NEÑ: tensores, álgebra lineal avanzada y Fourier
+//  Parte 17.
+//
+//  Se importa con:  usar "nen"     (o  usar einstein, fourier2D de "nen")
+//
+//  AMPLÍA, NO REPITE. «numerico» ya tiene los arreglos, LU, QR, Cholesky, SVD,
+//  los valores propios simétricos, «fourier» en una dimensión y la convolución.
+//  Lo de aquí es lo que faltaba encima: operar sobre tensores enteros (por eje,
+//  con Einstein, contrayendo), el caso GENERAL de los valores propios, las
+//  funciones de matrices (exponencial, raíz, logaritmo) y Fourier en dos
+//  dimensiones y para señales. Cuando algo ya existe en «numerico» se LLAMA a
+//  la nativa de allí (ver «deNumerico»), no se copia: una SVD escrita dos veces
+//  son dos SVD que algún día dirán cosas distintas.
+//
+//  LOS NÚCLEOS. Lo que pesa —elemento a elemento, reducciones, el producto de
+//  matrices, las etapas de la FFT, la convolución 2D— se escribe como un núcleo
+//  de C1EÑ: un cuerpo en C que corre una vez por índice «i» y un respaldo en
+//  JavaScript que hace EXACTAMENTE las mismas cuentas en el mismo orden. Las
+//  tablas de senos y cosenos de la FFT se calculan en JavaScript y se le pasan
+//  al núcleo, de modo que la FFT en GPU no usa ni una función trascendente y da
+//  el mismo número, bit a bit, que en CPU. Los únicos núcleos que pueden
+//  diferir en la última cifra son los que llaman a sin, exp, log, pow… porque
+//  cada biblioteca matemática las redondea a su manera (ver NEN_T_ULP).
+//
+//  El umbral: por debajo de NEN_T_UMBRAL números se corre el respaldo de
+//  JavaScript directamente —mandar 100 números a la GPU cuesta más que
+//  sumarlos—; por encima se pasa por «vm.c1en.kernel» si C1EÑ está instalado.
+//  Como el respaldo y el núcleo son la misma cuenta, el resultado no depende
+//  del camino.
+// ============================================================================
+
+// A partir de cuántos números (o de cuánto trabajo) un núcleo se manda a C1EÑ.
+// 2¹⁵: con menos, copiar a la GPU y volver tarda más que hacerlo aquí.
+const NEN_T_UMBRAL = 1 << 15;
+// Cada trozo de una reducción larga. La suma por trozos fija el ORDEN de las
+// sumas según el largo y no según el dispositivo (así GPU y CPU coinciden), y
+// de paso suma con menos error que de un tirón: 4096 números de cada vez.
+const NEN_T_TROZO = 4096;
+
+// Los núcleos que usan funciones de la biblioteca matemática de C. Ahí la GPU,
+// glibc y V8 pueden diferir en el último bit; el arnés de pruebas los compara
+// con tolerancia de unos pocos ulp y todos los demás bit a bit.
+const NEN_T_ULP = new Set(['nen_seno', 'nen_coseno', 'nen_tangente', 'nen_arcotangente', 'nen_angulo',
+  'nen_senoh', 'nen_cosenoh', 'nen_tangenteh', 'nen_exp', 'nen_log', 'nen_potencia', 'nen_sigmoide',
+  'nen_softmax']);
+
+// ── los núcleos ─────────────────────────────────────────────────────────────
+// Un núcleo de una entrada y una salida, elemento a elemento. El cuerpo en C y
+// la función de JavaScript son la misma expresión escrita dos veces.
+function nenUnario(nombre, cuerpo, f) {
+  return {
+    nombre,
+    params: [['n', 'i64'], ['x', 'f64*'], ['y', 'f64*']],
+    cuerpo,
+    js: (n, x, y) => { for (let i = 0; i < n; i++) y[i] = f(x[i]); },
+  };
+}
+// El seno hiperbólico, sin «sinh» de C (la interfaz común no la garantiza):
+// cerca de 0, (eˣ − e⁻ˣ)/2 resta dos números casi iguales y pierde todas las
+// cifras, así que ahí va la serie de Taylor hasta x¹³ (el término siguiente
+// pesa 10⁻²¹ con |x| < 0.25); lejos de 0, la fórmula con la exponencial.
+const NEN_T_SENOH_C =
+  'double v = x[i]; double a = fabs(v); double r; ' +
+  'if (a < 0.25) { double v2 = v * v; r = v * (1.0 + v2 / 6.0 * (1.0 + v2 / 20.0 * (1.0 + v2 / 42.0 * (1.0 + v2 / 72.0 * (1.0 + v2 / 110.0 * (1.0 + v2 / 156.0)))))); } ' +
+  'else { double e = exp(a); r = 0.5 * (e - 1.0 / e); if (v < 0.0) r = -r; } y[i] = r;';
+function nenSenoh(v) {
+  const a = Math.abs(v);
+  let r;
+  if (a < 0.25) { const v2 = v * v; r = v * (1.0 + v2 / 6.0 * (1.0 + v2 / 20.0 * (1.0 + v2 / 42.0 * (1.0 + v2 / 72.0 * (1.0 + v2 / 110.0 * (1.0 + v2 / 156.0)))))); }
+  else { const e = Math.exp(a); r = 0.5 * (e - 1.0 / e); if (v < 0.0) r = -r; }
+  return r;
+}
+// La tangente hiperbólica: con |x| grande, (1 − e^{−2|x|})/(1 + e^{−2|x|}) no
+// se desborda nunca (e^{−2|x|} va a 0 y queda ±1); cerca de 0, seno entre
+// coseno con la serie de arriba.
+const NEN_T_TANH_C =
+  'double v = x[i]; double a = fabs(v); double r; ' +
+  'if (a < 0.25) { double a2 = a * a; double s = a * (1.0 + a2 / 6.0 * (1.0 + a2 / 20.0 * (1.0 + a2 / 42.0 * (1.0 + a2 / 72.0 * (1.0 + a2 / 110.0 * (1.0 + a2 / 156.0)))))); r = s / sqrt(1.0 + s * s); } ' +
+  'else { double t = exp(-2.0 * a); r = (1.0 - t) / (1.0 + t); } ' +
+  'if (v < 0.0) r = -r; y[i] = r;';
+function nenTanh(v) {
+  const a = Math.abs(v);
+  let r;
+  if (a < 0.25) { const a2 = a * a; const s = a * (1.0 + a2 / 6.0 * (1.0 + a2 / 20.0 * (1.0 + a2 / 42.0 * (1.0 + a2 / 72.0 * (1.0 + a2 / 110.0 * (1.0 + a2 / 156.0)))))); r = s / Math.sqrt(1.0 + s * s); }
+  else { const t = Math.exp(-2.0 * a); r = (1.0 - t) / (1.0 + t); }
+  if (v < 0.0) r = -r;
+  return r;
+}
+
+// Las reducciones por trozos. Cada hilo «i» reduce un trozo de una fila:
+// fila = i / nb, trozo = i % nb, y el trozo va de t·B a min(t·B + B, K). Con
+// nb = 1 y B = K es la reducción de toda la fila de una vez.
+function nenReduccion(nombre, inicio, paso, pasoJs, conMu) {
+  const params = [['n', 'i64'], ['K', 'i64'], ['B', 'i64'], ['nb', 'i64'], ['x', 'f64*']];
+  if (conMu) params.push(['mu', 'f64*']);
+  params.push(['y', 'f64*']);
+  const cab = 'long long f = i / nb; long long t = i % nb; long long ini = t * B; long long fin = ini + B; ' +
+    'if (fin > K) fin = K; ';
+  const cuerpo = cab + `double s = ${inicio}; ` +
+    `for (long long k = ${inicio === 'x[f * K + ini]' ? 'ini + 1' : 'ini'}; k < fin; k++) { double v = x[f * K + k]; ${paso} } y[i] = s;`;
+  const desdeElPrimero = inicio === 'x[f * K + ini]';
+  const js = conMu
+    ? (n, K, B, nb, x, mu, y) => {
+      for (let i = 0; i < n; i++) {
+        const f = Math.floor(i / nb), t = i % nb, ini = t * B;
+        let fin = ini + B; if (fin > K) fin = K;
+        let s = 0.0;
+        for (let k = ini; k < fin; k++) s = pasoJs(s, x[f * K + k], mu[f]);
+        y[i] = s;
+      }
+    }
+    : (n, K, B, nb, x, y) => {
+      for (let i = 0; i < n; i++) {
+        const f = Math.floor(i / nb), t = i % nb, ini = t * B;
+        let fin = ini + B; if (fin > K) fin = K;
+        let s = desdeElPrimero ? x[f * K + ini] : +inicio;
+        for (let k = desdeElPrimero ? ini + 1 : ini; k < fin; k++) s = pasoJs(s, x[f * K + k]);
+        y[i] = s;
+      }
+    };
+  return { nombre, params, cuerpo, js };
+}
+
+const NEN_T_NUCLEOS = {};
+for (const k of [
+  nenUnario('nen_seno', 'y[i] = sin(x[i]);', Math.sin),
+  nenUnario('nen_coseno', 'y[i] = cos(x[i]);', Math.cos),
+  nenUnario('nen_tangente', 'y[i] = tan(x[i]);', Math.tan),
+  // atan2(x, 1) y no «atan»: es la que está en la lista común de C1EÑ.
+  nenUnario('nen_arcotangente', 'y[i] = atan2(x[i], 1.0);', v => Math.atan2(v, 1.0)),
+  nenUnario('nen_senoh', NEN_T_SENOH_C, nenSenoh),
+  nenUnario('nen_cosenoh', 'double e = exp(fabs(x[i])); y[i] = 0.5 * (e + 1.0 / e);',
+    v => { const e = Math.exp(Math.abs(v)); return 0.5 * (e + 1.0 / e); }),
+  nenUnario('nen_tangenteh', NEN_T_TANH_C, nenTanh),
+  nenUnario('nen_exp', 'y[i] = exp(x[i]);', Math.exp),
+  nenUnario('nen_log', 'y[i] = log(x[i]);', Math.log),
+  nenUnario('nen_raiz', 'y[i] = sqrt(x[i]);', Math.sqrt),
+  nenUnario('nen_absoluto', 'y[i] = fabs(x[i]);', Math.abs),
+  // El signo deja pasar el cero con su signo y el NaN: v > 0 y v < 0 son
+  // falsos para los dos, y entonces se devuelve v tal cual.
+  nenUnario('nen_signo', 'double v = x[i]; y[i] = v > 0.0 ? 1.0 : (v < 0.0 ? -1.0 : v);',
+    v => (v > 0.0 ? 1.0 : (v < 0.0 ? -1.0 : v))),
+  nenUnario('nen_piso', 'y[i] = floor(x[i]);', Math.floor),
+  nenUnario('nen_techo', 'y[i] = ceil(x[i]);', Math.ceil),
+  // La sigmoide por dos caminos según el signo: 1/(1+e⁻ˣ) con x muy negativo
+  // calcula e^{+grande}, que se desborda; eˣ/(1+eˣ) ahí no.
+  nenUnario('nen_sigmoide', 'double v = x[i]; if (v >= 0.0) { y[i] = 1.0 / (1.0 + exp(-v)); } else { double e = exp(v); y[i] = e / (1.0 + e); }',
+    v => { if (v >= 0.0) return 1.0 / (1.0 + Math.exp(-v)); const e = Math.exp(v); return e / (1.0 + e); }),
+  // ReLU que conserva el NaN: un hueco sigue siendo un hueco.
+  nenUnario('nen_relu', 'double v = x[i]; y[i] = v > 0.0 ? v : (v == v ? 0.0 : v);',
+    v => (v > 0.0 ? v : (v === v ? 0.0 : v))),
+  {
+    // Redondeo «a la mitad hacia arriba», el mismo de Math.round: floor más
+    // mirar el resto. «floor(v + 0.5)» falla con 0.49999999999999994, que al
+    // sumarle 0.5 ya redondea a 1. v − floor(v) es exacto, así que esto no.
+    nombre: 'nen_redondear',
+    params: [['n', 'i64'], ['f', 'f64'], ['x', 'f64*'], ['y', 'f64*']],
+    cuerpo: 'double v = x[i] * f; double r = floor(v); if (v - r >= 0.5) r = r + 1.0; y[i] = r / f;',
+    js: (n, f, x, y) => { for (let i = 0; i < n; i++) { const v = x[i] * f; let r = Math.floor(v); if (v - r >= 0.5) r = r + 1.0; y[i] = r / f; } },
+  },
+  {
+    nombre: 'nen_potencia',
+    params: [['n', 'i64'], ['x', 'f64*'], ['p', 'f64*'], ['y', 'f64*']],
+    cuerpo: 'y[i] = pow(x[i], p[i]);',
+    js: (n, x, p, y) => { for (let i = 0; i < n; i++) y[i] = Math.pow(x[i], p[i]); },
+  },
+  {
+    nombre: 'nen_angulo',
+    params: [['n', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['y', 'f64*']],
+    cuerpo: 'y[i] = atan2(a[i], b[i]);',
+    js: (n, a, b, y) => { for (let i = 0; i < n; i++) y[i] = Math.atan2(a[i], b[i]); },
+  },
+  {
+    // Softmax de una fila por hilo: el máximo primero, para que exp no se
+    // desborde (exp(1000) es infinito y exp(1000 − 1000) es 1), y la suma en
+    // orden fijo.
+    nombre: 'nen_softmax',
+    params: [['n', 'i64'], ['K', 'i64'], ['x', 'f64*'], ['y', 'f64*']],
+    cuerpo: 'long long o = i * K; double m = x[o]; for (long long k = 1; k < K; k++) { if (x[o + k] > m) m = x[o + k]; } ' +
+      'double s = 0.0; for (long long k = 0; k < K; k++) { double e = exp(x[o + k] - m); y[o + k] = e; s += e; } ' +
+      'for (long long k = 0; k < K; k++) y[o + k] = y[o + k] / s;',
+    js: (n, K, x, y) => {
+      for (let i = 0; i < n; i++) {
+        const o = i * K;
+        let m = x[o];
+        for (let k = 1; k < K; k++) if (x[o + k] > m) m = x[o + k];
+        let s = 0.0;
+        for (let k = 0; k < K; k++) { const e = Math.exp(x[o + k] - m); y[o + k] = e; s += e; }
+        for (let k = 0; k < K; k++) y[o + k] = y[o + k] / s;
+      }
+    },
+  },
+  nenReduccion('nen_red_suma', '0.0', 's += v;', (s, v) => s + v),
+  nenReduccion('nen_red_producto', '1.0', 's *= v;', (s, v) => s * v),
+  // El máximo y el mínimo arrastran el NaN: si hay un hueco, el resultado lo
+  // es, como en «+». Esconderlo daría un máximo que no lo es.
+  nenReduccion('nen_red_maximo', 'x[f * K + ini]', 'if (v > s || v != v) s = v;', (s, v) => ((v > s || v !== v) ? v : s)),
+  nenReduccion('nen_red_minimo', 'x[f * K + ini]', 'if (v < s || v != v) s = v;', (s, v) => ((v < s || v !== v) ? v : s)),
+  nenReduccion('nen_red_suma2', '0.0', 's += v * v;', (s, v) => s + v * v),
+  nenReduccion('nen_red_sumaabs', '0.0', 's += fabs(v);', (s, v) => s + Math.abs(v)),
+  nenReduccion('nen_red_maxabs', '0.0', 'double a = fabs(v); if (a > s || a != a) s = a;',
+    (s, v) => { const a = Math.abs(v); return (a > s || a !== a) ? a : s; }),
+  {
+    // La suma de las desviaciones al cuadrado respecto a la media de su fila.
+    // Es la segunda pasada de la varianza: restar la media antes de elevar es
+    // lo que evita la cancelación de la fórmula Σx² − n·m².
+    nombre: 'nen_red_desv2',
+    params: [['n', 'i64'], ['K', 'i64'], ['B', 'i64'], ['nb', 'i64'], ['x', 'f64*'], ['mu', 'f64*'], ['y', 'f64*']],
+    cuerpo: 'long long f = i / nb; long long t = i % nb; long long ini = t * B; long long fin = ini + B; ' +
+      'if (fin > K) fin = K; double m = mu[f]; double s = 0.0; ' +
+      'for (long long k = ini; k < fin; k++) { double d = x[f * K + k] - m; s += d * d; } y[i] = s;',
+    js: (n, K, B, nb, x, mu, y) => {
+      for (let i = 0; i < n; i++) {
+        const f = Math.floor(i / nb), t = i % nb, ini = t * B;
+        let fin = ini + B; if (fin > K) fin = K;
+        const m = mu[f];
+        let s = 0.0;
+        for (let k = ini; k < fin; k++) { const d = x[f * K + k] - m; s += d * d; }
+        y[i] = s;
+      }
+    },
+  },
+  {
+    // El producto de matrices, por lotes: un hilo por número de la salida,
+    // i = lote·m·p + fila·p + columna, y la suma en el orden de k de siempre.
+    // No es el algoritmo más rápido de GPU (sin memoria compartida), pero da
+    // EXACTAMENTE lo mismo que la CPU, que aquí pesa más.
+    nombre: 'nen_matmul',
+    params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
+    cuerpo: 'long long mp = m * p; long long l = i / mp; long long r = i % mp; long long f = r / p; long long col = r % p; ' +
+      'long long oa = l * m * K + f * K; long long ob = l * K * p + col; double s = 0.0; ' +
+      'for (long long k = 0; k < K; k++) s += a[oa + k] * b[ob + k * p]; c[i] = s;',
+    js: (n, m, K, p, a, b, c) => {
+      const mp = m * p;
+      for (let i = 0; i < n; i++) {
+        const l = Math.floor(i / mp), r = i % mp, f = Math.floor(r / p), col = r % p;
+        const oa = l * m * K + f * K, ob = l * K * p + col;
+        let s = 0.0;
+        for (let k = 0; k < K; k++) s += a[oa + k] * b[ob + k * p];
+        c[i] = s;
+      }
+    },
+  },
+  {
+    // FFT, pasada 1: la permutación por inversión de bits, fuera de sitio
+    // (en el sitio, dos hilos se pisarían al intercambiar). Por filas: la
+    // misma pasada transforma todas las filas de una matriz a la vez.
+    nombre: 'nen_fft_permutar',
+    params: [['n', 'i64'], ['N', 'i64'], ['rev', 'i32*'], ['x', 'f64*'], ['y', 'f64*']],
+    cuerpo: 'long long f = i / N; long long j = i % N; long long o = f * 2 * N; long long d = o + 2 * (long long)rev[j]; ' +
+      'y[d] = x[o + 2 * j]; y[d + 1] = x[o + 2 * j + 1];',
+    js: (n, N, rev, x, y) => {
+      for (let i = 0; i < n; i++) {
+        const f = Math.floor(i / N), j = i % N, o = f * 2 * N, d = o + 2 * rev[j];
+        y[d] = x[o + 2 * j]; y[d + 1] = x[o + 2 * j + 1];
+      }
+    },
+  },
+  {
+    // FFT, pasadas 2…log₂(N)+1: una etapa de mariposas de Cooley-Tukey. Un
+    // hilo por mariposa (N/2 por fila). Las raíces de la unidad llegan en una
+    // tabla calculada en JavaScript con coseno y seno de verdad —la misma que
+    // usa «fourier» de numerico—, y «conj» vale +1 o −1 (la directa o la
+    // inversa): multiplicar por ±1 es exacto, así que no hay trascendentes en
+    // la GPU y el resultado es el de la CPU bit a bit.
+    nombre: 'nen_fft_etapa',
+    params: [['n', 'i64'], ['N', 'i64'], ['largo', 'i64'], ['conj', 'f64'], ['twr', 'f64*'], ['twi', 'f64*'], ['d', 'f64*']],
+    cuerpo: 'long long h = N / 2; long long f = i / h; long long j = i % h; long long mitad = largo / 2; ' +
+      'long long g = j / mitad; long long k = j % mitad; long long o = f * 2 * N; ' +
+      'long long p = g * largo + k; long long q = p + mitad; long long w = k * (N / largo); ' +
+      'double wr = twr[w]; double wi = conj * twi[w]; double qr = d[o + 2 * q]; double qi = d[o + 2 * q + 1]; ' +
+      'double vr = qr * wr - qi * wi; double vi = qr * wi + qi * wr; double ur = d[o + 2 * p]; double ui = d[o + 2 * p + 1]; ' +
+      'd[o + 2 * p] = ur + vr; d[o + 2 * p + 1] = ui + vi; d[o + 2 * q] = ur - vr; d[o + 2 * q + 1] = ui - vi;',
+    js: (n, N, largo, conj, twr, twi, d) => {
+      const h = N / 2, mitad = largo / 2, salto = N / largo;
+      for (let i = 0; i < n; i++) {
+        const f = Math.floor(i / h), j = i % h, g = Math.floor(j / mitad), k = j % mitad, o = f * 2 * N;
+        const p = g * largo + k, q = p + mitad, w = k * salto;
+        const wr = twr[w], wi = conj * twi[w];
+        const qr = d[o + 2 * q], qi = d[o + 2 * q + 1];
+        const vr = qr * wr - qi * wi, vi = qr * wi + qi * wr;
+        const ur = d[o + 2 * p], ui = d[o + 2 * p + 1];
+        d[o + 2 * p] = ur + vr; d[o + 2 * p + 1] = ui + vi;
+        d[o + 2 * q] = ur - vr; d[o + 2 * q + 1] = ui - vi;
+      }
+    },
+  },
+  {
+    // Multiplicar cada fila compleja por la misma fila «b» (Bluestein, filtros).
+    nombre: 'nen_cmul_filas',
+    params: [['n', 'i64'], ['N', 'i64'], ['a', 'f64*'], ['b', 'f64*']],
+    cuerpo: 'long long j = i % N; double ar = a[2 * i]; double ai = a[2 * i + 1]; double br = b[2 * j]; double bi = b[2 * j + 1]; ' +
+      'a[2 * i] = ar * br - ai * bi; a[2 * i + 1] = ar * bi + ai * br;',
+    js: (n, N, a, b) => {
+      for (let i = 0; i < n; i++) {
+        const j = i % N, ar = a[2 * i], ai = a[2 * i + 1], br = b[2 * j], bi = b[2 * j + 1];
+        a[2 * i] = ar * br - ai * bi; a[2 * i + 1] = ar * bi + ai * br;
+      }
+    },
+  },
+  {
+    nombre: 'nen_dividir',
+    params: [['n', 'i64'], ['s', 'f64'], ['d', 'f64*']],
+    cuerpo: 'd[i] = d[i] / s;',
+    js: (n, s, d) => { for (let i = 0; i < n; i++) d[i] = d[i] / s; },
+  },
+  {
+    // Convolución 2D directa, un hilo por número de la salida. «oM, oN» es
+    // dónde empieza la salida pedida dentro de la convolución completa: así
+    // los tres modos («completa», «misma», «valida») son el mismo núcleo.
+    nombre: 'nen_conv2d',
+    params: [['n', 'i64'], ['Ma', 'i64'], ['Na', 'i64'], ['Mb', 'i64'], ['Nb', 'i64'], ['No', 'i64'], ['oM', 'i64'], ['oN', 'i64'],
+      ['a', 'f64*'], ['b', 'f64*'], ['y', 'f64*']],
+    cuerpo: 'long long fi = i / No + oM; long long fj = i % No + oN; double s = 0.0; ' +
+      'for (long long p = 0; p < Mb; p++) { long long ai = fi - p; if (ai < 0 || ai >= Ma) continue; ' +
+      'for (long long q = 0; q < Nb; q++) { long long aj = fj - q; if (aj < 0 || aj >= Na) continue; ' +
+      's += a[ai * Na + aj] * b[p * Nb + q]; } } y[i] = s;',
+    js: (n, Ma, Na, Mb, Nb, No, oM, oN, a, b, y) => {
+      for (let i = 0; i < n; i++) {
+        const fi = Math.floor(i / No) + oM, fj = i % No + oN;
+        let s = 0.0;
+        for (let p = 0; p < Mb; p++) {
+          const ai = fi - p;
+          if (ai < 0 || ai >= Ma) continue;
+          for (let q = 0; q < Nb; q++) {
+            const aj = fj - q;
+            if (aj < 0 || aj >= Na) continue;
+            s += a[ai * Na + aj] * b[p * Nb + q];
+          }
+        }
+        y[i] = s;
+      }
+    },
+  },
+]) NEN_T_NUCLEOS[k.nombre] = k;
+
+// ============================================================================
+function instalarNenTensores(vm, def) {
+  const L = items => vm.nuevaLista(items);
+  const D = () => vm.nuevoDic();
+  const num = (v, n, f) => vm.exigeNum(v, n, f);
+  const ent = (v, n, f) => vm.exigeEnt(v, n, f);
+  const EPS = 2.220446049250313e-16;
+
+  // ── lanzar un núcleo ──────────────────────────────────────────────────────
+  // Grande y con C1EÑ: por el motor (que decide jit, nativo o GPU). Si no, el
+  // respaldo directamente. Los Float64Array internos se envuelven en un
+  // ObjArreglo sin registrar: son temporales y nadie más los ve.
+  const cacheNucleos = new Map();
+  const envolver = a => (a instanceof Float64Array ? new ObjArreglo(a, [a.length], 'real')
+    : a instanceof Int32Array ? new ObjArreglo(a, [a.length], 'entero') : a);
+  function correr(nombre, trabajo, ...args) {
+    const spec = NEN_T_NUCLEOS[nombre];
+    vm.cobrar(trabajo);
+    if (trabajo >= NEN_T_UMBRAL && vm.c1en && typeof vm.c1en.kernel === 'function') {
+      let k = cacheNucleos.get(nombre);
+      if (!k) { k = vm.c1en.kernel(spec); cacheNucleos.set(nombre, k); }
+      return k(...args.map(envolver));
+    }
+    return spec.js(...args);
+  }
+
+  // ── llamar a lo que ya existe en «numerico» ───────────────────────────────
+  function deNumerico(nombre, args) {
+    const g = vm.globals.get(nombreGlobalModulo(claveEdsl('numerico'), nombre));
+    if (!g) vm.error(`NEÑ necesita «${nombre}» de numerico y no está instalado`);
+    return g.fn(args, vm);
+  }
+
+  // ── entrar: arreglos, listas y números ────────────────────────────────────
+  function aArr(v, n, f) {
+    if (v instanceof ObjArreglo) return v;
+    if (v instanceof ObjLista) return deNumerico('arreglo', [v]);
+    return vm.error(`«${f}»: el argumento ${n} debe ser un arreglo (o una lista de números) y es ${tipoDe(v)}`);
+  }
+  const real = (v, n, f) => { const x = aArr(v, n, f); vm.nadaDeComplejos(x, f); return x; };
+  const esC = x => x instanceof ObjArreglo && x.tipo === 'complejo';
+  const iguales = (p, q) => p.length === q.length && p.every((v, i) => v === q[i]);
+
+  // Los números de un arreglo, en orden lógico y en un Float64Array seguido
+  // (de 2n si es complejo). Recorre por zancadas con un odómetro y no con el
+  // generador «posiciones», que es diez veces más lento en arreglos grandes.
+  function planoDe(x) {
+    const n = x.tamano, w = x.tipo === 'complejo' ? 2 : 1, out = new Float64Array(n * w);
+    vm.cobrar(n);
+    if (n === 0) return out;
+    if (x.seguida) { out.set(x.datos.subarray(0, n * w)); return out; }
+    const nd = x.forma.length, ix = new Array(nd).fill(0), f = x.forma, z = x.zancadas, d = x.datos;
+    let p = x.desp;
+    for (let k = 0; k < n; k++) {
+      if (w === 1) out[k] = d[p]; else { out[2 * k] = d[2 * p]; out[2 * k + 1] = d[2 * p + 1]; }
+      for (let q = nd - 1; q >= 0; q--) {
+        if (++ix[q] < f[q]) { p += z[q]; break; }
+        p -= (f[q] - 1) * z[q]; ix[q] = 0;
+      }
+    }
+    return out;
+  }
+  // Una vista temporal (sin registrar) con otra forma y otras zancadas.
+  const vistaT = (x, forma, zancadas, desp) => new ObjArreglo(x.datos, forma, x.tipo, zancadas, desp, x.base || x);
+  const permutadaT = (x, perm) => vistaT(x, perm.map(e => x.forma[e]), perm.map(e => x.zancadas[e]), x.desp);
+  const difundidaT = (x, f) => vistaT(x, f.slice(), zancadasDifundidas(x, f), x.desp);
+  // Y de vuelta a arreglos de Ñ.
+  const deReales = (forma, d) => { const o = vm.arrNuevo(forma, 'real'); o.datos.set(d.subarray(0, o.tamano)); return o; };
+  const deComplejos = (forma, d) => vm.arrDesdePlanosC(d, forma);
+  const mat2 = (v, n, f) => {
+    const x = real(v, n, f);
+    if (x.dimensiones !== 2) vm.error(`«${f}»: se esperaba una matriz (2 dimensiones) y llegó un arreglo de ${x.dimensiones}`,
+      x.dimensiones === 1 ? 'pásalo a matriz con expandir(v, 0) o expandir(v, 1)' : null);
+    return x;
+  };
+  const cuadrada = (v, n, f) => {
+    const x = mat2(v, n, f);
+    if (x.forma[0] !== x.forma[1]) vm.error(`«${f}» necesita una matriz cuadrada y llegó una de ${x.forma.join('×')}`);
+    return x;
+  };
+  const vector = (v, n, f) => {
+    const x = aArr(v, n, f);
+    if (x.dimensiones !== 1) vm.error(`«${f}»: el argumento ${n} debe ser un vector (1 dimensión) y tiene ${x.dimensiones}`,
+      'aplánalo con aplanarA o saca una fila con fila(a, i)');
+    return x;
+  };
+  const textoDe = (v, n, f) => vm.exigeTexto(v, n, f);
+  const listaEnteros = (v, n, f) => {
+    if (typeof v === 'number') return [Math.trunc(v)];
+    return vm.exigeLista(v, n, f).items.map((x, i) => {
+      if (typeof x !== 'number' || !Number.isInteger(x)) vm.error(`«${f}»: el elemento ${i} del argumento ${n} debe ser un entero y es ${repr(x, 1)}`);
+      return x;
+    });
+  };
+
+  // ── el producto de matrices, por el núcleo ────────────────────────────────
+  // (lotes × m × K) · (lotes × K × p) → (lotes × m × p), todo plano.
+  function mm(a, b, m, K, p, lotes) {
+    lotes = lotes || 1;
+    const c = new Float64Array(lotes * m * p);
+    correr('nen_matmul', lotes * m * K * p, lotes * m * p, m, K, p, a, b, c);
+    return c;
+  }
+  const identidadP = n => { const I = new Float64Array(n * n); for (let i = 0; i < n; i++) I[i * n + i] = 1; return I; };
+  const norma1 = (A, n) => { let mx = 0; for (let j = 0; j < n; j++) { let s = 0; for (let i = 0; i < n; i++) s += Math.abs(A[i * n + j]); if (s > mx) mx = s; } return mx; };
+  const normaF = A => { let s = 0; for (let i = 0; i < A.length; i++) s += A[i] * A[i]; return Math.sqrt(s); };
+  // Resolver A·X = B (B de n×m) con la LU de numerico, sin copiarla.
+  const resolverP = (A, B, n, m) => {
+    const r = deNumerico('resolverA', [deReales([n, n], A), deReales([n, m], B)]);
+    return r.datos;
+  };
+  // La inversa por la LU de numerico. Si sale singular, el error se dice en
+  // nombre de quien la pidió: «inversaA» no le suena a quien llamó a raizMatriz.
+  const inversaP = (A, n, quien) => {
+    try { return deNumerico('inversaA', [deReales([n, n], A)]).datos; }
+    catch (e) {
+      if (e instanceof ErrorTiempoEjecucion && !e.fatal && /singular/.test(e.message))
+        vm.error(`«${quien}»: por el camino salió una matriz singular`, 'la matriz tiene un valor propio en 0, o está demasiado mal condicionada');
+      throw e;
+    }
+  };
+
+  // ── Fourier por núcleos ───────────────────────────────────────────────────
+  // Las tablas: las mismas cuentas que «fourier» de numerico, para que una FFT
+  // de potencia de dos dé aquí exactamente lo mismo que allí.
+  const tablas = new Map();
+  function tablaDe(n) {
+    let t = tablas.get(n);
+    if (t) return t;
+    const mitad = n >> 1, re = new Float64Array(Math.max(1, mitad)), im = new Float64Array(Math.max(1, mitad));
+    for (let k = 0; k < mitad; k++) { const ang = (-2 * Math.PI * k) / n; re[k] = Math.cos(ang); im[k] = Math.sin(ang); }
+    const rev = new Int32Array(n);
+    const bits = Math.round(Math.log2(n));
+    for (let i = 0; i < n; i++) { let r = 0; for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b); rev[i] = r; }
+    t = { re, im, rev };
+    if (tablas.size > 16) tablas.clear();
+    tablas.set(n, t);
+    return t;
+  }
+  const potenciaDeDos = n => (n & (n - 1)) === 0;
+  // Transforma «filas» filas de largo n, guardadas seguidas y entrelazadas
+  // (re, im). Devuelve un arreglo NUEVO. signo −1 directa, +1 inversa (sin
+  // dividir entre n: lo hace quien llama).
+  function fftFilas(d, filas, n, signo) {
+    if (n === 1) return Float64Array.from(d);
+    if (potenciaDeDos(n)) {
+      const t = tablaDe(n), y = new Float64Array(filas * 2 * n);
+      const trabajo = filas * n;
+      correr('nen_fft_permutar', trabajo, filas * n, n, t.rev, d, y);
+      for (let largo = 2; largo <= n; largo <<= 1)
+        correr('nen_fft_etapa', trabajo, filas * (n >> 1), n, largo, -signo, t.re, t.im, y);
+      return y;
+    }
+    // Bluestein: las longitudes que no son potencia de dos se convierten en una
+    // convolución de largo potencia de dos y se resuelven con las etapas de
+    // arriba. Así ningún tamaño es O(n²). Es la misma idea que «fourier».
+    const T = 1 << Math.ceil(Math.log2(2 * n - 1));
+    const A = new Float64Array(filas * 2 * T), B = new Float64Array(2 * T);
+    const cr = new Float64Array(n), ci = new Float64Array(n);
+    for (let j = 0; j < n; j++) {
+      const m = (j * j) % (2 * n);
+      const ang = (signo * Math.PI * m) / n;
+      cr[j] = Math.cos(ang); ci[j] = Math.sin(ang);
+      B[2 * j] = cr[j]; B[2 * j + 1] = -ci[j];
+      if (j > 0) { B[2 * (T - j)] = cr[j]; B[2 * (T - j) + 1] = -ci[j]; }
+    }
+    for (let f = 0; f < filas; f++) {
+      const o = f * 2 * n, oA = f * 2 * T;
+      for (let j = 0; j < n; j++) {
+        const xr = d[o + 2 * j], xi = d[o + 2 * j + 1];
+        A[oA + 2 * j] = xr * cr[j] - xi * ci[j];
+        A[oA + 2 * j + 1] = xr * ci[j] + xi * cr[j];
+      }
+    }
+    const FA = fftFilas(A, filas, T, -1), FB = fftFilas(B, 1, T, -1);
+    correr('nen_cmul_filas', filas * T, filas * T, T, FA, FB);
+    const R = fftFilas(FA, filas, T, 1);
+    const out = new Float64Array(filas * 2 * n);
+    for (let f = 0; f < filas; f++) {
+      const o = f * 2 * n, oR = f * 2 * T;
+      for (let k = 0; k < n; k++) {
+        const vr = R[oR + 2 * k] / T, vi = R[oR + 2 * k + 1] / T;
+        out[o + 2 * k] = vr * cr[k] - vi * ci[k];
+        out[o + 2 * k + 1] = vr * ci[k] + vi * cr[k];
+      }
+    }
+    vm.cobrar(filas * n);
+    return out;
+  }
+  // Complejo entrelazado desde reales.
+  const aComplejo = re => { const d = new Float64Array(2 * re.length); for (let i = 0; i < re.length; i++) d[2 * i] = re[i]; return d; };
+  const planoC = x => (esC(x) ? planoDe(x) : aComplejo(planoDe(x)));
+  // Transponer filas×cols complejos.
+  function transponerC(d, filas, cols) {
+    const o = new Float64Array(d.length);
+    for (let i = 0; i < filas; i++) for (let j = 0; j < cols; j++) {
+      o[2 * (j * filas + i)] = d[2 * (i * cols + j)];
+      o[2 * (j * filas + i) + 1] = d[2 * (i * cols + j) + 1];
+    }
+    vm.cobrar(filas * cols);
+    return o;
+  }
+  function fft2D(d, M, N, signo) {
+    let r = fftFilas(d, M, N, signo);          // las filas
+    r = transponerC(r, M, N);
+    r = fftFilas(r, N, M, signo);              // las columnas, como filas
+    return transponerC(r, N, M);
+  }
+  const dividirTodo = (d, s) => { correr('nen_dividir', d.length, d.length, s, d); return d; };
+
+  // ════════════════════════════════════════════ elemento a elemento
+  // «seno(arreglo)» ya funciona en numerico para reales. Estas añaden tres
+  // cosas que allí no hay: los COMPLEJOS, las listas como entrada, y el núcleo
+  // de C1EÑ cuando el arreglo es grande. Los nombres llevan la «A» de las
+  // versiones de arreglo de numerico (inversaA, resolverA…).
+  // Funciones complejas: cada una recibe (re, im) y devuelve [re, im].
+  const cExp = (a, b) => { const e = Math.exp(a); return [e * Math.cos(b), e * Math.sin(b)]; };
+  const cLog = (a, b) => [Math.log(Math.hypot(a, b)), Math.atan2(b, a)];
+  const cDiv = (a, b, c, d) => {
+    // División de Smith: sin desbordes intermedios al elevar al cuadrado.
+    if (Math.abs(c) >= Math.abs(d)) { const r = d / c, t = c + d * r; return [(a + b * r) / t, (b - a * r) / t]; }
+    const r = c / d, t = c * r + d; return [(a * r + b) / t, (b * r - a) / t];
+  };
+  const cRaiz = (a, b) => {
+    if (a === 0 && b === 0) return [0, 0];
+    const r = Math.hypot(a, b);
+    if (a >= 0) { const t = Math.sqrt((r + a) / 2); return [t, b / (2 * t)]; }
+    const t = Math.sqrt((r - a) / 2);
+    return [Math.abs(b) / (2 * t), b < 0 || Object.is(b, -0) ? -t : t];
+  };
+  const COMPLEJAS = {
+    senoA: (a, b) => [Math.sin(a) * Math.cosh(b), Math.cos(a) * Math.sinh(b)],
+    cosenoA: (a, b) => [Math.cos(a) * Math.cosh(b), -Math.sin(a) * Math.sinh(b)],
+    // tan z = (sen 2a + i·senh 2b)/(cos 2a + cosh 2b): una sola división y sin
+    // restar dos infinitos cuando la parte imaginaria es grande.
+    tangenteA: (a, b) => { const d = Math.cos(2 * a) + Math.cosh(2 * b); return [Math.sin(2 * a) / d, Math.sinh(2 * b) / d]; },
+    senoHiperbolicoA: (a, b) => [Math.sinh(a) * Math.cos(b), Math.cosh(a) * Math.sin(b)],
+    cosenoHiperbolicoA: (a, b) => [Math.cosh(a) * Math.cos(b), Math.sinh(a) * Math.sin(b)],
+    tangenteHiperbolicaA: (a, b) => { const d = Math.cosh(2 * a) + Math.cos(2 * b); return [Math.sinh(2 * a) / d, Math.sin(2 * b) / d]; },
+    expA: cExp,
+    logA: cLog,
+    raizA: cRaiz,
+    signoA: (a, b) => { const r = Math.hypot(a, b); return r === 0 ? [0, 0] : [a / r, b / r]; },
+  };
+  // El dominio real: lo que se sale da NaN en silencio, y aquí se dice.
+  const DOMINIO = {
+    logA: v => v < 0, raizA: v => v < 0,
+  };
+  function unaria(nombre, nucleo, doc, opciones) {
+    opciones = opciones || {};
+    def(nombre, 'real|arreglo|lista -> cualquiera', a => {
+      const v = a[0];
+      if (typeof v === 'number') {
+        if (DOMINIO[nombre] && DOMINIO[nombre](v))
+          vm.error(`«${nombre}» de un número negativo (${v}) no es un número real`, 'pásalo a complejo con complejo(x) si quieres el resultado complejo');
+        const y = new Float64Array(1);
+        NEN_T_NUCLEOS[nucleo].js(1, Float64Array.of(v), y);
+        return y[0];
+      }
+      const x = aArr(v, 1, nombre);
+      if (esC(x)) {
+        if (nombre === 'absolutoA') return vm.arrDeComplejoA(x, (re, im) => Math.hypot(re, im));
+        const fc = COMPLEJAS[nombre];
+        if (!fc) vm.error(`«${nombre}» no está definida para complejos`, 'usa parteReal, parteImaginaria o absoluto primero');
+        return vm.arrComplejoA(x, fc);
+      }
+      const d = planoDe(x), n = d.length;
+      if (DOMINIO[nombre]) for (let i = 0; i < n; i++) if (DOMINIO[nombre](d[i]))
+        vm.error(`«${nombre}»: hay un valor negativo (${d[i]}, en la posición ${i}) y su resultado no es un número real`,
+          'pásalo a complejo con complejo(a) si quieres los resultados complejos');
+      const y = new Float64Array(n);
+      correr(nucleo, n, n, d, y);
+      return deReales(x.forma, y);
+    }, doc);
+  }
+  unaria('senoA', 'nen_seno', 'senoA(a) — el seno de cada número · también de complejos y de listas · en la GPU si el arreglo es grande');
+  unaria('cosenoA', 'nen_coseno', 'cosenoA(a) — el coseno de cada número, real o complejo');
+  unaria('tangenteA', 'nen_tangente', 'tangenteA(a) — la tangente de cada número, real o complejo');
+  unaria('arcotangenteA', 'nen_arcotangente', 'arcotangenteA(a) — el arco cuya tangente es cada número, entre −π/2 y π/2');
+  unaria('senoHiperbolicoA', 'nen_senoh', 'senoHiperbolicoA(a) — (eˣ − e⁻ˣ)/2 de cada número, sin perder cifras cerca de 0 · también complejos');
+  unaria('cosenoHiperbolicoA', 'nen_cosenoh', 'cosenoHiperbolicoA(a) — (eˣ + e⁻ˣ)/2 de cada número · también complejos');
+  unaria('tangenteHiperbolicaA', 'nen_tangenteh', 'tangenteHiperbolicaA(a) — seno entre coseno hiperbólicos, sin desbordarse con números grandes · también complejos');
+  unaria('expA', 'nen_exp', 'expA(a) — eˣ de cada número · de un complejo, e^a·(cos b + i·sen b)');
+  unaria('logA', 'nen_log', 'logA(a) — el logaritmo natural de cada número · un negativo es un error salvo que lo pases a complejo · log(0) da −|INFINITO');
+  unaria('raizA', 'nen_raiz', 'raizA(a) — la raíz cuadrada de cada número · con complejos, la raíz principal');
+  unaria('absolutoA', 'nen_absoluto', 'absolutoA(a) — el valor absoluto de cada número · de un complejo, su módulo');
+  unaria('signoA', 'nen_signo', 'signoA(a) — −1, 0 o 1 según el signo · de un complejo, z/|z|');
+  unaria('pisoA', 'nen_piso', 'pisoA(a) — redondea hacia abajo y devuelve REALES, para no desbordar enteros de 32 bits');
+  unaria('techoA', 'nen_techo', 'techoA(a) — redondea hacia arriba, devolviendo reales');
+  unaria('sigmoideA', 'nen_sigmoide', 'sigmoideA(a) — 1/(1 + e⁻ˣ) de cada número, sin desbordarse con x muy negativo');
+  unaria('reluA', 'nen_relu', 'reluA(a) — max(x, 0) de cada número · un NaN sigue siendo NaN');
+
+  def('redondearA', '... -> cualquiera', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«redondearA» toma el arreglo y, si quieres, cuántos decimales');
+    const dec = a.length > 1 ? ent(a[1], 2, 'redondearA') : 0;
+    const f = Math.pow(10, dec);
+    if (typeof a[0] === 'number') { const y = new Float64Array(1); NEN_T_NUCLEOS.nen_redondear.js(1, f, Float64Array.of(a[0]), y); return y[0]; }
+    const x = real(a[0], 1, 'redondearA'), d = planoDe(x), y = new Float64Array(d.length);
+    correr('nen_redondear', d.length, d.length, f, d, y);
+    return deReales(x.forma, y);
+  }, 'redondearA(a, decimales?) — redondea cada número, la mitad hacia arriba como «redondear»');
+
+  // Dos arreglos (o arreglo y número) a la misma forma por difusión, en planos.
+  function dosPlanos(p, q, quien) {
+    const ap = typeof p === 'number' ? null : aArr(p, 1, quien), aq = typeof q === 'number' ? null : aArr(q, 2, quien);
+    if (!ap && !aq) return null;
+    let f;
+    if (ap && aq) {
+      f = difundir(ap.forma, aq.forma);
+      if (f === null) vm.error(`«${quien}»: las formas ${ap.forma.join('×')} y ${aq.forma.join('×')} no se pueden difundir`,
+        'de derecha a izquierda, cada par de ejes tiene que ser igual o uno de los dos ser 1');
+    } else f = (ap || aq).forma.slice();
+    const complejo = esC(ap) || esC(aq);
+    const plano = (x, v) => {
+      if (!x) { const n = tamanoDe(f); const d = new Float64Array(complejo ? 2 * n : n); for (let i = 0; i < n; i++) d[complejo ? 2 * i : i] = v; return d; }
+      const d = planoDe(difundidaT(x, f));
+      return complejo && !esC(x) ? aComplejo(d) : d;
+    };
+    return { forma: f, complejo, x: plano(ap, p), y: plano(aq, q) };
+  }
+  def('potenciaA', 'real|arreglo|lista, real|arreglo|lista -> cualquiera', a => {
+    if (typeof a[0] === 'number' && typeof a[1] === 'number') return Math.pow(a[0], a[1]);
+    const t = dosPlanos(a[0], a[1], 'potenciaA'), n = tamanoDe(t.forma);
+    if (t.complejo) {
+      // z^w = exp(w·log z), con 0^w = 0 cuando la parte real de w es positiva.
+      const out = new Float64Array(2 * n);
+      for (let i = 0; i < n; i++) {
+        const zr = t.x[2 * i], zi = t.x[2 * i + 1], wr = t.y[2 * i], wi = t.y[2 * i + 1];
+        if (zr === 0 && zi === 0) { out[2 * i] = (wr === 0 && wi === 0) ? 1 : 0; continue; }
+        const [lr, li] = cLog(zr, zi);
+        const [er, ei] = cExp(wr * lr - wi * li, wr * li + wi * lr);
+        out[2 * i] = er; out[2 * i + 1] = ei;
+      }
+      vm.cobrar(n);
+      return deComplejos(t.forma, out);
+    }
+    for (let i = 0; i < n; i++)
+      if (t.x[i] < 0 && !Number.isInteger(t.y[i]))
+        vm.error(`«potenciaA»: ${t.x[i]} elevado a ${t.y[i]} no es un número real (posición ${i})`,
+          'una base negativa solo admite exponentes enteros; pásala a complejo con complejo(a) para el resultado complejo');
+    const y = new Float64Array(n);
+    correr('nen_potencia', n, n, t.x, t.y, y);
+    return deReales(t.forma, y);
+  }, 'potenciaA(a, b) — a elevado a b elemento a elemento, con difusión · bases negativas solo con exponente entero, salvo en complejos');
+  def('anguloA', 'real|arreglo|lista, real|arreglo|lista -> cualquiera', a => {
+    if (typeof a[0] === 'number' && typeof a[1] === 'number') return Math.atan2(a[0], a[1]);
+    const t = dosPlanos(a[0], a[1], 'anguloA');
+    if (t.complejo) vm.error('«anguloA» es para reales: el ángulo de un complejo es fase(z)');
+    const n = tamanoDe(t.forma), y = new Float64Array(n);
+    correr('nen_angulo', n, n, t.x, t.y, y);
+    return deReales(t.forma, y);
+  }, 'anguloA(y, x) — el ángulo de cada punto (x, y) entre −π y π, sabiendo el cuadrante · la «angulo» de numerico, por arreglos');
+
+  // Mover un eje al final y volver: lo usan softmax y las reducciones.
+  const ejeAlFinal = (x, e) => { const p = []; for (let i = 0; i < x.dimensiones; i++) if (i !== e) p.push(i); p.push(e); return p; };
+  const inversaPerm = p => { const q = new Array(p.length); p.forEach((v, i) => { q[v] = i; }); return q; };
+  def('softmax', '... -> arreglo', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«softmax» toma el arreglo y, si quieres, el eje (el último por omisión)');
+    const x = real(a[0], 1, 'softmax');
+    const e = vm.arrEje(x, a.length > 1 ? ent(a[1], 2, 'softmax') : -1, 'softmax');
+    const perm = ejeAlFinal(x, e), K = x.forma[e], M = x.tamano / (K || 1);
+    if (K === 0) return deReales(x.forma, new Float64Array(0));
+    const d = planoDe(permutadaT(x, perm)), y = new Float64Array(d.length);
+    correr('nen_softmax', d.length, M, K, d, y);
+    const pf = perm.map(i => x.forma[i]);
+    const tmp = new ObjArreglo(y, pf, 'real');
+    return deReales(x.forma, planoDe(permutadaT(tmp, inversaPerm(perm))));
+  }, 'softmax(a, eje?) — exp(x)/Σexp(x) a lo largo del eje (el último), restando el máximo para no desbordarse · cada fila suma 1');
+  def('mapearA', 'arreglo|lista, funcion -> arreglo', a => {
+    const x = real(a[0], 1, 'mapearA');
+    const f = vm.exigeFuncion(a[1], 2, 'mapearA');
+    const d = planoDe(x), y = new Float64Array(d.length);
+    for (let i = 0; i < d.length; i++) {
+      const r = vm.invocar(f, [d[i]]);
+      if (typeof r !== 'number') vm.error(`«mapearA»: la función tiene que devolver un número y con ${d[i]} devolvió ${tipoDe(r)}`);
+      y[i] = r;
+    }
+    return deReales(x.forma, y);
+  }, 'mapearA(a, fn(x) { … }) — aplica una función de Ñ a cada número y devuelve un arreglo de la misma forma');
+
+  // ════════════════════════════════════════════ reducciones por eje
+  // «suma(a, eje)» de numerico reduce UN eje de un arreglo real. Estas reducen
+  // uno, varios (lista) o todos, aceptan «mantener» para conservar los ejes con
+  // tamaño 1 (y así difundir el resultado contra el original), y van por el
+  // núcleo de reducción por trozos.
+  function ejesDe(x, v, f) {
+    if (v === undefined || v === null) return x.forma.map((_, i) => i);
+    const lista = typeof v === 'number' ? [v] : listaEnteros(v, 2, f);
+    const s = new Set();
+    for (const e of lista) {
+      const k = vm.arrEje(x, e, f);
+      if (s.has(k)) vm.error(`«${f}»: el eje ${k} está repetido`);
+      s.add(k);
+    }
+    return [...s].sort((p, q) => p - q);
+  }
+  // Deja los ejes reducidos al final y da el plano (M filas de K).
+  function prepararReduccion(x, ejesArg, mantener, f) {
+    const ejes = ejesDe(x, ejesArg, f);
+    const libres = x.forma.map((_, i) => i).filter(i => !ejes.includes(i));
+    const perm = libres.concat(ejes);
+    const M = libres.reduce((p, i) => p * x.forma[i], 1), K = ejes.reduce((p, i) => p * x.forma[i], 1);
+    const formaOut = mantener ? x.forma.map((v, i) => (ejes.includes(i) ? 1 : v)) : libres.map(i => x.forma[i]);
+    return { d: planoDe(permutadaT(x, perm)), M, K, formaOut };
+  }
+  // Reducir M filas de K por trozos; si quedan varios trozos por fila, se
+  // reducen otra vez (con la operación que los combina).
+  const COMBINA = { nen_red_suma: 'nen_red_suma', nen_red_producto: 'nen_red_producto', nen_red_maximo: 'nen_red_maximo',
+    nen_red_minimo: 'nen_red_minimo', nen_red_suma2: 'nen_red_suma', nen_red_sumaabs: 'nen_red_suma',
+    nen_red_maxabs: 'nen_red_maximo', nen_red_desv2: 'nen_red_suma' };
+  function reducirFilas(op, x, M, K, mu) {
+    if (K <= NEN_T_TROZO) {
+      const y = new Float64Array(M);
+      if (mu) correr(op, M * K, M, K, K, 1, x, mu, y); else correr(op, M * K, M, K, K, 1, x, y);
+      return y;
+    }
+    const nb = Math.ceil(K / NEN_T_TROZO), y = new Float64Array(M * nb);
+    if (mu) correr(op, M * K, M * nb, K, NEN_T_TROZO, nb, x, mu, y); else correr(op, M * K, M * nb, K, NEN_T_TROZO, nb, x, y);
+    return reducirFilas(COMBINA[op], y, M, nb, null);
+  }
+  const salida = (forma, y) => (forma.length ? deReales(forma, y) : y[0]);
+  // Los argumentos de todas: (a, eje?, mantener?). «eje» puede ser nulo para
+  // decir «todos» y aun así pasar «mantener».
+  const argsRed = (a, f) => {
+    if (a.length < 1 || a.length > 3) vm.error(`«${f}» toma el arreglo, el eje (un entero, una lista o nulo) y si quieres mantener los ejes`);
+    return { x: aArr(a[0], 1, f), eje: a[1], mantener: a.length > 2 ? !!a[2] : false };
+  };
+  // Las de complejos, en JavaScript: suma y producto de pares (re, im).
+  function reducirC(x, eje, mantener, f, producto) {
+    const r = prepararReduccion(x, eje, mantener, f), out = new Float64Array(2 * r.M);
+    for (let i = 0; i < r.M; i++) {
+      let sr = producto ? 1 : 0, si = 0;
+      for (let k = 0; k < r.K; k++) {
+        const vr = r.d[2 * (i * r.K + k)], vi = r.d[2 * (i * r.K + k) + 1];
+        if (producto) { const t = sr * vr - si * vi; si = sr * vi + si * vr; sr = t; } else { sr += vr; si += vi; }
+      }
+      out[2 * i] = sr; out[2 * i + 1] = si;
+    }
+    return { forma: r.formaOut.length ? r.formaOut : [1], d: out, K: r.K };
+  }
+  def('sumaEje', '... -> cualquiera', a => {
+    const { x, eje, mantener } = argsRed(a, 'sumaEje');
+    if (esC(x)) { const r = reducirC(x, eje, mantener, 'sumaEje', false); return deComplejos(r.forma, r.d); }
+    const r = prepararReduccion(x, eje, mantener, 'sumaEje');
+    return salida(r.formaOut, reducirFilas('nen_red_suma', r.d, r.M, r.K));
+  }, 'sumaEje(a, eje?, mantener?) — suma por uno, varios ([0, 2]) o todos los ejes · por trozos, que suma con menos error · complejos también');
+  def('productoEje', '... -> cualquiera', a => {
+    const { x, eje, mantener } = argsRed(a, 'productoEje');
+    if (esC(x)) { const r = reducirC(x, eje, mantener, 'productoEje', true); return deComplejos(r.forma, r.d); }
+    const r = prepararReduccion(x, eje, mantener, 'productoEje');
+    return salida(r.formaOut, reducirFilas('nen_red_producto', r.d, r.M, r.K));
+  }, 'productoEje(a, eje?, mantener?) — multiplica a lo largo de los ejes · complejos también');
+  def('mediaEje', '... -> cualquiera', a => {
+    const { x, eje, mantener } = argsRed(a, 'mediaEje');
+    if (esC(x)) {
+      const r = reducirC(x, eje, mantener, 'mediaEje', false);
+      if (r.K === 0) vm.error('«mediaEje» de un eje vacío');
+      for (let i = 0; i < r.d.length; i++) r.d[i] /= r.K;
+      return deComplejos(r.forma, r.d);
+    }
+    const r = prepararReduccion(x, eje, mantener, 'mediaEje');
+    if (r.K === 0) vm.error('«mediaEje» de un eje vacío');
+    const y = reducirFilas('nen_red_suma', r.d, r.M, r.K);
+    for (let i = 0; i < y.length; i++) y[i] /= r.K;
+    return salida(r.formaOut, y);
+  }, 'mediaEje(a, eje?, mantener?) — la media por eje · con mantener verdadero, a − mediaEje(a, 0, verdadero) centra cada columna');
+  function varianza(a, f, raiz) {
+    const { x, eje, mantener } = argsRed(a, f);
+    vm.nadaDeComplejos(x, f);
+    const r = prepararReduccion(x, eje, mantener, f);
+    if (r.K < 2) vm.error(`«${f}» necesita al menos 2 datos por grupo y hay ${r.K}`);
+    // Dos pasadas: la media y después las desviaciones. La de una pasada,
+    // Σx²/n − media², resta dos números grandes y casi iguales y puede dar
+    // varianzas negativas con datos de magnitud grande.
+    const mu = reducirFilas('nen_red_suma', r.d, r.M, r.K);
+    for (let i = 0; i < mu.length; i++) mu[i] /= r.K;
+    const y = reducirFilas('nen_red_desv2', r.d, r.M, r.K, mu);
+    for (let i = 0; i < y.length; i++) { y[i] /= (r.K - 1); if (raiz) y[i] = Math.sqrt(y[i]); }
+    return salida(r.formaOut, y);
+  }
+  def('varianzaEje', '... -> cualquiera', a => varianza(a, 'varianzaEje', false),
+    'varianzaEje(a, eje?, mantener?) — varianza muestral (entre n−1, como «varianza») por eje, en dos pasadas');
+  def('desviacionEje', '... -> cualquiera', a => varianza(a, 'desviacionEje', true),
+    'desviacionEje(a, eje?, mantener?) — desviación muestral por eje');
+  const extremo = (nombre, op, doc) => def(nombre, '... -> cualquiera', a => {
+    const { x, eje, mantener } = argsRed(a, nombre);
+    vm.nadaDeComplejos(x, nombre);
+    const r = prepararReduccion(x, eje, mantener, nombre);
+    if (r.K === 0) vm.error(`«${nombre}» de un eje vacío: no hay ningún número del que sacarlo`);
+    return salida(r.formaOut, reducirFilas(op, r.d, r.M, r.K));
+  }, doc);
+  extremo('maximoEje', 'nen_red_maximo', 'maximoEje(a, eje?, mantener?) — el mayor por eje · un NaN en el grupo da NaN');
+  extremo('minimoEje', 'nen_red_minimo', 'minimoEje(a, eje?, mantener?) — el menor por eje');
+  def('normaEje', '... -> cualquiera', a => {
+    if (a.length < 1 || a.length > 4) vm.error('«normaEje» toma el arreglo, el eje, el orden (2, 1 o |INFINITO) y si quieres mantener los ejes');
+    let x = aArr(a[0], 1, 'normaEje');
+    const orden = a.length > 2 && a[2] !== null ? num(a[2], 3, 'normaEje') : 2;
+    if (orden !== 1 && orden !== 2 && orden !== Infinity)
+      vm.error(`«normaEje»: el orden ${orden} no está`, 'son 2 (la euclídea, por omisión), 1 y |INFINITO');
+    if (esC(x)) x = vm.arrDeComplejoA(x, (re, im) => Math.hypot(re, im));
+    const r = prepararReduccion(x, a[1], a.length > 3 ? !!a[3] : false, 'normaEje');
+    let y;
+    if (orden === 2) {
+      // El escalado de la norma: sin él, un vector de números de 1e200 da
+      // infinito al elevar al cuadrado. Se divide entre el mayor, se suma y se
+      // vuelve a multiplicar.
+      const mx = reducirFilas('nen_red_maxabs', r.d, r.M, r.K);
+      const esc = new Float64Array(r.d.length);
+      for (let i = 0; i < r.M; i++) { const s = mx[i] || 1; for (let k = 0; k < r.K; k++) esc[i * r.K + k] = r.d[i * r.K + k] / s; }
+      y = reducirFilas('nen_red_suma2', esc, r.M, r.K);
+      for (let i = 0; i < y.length; i++) y[i] = mx[i] === 0 || !Number.isFinite(mx[i]) ? mx[i] : mx[i] * Math.sqrt(y[i]);
+    } else y = reducirFilas(orden === 1 ? 'nen_red_sumaabs' : 'nen_red_maxabs', r.d, r.M, r.K);
+    return salida(r.formaOut, y);
+  }, 'normaEje(a, eje?, orden?, mantener?) — la longitud de cada fila o columna · orden 2, 1 o |INFINITO · complejos por su módulo');
+  const logica = (nombre, op, doc) => def(nombre, '... -> cualquiera', a => {
+    const { x, eje, mantener } = argsRed(a, nombre);
+    vm.nadaDeComplejos(x, nombre);
+    const r = prepararReduccion(x, eje, mantener, nombre);
+    for (let i = 0; i < r.d.length; i++) r.d[i] = r.d[i] ? 1 : 0;
+    if (r.K === 0) { const y = new Float64Array(r.M).fill(op === 'nen_red_minimo' ? 1 : 0); return r.formaOut.length ? aBool(r.formaOut, y) : !!y[0]; }
+    const y = reducirFilas(op, r.d, r.M, r.K);
+    return r.formaOut.length ? aBool(r.formaOut, y) : !!y[0];
+  }, doc);
+  const aBool = (forma, y) => { const o = vm.arrNuevo(forma, 'bool'); for (let i = 0; i < y.length; i++) o.datos[i] = y[i] ? 1 : 0; return o; };
+  logica('todosEje', 'nen_red_minimo', 'todosEje(mascara, eje?, mantener?) — ¿todos ciertos? por eje · da una máscara, o un bool si reduce todo');
+  logica('algunoEje', 'nen_red_maximo', 'algunoEje(mascara, eje?, mantener?) — ¿alguno cierto? por eje');
+
+  // ════════════════════════════════════════════ álgebra de tensores
+  def('permutarEjes', '... -> arreglo', a => {
+    const x = aArr(a[0], 1, 'permutarEjes');
+    const nd = x.dimensiones;
+    const p = a.length > 1 ? listaEnteros(a[1], 2, 'permutarEjes').map(e => vm.arrEje(x, e, 'permutarEjes'))
+      : x.forma.map((_, i) => nd - 1 - i);
+    if (p.length !== nd || new Set(p).size !== nd)
+      vm.error(`«permutarEjes»: el orden tiene que nombrar cada uno de los ${nd} ejes una vez y llegó [${p.join(', ')}]`);
+    // Como «transpuesta»: cambiar el orden de los ejes es cambiar el orden de
+    // las zancadas. Una VISTA, sin copiar nada.
+    return vm.nuevoArreglo(x.datos, p.map(e => x.forma[e]), x.tipo, p.map(e => x.zancadas[e]), x.desp, x.base || x);
+  }, 'permutarEjes(a, orden?) — una VISTA con los ejes en otro orden: permutarEjes(t, [2, 0, 1]) · sin orden, los invierte');
+  def('voltear', '... -> arreglo', a => {
+    const x = aArr(a[0], 1, 'voltear');
+    const ejes = a.length > 1 && a[1] !== null ? ejesDe(x, a[1], 'voltear') : x.forma.map((_, i) => i);
+    const z = x.zancadas.slice();
+    let desp = x.desp;
+    for (const e of ejes) { if (x.forma[e] > 0) desp += (x.forma[e] - 1) * z[e]; z[e] = -z[e]; }
+    return vm.nuevoArreglo(x.datos, x.forma.slice(), x.tipo, z, desp, x.base || x);
+  }, 'voltear(a, eje?) — una VISTA al revés por ese eje (o ejes, o todos) · zancada negativa, sin copiar');
+  // Rodar copia: cada eje se reparte en dos trozos que cambian de sitio.
+  function rodarPlano(x, k, e) {
+    const w = esC(x) ? 2 : 1, d = planoDe(x), f = x.forma, n = f[e];
+    if (n === 0) return d;
+    const despl = ((k % n) + n) % n;
+    const dentro = f.slice(e + 1).reduce((p, q) => p * q, 1), fuera = f.slice(0, e).reduce((p, q) => p * q, 1);
+    const out = new Float64Array(d.length);
+    for (let o = 0; o < fuera; o++) for (let j = 0; j < n; j++) {
+      const de = (o * n + j) * dentro * w, a2 = (o * n + (j + despl) % n) * dentro * w;
+      out.set(d.subarray(de, de + dentro * w), a2);
+    }
+    return out;
+  }
+  const deTipo = (x, forma, d) => (esC(x) ? deComplejos(forma, d) : x.tipo === 'entero' ? aEntero(forma, d) : deReales(forma, d));
+  const aEntero = (forma, d) => { const o = vm.arrNuevo(forma, 'entero'); for (let i = 0; i < o.tamano; i++) o.datos[i] = d[i]; return o; };
+  def('rodar', '... -> arreglo', a => {
+    if (a.length < 2 || a.length > 3) vm.error('«rodar» toma el arreglo, cuántos puestos y, si quieres, el eje');
+    const x = aArr(a[0], 1, 'rodar'), k = ent(a[1], 2, 'rodar');
+    if (a.length === 3) { const e = vm.arrEje(x, ent(a[2], 3, 'rodar'), 'rodar'); return deTipo(x, x.forma, rodarPlano(x, k, e)); }
+    const plano = new ObjArreglo(planoDe(x), [x.tamano], x.tipo === 'complejo' ? 'complejo' : 'real');
+    return deTipo(x, x.forma, rodarPlano(plano, k, 0));
+  }, 'rodar(a, k, eje?) — desplaza k puestos en círculo: lo que sale por un lado entra por el otro · sin eje, sobre el arreglo aplanado');
+  def('rejilla', '... -> lista', a => {
+    if (a.length < 2) vm.error('«rejilla» necesita al menos dos vectores (x, y)');
+    const vs = a.map((v, i) => planoDe(vector(v, i + 1, 'rejilla')));
+    // El orden de un plano: con dos vectores, las FILAS van por «y» y las
+    // COLUMNAS por «x», como en un dibujo (es el «meshgrid» de NumPy). Con más,
+    // el resto de ejes va detrás en su orden.
+    const largos = vs.map(v => v.length);
+    const forma = [largos[1], largos[0]].concat(largos.slice(2));
+    const ejeDe = i => (i === 0 ? 1 : i === 1 ? 0 : i);
+    const total = tamanoDe(forma);
+    vm.cobrar(total * vs.length);
+    return L(vs.map((v, i) => {
+      const e = ejeDe(i), o = vm.arrNuevo(forma, 'real');
+      const dentro = forma.slice(e + 1).reduce((p, q) => p * q, 1);
+      for (let k = 0; k < total; k++) o.datos[k] = v[Math.floor(k / dentro) % forma[e]];
+      return o;
+    }));
+  }, 'rejilla(x, y, …) — la lista [X, Y, …] de una cuadrícula: X[i][j] = x[j] e Y[i][j] = y[i] · para evaluar f(x, y) en todo el plano de una vez');
+  def('repetirA', '... -> arreglo', a => {
+    if (a.length < 2 || a.length > 3) vm.error('«repetirA» toma el arreglo, cuántas veces y, si quieres, el eje');
+    let x = aArr(a[0], 1, 'repetirA');
+    const veces = ent(a[1], 2, 'repetirA');
+    if (veces < 0) vm.error('«repetirA»: las veces no pueden ser negativas');
+    if (a.length < 3) x = new ObjArreglo(planoDe(x), [x.tamano], x.tipo === 'complejo' ? 'complejo' : 'real');
+    const e = a.length === 3 ? vm.arrEje(x, ent(a[2], 3, 'repetirA'), 'repetirA') : 0;
+    const w = esC(x) ? 2 : 1, d = planoDe(x), f = x.forma;
+    const dentro = f.slice(e + 1).reduce((p, q) => p * q, 1) * w, fuera = f.slice(0, e).reduce((p, q) => p * q, 1);
+    const f2 = f.slice(); f2[e] = f[e] * veces;
+    const out = new Float64Array(tamanoDe(f2) * w);
+    let o = 0;
+    for (let i = 0; i < fuera; i++) for (let j = 0; j < f[e]; j++) {
+      const de = (i * f[e] + j) * dentro;
+      for (let v = 0; v < veces; v++) { out.set(d.subarray(de, de + dentro), o); o += dentro; }
+    }
+    vm.cobrar(out.length);
+    return deTipo(a[0] instanceof ObjArreglo ? a[0] : x, f2, out);
+  }, 'repetirA(a, veces, eje?) — repite CADA elemento seguido: [1, 2] dos veces es [1, 1, 2, 2] · sin eje, aplanado');
+  def('mosaico', 'arreglo|lista, entero|lista -> arreglo', a => {
+    const x = aArr(a[0], 1, 'mosaico');
+    let reps = listaEnteros(a[1], 2, 'mosaico');
+    if (reps.some(r => r < 0)) vm.error('«mosaico»: las repeticiones no pueden ser negativas');
+    // Como «tile» de NumPy: si hay más repeticiones que ejes, se añaden ejes de
+    // 1 por delante; si hay menos, las que faltan valen 1.
+    let f = x.forma.slice();
+    while (f.length < reps.length) f.unshift(1);
+    while (reps.length < f.length) reps.unshift(1);
+    const w = esC(x) ? 2 : 1, d = planoDe(x), f2 = f.map((v, i) => v * reps[i]), nd = f.length;
+    const out = new Float64Array(tamanoDe(f2) * w);
+    const zs = zancadasDe(f), ix = new Array(nd).fill(0), total = tamanoDe(f2);
+    for (let k = 0; k < total; k++) {
+      let p = 0;
+      for (let q = 0; q < nd; q++) p += (ix[q] % f[q]) * zs[q];
+      if (w === 1) out[k] = d[p]; else { out[2 * k] = d[2 * p]; out[2 * k + 1] = d[2 * p + 1]; }
+      for (let q = nd - 1; q >= 0; q--) { if (++ix[q] < f2[q]) break; ix[q] = 0; }
+    }
+    vm.cobrar(total);
+    return deTipo(x, f2, out);
+  }, 'mosaico(a, repeticiones) — repite el arreglo ENTERO como baldosas: mosaico(m, [2, 3]) pone 2 por 3 copias');
+  def('diagonalDe', '... -> arreglo', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«diagonalDe» toma el arreglo y, si quieres, qué diagonal (0 la principal, 1 la de encima, −1 la de debajo)');
+    const x = aArr(a[0], 1, 'diagonalDe'), k = a.length > 1 ? ent(a[1], 2, 'diagonalDe') : 0;
+    vm.nadaDeComplejos(x, 'diagonalDe');
+    const d = planoDe(x);
+    if (x.dimensiones === 1) {
+      const n = x.tamano + Math.abs(k), out = new Float64Array(n * n);
+      for (let i = 0; i < x.tamano; i++) { const f = k >= 0 ? i : i - k, c = k >= 0 ? i + k : i; out[f * n + c] = d[i]; }
+      return deReales([n, n], out);
+    }
+    if (x.dimensiones !== 2) vm.error(`«diagonalDe»: se esperaba un vector o una matriz y llegó un arreglo de ${x.dimensiones} dimensiones`);
+    const nf = x.forma[0], nc = x.forma[1];
+    const f0 = k >= 0 ? 0 : -k, c0 = k >= 0 ? k : 0;
+    const n = Math.max(0, Math.min(nf - f0, nc - c0)), out = new Float64Array(n);
+    for (let i = 0; i < n; i++) out[i] = d[(f0 + i) * nc + c0 + i];
+    return deReales([n], out);
+  }, 'diagonalDe(a, k?) — la k-ésima diagonal de una matriz, o la matriz con el vector en su k-ésima diagonal · «diagonal» de numerico es k = 0');
+  def('productoCruz', 'arreglo|lista, arreglo|lista -> arreglo', a => {
+    const x = real(a[0], 1, 'productoCruz'), y = real(a[1], 2, 'productoCruz');
+    if (x.forma[x.dimensiones - 1] !== 3 || y.forma[y.dimensiones - 1] !== 3)
+      vm.error(`«productoCruz» es para vectores de 3 componentes y llegaron de ${x.forma.join('×')} y ${y.forma.join('×')}`,
+        'el último eje tiene que medir 3; en el plano, añade un 0 como tercera componente');
+    const t = dosPlanos(x, y, 'productoCruz'), n = tamanoDe(t.forma) / 3, out = new Float64Array(3 * n);
+    for (let i = 0; i < n; i++) {
+      const o = 3 * i, a1 = t.x[o], a2 = t.x[o + 1], a3 = t.x[o + 2], b1 = t.y[o], b2 = t.y[o + 1], b3 = t.y[o + 2];
+      out[o] = a2 * b3 - a3 * b2; out[o + 1] = a3 * b1 - a1 * b3; out[o + 2] = a1 * b2 - a2 * b1;
+    }
+    return deReales(t.forma, out);
+  }, 'productoCruz(a, b) — el vector perpendicular a los dos, de largo el área del paralelogramo · sobre el último eje, con difusión');
+  def('normaTensor', '... -> real', a => {
+    const x = aArr(a[0], 1, 'normaTensor');
+    const orden = a.length > 1 ? num(a[1], 2, 'normaTensor') : 2;
+    const d = planoDe(esC(x) ? vm.arrDeComplejoA(x, (re, im) => Math.hypot(re, im)) : x);
+    if (orden === Infinity) return reducirFilas('nen_red_maxabs', d, 1, d.length)[0];
+    if (orden === 1) return reducirFilas('nen_red_sumaabs', d, 1, d.length)[0];
+    if (orden !== 2) vm.error(`«normaTensor»: el orden ${orden} no está`, 'son 2 (Frobenius, por omisión), 1 y |INFINITO');
+    const mx = reducirFilas('nen_red_maxabs', d, 1, d.length)[0];
+    if (mx === 0 || !Number.isFinite(mx)) return mx;
+    for (let i = 0; i < d.length; i++) d[i] /= mx;
+    return mx * Math.sqrt(reducirFilas('nen_red_suma2', d, 1, d.length)[0]);
+  }, 'normaTensor(t, orden?) — el tamaño de un tensor de cualquier forma: √Σ|x|² (Frobenius) · 1 o |INFINITO · complejos por su módulo · escalada para no desbordarse');
+
+  // contraer = tensordot: los ejes de «a» y de «b» que se suman se ponen al
+  // final de «a» y al principio de «b», y entonces es un producto de matrices
+  // de (libres de a) × (sumados) por (sumados) × (libres de b). Toda la
+  // contracción es UN núcleo de producto de matrices.
+  function contraerP(x, y, ea, eb, quien) {
+    if (ea.length !== eb.length) vm.error(`«${quien}»: hay ${ea.length} ejes de un lado y ${eb.length} del otro`);
+    for (let i = 0; i < ea.length; i++)
+      if (x.forma[ea[i]] !== y.forma[eb[i]])
+        vm.error(`«${quien}»: el eje ${ea[i]} del primero mide ${x.forma[ea[i]]} y el ${eb[i]} del segundo mide ${y.forma[eb[i]]}`,
+          'los ejes que se contraen tienen que medir lo mismo');
+    if (new Set(ea).size !== ea.length || new Set(eb).size !== eb.length) vm.error(`«${quien}»: un eje está repetido`);
+    const la = x.forma.map((_, i) => i).filter(i => !ea.includes(i));
+    const lb = y.forma.map((_, i) => i).filter(i => !eb.includes(i));
+    const M = la.reduce((p, i) => p * x.forma[i], 1), N = lb.reduce((p, i) => p * y.forma[i], 1);
+    const K = ea.reduce((p, i) => p * x.forma[i], 1);
+    const A = planoDe(permutadaT(x, la.concat(ea))), B = planoDe(permutadaT(y, eb.concat(lb)));
+    return { d: mm(A, B, M, K, N), forma: la.map(i => x.forma[i]).concat(lb.map(i => y.forma[i])) };
+  }
+  def('contraer', '... -> cualquiera', a => {
+    if (a.length < 2 || a.length > 4) vm.error('«contraer» toma dos arreglos y los ejes: contraer(a, b, k) o contraer(a, b, ejesA, ejesB)');
+    const x = real(a[0], 1, 'contraer'), y = real(a[1], 2, 'contraer');
+    let ea, eb;
+    if (a.length === 4) {
+      ea = listaEnteros(a[2], 3, 'contraer').map(e => vm.arrEje(x, e, 'contraer'));
+      eb = listaEnteros(a[3], 4, 'contraer').map(e => vm.arrEje(y, e, 'contraer'));
+    } else {
+      const k = a.length === 3 ? ent(a[2], 3, 'contraer') : 2;
+      if (k < 0 || k > x.dimensiones || k > y.dimensiones)
+        vm.error(`«contraer»: no se pueden contraer ${k} ejes entre arreglos de ${x.dimensiones} y ${y.dimensiones} dimensiones`);
+      ea = []; eb = [];
+      for (let i = 0; i < k; i++) { ea.push(x.dimensiones - k + i); eb.push(i); }
+    }
+    const r = contraerP(x, y, ea, eb, 'contraer');
+    return r.forma.length ? deReales(r.forma, r.d) : r.d[0];
+  }, 'contraer(a, b, ejesA, ejesB) — suma los productos a lo largo de esos ejes (tensordot) · contraer(a, b, 1) es el producto de matrices · un solo núcleo de GPU');
+
+  // ── einstein ──────────────────────────────────────────────────────────────
+  // La notación de Einstein: cada letra es un eje, las letras que se repiten
+  // entre entradas y no salen se suman. «ij,jk->ik» es el producto de
+  // matrices, «ii->» la traza, «ii->i» la diagonal, «ij->ji» la transpuesta.
+  function leerEinstein(spec, n) {
+    const limpio = spec.replace(/\s+/g, '');
+    if (limpio.includes('...'))
+      vm.error('«einstein»: los puntos suspensivos («...») no están soportados', 'escribe una letra por cada eje');
+    const partes = limpio.split('->');
+    if (partes.length > 2) vm.error(`«einstein»: «${spec}» tiene más de una flecha`);
+    const entradas = partes[0].split(',');
+    if (entradas.length !== n)
+      vm.error(`«einstein»: «${spec}» describe ${entradas.length} entrada${entradas.length === 1 ? '' : 's'} y llegaron ${n} arreglo${n === 1 ? '' : 's'}`,
+        'una lista de letras por arreglo, separadas por comas');
+    for (const e of entradas.concat(partes.length === 2 ? [partes[1]] : []))
+      for (const c of e) if (!/[a-zA-Z]/.test(c))
+        vm.error(`«einstein»: «${c}» no vale como índice en «${spec}»`, 'cada eje se nombra con una letra: «ij,jk->ik»');
+    let salida;
+    if (partes.length === 2) {
+      salida = partes[1];
+      if (new Set(salida).size !== salida.length) vm.error(`«einstein»: la salida «${salida}» repite una letra`);
+      const todas = new Set(entradas.join(''));
+      for (const c of salida) if (!todas.has(c)) vm.error(`«einstein»: la letra «${c}» de la salida no está en ninguna entrada`);
+    } else {
+      // Modo implícito, como NumPy: salen las letras que aparecen UNA vez, en
+      // orden alfabético; las repetidas se suman.
+      const cuenta = new Map();
+      for (const c of entradas.join('')) cuenta.set(c, (cuenta.get(c) || 0) + 1);
+      salida = [...cuenta.keys()].filter(c => cuenta.get(c) === 1).sort().join('');
+    }
+    return { entradas, salida };
+  }
+  def('einstein', '... -> cualquiera', a => {
+    if (a.length < 2) vm.error('«einstein» toma la descripción y al menos un arreglo: einstein("ij,jk->ik", a, b)');
+    const spec = textoDe(a[0], 1, 'einstein');
+    const xs = a.slice(1).map((v, i) => real(v, i + 2, 'einstein'));
+    const { entradas, salida } = leerEinstein(spec, xs.length);
+    const tam = new Map();
+    entradas.forEach((e, k) => {
+      if (e.length !== xs[k].dimensiones)
+        vm.error(`«einstein»: la entrada ${k + 1} se describe con ${e.length} letra${e.length === 1 ? '' : 's'} («${e}») y tiene ${xs[k].dimensiones} dimensiones`,
+          `su forma es ${xs[k].forma.join('×')}`);
+      for (let i = 0; i < e.length; i++) {
+        const c = e[i], v = xs[k].forma[i];
+        if (tam.has(c) && tam.get(c) !== v)
+          vm.error(`«einstein»: la letra «${c}» mide ${tam.get(c)} en un sitio y ${v} en otro`, 'los ejes con la misma letra tienen que medir lo mismo');
+        tam.set(c, v);
+      }
+    });
+    const formaSal = [...salida].map(c => tam.get(c));
+    // El camino rápido: dos entradas sin letras repetidas dentro de una misma
+    // entrada y sin «lotes» (letras en las dos entradas Y en la salida). Eso
+    // es exactamente una contracción, y va por el núcleo de producto de matrices.
+    if (xs.length === 2) {
+      const [ea, eb] = entradas;
+      const sinRep = new Set(ea).size === ea.length && new Set(eb).size === eb.length;
+      const comunes = [...ea].filter(c => eb.includes(c));
+      const sinLotes = comunes.every(c => !salida.includes(c));
+      const todasSalen = [...ea, ...eb].every(c => comunes.includes(c) || salida.includes(c));
+      if (sinRep && sinLotes && todasSalen) {
+        const r = contraerP(xs[0], xs[1], comunes.map(c => ea.indexOf(c)), comunes.map(c => eb.indexOf(c)), 'einstein');
+        const orden = [...ea].filter(c => !comunes.includes(c)).concat([...eb].filter(c => !comunes.includes(c)));
+        if (!orden.length) return r.d[0];
+        const t = new ObjArreglo(r.d, r.forma, 'real');
+        return deReales(formaSal, planoDe(permutadaT(t, [...salida].map(c => orden.indexOf(c)))));
+      }
+    }
+    // El camino general: un odómetro sobre todas las letras (primero las de la
+    // salida, después las sumadas), con la zancada de cada letra en cada
+    // entrada. Una letra repetida en una entrada suma sus zancadas, y eso es
+    // justo recorrer la diagonal.
+    const letras = [...salida].concat([...tam.keys()].filter(c => !salida.includes(c)));
+    const nl = letras.length, lim = letras.map(c => tam.get(c));
+    const zs = xs.map((x, k) => letras.map(c => {
+      let z = 0;
+      for (let i = 0; i < entradas[k].length; i++) if (entradas[k][i] === c) z += x.zancadas[i];
+      return z;
+    }));
+    const datos = xs.map(x => x.datos), desp = xs.map(x => x.desp);
+    const nSal = salida.length, totalSal = tamanoDe(formaSal), totalSum = tamanoDe(lim.slice(nSal));
+    vm.cobrar(totalSal * totalSum * xs.length);
+    const out = new Float64Array(totalSal), ix = new Array(nl).fill(0), pos = desp.slice();
+    if (totalSal * totalSum > 0) {
+      for (let s = 0; s < totalSal; s++) {
+        let acc = 0;
+        for (let t = 0; t < totalSum; t++) {
+          let pr = 1;
+          for (let k = 0; k < xs.length; k++) pr *= datos[k][pos[k]];
+          acc += pr;
+          // Avanzar el odómetro de las letras sumadas.
+          for (let q = nl - 1; q >= nSal; q--) {
+            if (++ix[q] < lim[q]) { for (let k = 0; k < xs.length; k++) pos[k] += zs[k][q]; break; }
+            for (let k = 0; k < xs.length; k++) pos[k] -= (lim[q] - 1) * zs[k][q];
+            ix[q] = 0;
+          }
+        }
+        out[s] = acc;
+        for (let q = nSal - 1; q >= 0; q--) {
+          if (++ix[q] < lim[q]) { for (let k = 0; k < xs.length; k++) pos[k] += zs[k][q]; break; }
+          for (let k = 0; k < xs.length; k++) pos[k] -= (lim[q] - 1) * zs[k][q];
+          ix[q] = 0;
+        }
+      }
+    }
+    return nSal ? deReales(formaSal, out) : out[0];
+  }, 'einstein("ij,jk->ik", a, b) — sumas de productos con la notación de Einstein: producto de matrices, traza («ii->»), diagonal («ii->i»), transpuesta («ij->ji»), externo («i,j->ij») · sin «->» salen las letras que aparecen una vez');
+
+  def('multLotes', 'arreglo|lista, arreglo|lista -> arreglo', a => {
+    let x = real(a[0], 1, 'multLotes'), y = real(a[1], 2, 'multLotes');
+    // Como «matmul» de NumPy: los dos últimos ejes son la matriz y los de
+    // delante son lotes que se difunden. Un vector se trata como fila (si va
+    // primero) o columna (si va segundo) y ese eje se quita al final.
+    const v1 = x.dimensiones === 1, v2 = y.dimensiones === 1;
+    if (v1) x = vistaT(x, [1, x.forma[0]], [0, x.zancadas[0]], x.desp);
+    if (v2) y = vistaT(y, [y.forma[0], 1], [y.zancadas[0], 0], y.desp);
+    const m = x.forma[x.dimensiones - 2], K = x.forma[x.dimensiones - 1], K2 = y.forma[y.dimensiones - 2], p = y.forma[y.dimensiones - 1];
+    if (K !== K2) vm.error(`«multLotes»: no se puede multiplicar …×${m}×${K} por …×${K2}×${p}`,
+      `las columnas del primero (${K}) tienen que ser las filas del segundo (${K2})`);
+    const la = x.forma.slice(0, -2), lb = y.forma.slice(0, -2), fl = difundir(la, lb);
+    if (fl === null) vm.error(`«multLotes»: los lotes ${la.join('×')} y ${lb.join('×')} no se pueden difundir`);
+    const lotes = tamanoDe(fl);
+    const A = planoDe(difundidaT(x, fl.concat([m, K]))), B = planoDe(difundidaT(y, fl.concat([K, p])));
+    const C = mm(A, B, m, K, p, lotes);
+    let forma = fl.concat([m, p]);
+    if (v1) forma.splice(forma.length - 2, 1);
+    if (v2) forma.splice(forma.length - 1, 1);
+    if (!forma.length) return C[0];
+    return deReales(forma, C);
+  }, 'multLotes(A, B) — producto de matrices por lotes: los dos últimos ejes son la matriz y los de delante se difunden · como «por» pero para pilas de matrices, en la GPU si es grande');
+
+  // ════════════════════════════════════════════ álgebra lineal avanzada
+  // Valores propios GENERALES. Es el algoritmo de EISPACK (orthes + hqr2) en
+  // la forma en que lo publicó JAMA: reducción a Hessenberg con reflexiones de
+  // Householder y después QR con el doble desplazamiento de Francis, que es lo
+  // que deja trabajar en reales y aun así encontrar los pares complejos (un
+  // bloque de 2×2 por par). Es el método de los libros y el de LAPACK en
+  // espíritu; «autoSimetrica» de numerico sigue siendo mejor para simétricas.
+  function hessenbergDe(A, n) {
+    const H = [], V = [];
+    for (let i = 0; i < n; i++) { H.push(Float64Array.from(A.subarray(i * n, i * n + n))); V.push(new Float64Array(n)); }
+    const ort = new Float64Array(n), low = 0, high = n - 1;
+    for (let m = low + 1; m <= high - 1; m++) {
+      let escala = 0;
+      for (let i = m; i <= high; i++) escala += Math.abs(H[i][m - 1]);
+      if (escala === 0) continue;
+      let h = 0;
+      for (let i = high; i >= m; i--) { ort[i] = H[i][m - 1] / escala; h += ort[i] * ort[i]; }
+      let g = Math.sqrt(h);
+      if (ort[m] > 0) g = -g;
+      h -= ort[m] * g;
+      ort[m] -= g;
+      for (let j = m; j < n; j++) {
+        let f = 0;
+        for (let i = high; i >= m; i--) f += ort[i] * H[i][j];
+        f /= h;
+        for (let i = m; i <= high; i++) H[i][j] -= f * ort[i];
+      }
+      for (let i = 0; i <= high; i++) {
+        let f = 0;
+        for (let j = high; j >= m; j--) f += ort[j] * H[i][j];
+        f /= h;
+        for (let j = m; j <= high; j++) H[i][j] -= f * ort[j];
+      }
+      ort[m] *= escala;
+      H[m][m - 1] = escala * g;
+    }
+    for (let i = 0; i < n; i++) V[i][i] = 1;
+    for (let m = high - 1; m >= low + 1; m--) {
+      if (H[m][m - 1] === 0) continue;
+      for (let i = m + 1; i <= high; i++) ort[i] = H[i][m - 1];
+      for (let j = m; j <= high; j++) {
+        let g = 0;
+        for (let i = m; i <= high; i++) g += ort[i] * V[i][j];
+        g = (g / ort[m]) / H[m][m - 1];       // dos divisiones: así no se desborda por abajo
+        for (let i = m; i <= high; i++) V[i][j] += g * ort[i];
+      }
+    }
+    // Lo de debajo de la subdiagonal guardaba los vectores de Householder; ya
+    // se usaron y en H tienen que ser ceros.
+    for (let i = 2; i < n; i++) for (let j = 0; j < i - 1; j++) H[i][j] = 0;
+    vm.cobrar(n * n * n);
+    return { H, V };
+  }
+  function cdiv(xr, xi, yr, yi) {
+    if (Math.abs(yr) > Math.abs(yi)) { const r = yi / yr, d = yr + r * yi; return [(xr + r * xi) / d, (xi - r * xr) / d]; }
+    const r = yr / yi, d = yi + r * yr;
+    return [(r * xr + xi) / d, (r * xi - xr) / d];
+  }
+  // QR de Francis sobre la Hessenberg. Con «vectores» hace además la
+  // sustitución hacia atrás y deja en V los vectores propios (los de un par
+  // complejo, como parte real e imaginaria en dos columnas seguidas). Sin
+  // ella, H queda en forma de Schur real y V es la Q de Schur.
+  function francis(H, V, n, vectores, quien) {
+    const d = new Float64Array(n), e = new Float64Array(n);
+    const eps = Math.pow(2, -52), low = 0, high = n - 1, nn = n;
+    let exshift = 0, p = 0, q = 0, r = 0, s = 0, z = 0, t, w, x, y;
+    let norma = 0;
+    for (let i = 0; i < nn; i++) for (let j = Math.max(i - 1, 0); j < nn; j++) norma += Math.abs(H[i][j]);
+    let iter = 0, total = 0;
+    n = nn - 1;
+    while (n >= low) {
+      let l = n;
+      while (l > low) {
+        s = Math.abs(H[l - 1][l - 1]) + Math.abs(H[l][l]);
+        if (s === 0) s = norma;
+        if (Math.abs(H[l][l - 1]) < eps * s) break;
+        l--;
+      }
+      if (l === n) {                                   // una raíz
+        H[n][n] += exshift; d[n] = H[n][n]; e[n] = 0; n--; iter = 0;
+      } else if (l === n - 1) {                        // dos raíces
+        w = H[n][n - 1] * H[n - 1][n];
+        p = (H[n - 1][n - 1] - H[n][n]) / 2;
+        q = p * p + w;
+        z = Math.sqrt(Math.abs(q));
+        H[n][n] += exshift; H[n - 1][n - 1] += exshift;
+        x = H[n][n];
+        if (q >= 0) {                                  // par real: se separa con una rotación
+          z = p >= 0 ? p + z : p - z;
+          d[n - 1] = x + z; d[n] = d[n - 1];
+          if (z !== 0) d[n] = x - w / z;
+          e[n - 1] = 0; e[n] = 0;
+          x = H[n][n - 1];
+          s = Math.abs(x) + Math.abs(z);
+          p = x / s; q = z / s;
+          r = Math.sqrt(p * p + q * q);
+          p /= r; q /= r;
+          for (let j = n - 1; j < nn; j++) { z = H[n - 1][j]; H[n - 1][j] = q * z + p * H[n][j]; H[n][j] = q * H[n][j] - p * z; }
+          for (let i = 0; i <= n; i++) { z = H[i][n - 1]; H[i][n - 1] = q * z + p * H[i][n]; H[i][n] = q * H[i][n] - p * z; }
+          for (let i = low; i <= high; i++) { z = V[i][n - 1]; V[i][n - 1] = q * z + p * V[i][n]; V[i][n] = q * V[i][n] - p * z; }
+        } else {                                       // par complejo conjugado
+          d[n - 1] = x + p; d[n] = x + p; e[n - 1] = z; e[n] = -z;
+        }
+        n -= 2; iter = 0;
+      } else {                                         // todavía no: un paso doble
+        x = H[n][n]; y = 0; w = 0;
+        if (l < n) { y = H[n - 1][n - 1]; w = H[n][n - 1] * H[n - 1][n]; }
+        // Los desplazamientos excepcionales (el de Wilkinson a las 10 vueltas
+        // y el de MATLAB a las 30) rompen los ciclos en los que el QR de
+        // Francis puede quedarse dando vueltas sin converger.
+        if (iter === 10) {
+          exshift += x;
+          for (let i = low; i <= n; i++) H[i][i] -= x;
+          s = Math.abs(H[n][n - 1]) + Math.abs(H[n - 1][n - 2]);
+          x = y = 0.75 * s;
+          w = -0.4375 * s * s;
+        }
+        if (iter === 30) {
+          s = (y - x) / 2;
+          s = s * s + w;
+          if (s > 0) {
+            s = Math.sqrt(s);
+            if (y < x) s = -s;
+            s = x - w / ((y - x) / 2 + s);
+            for (let i = low; i <= n; i++) H[i][i] -= s;
+            exshift += s;
+            x = y = w = 0.964;
+          }
+        }
+        iter++; total++;
+        if (iter > 200 || total > 100 * nn + 1000)
+          vm.error(`«${quien}»: el QR de Francis no converge después de ${total} pasos`,
+            'pasa con matrices muy mal escaladas; prueba a dividir la matriz entre su norma, o comprueba que no tenga NaN o infinitos');
+        let m = n - 2;
+        while (m >= l) {
+          z = H[m][m];
+          r = x - z; s = y - z;
+          p = (r * s - w) / H[m + 1][m] + H[m][m + 1];
+          q = H[m + 1][m + 1] - z - r - s;
+          r = H[m + 2][m + 1];
+          s = Math.abs(p) + Math.abs(q) + Math.abs(r);
+          p /= s; q /= s; r /= s;
+          if (m === l) break;
+          if (Math.abs(H[m][m - 1]) * (Math.abs(q) + Math.abs(r)) <
+              eps * (Math.abs(p) * (Math.abs(H[m - 1][m - 1]) + Math.abs(z) + Math.abs(H[m + 1][m + 1])))) break;
+          m--;
+        }
+        for (let i = m + 2; i <= n; i++) { H[i][i - 2] = 0; if (i > m + 2) H[i][i - 3] = 0; }
+        for (let k = m; k <= n - 1; k++) {
+          const notlast = k !== n - 1;
+          if (k !== m) {
+            p = H[k][k - 1]; q = H[k + 1][k - 1]; r = notlast ? H[k + 2][k - 1] : 0;
+            x = Math.abs(p) + Math.abs(q) + Math.abs(r);
+            if (x === 0) continue;
+            p /= x; q /= x; r /= x;
+          }
+          s = Math.sqrt(p * p + q * q + r * r);
+          if (p < 0) s = -s;
+          if (s !== 0) {
+            if (k !== m) H[k][k - 1] = -s * x;
+            else if (l !== m) H[k][k - 1] = -H[k][k - 1];
+            p += s; x = p / s; y = q / s; z = r / s; q /= p; r /= p;
+            for (let j = k; j < nn; j++) {
+              p = H[k][j] + q * H[k + 1][j];
+              if (notlast) { p += r * H[k + 2][j]; H[k + 2][j] -= p * z; }
+              H[k][j] -= p * x; H[k + 1][j] -= p * y;
+            }
+            for (let i = 0; i <= Math.min(n, k + 3); i++) {
+              p = x * H[i][k] + y * H[i][k + 1];
+              if (notlast) { p += z * H[i][k + 2]; H[i][k + 2] -= p * r; }
+              H[i][k] -= p; H[i][k + 1] -= p * q;
+            }
+            for (let i = low; i <= high; i++) {
+              p = x * V[i][k] + y * V[i][k + 1];
+              if (notlast) { p += z * V[i][k + 2]; V[i][k + 2] -= p * r; }
+              V[i][k] -= p; V[i][k + 1] -= p * q;
+            }
+          }
+        }
+      }
+    }
+    vm.cobrar(total * nn * nn);
+    if (!vectores || norma === 0) return { d, e };
+    // Sustitución hacia atrás sobre la forma triangular (por bloques).
+    for (n = nn - 1; n >= 0; n--) {
+      p = d[n]; q = e[n];
+      if (q === 0) {
+        let l = n;
+        H[n][n] = 1;
+        for (let i = n - 1; i >= 0; i--) {
+          w = H[i][i] - p; r = 0;
+          for (let j = l; j <= n; j++) r += H[i][j] * H[j][n];
+          if (e[i] < 0) { z = w; s = r; }
+          else {
+            l = i;
+            if (e[i] === 0) H[i][n] = w !== 0 ? -r / w : -r / (eps * norma);
+            else {
+              x = H[i][i + 1]; y = H[i + 1][i];
+              q = (d[i] - p) * (d[i] - p) + e[i] * e[i];
+              t = (x * s - z * r) / q;
+              H[i][n] = t;
+              H[i + 1][n] = Math.abs(x) > Math.abs(z) ? (-r - w * t) / x : (-s - y * t) / z;
+            }
+            t = Math.abs(H[i][n]);
+            if ((eps * t) * t > 1) for (let j = i; j <= n; j++) H[j][n] /= t;
+          }
+        }
+      } else if (q < 0) {
+        let l = n - 1;
+        if (Math.abs(H[n][n - 1]) > Math.abs(H[n - 1][n])) {
+          H[n - 1][n - 1] = q / H[n][n - 1];
+          H[n - 1][n] = -(H[n][n] - p) / H[n][n - 1];
+        } else {
+          const c = cdiv(0, -H[n - 1][n], H[n - 1][n - 1] - p, q);
+          H[n - 1][n - 1] = c[0]; H[n - 1][n] = c[1];
+        }
+        H[n][n - 1] = 0; H[n][n] = 1;
+        for (let i = n - 2; i >= 0; i--) {
+          let ra = 0, sa = 0;
+          for (let j = l; j <= n; j++) { ra += H[i][j] * H[j][n - 1]; sa += H[i][j] * H[j][n]; }
+          w = H[i][i] - p;
+          if (e[i] < 0) { z = w; r = ra; s = sa; }
+          else {
+            l = i;
+            if (e[i] === 0) { const c = cdiv(-ra, -sa, w, q); H[i][n - 1] = c[0]; H[i][n] = c[1]; }
+            else {
+              x = H[i][i + 1]; y = H[i + 1][i];
+              let vr = (d[i] - p) * (d[i] - p) + e[i] * e[i] - q * q;
+              const vi = (d[i] - p) * 2 * q;
+              if (vr === 0 && vi === 0) vr = eps * norma * (Math.abs(w) + Math.abs(q) + Math.abs(x) + Math.abs(y) + Math.abs(z));
+              const c = cdiv(x * r - z * ra + q * sa, x * s - z * sa - q * ra, vr, vi);
+              H[i][n - 1] = c[0]; H[i][n] = c[1];
+              if (Math.abs(x) > Math.abs(z) + Math.abs(q)) {
+                H[i + 1][n - 1] = (-ra - w * H[i][n - 1] + q * H[i][n]) / x;
+                H[i + 1][n] = (-sa - w * H[i][n] - q * H[i][n - 1]) / x;
+              } else {
+                const c2 = cdiv(-r - y * H[i][n - 1], -s - y * H[i][n], z, q);
+                H[i + 1][n - 1] = c2[0]; H[i + 1][n] = c2[1];
+              }
+            }
+            t = Math.max(Math.abs(H[i][n - 1]), Math.abs(H[i][n]));
+            if ((eps * t) * t > 1) for (let j = i; j <= n; j++) { H[j][n - 1] /= t; H[j][n] /= t; }
+          }
+        }
+      }
+    }
+    for (let j = nn - 1; j >= low; j--)
+      for (let i = low; i <= high; i++) {
+        z = 0;
+        for (let k = low; k <= Math.min(j, high); k++) z += V[i][k] * H[k][j];
+        V[i][j] = z;
+      }
+    return { d, e };
+  }
+  const aFilas = (M, n) => { const o = new Float64Array(n * n); for (let i = 0; i < n; i++) o.set(M[i], i * n); return o; };
+  const sinNoFinitos = (d, quien) => {
+    for (let i = 0; i < d.length; i++) if (!Number.isFinite(d[i]))
+      vm.error(`«${quien}»: la matriz tiene un ${Number.isNaN(d[i]) ? 'NaN' : 'infinito'} en la posición ${i}`, 'límpiala antes con aCero');
+  };
+  // El orden: de mayor a menor parte real, y en un par conjugado primero el de
+  // parte imaginaria positiva. Así el resultado no depende del orden en que el
+  // QR fue encontrando los valores.
+  function propiosDe(A, n, quien, conVectores) {
+    sinNoFinitos(A, quien);
+    const { H, V } = hessenbergDe(A, n);
+    const { d, e } = francis(H, V, n, conVectores, quien);
+    const orden = Array.from({ length: n }, (_, i) => i).sort((p, q) => (d[q] - d[p]) || (e[q] - e[p]) || (p - q));
+    return { d, e, V, orden };
+  }
+  def('formaHessenberg', 'arreglo|lista -> dic', a => {
+    const A = cuadrada(a[0], 1, 'formaHessenberg'), n = A.forma[0], d0 = planoDe(A);
+    sinNoFinitos(d0, 'formaHessenberg');
+    const { H, V } = hessenbergDe(d0, n);
+    const r = D();
+    r.mapa.set('H', deReales([n, n], aFilas(H, n))); r.mapa.set('Q', deReales([n, n], aFilas(V, n)));
+    return r;
+  }, 'formaHessenberg(A) — {"H","Q"} con A = Q·H·Qᵀ, Q ortogonal y H con ceros debajo de la subdiagonal · el primer paso de los valores propios');
+  def('factorSchur', 'arreglo|lista -> dic', a => {
+    const A = cuadrada(a[0], 1, 'factorSchur'), n = A.forma[0], d0 = planoDe(A);
+    sinNoFinitos(d0, 'factorSchur');
+    const { H, V } = hessenbergDe(d0, n);
+    const { e } = francis(H, V, n, false, 'factorSchur');
+    // Los restos diminutos de la subdiagonal se ponen a cero salvo en los
+    // bloques 2×2 de los pares complejos, que son parte de la forma.
+    for (let i = 1; i < n; i++) if (!(e[i - 1] > 0 && e[i] < 0)) H[i][i - 1] = 0;
+    for (let i = 2; i < n; i++) for (let j = 0; j < i - 1; j++) H[i][j] = 0;
+    const r = D();
+    r.mapa.set('T', deReales([n, n], aFilas(H, n))); r.mapa.set('Q', deReales([n, n], aFilas(V, n)));
+    return r;
+  }, 'factorSchur(A) — {"T","Q"} con A = Q·T·Qᵀ: T casi triangular (un bloque 2×2 por cada par de valores propios complejos) · la forma estable de la que salen los valores propios');
+  function valoresC(d, e, orden) {
+    const n = d.length, complejos = orden.some(i => e[i] !== 0);
+    if (!complejos) { const o = new Float64Array(n); orden.forEach((i, k) => { o[k] = d[i]; }); return deReales([n], o); }
+    const o = new Float64Array(2 * n);
+    orden.forEach((i, k) => { o[2 * k] = d[i]; o[2 * k + 1] = e[i]; });
+    return deComplejos([n], o);
+  }
+  def('autovaloresGeneral', 'arreglo|lista -> arreglo', a => {
+    const A = cuadrada(a[0], 1, 'autovaloresGeneral'), n = A.forma[0];
+    const { d, e, orden } = propiosDe(planoDe(A), n, 'autovaloresGeneral', false);
+    return valoresC(d, e, orden);
+  }, 'autovaloresGeneral(A) — los valores propios de CUALQUIER matriz cuadrada, por Hessenberg y QR de Francis · reales si todos lo son, complejos si hay pares conjugados (una rotación da ±i)');
+  def('autovectoresGeneral', 'arreglo|lista -> dic', a => {
+    const A = cuadrada(a[0], 1, 'autovectoresGeneral'), n = A.forma[0];
+    const { d, e, V, orden } = propiosDe(planoDe(A), n, 'autovectoresGeneral', true);
+    const complejos = orden.some(i => e[i] !== 0);
+    // Cada vector propio, normalizado a largo 1. En un par complejo, el de
+    // parte imaginaria positiva es V[:,j] + i·V[:,j+1] y su pareja el conjugado.
+    const col = new Float64Array(2 * n * n);
+    for (let j = 0; j < n; j++) {
+      let vr, vi;
+      if (e[j] === 0) { vr = V.map(f => f[j]); vi = new Array(n).fill(0); }
+      else if (e[j] > 0) { vr = V.map(f => f[j]); vi = V.map(f => f[j + 1]); }
+      else { vr = V.map(f => f[j - 1]); vi = V.map(f => -f[j]); }
+      let s = 0;
+      for (let i = 0; i < n; i++) s += vr[i] * vr[i] + vi[i] * vi[i];
+      s = Math.sqrt(s) || 1;
+      for (let i = 0; i < n; i++) { col[2 * (j * n + i)] = vr[i] / s; col[2 * (j * n + i) + 1] = vi[i] / s; }
+    }
+    const out = new Float64Array((complejos ? 2 : 1) * n * n);
+    orden.forEach((j, k) => {
+      for (let i = 0; i < n; i++) {
+        if (complejos) { out[2 * (i * n + k)] = col[2 * (j * n + i)]; out[2 * (i * n + k) + 1] = col[2 * (j * n + i) + 1]; }
+        else out[i * n + k] = col[2 * (j * n + i)];
+      }
+    });
+    const r = D();
+    r.mapa.set('valores', valoresC(d, e, orden));
+    r.mapa.set('vectores', complejos ? deComplejos([n, n], out) : deReales([n, n], out));
+    return r;
+  }, 'autovectoresGeneral(A) — {"valores","vectores"}: cada COLUMNA de vectores cumple A·v = λ·v y tiene largo 1 · complejos cuando hace falta · en matrices defectuosas los vectores de un valor repetido salen casi paralelos');
+  def('radioEspectral', 'arreglo|lista -> real', a => {
+    const A = cuadrada(a[0], 1, 'radioEspectral'), n = A.forma[0];
+    const { d, e } = propiosDe(planoDe(A), n, 'radioEspectral', false);
+    let r = 0;
+    for (let i = 0; i < n; i++) r = Math.max(r, Math.hypot(d[i], e[i]));
+    return r;
+  }, 'radioEspectral(A) — el mayor módulo de sus valores propios · menor que 1 quiere decir que A^k tiende a cero y que Jacobi o Gauss-Seidel con esa matriz de iteración convergen');
+
+  // exp(A) por Padé de grado 13 con escalado y cuadratura (Higham 2005, el
+  // método de «expm» de MATLAB y de SciPy). Se divide A entre 2^s hasta que
+  // su norma es pequeña, ahí el aproximante de Padé es exacto a precisión de
+  // máquina, y luego se eleva al cuadrado s veces. Las series de Taylor a
+  // secas pierden todas las cifras con matrices de norma grande.
+  const PADE13 = [64764752532480000, 32382376266240000, 7771770303897600, 1187353796428800, 129060195264000,
+    10559470521600, 670442572800, 33522128640, 1323241920, 40840800, 960960, 16380, 182, 1];
+  function expP(A0, n) {
+    const nrm = norma1(A0, n);
+    const s = nrm > 5.371920351148152 ? Math.ceil(Math.log2(nrm / 5.371920351148152)) : 0;
+    const A = A0.map(v => v / Math.pow(2, s));
+    const I = identidadP(n), b = PADE13;
+    const A2 = mm(A, A, n, n, n), A4 = mm(A2, A2, n, n, n), A6 = mm(A4, A2, n, n, n);
+    const comb = (c6, c4, c2, c0) => { const o = new Float64Array(n * n); for (let i = 0; i < n * n; i++) o[i] = c6 * A6[i] + c4 * A4[i] + c2 * A2[i] + c0 * I[i]; return o; };
+    const t1 = mm(A6, comb(b[13], b[11], b[9], 0), n, n, n), t2 = comb(b[7], b[5], b[3], b[1]);
+    for (let i = 0; i < n * n; i++) t1[i] += t2[i];
+    const U = mm(A, t1, n, n, n);
+    const v1 = mm(A6, comb(b[12], b[10], b[8], 0), n, n, n), v2 = comb(b[6], b[4], b[2], b[0]);
+    for (let i = 0; i < n * n; i++) v1[i] += v2[i];
+    const P = new Float64Array(n * n), Q = new Float64Array(n * n);
+    for (let i = 0; i < n * n; i++) { P[i] = v1[i] + U[i]; Q[i] = v1[i] - U[i]; }
+    let R = resolverP(Q, P, n, n);
+    for (let k = 0; k < s; k++) R = mm(R, R, n, n, n);
+    return R;
+  }
+  def('exponencialMatriz', 'arreglo|lista -> arreglo', a => {
+    const A = cuadrada(a[0], 1, 'exponencialMatriz'), n = A.forma[0], d = planoDe(A);
+    sinNoFinitos(d, 'exponencialMatriz');
+    return deReales([n, n], expP(d, n));
+  }, 'exponencialMatriz(A) — e^A = I + A + A²/2! + … por Padé 13 con escalado y cuadratura · la solución de x\' = A·x es exponencialMatriz(A·t)·x₀');
+
+  // Antes de una raíz o un logaritmo se miran los valores propios: con uno
+  // real negativo (o cero) no hay raíz ni logaritmo reales, y los métodos
+  // iterativos dan vueltas sin converger o devuelven basura.
+  function sinNegativos(d0, n, quien, que) {
+    const { d, e } = propiosDe(d0, n, quien, false);
+    const escala = Math.max(1e-300, ...Array.from(d).map(Math.abs));
+    for (let i = 0; i < n; i++) {
+      if (Math.abs(e[i]) > 1e-12 * escala) continue;
+      if (d[i] < 0) vm.error(`«${quien}»: la matriz tiene el valor propio real negativo ${d[i]}, y ${que} no es real`,
+        'el resultado complejo existe, pero Ñ todavía no hace funciones de matrices complejas');
+      if (Math.abs(d[i]) <= 1e-14 * escala) vm.error(`«${quien}»: la matriz es singular (tiene un valor propio en 0) y ${que} no está definida`);
+    }
+  }
+  // Denman–Beavers con escalado por el determinante: Y → √A y Z → √A⁻¹ a la
+  // vez. Es la iteración de Newton reescrita para que sea estable (la de
+  // Newton a secas amplifica los errores de redondeo y diverge).
+  function raizP(A, n, quien) {
+    let Y = Float64Array.from(A), Z = identidadP(n);
+    for (let k = 0; k < 100; k++) {
+      const Yi = inversaP(Y, n, quien), Zi = inversaP(Z, n, quien);
+      // El escalado solo en las primeras vueltas: acelera muchísimo cuando la
+      // matriz está lejos de la identidad, y cerca del final estorbaría.
+      let mu = 1;
+      if (k < 10) {
+        const dy = deNumerico('determinanteA', [deReales([n, n], Y)]), dz = deNumerico('determinanteA', [deReales([n, n], Z)]);
+        const pr = Math.abs(dy * dz);
+        if (pr > 0 && Number.isFinite(pr)) mu = Math.pow(pr, -1 / (2 * n));
+      }
+      const Y2 = new Float64Array(n * n), Z2 = new Float64Array(n * n);
+      for (let i = 0; i < n * n; i++) { Y2[i] = 0.5 * (mu * Y[i] + Zi[i] / mu); Z2[i] = 0.5 * (mu * Z[i] + Yi[i] / mu); }
+      let dif = 0;
+      for (let i = 0; i < n * n; i++) dif += (Y2[i] - Y[i]) * (Y2[i] - Y[i]);
+      Y = Y2; Z = Z2;
+      if (Math.sqrt(dif) <= 1e-14 * normaF(Y) && mu === 1) return Y;
+      if (Math.sqrt(dif) <= 1e-15 * normaF(Y)) return Y;
+    }
+    return vm.error(`«${quien}»: la iteración de Denman–Beavers no converge en 100 pasos`,
+      'suele pasar con matrices casi singulares o con valores propios muy cerca del eje real negativo');
+  }
+  def('raizMatriz', 'arreglo|lista -> arreglo', a => {
+    const A = cuadrada(a[0], 1, 'raizMatriz'), n = A.forma[0], d = planoDe(A);
+    sinNoFinitos(d, 'raizMatriz');
+    sinNegativos(d, n, 'raizMatriz', 'su raíz');
+    return deReales([n, n], raizP(d, n, 'raizMatriz'));
+  }, 'raizMatriz(A) — la raíz principal X con X·X = A, por Denman–Beavers · exige que A no tenga valores propios reales negativos ni nulos');
+  def('logaritmoMatriz', 'arreglo|lista -> arreglo', a => {
+    const A = cuadrada(a[0], 1, 'logaritmoMatriz'), n = A.forma[0];
+    let X = planoDe(A);
+    sinNoFinitos(X, 'logaritmoMatriz');
+    sinNegativos(X, n, 'logaritmoMatriz', 'su logaritmo');
+    // Escalado inverso y cuadratura: raíces sucesivas hasta que X está cerca
+    // de I (log de X^(1/2^k) = log(X)/2^k), y ahí la serie de artanh,
+    // log X = 2·Σ Z^(2j+1)/(2j+1) con Z = (X − I)(X + I)⁻¹, converge rápido.
+    const I = identidadP(n);
+    let k = 0;
+    const dist = M => { const D2 = new Float64Array(n * n); for (let i = 0; i < n * n; i++) D2[i] = M[i] - I[i]; return norma1(D2, n); };
+    while (dist(X) > 0.25 && k < 60) { X = raizP(X, n, 'logaritmoMatriz'); k++; }
+    const Xm = new Float64Array(n * n), Xp = new Float64Array(n * n);
+    for (let i = 0; i < n * n; i++) { Xm[i] = X[i] - I[i]; Xp[i] = X[i] + I[i]; }
+    const Z = resolverP(Xp, Xm, n, n);           // (X+I) y (X−I) conmutan
+    const Z2 = mm(Z, Z, n, n, n);
+    const suma = Float64Array.from(Z);
+    let P = Z;
+    for (let j = 1; j < 60; j++) {
+      P = mm(P, Z2, n, n, n);
+      let nt = 0;
+      for (let i = 0; i < n * n; i++) { const t = P[i] / (2 * j + 1); suma[i] += t; nt += t * t; }
+      if (Math.sqrt(nt) <= 1e-17 * (normaF(suma) || 1)) break;
+    }
+    const f = 2 * Math.pow(2, k);
+    for (let i = 0; i < n * n; i++) suma[i] *= f;
+    return deReales([n, n], suma);
+  }, 'logaritmoMatriz(A) — el logaritmo principal L con exponencialMatriz(L) = A, por escalado inverso y cuadratura · exige que A no tenga valores propios reales negativos ni nulos');
+
+  // Núcleo e imagen: por la SVD de numerico. Es la única forma fiable de
+  // decidir qué es «cero» con números con coma: los valores singulares por
+  // debajo de la tolerancia cuentan como cero.
+  function svdTol(a, quien) {
+    const A = mat2(a[0], 1, quien);
+    const r = deNumerico('descomponerSVD', [A]);
+    const S = r.mapa.get('S').datos, nf = A.forma[0], nc = A.forma[1];
+    const tol = a.length > 1 ? num(a[1], 2, quien) : Math.max(nf, nc) * EPS * (S[0] || 0);
+    return { U: r.mapa.get('U').datos, S, V: r.mapa.get('V').datos, nf, nc, tol };
+  }
+  def('nucleoMatriz', '... -> arreglo', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«nucleoMatriz» toma la matriz y, si quieres, la tolerancia');
+    const { S, V, nc, tol } = svdTol(a, 'nucleoMatriz');
+    const cols = [];
+    for (let k = 0; k < nc; k++) if (!(S[k] > tol)) cols.push(k);
+    const out = new Float64Array(nc * cols.length);
+    for (let i = 0; i < nc; i++) cols.forEach((k, j) => { out[i * cols.length + j] = V[i * nc + k]; });
+    return deReales([nc, cols.length], out);
+  }, 'nucleoMatriz(A, tol?) — una base ortonormal (en columnas) de los x con A·x = 0, por SVD · sin columnas si solo el 0 lo cumple');
+  def('imagenMatriz', '... -> arreglo', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«imagenMatriz» toma la matriz y, si quieres, la tolerancia');
+    const { U, S, nf, nc, tol } = svdTol(a, 'imagenMatriz');
+    const cols = [];
+    for (let k = 0; k < nc; k++) if (S[k] > tol) cols.push(k);
+    const out = new Float64Array(nf * cols.length);
+    for (let i = 0; i < nf; i++) cols.forEach((k, j) => { out[i * cols.length + j] = U[i * nc + k]; });
+    return deReales([nf, cols.length], out);
+  }, 'imagenMatriz(A, tol?) — una base ortonormal (en columnas) del espacio que generan las columnas de A · tantas columnas como el rango');
+  def('gramSchmidt', 'arreglo|lista -> dic', a => {
+    const A = mat2(a[0], 1, 'gramSchmidt'), nf = A.forma[0], nc = A.forma[1], d = planoDe(A);
+    if (nc > nf) vm.error(`«gramSchmidt»: hay ${nc} columnas en un espacio de ${nf} dimensiones, así que no pueden ser independientes`);
+    // Gram-Schmidt MODIFICADO: cada proyección se resta en cuanto se calcula,
+    // sobre el vector ya corregido. El clásico calcula todas contra el
+    // original y pierde la ortogonalidad cuando las columnas se parecen.
+    const Q = new Float64Array(nf * nc), R = new Float64Array(nc * nc), v = new Float64Array(nf);
+    for (let j = 0; j < nc; j++) {
+      let n0 = 0;
+      for (let i = 0; i < nf; i++) { v[i] = d[i * nc + j]; n0 += v[i] * v[i]; }
+      n0 = Math.sqrt(n0);
+      for (let k = 0; k < j; k++) {
+        let s = 0;
+        for (let i = 0; i < nf; i++) s += Q[i * nc + k] * v[i];
+        R[k * nc + j] = s;
+        for (let i = 0; i < nf; i++) v[i] -= s * Q[i * nc + k];
+      }
+      let nv = 0;
+      for (let i = 0; i < nf; i++) nv += v[i] * v[i];
+      nv = Math.sqrt(nv);
+      if (nv <= 1e-12 * (n0 || 1))
+        vm.error(`«gramSchmidt»: la columna ${j} depende de las anteriores`, 'quítala, o usa imagenMatriz, que aguanta columnas dependientes');
+      R[j * nc + j] = nv;
+      for (let i = 0; i < nf; i++) Q[i * nc + j] = v[i] / nv;
+    }
+    vm.cobrar(nf * nc * nc);
+    const r = D();
+    r.mapa.set('Q', deReales([nf, nc], Q)); r.mapa.set('R', deReales([nc, nc], R));
+    return r;
+  }, 'gramSchmidt(A) — {"Q","R"}: Q con columnas ortonormales que generan lo mismo que las de A, y A = Q·R · Gram-Schmidt modificado');
+  const simetricaP = (d, n) => { for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) if (Math.abs(d[i * n + j] - d[j * n + i]) > 1e-9 * (1 + Math.abs(d[i * n + j]))) return false; return true; };
+  def('factorLDL', 'arreglo|lista -> dic', a => {
+    const A = cuadrada(a[0], 1, 'factorLDL'), n = A.forma[0], d = planoDe(A);
+    if (!simetricaP(d, n)) vm.error('«factorLDL» necesita una matriz simétrica', 'para una cualquiera usa factorLU');
+    // Como Cholesky pero sin raíces: vale también para simétricas que no son
+    // definidas positivas (D puede tener negativos). Sin pivoteo, así que un
+    // cero en D lo para.
+    const Lm = new Float64Array(n * n), Dv = new Float64Array(n);
+    for (let j = 0; j < n; j++) {
+      let s = d[j * n + j];
+      for (let k = 0; k < j; k++) s -= Lm[j * n + k] * Lm[j * n + k] * Dv[k];
+      Dv[j] = s;
+      Lm[j * n + j] = 1;
+      if (Math.abs(s) <= 1e-14 * (1 + Math.abs(d[j * n + j])))
+        vm.error(`«factorLDL»: el pivote ${j} es cero y LDLᵀ sin pivoteo no existe para esta matriz`, 'usa factorLU, que pivota');
+      for (let i = j + 1; i < n; i++) {
+        let t = d[i * n + j];
+        for (let k = 0; k < j; k++) t -= Lm[i * n + k] * Lm[j * n + k] * Dv[k];
+        Lm[i * n + j] = t / s;
+      }
+    }
+    vm.cobrar(n * n * n);
+    const r = D();
+    r.mapa.set('L', deReales([n, n], Lm)); r.mapa.set('D', deReales([n], Dv));
+    return r;
+  }, 'factorLDL(A) — {"L","D"} con A = L·diagonal(D)·Lᵀ y L con unos en la diagonal · como Cholesky pero sin raíces, y vale para simétricas indefinidas');
+
+  // Los iterativos. Sirven cuando A es grande y casi toda ceros, o cuando
+  // basta una solución aproximada: cada paso es un producto matriz-vector.
+  function argsIterativo(a, quien) {
+    if (a.length < 2 || a.length > 4) vm.error(`«${quien}» toma A, b y, si quieres, la tolerancia y el máximo de iteraciones`);
+    const A = cuadrada(a[0], 1, quien), n = A.forma[0], b = vector(a[1], 2, quien);
+    if (b.tamano !== n) vm.error(`«${quien}»: la matriz es ${n}×${n} y el vector tiene ${b.tamano}`);
+    const tol = a.length > 2 ? num(a[2], 3, quien) : 1e-10;
+    const maxIt = a.length > 3 ? ent(a[3], 4, quien) : Math.max(1000, 10 * n);
+    const bd = planoDe(b);
+    let nb = 0;
+    for (let i = 0; i < n; i++) nb += bd[i] * bd[i];
+    return { A: planoDe(A), n, b: bd, tol, maxIt, nb: Math.sqrt(nb) };
+  }
+  def('resolverGradienteConjugado', '... -> arreglo', a => {
+    const { A, n, b, tol, maxIt, nb } = argsIterativo(a, 'resolverGradienteConjugado');
+    if (!simetricaP(A, n)) vm.error('«resolverGradienteConjugado» necesita una matriz simétrica', 'para una cualquiera usa resolverA o resolverGaussSeidel');
+    const x = new Float64Array(n), r = Float64Array.from(b), p = Float64Array.from(b);
+    let rr = 0;
+    for (let i = 0; i < n; i++) rr += r[i] * r[i];
+    if (nb === 0) return deReales([n], x);
+    for (let it = 0; it < maxIt; it++) {
+      if (Math.sqrt(rr) <= tol * nb) return deReales([n], x);
+      const Ap = mm(A, p, n, n, 1);
+      let pAp = 0;
+      for (let i = 0; i < n; i++) pAp += p[i] * Ap[i];
+      if (!(pAp > 0)) vm.error('«resolverGradienteConjugado»: la matriz no es definida positiva (pᵀ·A·p ≤ 0)',
+        'el gradiente conjugado solo vale para simétricas definidas positivas; usa resolverA');
+      const alfa = rr / pAp;
+      let rr2 = 0;
+      for (let i = 0; i < n; i++) { x[i] += alfa * p[i]; r[i] -= alfa * Ap[i]; rr2 += r[i] * r[i]; }
+      const beta = rr2 / rr;
+      for (let i = 0; i < n; i++) p[i] = r[i] + beta * p[i];
+      rr = rr2;
+    }
+    if (Math.sqrt(rr) <= tol * nb) return deReales([n], x);
+    return vm.error(`«resolverGradienteConjugado»: no converge en ${maxIt} iteraciones (el residuo relativo es ${(Math.sqrt(rr) / nb).toExponential(2)})`,
+      'sube el máximo de iteraciones (cuarto argumento) o afloja la tolerancia (tercero); una matriz muy mal condicionada converge muy despacio');
+  }, 'resolverGradienteConjugado(A, b, tol?, maxIter?) — la x de A·x = b para A simétrica definida positiva, iterando · en exacto acaba en n pasos · avisa si no converge');
+  function iterarClasico(a, quien, seidel) {
+    const { A, n, b, tol, maxIt, nb } = argsIterativo(a, quien);
+    for (let i = 0; i < n; i++) if (A[i * n + i] === 0)
+      vm.error(`«${quien}»: hay un 0 en la diagonal (fila ${i}) y el método divide entre ella`, 'reordena las filas para que la diagonal no tenga ceros');
+    let x = new Float64Array(n);
+    for (let it = 1; it <= maxIt; it++) {
+      const nuevo = seidel ? x : new Float64Array(n);
+      let dif = 0, tam = 0;
+      for (let i = 0; i < n; i++) {
+        let s = b[i];
+        for (let j = 0; j < n; j++) if (j !== i) s -= A[i * n + j] * x[j];
+        const v = s / A[i * n + i];
+        dif = Math.max(dif, Math.abs(v - x[i])); tam = Math.max(tam, Math.abs(v));
+        nuevo[i] = v;
+      }
+      x = nuevo;
+      vm.cobrar(n * n);
+      if (!Number.isFinite(dif)) break;
+      if (dif <= tol * (tam || 1)) {
+        let rr = 0;
+        for (let i = 0; i < n; i++) { let s = -b[i]; for (let j = 0; j < n; j++) s += A[i * n + j] * x[j]; rr += s * s; }
+        if (Math.sqrt(rr) <= Math.max(tol, 1e-12) * (nb || 1) * 1e3) return deReales([n], x);
+      }
+    }
+    return vm.error(`«${quien}»: no converge en ${maxIt} iteraciones`,
+      'converge seguro si la matriz es diagonalmente dominante (cada |aᵢᵢ| mayor que la suma del resto de su fila)' +
+      (seidel ? ' o simétrica definida positiva' : '') + '; si no, usa resolverA');
+  }
+  def('resolverGaussSeidel', '... -> arreglo', a => iterarClasico(a, 'resolverGaussSeidel', true),
+    'resolverGaussSeidel(A, b, tol?, maxIter?) — la x de A·x = b iterando y usando cada valor nuevo en cuanto se calcula · converge con A diagonalmente dominante o simétrica definida positiva · avisa si no');
+  def('resolverJacobi', '... -> arreglo', a => iterarClasico(a, 'resolverJacobi', false),
+    'resolverJacobi(A, b, tol?, maxIter?) — como Gauss-Seidel pero cada vuelta usa solo los valores de la anterior: más lento, y cada fila es independiente (paralelizable)');
+
+  // Matrices con nombre propio.
+  def('vandermonde', '... -> arreglo', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«vandermonde» toma los puntos y, si quieres, cuántas columnas');
+    const x = planoDe(real(vector(a[0], 1, 'vandermonde'), 1, 'vandermonde'));
+    const m = a.length > 1 ? ent(a[1], 2, 'vandermonde') : x.length;
+    if (m < 0) vm.error('«vandermonde»: las columnas no pueden ser negativas');
+    const out = new Float64Array(x.length * m);
+    for (let i = 0; i < x.length; i++) { let p = 1; for (let j = 0; j < m; j++) { out[i * m + j] = p; p *= x[i]; } }
+    return deReales([x.length, m], out);
+  }, 'vandermonde(x, columnas?) — la matriz de potencias CRECIENTES [1, x, x², …] por fila · resolverA(vandermonde(x), y) da el polinomio que pasa por los puntos, de menor a mayor grado');
+  def('toeplitz', '... -> arreglo', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«toeplitz» toma la primera columna y, si quieres, la primera fila');
+    const c = planoDe(real(vector(a[0], 1, 'toeplitz'), 1, 'toeplitz'));
+    const r = a.length > 1 ? planoDe(real(vector(a[1], 2, 'toeplitz'), 2, 'toeplitz')) : c;
+    // Como en SciPy: el primer número de la fila se ignora; manda el de la columna.
+    const nf = c.length, nc = r.length, out = new Float64Array(nf * nc);
+    for (let i = 0; i < nf; i++) for (let j = 0; j < nc; j++) out[i * nc + j] = i >= j ? c[i - j] : r[j - i];
+    return deReales([nf, nc], out);
+  }, 'toeplitz(columna, fila?) — la matriz constante a lo largo de cada diagonal · sin fila, simétrica · la de una convolución o una autocorrelación');
+  def('hilbert', 'entero -> arreglo', a => {
+    const n = ent(a[0], 1, 'hilbert');
+    if (n < 1) vm.error('«hilbert»: el tamaño tiene que ser 1 o más');
+    const out = new Float64Array(n * n);
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) out[i * n + j] = 1 / (i + j + 1);
+    return deReales([n, n], out);
+  }, 'hilbert(n) — H[i][j] = 1/(i+j+1) · la matriz mal condicionada de los ejemplos: con n = 12 se pierden 16 cifras al resolver');
+  def('matrizRotacion', '... -> arreglo', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«matrizRotacion» toma el ángulo y, para 3D, el eje ("x", "y", "z" o un vector)');
+    const t = num(a[0], 1, 'matrizRotacion'), c = Math.cos(t), s = Math.sin(t);
+    if (a.length === 1) return deReales([2, 2], Float64Array.of(c, -s, s, c));
+    let u;
+    if (typeof a[1] === 'string') {
+      const ejes = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+      u = ejes[a[1]];
+      if (!u) vm.error(`«matrizRotacion»: el eje «${a[1]}» no existe`, 'son "x", "y", "z", o un vector de 3 componentes');
+    } else {
+      u = Array.from(planoDe(real(vector(a[1], 2, 'matrizRotacion'), 2, 'matrizRotacion')));
+      if (u.length !== 3) vm.error('«matrizRotacion»: el eje tiene que ser un vector de 3 componentes');
+      const nu = Math.hypot(u[0], u[1], u[2]);
+      if (nu === 0) vm.error('«matrizRotacion»: el eje no puede ser el vector cero');
+      u = u.map(v => v / nu);
+    }
+    // Rodrigues: R = cos·I + sen·[u]× + (1 − cos)·u·uᵀ.
+    const [x, y, z] = u, k = 1 - c;
+    return deReales([3, 3], Float64Array.of(
+      c + x * x * k, x * y * k - z * s, x * z * k + y * s,
+      y * x * k + z * s, c + y * y * k, y * z * k - x * s,
+      z * x * k - y * s, z * y * k + x * s, c + z * z * k));
+  }, 'matrizRotacion(angulo) — la de 2×2 · matrizRotacion(angulo, "z") o (angulo, [ux, uy, uz]) — la de 3×3 alrededor de ese eje (Rodrigues), en sentido antihorario');
+
+  // ════════════════════════════════════════════ Fourier y señales
+  const fourier2DArg = (v, quien) => {
+    const x = aArr(v, 1, quien);
+    if (x.dimensiones !== 2) vm.error(`«${quien}» trabaja sobre matrices (2 dimensiones) y llegó un arreglo de ${x.dimensiones}`,
+      'para una dimensión usa fourier de numerico');
+    if (x.tamano === 0) vm.error(`«${quien}» de un arreglo vacío`);
+    return x;
+  };
+  def('fourier2D', 'arreglo|lista -> arreglo', a => {
+    const x = fourier2DArg(a[0], 'fourier2D'), M = x.forma[0], N = x.forma[1];
+    return deComplejos([M, N], fft2D(planoC(x), M, N, -1));
+  }, 'fourier2D(m) — la transformada de una imagen o una matriz: por filas y después por columnas · real o complejo, devuelve complejos · cualquier tamaño');
+  def('fourierInversa2D', 'arreglo|lista -> arreglo', a => {
+    const x = fourier2DArg(a[0], 'fourierInversa2D'), M = x.forma[0], N = x.forma[1];
+    return deComplejos([M, N], dividirTodo(fft2D(planoC(x), M, N, 1), M * N));
+  }, 'fourierInversa2D(F) — el camino de vuelta, ya dividido entre el número de datos · fourierInversa2D(fourier2D(m)) devuelve m');
+  const senal = (v, n, quien) => {
+    const x = vector(v, n, quien);
+    if (x.tamano === 0) vm.error(`«${quien}» de una señal vacía`);
+    return x;
+  };
+  def('fourierReal', 'arreglo|lista -> arreglo', a => {
+    const x = real(senal(a[0], 1, 'fourierReal'), 1, 'fourierReal'), n = x.tamano;
+    const F = fftFilas(aComplejo(planoDe(x)), 1, n, -1), m = Math.floor(n / 2) + 1;
+    return deComplejos([m], F.subarray(0, 2 * m));
+  }, 'fourierReal(x) — de una señal REAL, solo las frecuencias no negativas: n/2+1 números · las otras son sus conjugadas y no aportan nada');
+  def('fourierRealInversa', '... -> arreglo', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«fourierRealInversa» toma el medio espectro y, si quieres, el largo de la señal');
+    const X = senal(a[0], 1, 'fourierRealInversa'), m = X.tamano;
+    const n = a.length > 1 ? ent(a[1], 2, 'fourierRealInversa') : 2 * (m - 1);
+    if (n < 1) vm.error('«fourierRealInversa»: el largo tiene que ser 1 o más');
+    if (Math.floor(n / 2) + 1 > m) vm.error(`«fourierRealInversa»: para ${n} datos hacen falta ${Math.floor(n / 2) + 1} frecuencias y hay ${m}`);
+    const h = planoC(X), d = new Float64Array(2 * n);
+    // Se reconstruye el espectro entero con la simetría de una señal real:
+    // X[n−k] = conjugado(X[k]). La parte imaginaria de X[0] (y de X[n/2] si n
+    // es par) se ignora, porque en una señal real tiene que ser cero.
+    for (let k = 0; k <= Math.floor(n / 2); k++) { d[2 * k] = h[2 * k]; d[2 * k + 1] = h[2 * k + 1]; }
+    d[1] = 0;
+    if (n % 2 === 0) d[n + 1] = 0;
+    for (let k = 1; k < n - Math.floor(n / 2); k++) { d[2 * (n - k)] = h[2 * k]; d[2 * (n - k) + 1] = -h[2 * k + 1]; }
+    const y = fftFilas(d, 1, n, 1), out = new Float64Array(n);
+    for (let i = 0; i < n; i++) out[i] = y[2 * i] / n;
+    return deReales([n], out);
+  }, 'fourierRealInversa(X, n?) — de vuelta desde fourierReal a una señal real de n datos (por omisión 2·(largo−1), es decir, n par)');
+  def('frecuenciasReal', '... -> arreglo', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«frecuenciasReal» toma cuántos datos y, si quieres, el paso de muestreo');
+    const n = ent(a[0], 1, 'frecuenciasReal'), paso = a.length > 1 ? num(a[1], 2, 'frecuenciasReal') : 1;
+    if (n < 1) vm.error('«frecuenciasReal» necesita al menos 1 dato');
+    if (paso === 0) vm.error('«frecuenciasReal»: el paso de muestreo no puede ser 0');
+    const m = Math.floor(n / 2) + 1, out = new Float64Array(m);
+    for (let i = 0; i < m; i++) out[i] = i / (n * paso);
+    return deReales([m], out);
+  }, 'frecuenciasReal(n, paso?) — el eje de frecuencias de fourierReal: 0, 1/(n·paso), … hasta la de Nyquist');
+  function centrar(a, quien, signo) {
+    const x = aArr(a[0], 1, quien);
+    const ejes = a.length > 1 && a[1] !== null ? ejesDe(x, a[1], quien) : x.forma.map((_, i) => i);
+    let t = x;
+    for (const e of ejes) {
+      const k = signo > 0 ? Math.floor(t.forma[e] / 2) : -Math.floor(t.forma[e] / 2);
+      t = new ObjArreglo(rodarPlano(t, k, e), t.forma.slice(), esC(x) ? 'complejo' : 'real');
+    }
+    return deTipo(x, x.forma, planoDe(t));
+  }
+  def('centrarFrecuencias', '... -> arreglo', a => centrar(a, 'centrarFrecuencias', 1),
+    'centrarFrecuencias(F, eje?) — pone la frecuencia 0 en el centro (fftshift) para dibujar el espectro · en todos los ejes si no dices cuál');
+  def('descentrarFrecuencias', '... -> arreglo', a => centrar(a, 'descentrarFrecuencias', -1),
+    'descentrarFrecuencias(F, eje?) — deshace centrarFrecuencias (ifftshift), también con largos impares');
+  function ventanaDe(tipo, n, simetrica, quien) {
+    const w = new Float64Array(n);
+    if (n === 1) { w[0] = 1; return w; }
+    // Periódica por omisión (denominador n): es la que se quiere para análisis
+    // espectral, porque encaja exacta con la FFT. La simétrica (n − 1) es la
+    // de diseñar filtros.
+    const N = simetrica ? n - 1 : n;
+    const c = { hann: [0.5, 0.5, 0], hamming: [0.54, 0.46, 0], blackman: [0.42, 0.5, 0.08] }[tipo];
+    for (let i = 0; i < n; i++) {
+      if (tipo === 'rectangular') w[i] = 1;
+      else if (tipo === 'bartlett') w[i] = 1 - Math.abs((2 * i - N) / N);
+      else if (c) w[i] = c[0] - c[1] * Math.cos(2 * Math.PI * i / N) + c[2] * Math.cos(4 * Math.PI * i / N);
+      else vm.error(`«${quien}»: la ventana «${tipo}» no existe`, 'son "hann", "hamming", "blackman", "bartlett" y "rectangular"');
+    }
+    return w;
+  }
+  def('ventana', '... -> arreglo', a => {
+    if (a.length < 2 || a.length > 3) vm.error('«ventana» toma el tipo, el tamaño y, si quieres, si es simétrica');
+    const tipo = textoDe(a[0], 1, 'ventana'), n = ent(a[1], 2, 'ventana');
+    if (n < 1) vm.error('«ventana»: el tamaño tiene que ser 1 o más');
+    return deReales([n], ventanaDe(tipo, n, a.length > 2 && !!a[2], 'ventana'));
+  }, 'ventana(tipo, n, simetrica?) — "hann", "hamming", "blackman", "bartlett" o "rectangular" · periódica por omisión (la del análisis espectral); simétrica con verdadero');
+  // Los cuadros de una señal, ya multiplicados por la ventana, transformados
+  // todos a la vez (una fila cada uno).
+  function cuadros(x, tamano, salto, w, quitarMedia) {
+    const n = x.length, k = 1 + Math.floor((n - tamano) / salto), d = new Float64Array(k * 2 * tamano);
+    for (let f = 0; f < k; f++) {
+      let m = 0;
+      if (quitarMedia) { for (let i = 0; i < tamano; i++) m += x[f * salto + i]; m /= tamano; }
+      for (let i = 0; i < tamano; i++) d[f * 2 * tamano + 2 * i] = (x[f * salto + i] - m) * w[i];
+    }
+    return { F: fftFilas(d, k, tamano, -1), k };
+  }
+  def('espectrograma', '... -> arreglo', a => {
+    if (a.length < 3 || a.length > 4) vm.error('«espectrograma» toma la señal, el tamaño de cada cuadro, el salto y, si quieres, la ventana');
+    const x = planoDe(real(senal(a[0], 1, 'espectrograma'), 1, 'espectrograma'));
+    const tam = ent(a[1], 2, 'espectrograma'), salto = ent(a[2], 3, 'espectrograma');
+    if (tam < 1 || salto < 1) vm.error('«espectrograma»: el tamaño y el salto tienen que ser 1 o más');
+    if (tam > x.length) vm.error(`«espectrograma»: el cuadro (${tam}) es más largo que la señal (${x.length})`);
+    const w = ventanaDe(a.length > 3 ? textoDe(a[3], 4, 'espectrograma') : 'hann', tam, false, 'espectrograma');
+    const { F, k } = cuadros(x, tam, salto, w, false), m = Math.floor(tam / 2) + 1, out = new Float64Array(k * m);
+    for (let f = 0; f < k; f++) for (let j = 0; j < m; j++)
+      out[f * m + j] = Math.hypot(F[f * 2 * tam + 2 * j], F[f * 2 * tam + 2 * j + 1]);
+    return deReales([k, m], out);
+  }, 'espectrograma(senal, tamano, salto, ventana?) — una fila por cuadro y una columna por frecuencia (0 a n/2), con el MÓDULO de su transformada · cómo cambia el espectro con el tiempo');
+  def('potenciaEspectral', '... -> dic', a => {
+    if (a.length < 1 || a.length > 3) vm.error('«potenciaEspectral» toma la señal y, si quieres, el tamaño de los trozos y la frecuencia de muestreo');
+    const x = planoDe(real(senal(a[0], 1, 'potenciaEspectral'), 1, 'potenciaEspectral'));
+    const tam = Math.min(a.length > 1 && a[1] !== null ? ent(a[1], 2, 'potenciaEspectral') : 256, x.length);
+    const fs = a.length > 2 ? num(a[2], 3, 'potenciaEspectral') : 1;
+    if (tam < 1) vm.error('«potenciaEspectral»: el tamaño de los trozos tiene que ser 1 o más');
+    if (!(fs > 0)) vm.error('«potenciaEspectral»: la frecuencia de muestreo tiene que ser positiva');
+    // Welch: trozos solapados a la mitad, cada uno sin su media y con ventana
+    // de Hann, y la media de sus periodogramas. Promediar es lo que quita el
+    // ruido que tiene el periodograma de la señal entera, que no mejora por
+    // muchos datos que haya. Mismas convenciones que scipy.signal.welch.
+    const w = ventanaDe('hann', tam, false, 'potenciaEspectral');
+    const salto = tam - Math.floor(tam / 2);
+    const { F, k } = cuadros(x, tam, salto, w, true), m = Math.floor(tam / 2) + 1;
+    let sw = 0;
+    for (let i = 0; i < tam; i++) sw += w[i] * w[i];
+    const P = new Float64Array(m), fr = new Float64Array(m);
+    for (let j = 0; j < m; j++) {
+      let s = 0;
+      for (let f = 0; f < k; f++) { const re = F[f * 2 * tam + 2 * j], im = F[f * 2 * tam + 2 * j + 1]; s += re * re + im * im; }
+      const doble = j > 0 && !(tam % 2 === 0 && j === m - 1) ? 2 : 1;
+      P[j] = doble * s / k / (fs * sw);
+      fr[j] = j * fs / tam;
+    }
+    const r = D();
+    r.mapa.set('frecuencias', deReales([m], fr)); r.mapa.set('potencia', deReales([m], P));
+    return r;
+  }, 'potenciaEspectral(senal, tamano?, fs?) — {"frecuencias","potencia"}: la densidad espectral por el método de Welch (trozos de 256 solapados a la mitad, Hann) · dónde está la energía de una señal con ruido');
+  // Convolución lineal de dos señales complejas por FFT, de largo n+m−1.
+  function convolucionC(p, q, n, m) {
+    const largo = n + m - 1, T = 1 << Math.ceil(Math.log2(Math.max(1, largo)));
+    const A = new Float64Array(2 * T), B = new Float64Array(2 * T);
+    A.set(p.subarray(0, 2 * n)); B.set(q.subarray(0, 2 * m));
+    const FA = fftFilas(A, 1, T, -1), FB = fftFilas(B, 1, T, -1);
+    correr('nen_cmul_filas', T, T, T, FA, FB);
+    const R = fftFilas(FA, 1, T, 1);
+    return dividirTodo(R.slice(0, 2 * largo), T);
+  }
+  def('correlacionCruzada', 'arreglo|lista, arreglo|lista -> arreglo', a => {
+    const x = senal(a[0], 1, 'correlacionCruzada'), y = senal(a[1], 2, 'correlacionCruzada');
+    const n = x.tamano, m = y.tamano, py = planoC(y), rev = new Float64Array(2 * m);
+    // Correlar es convolucionar con la otra al revés y conjugada.
+    for (let i = 0; i < m; i++) { rev[2 * i] = py[2 * (m - 1 - i)]; rev[2 * i + 1] = -py[2 * (m - 1 - i) + 1]; }
+    const c = convolucionC(planoC(x), rev, n, m);
+    if (esC(x) || esC(y)) return deComplejos([n + m - 1], c);
+    const out = new Float64Array(n + m - 1);
+    for (let i = 0; i < out.length; i++) out[i] = c[2 * i];
+    return deReales([n + m - 1], out);
+  }, 'correlacionCruzada(a, b) — Σ a[n+k]·conj(b[n]) para cada desfase k, de −(largo(b)−1) a largo(a)−1 (n+m−1 números, como NumPy) · dónde se parece más una señal a la otra');
+  def('autocorrelacion', 'arreglo|lista -> arreglo', a => {
+    const x = planoDe(real(senal(a[0], 1, 'autocorrelacion'), 1, 'autocorrelacion')), n = x.length;
+    let m = 0;
+    for (let i = 0; i < n; i++) m += x[i];
+    m /= n;
+    const c = new Float64Array(2 * n);
+    for (let i = 0; i < n; i++) c[2 * i] = x[i] - m;
+    const rev = new Float64Array(2 * n);
+    for (let i = 0; i < n; i++) rev[2 * i] = c[2 * (n - 1 - i)];
+    const r = convolucionC(c, rev, n, n), out = new Float64Array(n), r0 = r[2 * (n - 1)];
+    if (!(r0 > 0)) vm.error('«autocorrelacion»: la señal es constante y no tiene variación que comparar');
+    for (let k = 0; k < n; k++) out[k] = r[2 * (n - 1 + k)] / r0;
+    return deReales([n], out);
+  }, 'autocorrelacion(x) — cuánto se parece la serie (sin su media) a sí misma desplazada k pasos, de k = 0 (vale 1) a n−1 · los picos son sus periodos');
+  // DCT-II ortonormal por una sola FFT de largo n (Makhoul 1980): se reordena
+  // x con los pares delante y los impares al revés detrás, y la DCT sale de
+  // girar la FFT por e^(−iπk/2n). Ortonormal = la inversa es la transpuesta y
+  // se conserva la energía, como en JPEG y en scipy con norm="ortho".
+  function dctII(x) {
+    const n = x.length, v = new Float64Array(2 * n);
+    for (let k = 0; k < Math.ceil(n / 2); k++) v[2 * k] = x[2 * k];
+    for (let k = 0; k < Math.floor(n / 2); k++) v[2 * (n - 1 - k)] = x[2 * k + 1];
+    const V = fftFilas(v, 1, n, -1), out = new Float64Array(n);
+    for (let k = 0; k < n; k++) {
+      const ang = -Math.PI * k / (2 * n);
+      const re = V[2 * k] * Math.cos(ang) - V[2 * k + 1] * Math.sin(ang);
+      out[k] = 2 * re * (k === 0 ? Math.sqrt(1 / (4 * n)) : Math.sqrt(1 / (2 * n)));
+    }
+    return out;
+  }
+  function dctIII(X) {
+    const n = X.length, y = new Float64Array(n + 1);
+    for (let k = 0; k < n; k++) y[k] = X[k] / (k === 0 ? Math.sqrt(1 / (4 * n)) : Math.sqrt(1 / (2 * n)));
+    // De la DCT sin normalizar a la FFT de la señal reordenada:
+    // V[k] = e^(iπk/2n)·(y[k] − i·y[n−k])/2, con y[n] = 0.
+    const V = new Float64Array(2 * n);
+    for (let k = 0; k < n; k++) {
+      const ar = y[k] / 2, ai = k === 0 ? 0 : -y[n - k] / 2, ang = Math.PI * k / (2 * n), c = Math.cos(ang), s = Math.sin(ang);
+      V[2 * k] = ar * c - ai * s; V[2 * k + 1] = ar * s + ai * c;
+    }
+    const v = fftFilas(V, 1, n, 1), out = new Float64Array(n);
+    for (let k = 0; k < Math.ceil(n / 2); k++) out[2 * k] = v[2 * k] / n;
+    for (let k = 0; k < Math.floor(n / 2); k++) out[2 * k + 1] = v[2 * (n - 1 - k)] / n;
+    return out;
+  }
+  def('transformadaCoseno', 'arreglo|lista -> arreglo', a => {
+    const x = real(senal(a[0], 1, 'transformadaCoseno'), 1, 'transformadaCoseno');
+    return deReales([x.tamano], dctII(planoDe(x)));
+  }, 'transformadaCoseno(x) — la DCT-II ortonormal (la de JPEG y MP3): solo cosenos, sin complejos · concentra la energía en los primeros números');
+  def('transformadaCosenoInversa', 'arreglo|lista -> arreglo', a => {
+    const X = real(senal(a[0], 1, 'transformadaCosenoInversa'), 1, 'transformadaCosenoInversa');
+    return deReales([X.tamano], dctIII(planoDe(X)));
+  }, 'transformadaCosenoInversa(X) — la DCT-III ortonormal: transformadaCosenoInversa(transformadaCoseno(x)) devuelve x');
+  def('filtrarFrecuencias', '... -> arreglo', a => {
+    if (a.length < 3 || a.length > 4) vm.error('«filtrarFrecuencias» toma la señal, el tipo y uno o dos cortes',
+      'filtrarFrecuencias(x, "bajos", 0.1) · filtrarFrecuencias(x, "banda", 0.05, 0.2)');
+    const x = real(senal(a[0], 1, 'filtrarFrecuencias'), 1, 'filtrarFrecuencias'), n = x.tamano;
+    const tipo = textoDe(a[1], 2, 'filtrarFrecuencias');
+    const c1 = num(a[2], 3, 'filtrarFrecuencias'), c2 = a.length > 3 ? num(a[3], 4, 'filtrarFrecuencias') : null;
+    const doble = tipo === 'banda' || tipo === 'rechazaBanda';
+    if (!['bajos', 'altos', 'banda', 'rechazaBanda'].includes(tipo))
+      vm.error(`«filtrarFrecuencias»: el tipo «${tipo}» no existe`, 'son "bajos", "altos", "banda" y "rechazaBanda"');
+    if (doble && c2 === null) vm.error(`«filtrarFrecuencias»: un filtro «${tipo}» necesita dos cortes (desde y hasta)`);
+    if (!doble && c2 !== null) vm.error(`«filtrarFrecuencias»: un filtro «${tipo}» lleva un solo corte`);
+    for (const c of [c1, c2]) if (c !== null && (c < 0 || c > 0.5))
+      vm.error(`«filtrarFrecuencias»: el corte ${c} se sale de 0 a 0.5`,
+        'los cortes van en ciclos por muestra: si mediste en Hz, divide entre la frecuencia de muestreo (0.5 es la de Nyquist)');
+    // Un filtro ideal: la transformada, poner a cero lo que no pasa y volver.
+    // Es exacto en frecuencia y sencillo de entender; a cambio, en el tiempo
+    // produce ondulaciones cerca de los saltos bruscos (el fenómeno de Gibbs).
+    const F = fftFilas(aComplejo(planoDe(x)), 1, n, -1);
+    for (let k = 0; k < n; k++) {
+      const f = Math.abs(k <= (n - 1) / 2 ? k / n : (k - n) / n);
+      const pasa = tipo === 'bajos' ? f <= c1 : tipo === 'altos' ? f >= c1
+        : tipo === 'banda' ? f >= c1 && f <= c2 : !(f >= c1 && f <= c2);
+      if (!pasa) { F[2 * k] = 0; F[2 * k + 1] = 0; }
+    }
+    const y = fftFilas(F, 1, n, 1), out = new Float64Array(n);
+    for (let i = 0; i < n; i++) out[i] = y[2 * i] / n;
+    return deReales([n], out);
+  }, 'filtrarFrecuencias(x, tipo, corte, corte2?) — filtro ideal por Fourier: "bajos", "altos", "banda" o "rechazaBanda", con los cortes en ciclos por muestra (0 a 0.5)');
+  def('convolucion2D', '... -> arreglo', a => {
+    if (a.length < 2 || a.length > 3) vm.error('«convolucion2D» toma la imagen, el núcleo y, si quieres, el modo');
+    const A = mat2(a[0], 1, 'convolucion2D'), B = mat2(a[1], 2, 'convolucion2D');
+    const modo = a.length > 2 ? textoDe(a[2], 3, 'convolucion2D') : 'completa';
+    const [Ma, Na] = A.forma, [Mb, Nb] = B.forma;
+    let Mo, No, oM, oN;
+    if (modo === 'completa') { Mo = Ma + Mb - 1; No = Na + Nb - 1; oM = 0; oN = 0; }
+    else if (modo === 'misma') { Mo = Ma; No = Na; oM = Math.floor((Mb - 1) / 2); oN = Math.floor((Nb - 1) / 2); }
+    else if (modo === 'valida') {
+      Mo = Ma - Mb + 1; No = Na - Nb + 1; oM = Mb - 1; oN = Nb - 1;
+      if (Mo < 1 || No < 1) vm.error(`«convolucion2D»: en modo "valida" el núcleo (${Mb}×${Nb}) no cabe en la imagen (${Ma}×${Na})`);
+    } else vm.error(`«convolucion2D»: el modo «${modo}» no existe`, 'son "completa" (por omisión), "misma" y "valida", como en SciPy');
+    if (Ma * Na === 0 || Mb * Nb === 0) vm.error('«convolucion2D» de una matriz vacía');
+    const y = new Float64Array(Mo * No);
+    correr('nen_conv2d', Mo * No * Mb * Nb, Mo * No, Ma, Na, Mb, Nb, No, oM, oN, planoDe(A), planoDe(B), y);
+    return deReales([Mo, No], y);
+  }, 'convolucion2D(imagen, nucleo, modo?) — desenfocar, detectar bordes, suavizar una malla · modos "completa", "misma" (del tamaño de la imagen) y "valida" · un hilo de GPU por píxel');
+  function analitica(x) {
+    const n = x.length, F = fftFilas(aComplejo(x), 1, n, -1);
+    // El filtro de Hilbert en frecuencia: dobla las positivas y anula las
+    // negativas. Lo que queda es la señal con su versión desfasada 90° como
+    // parte imaginaria.
+    for (let k = 0; k < n; k++) {
+      let h;
+      if (k === 0 || (n % 2 === 0 && k === n / 2)) h = 1;
+      else if (k < n / 2) h = 2;
+      else h = 0;
+      F[2 * k] *= h; F[2 * k + 1] *= h;
+    }
+    return dividirTodo(fftFilas(F, 1, n, 1), n);
+  }
+  def('senalAnalitica', 'arreglo|lista -> arreglo', a => {
+    const x = real(senal(a[0], 1, 'senalAnalitica'), 1, 'senalAnalitica');
+    return deComplejos([x.tamano], analitica(planoDe(x)));
+  }, 'senalAnalitica(x) — x + i·H(x), con H la transformada de Hilbert · su módulo es la envolvente y su fase la fase instantánea');
+  def('envolvente', 'arreglo|lista -> arreglo', a => {
+    const x = real(senal(a[0], 1, 'envolvente'), 1, 'envolvente'), d = analitica(planoDe(x)), n = x.tamano, out = new Float64Array(n);
+    for (let i = 0; i < n; i++) out[i] = Math.hypot(d[2 * i], d[2 * i + 1]);
+    return deReales([n], out);
+  }, 'envolvente(x) — el contorno de una señal que oscila: el módulo de su señal analítica · el volumen de un sonido, la amplitud de una vibración');
 }
 
 

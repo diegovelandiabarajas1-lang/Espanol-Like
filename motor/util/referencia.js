@@ -116,7 +116,11 @@ const cambios = { nuevos: [], idos: [], cambiados: [], base: null };
 // ── 2. cada ejemplo se ejecuta de verdad; lo que imprima es lo que se publica
 const corridos = {};
 {
-  const ejemplos = require('./ejemplos-biblioteca.js');
+  // Los ejemplos de NEÑ viven en archivos aparte, uno por parte, porque cada
+  // parte se escribió y se probó por separado; aquí se juntan en una sola tabla.
+  const ejemplos = Object.assign({}, require('./ejemplos-biblioteca.js'),
+    require('./ejemplos-nen-c1en.js'), require('./ejemplos-nen-calculo.js'),
+    require('./ejemplos-nen-formulas.js'), require('./ejemplos-nen-tensores.js'));
   const clave = e => (e.edsl ? e.edsl + '.' + e.nombre : e.nombre);
   const faltan = inventario.filter(e => !(clave(e) in ejemplos)).map(clave);
   if (faltan.length) throw new Error('sin ejemplo: ' + faltan.join(', '));
@@ -265,6 +269,8 @@ const SECCIONES = [
    'Números y texto para que los lea una persona. Es un eDSL: sus nombres no existen hasta que un «usar» los trae, así que «numero», «moneda» o «centrar» siguen libres para quien no lo importe. La convención es la del español y no hay que pedirla: coma decimal y punto de miles, «3 lápices» y no «3 lápizs», «pan e higos» y no «pan y higos», y «enLetras» para la factura que hay que imprimir en palabras. No usa Intl, que en QuickJS no existe: todo se calcula a mano y da lo mismo en las dos máquinas.'],
   ['fecha', 'fecha',
    'El calendario, con una decisión que gobierna el resto: una fecha de Ñ NO tiene zona horaria. Es un instante del calendario —como el TIMESTAMP WITHOUT TIME ZONE de SQL—, así que lo que se escribe es lo que se lee, en cualquier máquina, sin horario de verano ni desplazamientos; solo «hoy» y «ahora» miran el reloj local, una vez. Es un tipo de la máquina y no un texto, y eso es lo que hace que «<» y «==» funcionen solos y que el verificador pare el programa que compara una fecha con un texto: como texto, «10/02» es menor que «9/01», y ahí es donde se pierden los días. Las funciones «…Entre» miden tiempo transcurrido y truncan; para días de calendario se compone: diasEntre(inicioDia(a), inicioDia(b)).'],
+  ['nen', 'nen — Numeric Extension for Ñ',
+   'La matemática seria de Ñ, en un solo eDSL con cuatro partes que se usan juntas. CÁLCULO: derivar, integrar (Gauss–Kronrod adaptativo, con límites infinitos), raíces de ecuaciones y de polinomios (todas, complejas incluidas), optimización (Brent, Nelder–Mead, BFGS, Levenberg–Marquardt, símplex), ecuaciones diferenciales (Dormand–Prince), interpolación y splines, funciones especiales (gamma, erf, Bessel, zeta) y distribuciones. FÓRMULAS: un pequeño sistema de álgebra simbólica que lee fórmulas escritas como texto en notación natural —«3x^2 + seno(x)»—, las simplifica con aritmética racional exacta, deriva, integra por reglas, resuelve ecuaciones y sistemas de forma exacta cuando se puede, y las convierte en funciones de Ñ o en LaTeX. TENSORES: operaciones elemento a elemento y por eje, einstein (la notación de Einstein), autovalores generales, exponencial de matriz, Fourier en 2D, ventanas, espectrogramas, filtros y convolución 2D; lo que pesa corre en C1EÑ. C1EÑ —Cuda 1 Engine of Ñ— es el motor que ejecuta funciones de Ñ en paralelo: «paralelo(n, fn, …)» corre el cuerpo una vez por índice en el mejor dispositivo que haya —GPU por CUDA, CPU nativa compilada con gcc, o el JIT de JavaScript—, y los tres dan los mismos bits en la aritmética básica. Lo que ya estaba en «numerico» (arreglos, LU, QR, SVD, fourier) no se repite: NEÑ lo amplía.'],
   ['probar', 'probar',
    'Para que Ñ se pruebe a sí mismo. Las suites del lenguaje estaban escritas en JavaScript, así que cada eDSL nuevo costaba sus cincuenta bloques de prueba en otro idioma; con esto se escriben en Ñ. Lo delicado es que una prueba que falla no se lleve el programa: una afirmación fallida es un error normal del motor, y el corredor lo recoge haciendo desde fuera el mismo desenrollado que hace «intentar» por dentro —recortar los marcos, bajar la pila, cerrar los upvalues—. Lo único que no recoge es el límite de instrucciones: si se pudiera, una prueba con un bucle infinito desactivaría la única red que hay.'],
 ];

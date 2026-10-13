@@ -19,6 +19,8 @@ const SUITES = [
   ['ejemplos',    'ejemplos-ide.js', 'los ejemplos del selector, uno por uno'],
   ['apps',        'apps.js',         'los programas de ejemplos/, con anfitrión completo'],
   ['pseudocódigo','pseudocodigo.js',  'la notación de PSeInt corriendo en el motor de Ñ'],
+  ['C1EÑ',        'c1en.js',         'núcleos de Ñ en jit, C nativo y GPU (simulada), comparados al bit'],
+  ['núcleos NEÑ', 'nen-nucleos.js',  'los núcleos de tensores y Fourier compilados en C contra su respaldo'],
 ];
 
 let fallan = 0, saltadas = 0;

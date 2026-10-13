@@ -1,0 +1,1740 @@
+# ECOSIM-5 · versión 5 · clubes, empresas que nacen y quiebran · con crédito · economía cerrada con emisión de acciones, tesorería,
+# cuentas por agente, ranking de patrimonio, riqueza inicial desigual y una bolsa
+# que por fin toca la economía real.
+#
+# Novedades de la v5: CLUBES y EMPRESAS QUE NACEN Y MUEREN.
+#   · Cada comprador tiene «voluntad» (0–99, un rasgo fijo). Los más decididos
+#     fundan un club con sus compañeros de trabajo; los demás se unen con una
+#     probabilidad que crece con su voluntad, y aportan más cuanto más voluntad
+#     tienen. Nadie lo programa: los clubes salen o no salen.
+#   · Un club es un tenedor con cuenta propia. Al aportar se reciben
+#     PARTICIPACIONES al valor del club (efectivo + acciones − deuda); la suma de
+#     participaciones de los socios es siempre la del club. El socio que se queda
+#     sin dinero retira su parte; si el club no tiene efectivo, cobra solo lo que
+#     haya: una corrida contra el club.
+#   · El club invierte en la empresa que más gana por hora frente a su precio, y
+#     vende las que pierden: es el ancla de valor que le faltaba a la bolsa.
+#   · Con 5 M de monedas en efectivo, o 7 M en acciones (el banco le presta los
+#     5 M contra ellas), el club FUNDA una empresa en el sector que más gana. La
+#     empresa nace con esos 5 M, sus 50.000 acciones son del club, y contrata
+#     desempleados y, si no hay, a trabajadores de la empresa más grande del sector.
+#   · QUIEBRA: si la ganancia de la última hora cae al 1 % o menos de su mejor hora
+#     dos horas seguidas, o si no puede pagar la nómina dos horas seguidas. Las
+#     empresas nuevas tienen 2 horas de gracia. La liquidación despide a todos,
+#     paga al banco, reparte lo que sobra entre los accionistas, CANCELA las
+#     acciones y DESTRUYE el inventario. Las invariantes cambian de forma, no de
+#     rigor:  acciones vivas = 50.000 por empresa activa · producido = consumido +
+#     inventario + destruido.
+#
+# Novedades de la v4: CRÉDITO, con contabilidad de doble entrada.
+#   · Un préstamo CREA dinero: aparece un depósito en la cuenta del que pide y una
+#     deuda igual en el banco. Pagar el préstamo lo DESTRUYE. Por eso el dinero ya
+#     no es fijo; lo fijo es la BASE MONETARIA (las reservas), y estas identidades:
+#       depósitos totales = base monetaria + préstamos vivos
+#       en cada banco:  depósitos = reservas + préstamos
+#       deuda de todos los deudores = préstamos de todos los bancos
+#   · Encaje del 10 %: un banco solo presta si sus reservas cubren el 10 % de sus
+#     depósitos. Un pago a otro banco mueve reservas; si al banco no le alcanzan,
+#     el pago se rechaza (crisis de liquidez).
+#   · Quién pide: inversores que compran acciones a margen (hasta el 50 % del
+#     valor de las que ya tienen) y empresas sin caja para la nómina.
+#   · Llamada de margen: si la deuda pasa el 70 % del valor de las acciones, el
+#     deudor vende todo con descuento y lo cobrado paga la deuda. Si ya no tiene
+#     acciones ni dinero, el banco castiga el préstamo contra su propio capital.
+#   · Intereses: 0,2 % por hora. Si el deudor no puede pagar, se suman a la deuda.
+#   · Quinto argumento: 1 con crédito (por defecto), 0 sin crédito, para comparar.
+#   · El resumen lista la caja de las 75 empresas una por una, y lo mismo queda
+#     en ecosim/empresas4.csv.
+#
+# Novedades de la v3 frente a la v2:
+#   · La riqueza inicial es por persona y desigual (Pareto), no un porcentaje por
+#     grupo: cambiar cuántos accionistas hay ya no hace a cada uno 100 veces más rico.
+#   · Las empresas INVIERTEN su caja: compran máquinas a las empresas de
+#     Tecnología (dinero y bienes reales, conservados), y las máquinas suben la
+#     productividad. Más productividad con la misma demanda = despidos.
+#   · El consumo depende del bolsillo: lo que no es agua ni comida solo se compra
+#     con colchón. Quien perdió su dinero en la bolsa deja de comprar.
+#   · Euforia y pánico: si el índice subió mucho en la última hora entran más
+#     compradores a la bolsa; si cayó, los que tienen acciones venden.
+#   · La empresa vende su tesorería al último precio. Mientras le queden acciones
+#     autorizadas, el precio se sostiene ahí (como un tipo de cambio fijo); cuando
+#     se agotan, queda libre.
+#   · El resumen sale todo en monedas.
+#   · Necesita el arreglo de «**» bajo el JIT (D-1, aplicado el 9-oct-2026).
+#
+# Uso (desde D:\ProyectosJS):
+#   node motor/util/n-node.js ecosim/ecosim5.esl [ticks] [semilla] [compradores] [accionistas] [credito]
+# Por defecto: 7200 ticks (2 h, un tick = un segundo), 200.000 compradores y
+# 10.000 accionistas. La escala completa es 2000000 y 100000.
+# Escribe ecosim/salida5.csv (una fila por minuto), ecosim/empresas5.csv, ecosim/clubes5.csv y ecosim/ranking5.csv (top 10
+# por patrimonio cada 10 minutos).
+#
+# Las tres masas que no pueden aparecer ni desaparecer:
+#   · DINERO   en centavos. 4.000 M de monedas, creadas en el tick 0. Toda
+#              transferencia pasa por «transferir», que mueve también las reservas.
+#   · ACCIONES 50.000 por empresa desde el tick 0. Las que nadie ha comprado
+#              están en la TESORERÍA de la empresa: tenencias + tesorería = 50.000.
+#   · BIENES   producido = consumido + inventario.
+
+# ─────────────────────────────────────────────── argumentos y tamaño
+fijo TICKS = argEntero(0, 7200)
+var SEMILLA = argEntero(1, 20261012)
+fijo N_AG = argEntero(2, 200000)              # compradores: consumen, trabajan, pueden invertir
+fijo N_INV = argEntero(3, 10000)              # accionistas (bots)
+
+fijo N_SECTOR = 5
+fijo POR_SECTOR = 15
+fijo N_INI = N_SECTOR * POR_SECTOR            # 75 empresas al empezar
+fijo N_EMP = 200                              # espacios para empresas: las que nacen ocupan los libres
+fijo N_BANCO = 3
+fijo TENEDORES = N_AG + N_INV                 # cuentas 0..N_AG-1 compradores, luego accionistas
+fijo C_EMP = TENEDORES                        # cuentas de las empresas
+fijo C_BANCO = C_EMP + N_EMP                  # cuenta propia (capital) de cada banco
+fijo C_CLUB = C_BANCO + N_BANCO                # cuentas de los clubes
+fijo MAX_CLUB = 300
+fijo N_CTA = TENEDORES + N_EMP + N_BANCO + MAX_CLUB
+fijo FUNDAR_EFECTIVO = 500000000              # 5 M de monedas para fundar…
+fijo FUNDAR_ACCIONES = 700000000              # …o 7 M en acciones (el banco presta los 5 M)
+fijo GRACIA = 7200                            # 2 horas sin poder quebrar al nacer
+fijo MONEDAS = 4000000000                     # 4.000 M de monedas (3.800 M: cambiar aquí)
+fijo M0 = MONEDAS * 100                       # en centavos
+fijo CREDITO = argEntero(4, 1) == 1           # quinto argumento: 1 con crédito, 0 sin
+fijo ENCAJE = 10                              # % de los depósitos que el banco guarda en reservas
+fijo MARGEN_PRESTAMO = 50                     # se presta hasta el 50 % del valor de las acciones…
+fijo MARGEN_LLAMADA = 70                      # …y si la deuda pasa el 70 %, venta forzosa
+fijo INTERES_MIL = 2                          # 0,2 % por hora
+fijo CAPITAL_BANCO = M0 // 200                # 0,5 % de la base para cada banco
+
+# acciones
+fijo ACC_TOTAL = 50000                        # por empresa, existen desde el tick 0
+fijo ACC_IPO = 10000                          # a la venta en el tick 0…
+fijo PRECIO_IPO = 10000                       # …a 100 monedas
+fijo TRAMO = 2000                             # luego se sueltan 2.000…
+fijo CADA_TRAMO = 120                         # …cada 2 minutos…
+fijo INICIO_TRAMOS = 3000                     # …desde el minuto 50…
+fijo N_TRAMOS = 20                            # …hasta completar 50.000 (minuto 88)
+
+fijo SECTORES = ["Agua", "Comida", "Tecnología", "Entretenimiento", "Random"]
+fijo PRECIO_BASE = [800, 1200, 3000, 1500, 1000]
+fijo SALARIO_HORA = 6000
+# riqueza inicial (Pareto): mínimo relativo y alfa (más bajo = más desigual)
+fijo MIN_COMPRADOR = 1.0
+fijo ALFA_COMPRADOR = 2.0
+fijo MIN_ACCIONISTA = 10.0
+fijo ALFA_ACCIONISTA = 1.5
+fijo COLCHON = 20                             # lo no básico exige tener 20 veces su precio
+fijo P = 94906249                             # primo con P*P < 2^53
+fijo ORD = 10000000                           # códigos de orden: precio*ORD + índice
+
+# ─────────────────────────────────────────────── azar sin estado
+fn h(a: entero, b: entero, c: entero): entero {
+  var x = (a * 7919 + b * 104729 + c * 1299709 + SEMILLA) % P
+  x = (x * x + 12345) % P
+  x = (x * x + 54321) % P
+  devolver x
+}
+
+fn argEntero(i: entero, defecto: entero): entero {
+  fijo a = argumentos()
+  si longitud(a) > i { devolver entero(a[i]) }
+  devolver defecto
+}
+
+# ─────────────────────────────────────────────── estado
+var saldo: lista<entero> = []
+var bancoDe: lista<entero> = []
+var reservas: lista<entero> = []
+var porBanco: lista<entero> = []
+var depos: lista<entero> = []                 # depósitos de cada banco, llevados al día
+var prestamos: lista<entero> = []             # préstamos vivos de cada banco
+var deuda: lista<entero> = []                 # deuda de cada cuenta
+var valorAcc: lista<entero> = []              # valor de las acciones de cada tenedor (cada 10 min)
+var forzados: lista<entero> = []              # tenedores en venta forzosa
+var prestadoTotal = 0
+var llamadasMargen = 0
+var impagos = 0
+var pagosRechazados = 0
+
+# cuentas por fuente: lo que cada uno ha cobrado en total
+var ingresoSal: lista<entero> = []
+var ingresoDiv: lista<entero> = []
+
+var hambre: lista<entero> = []
+var aburr: lista<entero> = []
+var curio: lista<entero> = []
+var empleo: lista<entero> = []
+var eleccion: lista<entero> = []
+
+var sector: lista<entero> = []
+var precio: lista<entero> = []
+var inv: lista<entero> = []
+var progreso: lista<entero> = []
+var trab: lista<entero> = []
+var calidad: lista<entero> = []
+var estrellas: lista<entero> = []
+var resenas: lista<entero> = []
+var pendEst: lista<entero> = []
+var pendRes: lista<entero> = []
+var pz: lista<entero> = []
+var ventasHora: lista<entero> = []
+var ventasHoraAnt: lista<entero> = []
+var ingresosPeriodo: lista<entero> = []       # ventas desde el último dividendo
+var ingresosTot: lista<entero> = []           # ventas de toda la corrida
+var salariosTot: lista<entero> = []           # salarios de toda la corrida
+var salariosPeriodo: lista<entero> = []
+var ingresosHora: lista<entero> = []
+var salariosHora: lista<entero> = []
+var capital: lista<entero> = []               # lo que la empresa ha levantado vendiendo acciones
+
+# acciones
+var libro: lista<dic<entero, entero>> = []    # libro[e][tenedor] = acciones (solo > 0)
+var tesoreria: lista<entero> = []             # acciones aún de la empresa
+var autorizadas: lista<entero> = []           # de esas, cuántas puede vender ya
+var precioAcc: lista<entero> = []
+var precioAccAnt: lista<entero> = []
+var divUltimo: lista<entero> = []
+
+# órdenes de la sesión (se reutilizan)
+var oPrecio: lista<entero> = []
+var oCant: lista<entero> = []
+var oQuien: lista<entero> = []                # -1 = tesorería de la empresa
+var nOrd = 0
+
+var quitarCupo: lista<entero> = []
+var ponerCupo: lista<entero> = []
+var patrimonio: lista<entero> = []
+# empresas vivas y muertas
+var activa: lista<bool> = []
+var usado: lista<bool> = []
+var sectorFirmas: lista<lista<entero>> = []   # empresas activas de cada sector
+var activas: lista<entero> = []
+var fundadaEn: lista<entero> = []
+var fundador: lista<entero> = []              # club que la fundó, o -1
+var cierreEn: lista<entero> = []
+var causaCierre: lista<texto> = []
+var ganHora: lista<entero> = []               # ganancia de la última hora completa
+var ganMax: lista<entero> = []                # su mejor hora
+var horasMalas: lista<entero> = []
+var horasSinPagar: lista<entero> = []
+var noPago: lista<bool> = []
+var destruido = 0                             # bienes destruidos en liquidaciones
+var canceladas = 0                            # acciones canceladas en liquidaciones
+var fundadas = 0
+var quiebras = 0
+var pagadoLiquidacion = 0
+# clubes
+var voluntad: lista<entero> = []
+var clubDe: lista<entero> = []                # club de cada comprador, o -1
+var partic: lista<entero> = []                # participaciones de cada comprador
+var partTotal: lista<entero> = []
+var miembros: lista<entero> = []
+var clubOrigen: lista<entero> = []            # empresa donde nació el club
+var clubFundadas: lista<entero> = []
+var clubAbierto: lista<entero> = []           # club de cada empresa, o -1
+var nClubs = 0
+var retirosParciales = 0
+var maquinas: lista<entero> = []             # capital físico de cada empresa
+var inversionTotal = 0                        # monedas gastadas en máquinas
+var indiceHist: lista<entero> = []            # índice de cada sesión, para euforia y pánico
+var compradoresEnBolsa = 0
+
+var producido = 0
+var consumido = 0
+var operaciones = 0
+var csv = "tick,desempleo,indice_bolsa_centavos,acciones_en_circulacion,capital_levantado_centavos,dinero_compradores_centavos,dinero_accionistas_centavos,dinero_empresas_centavos,empresas_activas,fundadas,quiebras,clubes,socios,prestamos_centavos,deuda_personas_centavos,deuda_empresas_centavos,capital_bancos_centavos,llamadas_margen,impagos_centavos,pagos_rechazados,precio_agua,precio_comida,precio_tec,precio_entret,precio_random,estrellas_medias,operaciones_bolsa,maquinas,inversion_centavos,compradores_en_bolsa\n"
+var csvRank = "tick,puesto,id,tipo,patrimonio_neto_centavos,dinero_centavos,acciones_centavos,deuda_centavos,salario_centavos,dividendos_centavos\n"
+
+# ─────────────────────────────────────────────── dinero: la única puerta
+fn transferir(de: entero, a: entero, monto: entero): bool {
+  si monto <= 0 o saldo[de] < monto { devolver falso }
+  fijo bd = bancoDe[de]
+  fijo ba = bancoDe[a]
+  si bd != ba {
+    # un pago a otro banco se liquida en reservas: si no alcanzan, no hay pago
+    si reservas[bd] < monto {
+      pagosRechazados += 1
+      devolver falso
+    }
+    reservas[bd] = reservas[bd] - monto
+    reservas[ba] = reservas[ba] + monto
+    depos[bd] = depos[bd] - monto
+    depos[ba] = depos[ba] + monto
+  }
+  saldo[de] = saldo[de] - monto
+  saldo[a] = saldo[a] + monto
+  devolver cierto
+}
+
+# ─────────────────────────────────────────────── crédito: las únicas puertas
+# Prestar crea un depósito y una deuda iguales; amortizar destruye los dos.
+fn prestar(c: entero, m: entero): bool {
+  si no CREDITO o m <= 0 { devolver falso }
+  fijo b = bancoDe[c]
+  si saldo[C_BANCO + b] <= 0 { devolver falso }              # banco quebrado: no presta
+  si reservas[b] * 100 < ENCAJE * (depos[b] + m) { devolver falso }
+  saldo[c] = saldo[c] + m
+  deuda[c] = deuda[c] + m
+  prestamos[b] = prestamos[b] + m
+  depos[b] = depos[b] + m
+  prestadoTotal += m
+  devolver cierto
+}
+
+fn amortizar(c: entero, cuanto: entero) {
+  var m = minimo(cuanto, minimo(saldo[c], deuda[c]))
+  si m <= 0 { devolver }
+  fijo b = bancoDe[c]
+  saldo[c] = saldo[c] - m
+  deuda[c] = deuda[c] - m
+  prestamos[b] = prestamos[b] - m
+  depos[b] = depos[b] - m
+}
+
+# El interés que no se puede pagar se suma a la deuda: el banco anota el ingreso
+# en su capital y el préstamo crece lo mismo.
+fn capitalizar(c: entero, m: entero) {
+  fijo b = bancoDe[c]
+  deuda[c] = deuda[c] + m
+  prestamos[b] = prestamos[b] + m
+  saldo[C_BANCO + b] = saldo[C_BANCO + b] + m
+  depos[b] = depos[b] + m
+}
+
+# Impago: el banco borra el préstamo y la pérdida sale de su capital. El
+# capital del banco puede quedar negativo: es un banco quebrado.
+fn castigar(c: entero) {
+  fijo L = deuda[c]
+  si L <= 0 { devolver }
+  fijo b = bancoDe[c]
+  deuda[c] = 0
+  prestamos[b] = prestamos[b] - L
+  saldo[C_BANCO + b] = saldo[C_BANCO + b] - L
+  depos[b] = depos[b] - L
+  impagos += L
+}
+
+fn pedirMargen(c: entero, falta: entero) {
+  fijo cabe = valorAcc[c] * MARGEN_PRESTAMO // 100 - deuda[c]
+  si falta > 0 y cabe >= falta { prestar(c, falta) }
+}
+
+fn intereses() {
+  para c en rango(N_CTA) {
+    fijo d = deuda[c]
+    si d > 0 {
+      var i = d * INTERES_MIL // 1000
+      si i == 0 { i = 1 }
+      fijo banco = C_BANCO + bancoDe[c]
+      si saldo[c] >= i { transferir(c, banco, i) } sino { capitalizar(c, i) }
+    }
+  }
+}
+
+# Cada 10 minutos, con el valor de las acciones recién calculado
+fn margenes() {
+  forzados = []
+  para c en rango(N_CTA) {
+    si c >= TENEDORES y c < C_CLUB { continuar }    # empresas y bancos no compran a margen
+    si deuda[c] > 0 {
+      si valorAcc[c] == 0 {
+        amortizar(c, saldo[c])
+        si deuda[c] > 0 { castigar(c) }
+      } sino si deuda[c] * 100 > valorAcc[c] * MARGEN_LLAMADA {
+        amortizar(c, saldo[c])
+        si deuda[c] * 100 > valorAcc[c] * MARGEN_LLAMADA {
+          agregar(forzados, c)
+          llamadasMargen += 1
+        }
+      }
+    }
+  }
+}
+
+# ─────────────────────────────────────────────── acciones: las dos únicas puertas
+# quien = -1 es la tesorería de la empresa
+fn tieneAcc(e: entero, quien: entero): entero {
+  si quien < 0 { devolver tesoreria[e] }
+  fijo d = libro[e]
+  si contiene(d, quien) { devolver d[quien] }
+  devolver 0
+}
+fn moverAcc(e: entero, de: entero, a: entero, q: entero) {
+  si de < 0 { tesoreria[e] = tesoreria[e] - q } sino {
+    fijo d = libro[e]
+    fijo queda = d[de] - q
+    si queda == 0 { borrar(d, de) } sino { d[de] = queda }
+  }
+  si a < 0 { tesoreria[e] = tesoreria[e] + q } sino {
+    fijo d = libro[e]
+    si contiene(d, a) { d[a] = d[a] + q } sino { d[a] = q }
+  }
+}
+
+# ─────────────────────────────────────────────── tick 0
+fn iniciar() {
+  para b en rango(N_BANCO) {
+    agregar(reservas, 0)
+    agregar(porBanco, 0)
+  }
+  # El 90 % del dinero es de las personas y se reparte por PESOS de Pareto: cada
+  # comprador pesa en promedio ~2 y cada accionista ~30, así que la riqueza por
+  # cabeza no depende de cuántos haya de cada tipo. El 10 % es de las empresas.
+  # El residuo de las divisiones enteras va a la empresa 0: ni un centavo se pierde.
+  var pesos: lista<real> = []
+  var suma = 0.0
+  para c en rango(TENEDORES) {
+    fijo u = (h(0, c, 30) % 1000000 + 1) / 1000000.0
+    var w = 0.0
+    si c < N_AG { w = MIN_COMPRADOR * (1.0 / u) ** (1.0 / ALFA_COMPRADOR) }
+    sino { w = MIN_ACCIONISTA * (1.0 / u) ** (1.0 / ALFA_ACCIONISTA) }
+    agregar(pesos, w)
+    suma += w
+  }
+  fijo paraPersonas = M0 // 10 * 9
+  var repartido = 0
+  para c en rango(N_CTA) {
+    var s = 0
+    si c < TENEDORES { s = entero(paraPersonas * (pesos[c] / suma)) }
+    repartido += s
+    agregar(saldo, s)
+    agregar(bancoDe, h(0, c, 1) % N_BANCO)
+    agregar(ingresoSal, 0)
+    agregar(ingresoDiv, 0)
+    agregar(patrimonio, 0)
+  }
+  para b en rango(N_BANCO) {
+    saldo[C_BANCO + b] = CAPITAL_BANCO
+    bancoDe[C_BANCO + b] = b                      # cada banco tiene su capital en sí mismo
+    agregar(prestamos, 0)
+  }
+  fijo porEmp = (M0 - repartido - CAPITAL_BANCO * N_BANCO) // N_INI
+  para e en rango(N_INI) { saldo[C_EMP + e] = porEmp }
+  saldo[C_EMP] = saldo[C_EMP] + (M0 - repartido - CAPITAL_BANCO * N_BANCO - porEmp * N_INI)
+  para c en rango(N_CTA) {
+    reservas[bancoDe[c]] = reservas[bancoDe[c]] + saldo[c]
+    agregar(deuda, 0)
+  }
+  para b en rango(N_BANCO) { agregar(depos, reservas[b]) }
+  para c en rango(N_CTA) { agregar(valorAcc, 0) }
+  para k en rango(MAX_CLUB) {
+    agregar(partTotal, 0)
+    agregar(miembros, 0)
+    agregar(clubOrigen, -1)
+    agregar(clubFundadas, 0)
+  }
+
+  para i en rango(N_AG) {
+    agregar(hambre, h(0, i, 2) % 4000)
+    agregar(aburr, h(0, i, 3) % 4000)
+    agregar(curio, h(0, i, 4) % 4000)
+    agregar(empleo, i % N_INI)                  # todos empiezan empleados
+    agregar(eleccion, -1)
+    agregar(voluntad, h(0, i, 9) % 100)
+    agregar(clubDe, -1)
+    agregar(partic, 0)
+  }
+  # inventario inicial: unos 10 minutos de demanda
+  fijo inv0 = N_AG * 4 // (5 * N_INI) + 50
+  para e en rango(N_EMP) {
+    fijo viva = e < N_INI
+    var s = -1
+    si viva { s = e // POR_SECTOR }
+    agregar(activa, viva)
+    agregar(usado, viva)
+    agregar(fundadaEn, 0)
+    agregar(fundador, -1)
+    agregar(cierreEn, -1)
+    agregar(causaCierre, "")
+    agregar(ganHora, 0)
+    agregar(ganMax, 0)
+    agregar(horasMalas, 0)
+    agregar(horasSinPagar, 0)
+    agregar(noPago, falso)
+    agregar(clubAbierto, -1)
+    agregar(sector, s)
+    si viva { agregar(precio, PRECIO_BASE[s] + h(0, e, 5) % (PRECIO_BASE[s] // 2)) } sino { agregar(precio, 0) }
+    si viva { agregar(inv, inv0) } sino { agregar(inv, 0) }
+    agregar(progreso, 0)
+    agregar(trab, 0)
+    agregar(calidad, 1 + h(0, e, 6) % 5)
+    fijo fama = 1 + h(0, e, 7) % 5              # reseñas preestablecidas
+    si viva {
+      agregar(estrellas, 20 * fama * 100)
+      agregar(resenas, 20)
+    } sino {
+      agregar(estrellas, 0)
+      agregar(resenas, 1)
+    }
+    agregar(pendEst, 0)
+    agregar(pendRes, 0)
+    agregar(pz, 0)
+    agregar(ventasHora, 0)
+    agregar(ventasHoraAnt, 0)
+    agregar(ingresosPeriodo, 0)
+    agregar(ingresosTot, 0)
+    agregar(salariosTot, 0)
+    agregar(salariosPeriodo, 0)
+    agregar(ingresosHora, 0)
+    agregar(salariosHora, 0)
+    agregar(capital, 0)
+    var d: dic<entero, entero> = {}
+    agregar(libro, d)
+    si viva {
+      agregar(tesoreria, ACC_TOTAL)
+      agregar(autorizadas, ACC_IPO)
+      agregar(precioAcc, PRECIO_IPO)
+      agregar(precioAccAnt, PRECIO_IPO)
+    } sino {
+      agregar(tesoreria, 0)
+      agregar(autorizadas, 0)
+      agregar(precioAcc, 0)
+      agregar(precioAccAnt, 0)
+    }
+    agregar(divUltimo, 0)
+    agregar(quitarCupo, 0)
+    agregar(ponerCupo, 0)
+    agregar(maquinas, 0)
+  }
+  para i en rango(N_AG) { trab[i % N_INI] = trab[i % N_INI] + 1 }
+  producido = inv0 * N_INI
+  para s en rango(N_SECTOR) { agregar(sectorFirmas, []) }
+  rehacerListas()
+}
+
+fn rehacerListas() {
+  activas = []
+  para s en rango(N_SECTOR) { sectorFirmas[s] = [] }
+  para e en rango(N_EMP) {
+    si activa[e] {
+      agregar(activas, e)
+      agregar(sectorFirmas[sector[e]], e)
+    }
+  }
+}
+
+# ─────────────────────────────────────────────── consumidores
+fn elegir(t: entero) {
+  para e en rango(N_EMP) { pz[e] = (estrellas[e] // resenas[e]) * 4 - precio[e] }
+  fijo H = hambre
+  fijo A = aburr
+  fijo C = curio
+  fijo E = eleccion
+  fijo Z = pz
+  para i en rango(N_AG) {
+    var hh = H[i] + 3
+    si hh > 10000 { hh = 10000 }
+    H[i] = hh
+    var aa = A[i] + 2
+    si aa > 10000 { aa = 10000 }
+    A[i] = aa
+    var cc = C[i] + 1
+    si cc > 10000 { cc = 10000 }
+    C[i] = cc
+    var s = -1
+    si hh >= 4000 y hh >= aa y hh >= cc {
+      s = (t + i) % 2
+    } sino si aa >= 4000 y aa >= cc {
+      s = 3
+    } sino si cc >= 4000 {
+      s = 2
+    } sino si (t + i * 7) % 3000 == 0 {
+      s = 4
+    }
+    si s < 0 {
+      E[i] = -1
+    } sino {
+      fijo L = sectorFirmas[s]
+      fijo n = longitud(L)
+      si n == 0 { E[i] = -1 } sino {
+        fijo r = h(t, i, 12)
+        fijo a = L[r % n]
+        fijo b = L[(r // n) % n]
+        si Z[a] >= Z[b] { E[i] = a } sino { E[i] = b }
+      }
+    }
+  }
+}
+
+fn asignar(t: entero) {
+  fijo inicio = h(t, 0, 14) % N_AG
+  fijo E = eleccion
+  para j en rango(N_AG) {
+    var i = inicio + j
+    si i >= N_AG { i = i - N_AG }
+    fijo e = E[i]
+    si e >= 0 y inv[e] > 0 {
+      fijo pr = precio[e]
+      # lo que no es agua ni comida solo se compra con colchón
+      var puede = cierto
+      si sector[e] >= 2 y saldo[i] < pr * COLCHON { puede = falso }
+      si puede y transferir(i, C_EMP + e, pr) {
+        inv[e] = inv[e] - 1
+        consumido += 1
+        ventasHora[e] = ventasHora[e] + 1
+        ingresosPeriodo[e] = ingresosPeriodo[e] + pr
+        ingresosTot[e] = ingresosTot[e] + pr
+        ingresosHora[e] = ingresosHora[e] + pr
+        fijo s = sector[e]
+        si s <= 1 { hambre[i] = hambre[i] - 4500
+          si hambre[i] < 0 { hambre[i] = 0 } }
+        sino si s == 3 { aburr[i] = aburr[i] - 4500
+          si aburr[i] < 0 { aburr[i] = 0 } }
+        sino si s == 2 { curio[i] = curio[i] - 4500
+          si curio[i] < 0 { curio[i] = 0 } }
+        si h(t, i, 15) % 10 == 0 {
+          var est = calidad[e] + h(t, i, 16) % 3 - 1
+          si est < 1 { est = 1 }
+          si est > 5 { est = 5 }
+          pendEst[e] = pendEst[e] + est * 100
+          pendRes[e] = pendRes[e] + 1
+        }
+      }
+    }
+  }
+  para e en rango(N_EMP) {
+    estrellas[e] = estrellas[e] + pendEst[e]
+    resenas[e] = resenas[e] + pendRes[e]
+    pendEst[e] = 0
+    pendRes[e] = 0
+  }
+}
+
+# ─────────────────────────────────────────────── empresas
+fn producir() {
+  para e en rango(N_EMP) {
+    # 4,8 unidades por trabajador y hora; cada 10 máquinas valen un trabajador
+    # más, hasta duplicar la plantilla
+    var extra = maquinas[e] * 48 // 10
+    si extra > trab[e] * 48 { extra = trab[e] * 48 }
+    progreso[e] = progreso[e] + trab[e] * 48 + extra
+    fijo u = progreso[e] // 36000
+    progreso[e] = progreso[e] % 36000
+    inv[e] = inv[e] + u
+    producido += u
+  }
+}
+
+# Cada hora: salarios en un solo recorrido, y luego precio y plantilla.
+fn cadaHora(t: entero) {
+  fijo EM = empleo
+  para e en rango(N_EMP) { noPago[e] = falso }
+  # capital de trabajo: la empresa que no cubre la nómina pide prestado, hasta
+  # ocho nóminas de deuda
+  si CREDITO {
+    para e en rango(N_EMP) {
+      fijo nomina = trab[e] * SALARIO_HORA
+      fijo c = C_EMP + e
+      si saldo[c] < nomina y deuda[c] < nomina * 8 { prestar(c, nomina - saldo[c]) }
+    }
+  }
+  para i en rango(N_AG) {
+    fijo e = EM[i]
+    si e >= 0 {
+      si transferir(C_EMP + e, i, SALARIO_HORA) {
+        ingresoSal[i] = ingresoSal[i] + SALARIO_HORA
+        salariosPeriodo[e] = salariosPeriodo[e] + SALARIO_HORA
+        salariosTot[e] = salariosTot[e] + SALARIO_HORA
+        salariosHora[e] = salariosHora[e] + SALARIO_HORA
+      } sino {
+        EM[i] = -1                                 # sin caja para pagar: despide
+        trab[e] = trab[e] - 1
+        noPago[e] = cierto
+      }
+    }
+  }
+  para e en rango(N_EMP) {
+    fijo v = maximo(1, ventasHora[e])
+    # precio: inventario frente a ventas, y si la hora dio pérdida, sube
+    si ingresosHora[e] < salariosHora[e] { precio[e] = precio[e] * 103 // 100 + 1 }
+    sino si inv[e] > 2 * v { precio[e] = maximo(100, precio[e] * 98 // 100) }
+    sino si inv[e] < v // 2 { precio[e] = precio[e] * 102 // 100 + 1 }
+    # plantilla: cupos de despido y de contratación
+    quitarCupo[e] = 0
+    ponerCupo[e] = 0
+    si inv[e] > 3 * v y trab[e] > 0 { quitarCupo[e] = maximo(1, trab[e] // 20) }
+    si inv[e] < v y saldo[C_EMP + e] > (trab[e] * 21 // 20 + 1) * SALARIO_HORA * 2 {
+      ponerCupo[e] = maximo(1, trab[e] // 20)
+    }
+    ganHora[e] = ingresosHora[e] - salariosHora[e]
+    ventasHoraAnt[e] = ventasHora[e]
+    ventasHora[e] = 0
+    ingresosHora[e] = 0
+    salariosHora[e] = 0
+  }
+  invertir()
+  intereses()
+  # la empresa con caja de sobra devuelve lo que debe
+  para e en rango(N_EMP) {
+    fijo c = C_EMP + e
+    fijo colchon = trab[e] * SALARIO_HORA * 8
+    si deuda[c] > 0 y saldo[c] > colchon { amortizar(c, saldo[c] - colchon) }
+  }
+  clubes(t)
+  # un solo recorrido aplica los cupos: despidos primero, luego contrataciones
+  # por orden de empresa
+  var sig = 0
+  para i en rango(N_AG) {
+    fijo e = EM[i]
+    si e >= 0 {
+      si quitarCupo[e] > 0 {
+        EM[i] = -1
+        trab[e] = trab[e] - 1
+        quitarCupo[e] = quitarCupo[e] - 1
+      }
+    } sino {
+      mientras sig < N_EMP y ponerCupo[sig] == 0 { sig += 1 }
+      si sig < N_EMP {
+        EM[i] = sig
+        trab[sig] = trab[sig] + 1
+        ponerCupo[sig] = ponerCupo[sig] - 1
+      }
+    }
+  }
+  quiebrasDeLaHora(t)
+}
+
+# Cada hora, la empresa con caja de sobra (más de 4 horas de nómina) y sin
+# inventario parado gasta una décima parte del sobrante en máquinas. Las compra
+# a una empresa de Tecnología: el dinero pasa de una caja a otra y las unidades
+# salen del inventario de Tecnología. Nada se crea. Las máquinas se desgastan un
+# 2 % por hora.
+fn invertir() {
+  fijo T = sectorFirmas[2]
+  para e en rango(N_EMP) {
+    maquinas[e] = maquinas[e] * 98 // 100
+    si no activa[e] o longitud(T) == 0 { continuar }
+    fijo v = maximo(1, ventasHoraAnt[e])
+    fijo reserva = trab[e] * SALARIO_HORA * 4
+    fijo sobra = saldo[C_EMP + e] - reserva
+    si sobra > 0 y inv[e] < 2 * v {
+      fijo f = T[(e * 7 + inversionTotal) % longitud(T)]
+      si f != e y inv[f] > 1 {
+        var unidades = (sobra // 10) // precio[f]
+        si unidades > inv[f] // 2 { unidades = inv[f] // 2 }
+        fijo pago = unidades * precio[f]
+        si unidades > 0 y transferir(C_EMP + e, C_EMP + f, pago) {
+          inv[f] = inv[f] - unidades
+          consumido += unidades
+          maquinas[e] = maquinas[e] + unidades
+          ingresosPeriodo[f] = ingresosPeriodo[f] + pago
+          ingresosTot[f] = ingresosTot[f] + pago
+          ingresosHora[f] = ingresosHora[f] + pago
+          inversionTotal += pago
+        }
+      }
+    }
+  }
+}
+
+# ─────────────────────────────────────────────── clubes
+# Una vez por hora. Un solo recorrido de los compradores: fundar, unirse o
+# retirarse. Después, cada club decide si funda una empresa.
+fn clubes(t: entero) {
+  fijo EM = empleo
+  para i en rango(N_AG) {
+    fijo k = clubDe[i]
+    si k >= 0 {
+      # el socio que se quedó sin dinero retira su parte
+      si saldo[i] < SALARIO_HORA { retirar(i, k) }
+    } sino {
+      fijo e = EM[i]
+      si e >= 0 {
+        fijo abierto = clubAbierto[e]
+        si abierto < 0 {
+          # los más decididos fundan el club de su empresa
+          si voluntad[i] >= 95 y h(t, i, 40) % 10 == 0 y nClubs < MAX_CLUB y saldo[i] > 10 * SALARIO_HORA {
+            fijo nuevo = nClubs
+            nClubs += 1
+            clubOrigen[nuevo] = e
+            clubAbierto[e] = nuevo
+            unirse(i, nuevo)
+          }
+        } sino si h(t, i, 41) % 400 < voluntad[i] {
+          unirse(i, abierto)                      # hasta un 25 % por hora, según la voluntad
+        }
+      }
+    }
+  }
+  para k en rango(nClubs) { quizaFundar(k, t) }
+}
+
+# Aporta del 0 al 50 % de su dinero según su voluntad, y recibe participaciones
+# al valor actual del club.
+fn unirse(i: entero, k: entero) {
+  fijo aporte = saldo[i] * voluntad[i] // 200
+  si aporte < SALARIO_HORA { devolver }
+  fijo nav = navClub(k)
+  var nuevas = aporte
+  si partTotal[k] > 0 y nav > 0 { nuevas = entero(aporte * (partTotal[k] / nav)) }
+  si nuevas <= 0 { devolver }
+  si transferir(i, C_CLUB + k, aporte) {
+    clubDe[i] = k
+    partic[i] = nuevas
+    partTotal[k] = partTotal[k] + nuevas
+    miembros[k] = miembros[k] + 1
+  }
+}
+
+# Cobra su parte del valor del club; si el club no tiene ese efectivo, cobra lo
+# que haya y quema solo las participaciones que cobró.
+fn retirar(i: entero, k: entero) {
+  fijo nav = navClub(k)
+  fijo cc = C_CLUB + k
+  si nav <= 0 o partTotal[k] <= 0 { devolver }
+  fijo valor = entero(nav * (partic[i] / partTotal[k]))
+  si valor <= 0 { devolver }
+  var pago = valor
+  si pago > saldo[cc] {
+    pago = saldo[cc]
+    retirosParciales += 1
+  }
+  si pago <= 0 { devolver }
+  var quemar = entero(partic[i] * (pago / valor))
+  si pago == valor { quemar = partic[i] }
+  si quemar <= 0 { devolver }
+  si transferir(cc, i, pago) {
+    partic[i] = partic[i] - quemar
+    partTotal[k] = partTotal[k] - quemar
+    si partic[i] == 0 {
+      clubDe[i] = -1
+      miembros[k] = miembros[k] - 1
+    }
+  }
+}
+
+# ─────────────────────────────────────────────── nacer
+fn quizaFundar(k: entero, t: entero) {
+  fijo cc = C_CLUB + k
+  var hueco = -1
+  para e en rango(N_EMP) { si hueco < 0 y no usado[e] { hueco = e } }
+  si hueco < 0 { devolver }
+  si saldo[cc] < FUNDAR_EFECTIVO {
+    # con 7 M en acciones, el banco le presta lo que falta contra ellas
+    si no CREDITO o deuda[cc] > 0 o valorAcc[cc] < FUNDAR_ACCIONES { devolver }
+    si no prestar(cc, FUNDAR_EFECTIVO - saldo[cc]) { devolver }
+  }
+  fundar(k, hueco, t)
+}
+
+fn fundar(k: entero, e: entero, t: entero) {
+  fijo cc = C_CLUB + k
+  # el sector que más gana por empresa; un sector vacío es el más atractivo
+  var mejorS = 0
+  var mejorG = -1
+  para s en rango(N_SECTOR) {
+    fijo L = sectorFirmas[s]
+    var g = 1000000000000000
+    si longitud(L) > 0 {
+      var suma = 0
+      para f en L { suma += ganHora[f] }
+      g = suma // longitud(L)
+    }
+    si mejorG < 0 o g > mejorG {
+      mejorG = g
+      mejorS = s
+    }
+  }
+  fijo L = sectorFirmas[mejorS]
+  var pr = PRECIO_BASE[mejorS]
+  var plantilla = 0
+  var donante = -1
+  si longitud(L) > 0 {
+    var sp = 0
+    var st = 0
+    para f en L {
+      sp += precio[f]
+      st += trab[f]
+      si donante < 0 o trab[f] > trab[donante] { donante = f }
+    }
+    pr = sp // longitud(L)
+    plantilla = st // longitud(L) // 2
+  } sino {
+    plantilla = N_AG // (N_INI * 2)
+  }
+  si no transferir(cc, C_EMP + e, FUNDAR_EFECTIVO) { devolver }
+  activa[e] = cierto
+  usado[e] = cierto
+  sector[e] = mejorS
+  precio[e] = pr
+  inv[e] = 0
+  progreso[e] = 0
+  trab[e] = 0
+  maquinas[e] = 0
+  calidad[e] = 1 + h(t, e, 60) % 5
+  estrellas[e] = 5 * 300                          # sin historia: cinco reseñas de 3 estrellas
+  resenas[e] = 5
+  ganHora[e] = 0
+  ganMax[e] = 0
+  horasMalas[e] = 0
+  horasSinPagar[e] = 0
+  fundadaEn[e] = t
+  fundador[e] = k
+  capital[e] = FUNDAR_EFECTIVO
+  tesoreria[e] = ACC_TOTAL
+  moverAcc(e, -1, cc, ACC_TOTAL)                  # todas las acciones son del club
+  autorizadas[e] = 0
+  precioAcc[e] = FUNDAR_EFECTIVO // ACC_TOTAL
+  precioAccAnt[e] = precioAcc[e]
+  fundadas += 1
+  clubFundadas[k] = clubFundadas[k] + 1
+  # contrata: primero desempleados, y si no alcanza, de la empresa más grande del sector
+  fijo EM = empleo
+  var falta = plantilla
+  para i en rango(N_AG) {
+    si falta > 0 y EM[i] < 0 {
+      EM[i] = e
+      trab[e] = trab[e] + 1
+      falta -= 1
+    }
+  }
+  si donante >= 0 {
+    para i en rango(N_AG) {
+      si falta > 0 y EM[i] == donante y trab[donante] > 1 {
+        EM[i] = e
+        trab[donante] = trab[donante] - 1
+        trab[e] = trab[e] + 1
+        falta -= 1
+      }
+    }
+  }
+  rehacerListas()
+}
+
+# ─────────────────────────────────────────────── morir
+# Al final de cada hora. Quiebra la empresa cuya ganancia de la hora cae al 1 %
+# o menos de su mejor hora dos horas seguidas, o la que no pudo pagar la nómina
+# dos horas seguidas. Las recién nacidas tienen 2 horas de gracia.
+fn quiebrasDeLaHora(t: entero) {
+  var cambio = falso
+  para e en rango(N_EMP) {
+    si no activa[e] { continuar }
+    si ganHora[e] > ganMax[e] { ganMax[e] = ganHora[e] }
+    si t - fundadaEn[e] < GRACIA { continuar }
+    si ganMax[e] > 0 y ganHora[e] * 100 <= ganMax[e] { horasMalas[e] = horasMalas[e] + 1 } sino { horasMalas[e] = 0 }
+    si noPago[e] { horasSinPagar[e] = horasSinPagar[e] + 1 } sino { horasSinPagar[e] = 0 }
+    si horasMalas[e] >= 2 {
+      liquidar(e, t, "rendimiento")
+      cambio = cierto
+    } sino si horasSinPagar[e] >= 2 {
+      liquidar(e, t, "insolvencia")
+      cambio = cierto
+    }
+  }
+  si cambio { rehacerListas() }
+}
+
+fn liquidar(e: entero, t: entero, causa: texto) {
+  fijo c = C_EMP + e
+  # 1. despide a todos
+  fijo EM = empleo
+  para i en rango(N_AG) { si EM[i] == e { EM[i] = -1 } }
+  trab[e] = 0
+  # 2. el inventario se destruye
+  destruido += inv[e]
+  inv[e] = 0
+  # 3. el banco cobra primero; lo que no alcanza lo castiga
+  amortizar(c, saldo[c])
+  si deuda[c] > 0 { castigar(c) }
+  # 4. lo que sobra va a los accionistas en proporción
+  fijo d = libro[e]
+  var total = 0
+  para q en valores(d) { total += q }
+  si total > 0 y saldo[c] > 0 {
+    fijo porAccion = saldo[c] // total
+    si porAccion > 0 {
+      para quien en claves(d) {
+        fijo pago = d[quien] * porAccion
+        si transferir(c, quien, pago) { pagadoLiquidacion += pago }
+      }
+    }
+  }
+  # el residuo (o todo, si nadie tenía acciones) va al capital de su banco
+  si saldo[c] > 0 { transferir(c, C_BANCO + bancoDe[c], saldo[c]) }
+  # 5. las acciones se cancelan
+  canceladas += total + tesoreria[e]
+  var vacio: dic<entero, entero> = {}
+  libro[e] = vacio
+  tesoreria[e] = 0
+  autorizadas[e] = 0
+  precioAcc[e] = 0
+  activa[e] = falso
+  cierreEn[e] = t
+  causaCierre[e] = causa
+  quiebras += 1
+}
+
+# Cada 10 minutos: dividendos de la GANANCIA del periodo (ventas − salarios), no
+# de la caja. La mitad se reparte entre las acciones en circulación: la
+# tesorería no cobra, porque sería la empresa pagándose a sí misma.
+fn dividendos() {
+  para e en rango(N_EMP) {
+    si no activa[e] { continuar }
+    fijo ganancia = ingresosPeriodo[e] - salariosPeriodo[e]
+    ingresosPeriodo[e] = 0
+    salariosPeriodo[e] = 0
+    divUltimo[e] = 0
+    fijo circulan = ACC_TOTAL - tesoreria[e]
+    fijo reserva = trab[e] * SALARIO_HORA
+    var reparto = ganancia // 2
+    si reparto > saldo[C_EMP + e] - reserva { reparto = saldo[C_EMP + e] - reserva }
+    si reparto > 0 y circulan > 0 {
+      fijo porAccion = reparto // circulan
+      si porAccion > 0 {
+        divUltimo[e] = porAccion
+        fijo d = libro[e]
+        para quien en claves(d) {
+          fijo pago = d[quien] * porAccion
+          si transferir(C_EMP + e, quien, pago) { ingresoDiv[quien] = ingresoDiv[quien] + pago }
+        }
+      }
+    }
+  }
+}
+
+# ─────────────────────────────────────────────── bolsa: subasta cada minuto
+fn nuevaOrden(precioLim: entero, cant: entero, quien: entero): entero {
+  si nOrd >= longitud(oPrecio) {
+    agregar(oPrecio, 0)
+    agregar(oCant, 0)
+    agregar(oQuien, 0)
+  }
+  oPrecio[nOrd] = precioLim
+  oCant[nOrd] = cant
+  oQuien[nOrd] = quien
+  nOrd += 1
+  devolver nOrd - 1
+}
+
+fn bolsa(t: entero) {
+  nOrd = 0
+  var compras: lista<lista<entero>> = []
+  var ventas: lista<lista<entero>> = []
+  var valor: lista<entero> = []
+  para e en rango(N_EMP) {
+    agregar(compras, [])
+    agregar(ventas, [])
+    si divUltimo[e] > 0 { agregar(valor, divUltimo[e] * 30) } sino { agregar(valor, precioAcc[e]) }
+    # la empresa vende de su tesorería lo autorizado: al precio de salida en la
+    # IPO, y después al precio del momento
+    fijo oferta = minimo(autorizadas[e], tesoreria[e])
+    si oferta > 0 y activa[e] {
+      var lim = PRECIO_IPO
+      # al precio del momento, sin prima: con prima, cada sesión cerraba un 1 %
+      # más arriba y el precio subía solo (×1,8 por hora), sin que nadie lo decidiera
+      si t >= INICIO_TRAMOS { lim = precioAcc[e] }
+      agregar(ventas[e], lim * ORD + nuevaOrden(lim, oferta, -1))
+    }
+  }
+  # el índice de hace una hora decide el ánimo de todos
+  var indice = indiceBolsa()
+  agregar(indiceHist, indice)
+  fijo nAct = longitud(activas)
+  var animo = 0                                  # 1 euforia, -1 pánico
+  fijo n = longitud(indiceHist)
+  si n > 60 {
+    fijo antes = indiceHist[n - 61]
+    si indice * 10 > antes * 11 { animo = 1 }
+    si indice * 20 < antes * 19 { animo = -1 }
+  }
+  var cadaCuantos = 20
+  var umbral = 40 * SALARIO_HORA
+  si animo == 1 {
+    cadaCuantos = 5                              # euforia: entra uno de cada cinco…
+    umbral = 10 * SALARIO_HORA                   # …y con menos colchón
+  }
+  # accionistas: cada uno mira una empresa por sesión
+  para k en rango(N_INV) {
+    fijo d = N_AG + k
+    fijo r = h(t, d, 20)
+    fijo e = activas[r % nAct]
+    fijo p = precioAcc[e]
+    fijo estilo = k % 3
+    var lado = -1
+    si estilo == 0 {
+      si p * 10 < valor[e] * 9 { lado = 0 } sino si p * 10 > valor[e] * 11 { lado = 1 }
+    } sino si estilo == 1 {
+      si p > precioAccAnt[e] { lado = 0 } sino si p < precioAccAnt[e] { lado = 1 }
+    } sino { lado = (r // N_EMP) % 2 }
+    fijo ajuste = (r // 1000) % 4
+    si lado == 0 {
+      fijo lim = p * (100 + ajuste) // 100 + 1
+      # arriesga del 1 al 5 % de su dinero por sesión; el de tendencia, hasta el 10 %
+      var pct = 1 + (r // 50) % 5
+      si estilo == 1 { pct = pct * 2 }
+      var presupuesto = saldo[d] * pct // 100
+      # euforia: el de tendencia pide prestado todo lo que le cabe sobre sus acciones
+      si estilo == 1 y animo == 1 y CREDITO {
+        fijo cabe = valorAcc[d] * MARGEN_PRESTAMO // 100 - deuda[d]
+        si cabe > 0 {
+          si prestar(d, cabe) { presupuesto += cabe }
+        }
+      }
+      fijo cant = presupuesto // lim
+      si cant > 0 { agregar(compras[e], (ORD - 1 - lim) * ORD + nuevaOrden(lim, cant, d)) }
+    } sino si lado == 1 {
+      fijo tengo = tieneAcc(e, d)
+      si tengo > 0 {
+        fijo lim = maximo(1, p * (100 - ajuste) // 100)
+        # vende del 25 al 100 % de lo que tiene de esa empresa
+        fijo cant = maximo(1, tengo * (1 + (r // 50) % 4) // 4)
+        agregar(ventas[e], lim * ORD + nuevaOrden(lim, cant, d))
+      }
+    }
+  }
+  # compradores
+  compradoresEnBolsa = 0
+  para i en rango(N_AG) {
+    fijo r = h(t, i, 24)
+    si r % cadaCuantos == 0 {
+      fijo e = activas[(r // 20) % nAct]
+      fijo p = precioAcc[e]
+      compradoresEnBolsa += 1
+      si animo == -1 {
+        # pánico: el que tiene, vende barato
+        fijo tengo = tieneAcc(e, i)
+        si tengo > 0 {
+          fijo lim = maximo(1, p * 90 // 100)
+          agregar(ventas[e], lim * ORD + nuevaOrden(lim, tengo, i))
+        }
+      } sino si saldo[i] < SALARIO_HORA {
+        fijo tengo = tieneAcc(e, i)
+        si tengo > 0 {
+          fijo lim = maximo(1, p * 95 // 100)
+          agregar(ventas[e], lim * ORD + nuevaOrden(lim, tengo, i))
+        }
+      } sino si saldo[i] > umbral {
+        fijo lim = p * 101 // 100 + 1
+        # el comprador arriesga lo que le sobra por encima del umbral, del 5 al 20 %
+        var presupuesto = (saldo[i] - umbral) * (5 + (r // 2000) % 4 * 5) // 100
+        # en euforia, el que ya tiene acciones también se apalanca
+        si animo == 1 y CREDITO {
+          fijo cabe = valorAcc[i] * MARGEN_PRESTAMO // 100 - deuda[i]
+          si cabe > 0 {
+          si prestar(i, cabe) { presupuesto += cabe }
+        }
+        }
+        fijo cant = presupuesto // lim
+        si cant > 0 { agregar(compras[e], (ORD - 1 - lim) * ORD + nuevaOrden(lim, cant, i)) }
+      }
+    }
+  }
+  # clubes: compran la empresa que más gana por hora frente a su precio, y
+  # venden la que pierde. Arriesgan el 2 % de su efectivo por sesión.
+  var mejor = -1
+  para e en activas {
+    si ganHora[e] > 0 y precioAcc[e] > 0 {
+      si mejor < 0 o ganHora[e] * 1000 // precioAcc[e] > ganHora[mejor] * 1000 // precioAcc[mejor] { mejor = e }
+    }
+  }
+  para k en rango(nClubs) {
+    fijo cc = C_CLUB + k
+    si mejor >= 0 y animo != -1 y saldo[cc] > 0 {
+      fijo p = precioAcc[mejor]
+      fijo lim = p * 102 // 100 + 1
+      fijo cant = (saldo[cc] * 2 // 100) // lim
+      si cant > 0 { agregar(compras[mejor], (ORD - 1 - lim) * ORD + nuevaOrden(lim, cant, cc)) }
+    }
+    fijo e2 = activas[h(t, cc, 50) % nAct]
+    si ganHora[e2] < 0 {
+      fijo tengo = tieneAcc(e2, cc)
+      si tengo > 0 {
+        fijo lim = maximo(1, precioAcc[e2] * 97 // 100)
+        agregar(ventas[e2], lim * ORD + nuevaOrden(lim, maximo(1, tengo // 2), cc))
+      }
+    }
+  }
+  # ventas forzosas: el que recibió la llamada de margen vende todo con descuento
+  para c en forzados {
+    para e en rango(N_EMP) {
+      fijo tengo = tieneAcc(e, c)
+      si tengo > 0 {
+        fijo lim = maximo(1, precioAcc[e] * 85 // 100)
+        agregar(ventas[e], lim * ORD + nuevaOrden(lim, tengo, c))
+      }
+    }
+  }
+  para e en activas { casar(e, compras[e], ventas[e]) }
+}
+
+# media del precio de las acciones de las empresas activas
+fn indiceBolsa(): entero {
+  var x = 0
+  para e en activas { x += precioAcc[e] }
+  var n = longitud(activas)
+  si n < 1 { n = 1 }
+  devolver x // n
+}
+
+# Subasta con cantidades. Las compras se ordenan de mayor a menor precio y las
+# ventas de menor a mayor (empate: la orden que llegó antes). Se cruzan mientras
+# el comprador pague al menos lo que pide el vendedor; todo se ejecuta al precio
+# único del punto medio de la última pareja. El vendedor puede ser la empresa
+# (su tesorería) o cualquiera que tenga acciones.
+var fC: lista<entero> = []
+var fV: lista<entero> = []
+var fQ: lista<entero> = []
+fn casar(e: entero, libroC: lista<entero>, libroV: lista<entero>) {
+  fijo c: lista<entero> = ordenar(libroC)
+  fijo v: lista<entero> = ordenar(libroV)
+  precioAccAnt[e] = precioAcc[e]
+  var i = 0
+  var j = 0
+  var restaC = 0
+  var restaV = 0
+  si longitud(c) > 0 { restaC = oCant[c[0] % ORD] }
+  si longitud(v) > 0 { restaV = oCant[v[0] % ORD] }
+  var ultC = -1
+  var ultV = -1
+  var nf = 0
+  mientras i < longitud(c) y j < longitud(v) {
+    fijo oc = c[i] % ORD
+    fijo ov = v[j] % ORD
+    si oPrecio[oc] < oPrecio[ov] { romper }
+    fijo q = minimo(restaC, restaV)
+    si nf >= longitud(fC) {
+      agregar(fC, 0)
+      agregar(fV, 0)
+      agregar(fQ, 0)
+    }
+    fC[nf] = oc
+    fV[nf] = ov
+    fQ[nf] = q
+    nf += 1
+    ultC = oc
+    ultV = ov
+    restaC -= q
+    restaV -= q
+    si restaC == 0 {
+      i += 1
+      si i < longitud(c) { restaC = oCant[c[i] % ORD] }
+    }
+    si restaV == 0 {
+      j += 1
+      si j < longitud(v) { restaV = oCant[v[j] % ORD] }
+    }
+  }
+  si nf == 0 { devolver }
+  fijo pc = (oPrecio[ultC] + oPrecio[ultV]) // 2
+  para k en rango(nf) {
+    fijo comprador = oQuien[fC[k]]
+    fijo vendedor = oQuien[fV[k]]
+    si comprador != vendedor {
+      # lo que de verdad puede pagar ahora y lo que de verdad tiene el vendedor
+      var q = minimo(fQ[k], saldo[comprador] // pc)
+      q = minimo(q, tieneAcc(e, vendedor))
+      si q > 0 {
+        var cuentaV = vendedor
+        si vendedor < 0 { cuentaV = C_EMP + e }
+        si transferir(comprador, cuentaV, q * pc) {
+          moverAcc(e, vendedor, comprador, q)
+          # el banco cobra primero: lo que recibe un vendedor endeudado paga su deuda
+          si vendedor >= 0 y deuda[vendedor] > 0 { amortizar(vendedor, q * pc) }
+          si vendedor < 0 {
+            capital[e] = capital[e] + q * pc
+            autorizadas[e] = autorizadas[e] - q
+          }
+          operaciones += 1
+        }
+      }
+    }
+  }
+  precioAcc[e] = pc
+}
+
+fn soltarTramo(t: entero) {
+  si t >= INICIO_TRAMOS y (t - INICIO_TRAMOS) % CADA_TRAMO == 0 y (t - INICIO_TRAMOS) // CADA_TRAMO < N_TRAMOS {
+    para e en rango(N_INI) { si activa[e] { autorizadas[e] = autorizadas[e] + TRAMO } }
+  }
+}
+
+# ─────────────────────────────────────────────── invariantes
+# El JIT de Ñ no compila funciones con «lanzar»: el cálculo va en «revisar»,
+# compilable, y solo el aviso en «verificar».
+fn revisar(): entero {
+  fijo S = saldo
+  fijo B = bancoDe
+  var total = 0
+  para b en rango(N_BANCO) { porBanco[b] = 0 }
+  para c en rango(N_CTA) {
+    si S[c] < 0 y (c < C_BANCO o c >= C_CLUB) { devolver 1 }   # solo el capital de un banco puede ser negativo
+    total += S[c]
+    porBanco[B[c]] = porBanco[B[c]] + S[c]
+  }
+  var base = 0
+  var vivos = 0
+  para b en rango(N_BANCO) {
+    base += reservas[b]
+    vivos += prestamos[b]
+    si reservas[b] < 0 { devolver 3 }
+    si porBanco[b] != depos[b] { devolver 3 }
+    si depos[b] != reservas[b] + prestamos[b] { devolver 3 }
+  }
+  si base != M0 { devolver 6 }
+  si total != M0 + vivos { devolver 2 }
+  var deudas = 0
+  para c en rango(N_CTA) {
+    si deuda[c] < 0 { devolver 7 }
+    deudas += deuda[c]
+  }
+  si deudas != vivos { devolver 7 }
+  # acciones: 50.000 por empresa activa; ninguna en las cerradas o sin usar
+  para e en rango(N_EMP) {
+    var s = tesoreria[e]
+    si s < 0 { devolver 4 }
+    para q en valores(libro[e]) {
+      si q <= 0 { devolver 4 }
+      s += q
+    }
+    si activa[e] y s != ACC_TOTAL { devolver 4 }
+    si no activa[e] y s != 0 { devolver 4 }
+  }
+  var enEstante = 0
+  para e en rango(N_EMP) {
+    enEstante += inv[e]
+    si no activa[e] y inv[e] != 0 { devolver 5 }
+  }
+  si producido != consumido + enEstante + destruido { devolver 5 }
+  # participaciones: las de los socios suman las del club
+  var porClub: lista<entero> = []
+  para k en rango(nClubs) { agregar(porClub, 0) }
+  para i en rango(N_AG) {
+    fijo k = clubDe[i]
+    si k >= 0 {
+      si partic[i] <= 0 { devolver 8 }
+      porClub[k] = porClub[k] + partic[i]
+    } sino si partic[i] != 0 { devolver 8 }
+  }
+  para k en rango(nClubs) { si porClub[k] != partTotal[k] { devolver 8 } }
+  devolver 0
+}
+
+fn verificar(t: entero) {
+  fijo r = revisar()
+  si r == 1 { lanzar error("tick {t}: una cuenta quedó en negativo") }
+  si r == 2 { lanzar error("tick {t}: dinero fantasma: los depósitos ya no son base + préstamos") }
+  si r == 3 { lanzar error("tick {t}: un banco no cuadra: depósitos ≠ reservas + préstamos") }
+  si r == 6 { lanzar error("tick {t}: la base monetaria ya no es {M0} centavos") }
+  si r == 7 { lanzar error("tick {t}: la deuda de los deudores no coincide con los préstamos de los bancos") }
+  si r == 4 { lanzar error("tick {t}: acciones: una empresa activa no tiene {ACC_TOTAL}, o una cerrada todavía tiene") }
+  si r == 5 { lanzar error("tick {t}: bienes que no cuadran: producido ≠ consumido + inventario + destruido") }
+  si r == 8 { lanzar error("tick {t}: las participaciones de los socios no suman las de su club") }
+}
+
+# ─────────────────────────────────────────────── ranking de patrimonio
+# patrimonio = dinero + acciones al precio de la última subasta − deuda
+fn calcularPatrimonio() {
+  fijo PA = patrimonio
+  fijo VA = valorAcc
+  para c en rango(N_CTA) { VA[c] = 0 }
+  para e en rango(N_EMP) {
+    fijo d = libro[e]
+    fijo p = precioAcc[e]
+    para quien en claves(d) { VA[quien] = VA[quien] + d[quien] * p }
+  }
+  # patrimonio NETO: lo que debe se resta
+  para c en rango(TENEDORES) { PA[c] = saldo[c] + VA[c] - deuda[c] }
+  # los clubes y la parte de cada socio
+  para k en rango(nClubs) {
+    fijo cc = C_CLUB + k
+    PA[cc] = saldo[cc] + VA[cc] - deuda[cc]
+  }
+  para i en rango(N_AG) {
+    fijo k = clubDe[i]
+    si k >= 0 y partTotal[k] > 0 y PA[C_CLUB + k] > 0 {
+      PA[i] = PA[i] + entero(PA[C_CLUB + k] * (partic[i] / partTotal[k]))
+    }
+  }
+}
+
+fn navClub(k: entero): entero {
+  fijo cc = C_CLUB + k
+  devolver saldo[cc] + valorAcc[cc] - deuda[cc]
+}
+
+fn elMasRico(): entero {
+  fijo PA = patrimonio
+  var mejor = 0
+  para c en rango(TENEDORES) { si PA[c] > PA[mejor] { mejor = c } }
+  devolver mejor
+}
+
+fn ceros(n: entero, ancho: entero): texto {
+  var s = texto(n)
+  mientras longitud(s) < ancho { s = "0" + s }
+  devolver s
+}
+fn idDe(c: entero): texto {
+  si c < N_AG { devolver "C-" + ceros(c, 7) }
+  devolver "A-" + ceros(c - N_AG, 6)
+}
+
+fn ranking(t: entero, cuantos: entero) {
+  calcularPatrimonio()
+  fijo PA = patrimonio
+  var top: lista<entero> = []
+  para c en rango(TENEDORES) {
+    si longitud(top) < cuantos o PA[c] > PA[top[longitud(top) - 1]] {
+      # insertar en orden descendente
+      var k = longitud(top)
+      agregar(top, c)
+      mientras k > 0 y PA[top[k - 1]] < PA[c] {
+        top[k] = top[k - 1]
+        k -= 1
+      }
+      top[k] = c
+      si longitud(top) > cuantos { top = rebanar(top, 0, cuantos) }
+    }
+  }
+  para k en rango(longitud(top)) {
+    fijo c = top[k]
+    var tipo = "comprador"
+    si c >= N_AG { tipo = "accionista" }
+    csvRank = csvRank + "{t},{k + 1},{idDe(c)},{tipo},{PA[c]},{saldo[c]},{valorAcc[c]},{deuda[c]},{ingresoSal[c]},{ingresoDiv[c]}\n"
+  }
+}
+
+# ─────────────────────────────────────────────── serie de tiempo
+fn fila(t: entero) {
+  var parados = 0
+  para i en rango(N_AG) { si empleo[i] < 0 { parados += 1 } }
+  fijo indice = indiceBolsa()
+  var circ = 0
+  var cap = 0
+  para e en rango(N_EMP) {
+    si activa[e] { circ += ACC_TOTAL - tesoreria[e] }
+    cap += capital[e]
+  }
+  var socios = 0
+  para k en rango(nClubs) { socios += miembros[k] }
+  var dAg = 0
+  para c en rango(N_AG) { dAg += saldo[c] }
+  var dInv = 0
+  para c en rango(N_INV) { dInv += saldo[N_AG + c] }
+  var dEmp = 0
+  para e en rango(N_EMP) { dEmp += saldo[C_EMP + e] }
+  var vivos = 0
+  var capB = 0
+  para b en rango(N_BANCO) {
+    vivos += prestamos[b]
+    capB += saldo[C_BANCO + b]
+  }
+  var dP = 0
+  para c en rango(TENEDORES) { dP += deuda[c] }
+  var dE = 0
+  para e en rango(N_EMP) { dE += deuda[C_EMP + e] }
+  var linea = "{t},{parados},{indice},{circ},{cap},{dAg},{dInv},{dEmp},{longitud(activas)},{fundadas},{quiebras},{nClubs},{socios},{vivos},{dP},{dE},{capB},{llamadasMargen},{impagos},{pagosRechazados}"
+  para s en rango(N_SECTOR) {
+    var x = 0
+    fijo L = sectorFirmas[s]
+    para e en L { x += precio[e] }
+    linea = linea + ",{x // maximo(1, longitud(L))}"
+  }
+  var est = 0
+  para e en activas { est += estrellas[e] // resenas[e] }
+  var maq = 0
+  para e en rango(N_EMP) { maq += maquinas[e] }
+  csv = csv + linea + ",{est // maximo(1, longitud(activas))},{operaciones},{maq},{inversionTotal},{compradoresEnBolsa}\n"
+}
+
+fn tick(t: entero) {
+  elegir(t)
+  asignar(t)
+  producir()
+  soltarTramo(t)
+  si t % 60 == 0 { bolsa(t) }
+  si t % 3600 == 3599 { cadaHora(t) }
+  si t % 600 == 599 { dividendos() }
+  si t % 60 == 0 {
+    verificar(t)
+    fila(t)
+  }
+  si t % 600 == 0 {
+    ranking(t, 10)
+    margenes()
+  }
+}
+
+fn correr(ticks: entero) {
+  para t en rango(ticks) { tick(t) }
+  verificar(ticks)
+  ranking(ticks, 10)
+}
+
+# ─────────────────────────────────────────────── principal
+# «mon» escribe centavos como monedas con dos decimales y puntos de miles
+fn mon(c: entero): texto {
+  var signo = ""
+  var x = c
+  si x < 0 {
+    signo = "-"
+    x = -x
+  }
+  # los miles se separan con aritmética, de tres en tres cifras
+  var ent = x // 100
+  var con = ""
+  mientras ent >= 1000 {
+    con = "." + ceros(ent % 1000, 3) + con
+    ent = ent // 1000
+  }
+  devolver signo + texto(ent) + con + "," + ceros(x % 100, 2)
+}
+
+# ─────────────────────────────────────────────── destacados
+# Quién tiene más acciones, quién es el más pobre, y qué empresa rindió más y
+# menos. «Rendimiento» = ganancia acumulada de la corrida: ventas − salarios.
+# Al lado va lo que hizo su acción desde la salida a bolsa (100 monedas).
+var cuentaAcc: lista<entero> = []
+var cuentaEmp: lista<entero> = []
+
+fn contarAcciones() {
+  si longitud(cuentaAcc) == 0 {
+    para c en rango(TENEDORES) {
+      agregar(cuentaAcc, 0)
+      agregar(cuentaEmp, 0)
+    }
+  }
+  fijo CA = cuentaAcc
+  fijo CE = cuentaEmp
+  para c en rango(TENEDORES) {
+    CA[c] = 0
+    CE[c] = 0
+  }
+  para e en rango(N_EMP) {
+    fijo d = libro[e]
+    para quien en claves(d) {
+      si quien < TENEDORES {                    # personas; los clubes van aparte
+        CA[quien] = CA[quien] + d[quien]
+        CE[quien] = CE[quien] + 1
+      }
+    }
+  }
+}
+
+fn elDeMasAcciones(): entero {
+  fijo CA = cuentaAcc
+  var mejor = 0
+  para c en rango(TENEDORES) { si CA[c] > CA[mejor] { mejor = c } }
+  devolver mejor
+}
+
+fn elMasPobre(): entero {
+  fijo PA = patrimonio
+  var peor = 0
+  para c en rango(TENEDORES) { si PA[c] < PA[peor] { peor = c } }
+  devolver peor
+}
+
+fn tipoDe2(c: entero): texto {
+  si c < N_AG { devolver "comprador" }
+  devolver "accionista"
+}
+
+fn lineaEmpresa(e: entero): texto {
+  fijo ganancia = ingresosTot[e] - salariosTot[e]
+  var margen = 0
+  si ingresosTot[e] > 0 { margen = ganancia * 100 // ingresosTot[e] }
+  fijo varAcc = (precioAcc[e] - PRECIO_IPO) * 100 // PRECIO_IPO
+  var signo = ""
+  si varAcc > 0 { signo = "+" }
+  devolver "E-{ceros(e, 3)} ({SECTORES[sector[e]]}) · ganancia {mon(ganancia)} · vendió {mon(ingresosTot[e])} · pagó en salarios {mon(salariosTot[e])} · margen {margen} % · acción {mon(precioAcc[e])} ({signo}{varAcc} % desde la salida) · caja {mon(saldo[C_EMP + e])}"
+}
+
+fn destacados() {
+  calcularPatrimonio()
+  contarAcciones()
+  imprimir("destacados:")
+  fijo m = elDeMasAcciones()
+  imprimir("  el que tiene más acciones: {idDe(m)} ({tipoDe2(m)}) · {cuentaAcc[m]} acciones de {cuentaEmp[m]} empresas · valen {mon(valorAcc[m])} · dinero {mon(saldo[m])} · deuda {mon(deuda[m])}")
+  fijo p = elMasPobre()
+  imprimir("  el más pobre: {idDe(p)} ({tipoDe2(p)}) · patrimonio neto {mon(patrimonio[p])} · dinero {mon(saldo[p])} · acciones {mon(valorAcc[p])} · deuda {mon(deuda[p])} · salario cobrado {mon(ingresoSal[p])}")
+  var mejor = activas[0]
+  var peor = activas[0]
+  para e en activas {
+    fijo g = ingresosTot[e] - salariosTot[e]
+    si g > ingresosTot[mejor] - salariosTot[mejor] { mejor = e }
+    si g < ingresosTot[peor] - salariosTot[peor] { peor = e }
+  }
+  imprimir("  empresa con más rendimiento:   {lineaEmpresa(mejor)}")
+  imprimir("  empresa con menos rendimiento: {lineaEmpresa(peor)}")
+}
+
+fn idClub(k: entero): texto { devolver "K-" + ceros(k, 4) }
+
+fn resumenClubes() {
+  calcularPatrimonio()
+  var socios = 0
+  para k en rango(nClubs) { socios += miembros[k] }
+  imprimir("clubes: {nClubs} · {socios} socios · {fundadas} empresas fundadas · retiros que no se pudieron pagar enteros: {retirosParciales}")
+  var csvClub = "club,empresa_origen,socios,valor_neto_centavos,efectivo_centavos,acciones_centavos,deuda_centavos,participaciones,empresas_fundadas\n"
+  para k en rango(nClubs) {
+    fijo cc = C_CLUB + k
+    csvClub = csvClub + "{idClub(k)},E-{ceros(clubOrigen[k], 3)},{miembros[k]},{patrimonio[cc]},{saldo[cc]},{valorAcc[cc]},{deuda[cc]},{partTotal[k]},{clubFundadas[k]}\n"
+  }
+  escribirTexto("ecosim/clubes5.csv", csvClub)
+  si nClubs == 0 { devolver }
+  # los 5 clubes más ricos
+  var topK: lista<entero> = []
+  var usadoK: lista<bool> = []
+  para k en rango(nClubs) { agregar(usadoK, falso) }
+  para n en rango(minimo(5, nClubs)) {
+    var mejor = -1
+    para k en rango(nClubs) {
+      si no usadoK[k] y (mejor < 0 o patrimonio[C_CLUB + k] > patrimonio[C_CLUB + mejor]) { mejor = k }
+    }
+    usadoK[mejor] = cierto
+    agregar(topK, mejor)
+  }
+  imprimir("los 5 clubes más ricos:")
+  para n en rango(longitud(topK)) {
+    fijo k = topK[n]
+    fijo cc = C_CLUB + k
+    imprimir("  {n + 1}. {idClub(k)} (nació en E-{ceros(clubOrigen[k], 3)}) · valor neto {mon(patrimonio[cc])} · {miembros[k]} socios · efectivo {mon(saldo[cc])} · acciones {mon(valorAcc[cc])} · deuda {mon(deuda[cc])} · fundó {clubFundadas[k]}")
+  }
+  # frente a frente con las 5 personas más ricas
+  var topP: lista<entero> = []
+  para n en rango(5) {
+    fijo m = elMasRico()
+    agregar(topP, m)
+    patrimonio[m] = -1 - patrimonio[m]           # se marca y se restaura después
+  }
+  para m en topP { patrimonio[m] = -1 - patrimonio[m] }
+  imprimir("los 5 clubes más ricos frente a las 5 personas más ricas:")
+  var sumaK = 0
+  var sumaP = 0
+  para n en rango(5) {
+    var izq = "—"
+    si n < longitud(topK) {
+      fijo k = topK[n]
+      izq = "{idClub(k)} {mon(patrimonio[C_CLUB + k])}"
+      sumaK += patrimonio[C_CLUB + k]
+    }
+    fijo m = topP[n]
+    sumaP += patrimonio[m]
+    imprimir("  #{n + 1}  {izq}   vs   {idDe(m)} {mon(patrimonio[m])}")
+  }
+  var quien = "las personas"
+  si sumaK > sumaP { quien = "los clubes" }
+  imprimir("  total: clubes {mon(sumaK)} vs personas {mon(sumaP)} · ganan {quien}")
+}
+
+fn resumen(ms: real, t1: real, t0: real) {
+  imprimir("arranque {entero(t1 - t0)} ms · {TICKS} ticks en {entero(ms)} ms · {ms / TICKS} ms por tick")
+  var dinero = 0
+  para c en rango(N_CTA) { dinero += saldo[c] }
+  imprimir("invariantes ✓ · base {mon(M0)} monedas · dinero en depósitos {mon(dinero)} · {longitud(activas) * ACC_TOTAL} acciones vivas ({canceladas} canceladas) · bienes (producido {producido}, consumido o invertido {consumido}, destruido {destruido})")
+  var parados = 0
+  para i en rango(N_AG) { si empleo[i] < 0 { parados += 1 } }
+  var circ = 0
+  var cap = 0
+  var maq = 0
+  para e en rango(N_EMP) {
+    si activa[e] { circ += ACC_TOTAL - tesoreria[e] }
+    cap += capital[e]
+    maq += maquinas[e]
+  }
+  imprimir("desempleo {parados} de {N_AG} · acciones en circulación {circ} de {longitud(activas) * ACC_TOTAL} · operaciones {operaciones}")
+  imprimir("capital levantado en bolsa {mon(cap)} monedas · invertido en máquinas {mon(inversionTotal)} monedas · máquinas en uso {maq}")
+  # crédito
+  var vivos = 0
+  para b en rango(N_BANCO) { vivos += prestamos[b] }
+  var dP = 0
+  para c en rango(TENEDORES) { dP += deuda[c] }
+  var dE = 0
+  para e en rango(N_EMP) { dE += deuda[C_EMP + e] }
+  si CREDITO {
+    imprimir("crédito: préstamos vivos {mon(vivos)} · de personas {mon(dP)} · de empresas {mon(dE)} · prestado en total {mon(prestadoTotal)}")
+    imprimir("         llamadas de margen {llamadasMargen} · impagos castigados {mon(impagos)} · pagos rechazados por falta de reservas {pagosRechazados}")
+    para b en rango(N_BANCO) {
+      var estado = "sano"
+      si saldo[C_BANCO + b] < 0 { estado = "QUEBRADO" }
+      imprimir("  banco {b}: depósitos {mon(depos[b])} · reservas {mon(reservas[b])} ({reservas[b] * 100 // maximo(1, depos[b])} %) · préstamos {mon(prestamos[b])} · capital {mon(saldo[C_BANCO + b])} · {estado}")
+    }
+  } sino {
+    imprimir("crédito: apagado")
+  }
+  # las empresas, una por una: las activas por sector, y luego las cerradas
+  imprimir("empresas: {longitud(activas)} activas · {fundadas} fundadas por clubes · {quiebras} quebradas (todo en monedas)")
+  var csvEmp = "empresa,sector,estado,fundador,fundada_tick,cierre_tick,causa,caja_centavos,deuda_centavos,precio_producto_centavos,precio_accion_centavos,trabajadores,maquinas,inventario,capital_centavos,acciones_en_tesoreria,estrellas_x100,calidad,ganancia_ultima_hora_centavos,mejor_hora_centavos\n"
+  para s en rango(N_SECTOR) {
+    imprimir("  {SECTORES[s]} ({longitud(sectorFirmas[s])} activas)")
+    para e en sectorFirmas[s] {
+      fijo c = C_EMP + e
+      var linea = "    E-{ceros(e, 3)}  caja {mon(saldo[c])}"
+      si deuda[c] > 0 { linea = linea + " · deuda {mon(deuda[c])}" }
+      linea = linea + " · producto {mon(precio[e])} · acción {mon(precioAcc[e])} · trab {trab[e]} · máq {maquinas[e]} · ★{mon(estrellas[e] // resenas[e])}"
+      si fundador[e] >= 0 { linea = linea + " · nueva, de K-{ceros(fundador[e], 4)} en el minuto {fundadaEn[e] // 60}" }
+      imprimir(linea)
+    }
+  }
+  si quiebras > 0 {
+    imprimir("  cerradas:")
+    para e en rango(N_EMP) {
+      si usado[e] y no activa[e] {
+        var origen = "original"
+        si fundador[e] >= 0 { origen = "de K-{ceros(fundador[e], 4)}" }
+        imprimir("    E-{ceros(e, 3)} ({SECTORES[sector[e]]}, {origen}) · quebró en el minuto {cierreEn[e] // 60} por {causaCierre[e]} · su mejor hora ganó {mon(ganMax[e])}")
+      }
+    }
+  }
+  para e en rango(N_EMP) {
+    si usado[e] {
+      fijo c = C_EMP + e
+      var estado = "activa"
+      si no activa[e] { estado = "cerrada" }
+      csvEmp = csvEmp + "E-{ceros(e, 3)},{SECTORES[sector[e]]},{estado},{fundador[e]},{fundadaEn[e]},{cierreEn[e]},{causaCierre[e]},{saldo[c]},{deuda[c]},{precio[e]},{precioAcc[e]},{trab[e]},{maquinas[e]},{inv[e]},{capital[e]},{tesoreria[e]},{estrellas[e] // resenas[e]},{calidad[e]},{ganHora[e]},{ganMax[e]}\n"
+    }
+  }
+  escribirTexto("ecosim/empresas5.csv", csvEmp)
+  destacados()
+  resumenClubes()
+  imprimir("las 5 personas más ricas:")
+  calcularPatrimonio()
+  para k en rango(5) {
+    fijo mejor = elMasRico()
+    imprimir("  {k + 1}. {idDe(mejor)} · patrimonio neto {mon(patrimonio[mejor])} · dinero {mon(saldo[mejor])} · acciones {mon(valorAcc[mejor])} · deuda {mon(deuda[mejor])} · salario {mon(ingresoSal[mejor])} · dividendos {mon(ingresoDiv[mejor])}")
+    patrimonio[mejor] = -1
+  }
+  # desigualdad: qué parte del dinero de las personas tiene el 1 % más rico
+  calcularPatrimonio()
+  imprimir("el 1 % más rico tiene el {parteDelUno()} % del patrimonio de las personas")
+}
+
+# Proporción del patrimonio del 1 % más rico, en por ciento entero. Sin ordenar
+# 2 millones de valores: se busca por bisección el umbral que deja fuera al 99 %.
+fn parteDelUno(): entero {
+  fijo PA = patrimonio
+  var total = 0
+  var maxv = 0
+  para c en rango(TENEDORES) {
+    total += PA[c]
+    si PA[c] > maxv { maxv = PA[c] }
+  }
+  fijo cuantos = maximo(1, TENEDORES // 100)
+  var lo = 0
+  var hi = maxv
+  mientras hi - lo > 1 {
+    fijo medio = (lo + hi) // 2
+    var n = 0
+    para c en rango(TENEDORES) { si PA[c] >= medio { n += 1 } }
+    si n > cuantos { lo = medio } sino { hi = medio }
+  }
+  var arriba = 0
+  para c en rango(TENEDORES) { si PA[c] >= hi { arriba += PA[c] } }
+  si total == 0 { devolver 0 }
+  devolver arriba * 100 // total
+}
+
+var modo = "con crédito"
+si no CREDITO { modo = "sin crédito" }
+imprimir("ECOSIM-5 v5 · {N_AG} compradores · {N_INV} accionistas · {N_INI} empresas al empezar · base {MONEDAS} monedas · {modo} · semilla {SEMILLA}")
+fijo t0 = reloj()
+iniciar()
+verificar(0)
+calcularPatrimonio()
+imprimir("al empezar, el 1 % más rico tiene el {parteDelUno()} % del patrimonio de las personas")
+fijo t1 = reloj()
+correr(TICKS)
+fijo ms = reloj() - t1
+escribirTexto("ecosim/salida5.csv", csv)
+escribirTexto("ecosim/ranking5.csv", csvRank)
+resumen(ms, t1, t0)

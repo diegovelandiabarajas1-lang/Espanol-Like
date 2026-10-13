@@ -1,0 +1,267 @@
+# Las pruebas de C1EÑ —el motor que lleva funciones de Ñ a la GPU y a C—, en Ñ.
+#
+# Lo que se comprueba no es que «paralelo» devuelva algo, sino tres cosas que
+# se pueden verificar por otro camino:
+#   · los valores: saxpy contra la cuenta a mano, la suma por bloques contra
+#     «suma», el histograma contra el número de datos, π contra |PI;
+#   · la promesa de C1EÑ: el MISMO resultado en "jit" y en "nativo" (y en "gpu"
+#     cuando la hay), comparado con «==», no con «más o menos»;
+#   · los rechazos: lo que no está en el subconjunto se dice con la línea.
+# Si en esta máquina no hay compilador de C, lo que compara con "nativo" sale
+# como saltado, no como pasado.
+
+usar probar, saltar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCerca, debeSerCierto,
+     debeSerFalso, debeFallarCon, debeContener de "probar"
+usar paralelo, dispositivo, dispositivos, usarDispositivo, codigoC, codigoCuda, azarHilo, sumarAtomico de "nen"
+usar ceros, arreglo, suma, aListaA, elemento, secuencia, raiz, piso de "numerico"
+
+fn hay(nombre: texto) -> bool {
+    para d en dispositivos() {
+        si contiene(d, nombre) { devolver cierto }
+    }
+    devolver falso
+}
+fijo HAY_NATIVO = hay("nativo")
+fijo HAY_GPU = hay("gpu")
+# Los dispositivos con los que se compara: siempre jit, y los demás si están.
+fn todos() -> lista {
+    var ds = ["jit"]
+    si HAY_NATIVO { ds = ds + ["nativo"] }
+    si HAY_GPU { ds = ds + ["gpu"] }
+    devolver ds
+}
+
+# ─── los núcleos ────────────────────────────────────────────────────────────
+fn saxpy(i, a, x, y) {
+    y[i] = a * x[i] + y[i]
+}
+
+fn sumaBloques(b, x, parciales, tam) {
+    var s = 0.0
+    para j en rango(b * tam, minimo((b + 1) * tam, longitud(x))) {
+        s = s + x[j]
+    }
+    parciales[b] = s
+}
+
+fn histo(i, datos, cubetas, ancho) {
+    sumarAtomico(cubetas, piso(datos[i] / ancho), 1)
+}
+
+fn piHilo(i, muestras, semilla, dentro) {
+    var c = 0
+    para j en rango(muestras) {
+        var x = azarHilo(semilla, i * muestras + j, 0)
+        var y = azarHilo(semilla, i * muestras + j, 1)
+        si x * x + y * y < 1.0 { c = c + 1 }
+    }
+    dentro[i] = c
+}
+
+fn mandel(i, ancho, alto, iter, r) {
+    var cx = -2.0 + 3.0 * (i % ancho) / ancho
+    var cy = -1.2 + 2.4 * (i // ancho) / alto
+    var zx = 0.0
+    var zy = 0.0
+    var k = 0
+    mientras k < iter y zx * zx + zy * zy < 4.0 {
+        var t = zx * zx - zy * zy + cx
+        zy = 2.0 * zx * zy + cy
+        zx = t
+        k = k + 1
+    }
+    r[i] = k
+}
+
+# Corre saxpy en el dispositivo d y devuelve el resultado como lista.
+fn saxpyEn(d: texto) -> lista {
+    usarDispositivo(d)
+    var x = arreglo([1.0, 2.0, 3.0, 0.1, 0.7], "real")
+    var y = arreglo([0.5, 0.25, 0.125, 0.3, 0.2], "real")
+    paralelo(5, saxpy, 2.5, x, y)
+    devolver aListaA(y)
+}
+fn estimarPi(d: texto, hilos: entero, muestras: entero) -> real {
+    usarDispositivo(d)
+    var dentro = ceros(hilos, "entero")
+    paralelo(hilos, piHilo, muestras, 2026, dentro)
+    devolver 4.0 * suma(dentro) / (hilos * muestras)
+}
+fn mandelEn(d: texto) -> lista {
+    usarDispositivo(d)
+    var r = ceros(30 * 24, "entero")
+    paralelo(30 * 24, mandel, 30, 24, 50, r)
+    devolver aListaA(r)
+}
+
+grupo("los dispositivos", fn() {
+    probar("siempre hay jit, y dispositivo() dice cuál se usa", fn() {
+        debeContener(dispositivos(), "jit")
+        debeSer(usarDispositivo("jit"), "jit")
+        debeSer(dispositivo(), "jit")
+    })
+    probar("uno que no existe se dice con su nombre", fn() {
+        debeFallarCon(fn() { usarDispositivo("marte") }, "no conozco el dispositivo «marte»")
+    })
+    si HAY_GPU {
+        saltar("pedir GPU donde no la hay falla con explicación", fn() { })
+    } sino {
+        probar("pedir GPU donde no la hay falla con explicación", fn() {
+            debeFallarCon(fn() { usarDispositivo("gpu") }, "no hay GPU")
+        })
+    }
+})
+
+grupo("saxpy: y = a·x + y", fn() {
+    probar("da la cuenta hecha a mano en jit", fn() {
+        var y = saxpyEn("jit")
+        debeSerCerca(y[0], 3.0)
+        debeSerCerca(y[1], 5.25)
+        debeSerCerca(y[2], 7.625)
+        debeSer(y[3], 2.5 * 0.1 + 0.3)
+        debeSer(y[4], 2.5 * 0.7 + 0.2)
+    })
+    probar("y EXACTAMENTE lo mismo en todos los dispositivos", fn() {
+        var ref = saxpyEn("jit")
+        para d en todos() { debeSer(saxpyEn(d), ref) }
+    })
+})
+
+grupo("la suma de un arreglo, por bloques", fn() {
+    probar("las sumas parciales suman lo que suma «suma»", fn() {
+        var x = secuencia(0.0, 1000.0, 1.0)
+        var parciales = ceros(10)
+        usarDispositivo("jit")
+        paralelo(10, sumaBloques, x, parciales, 100)
+        debeSer(suma(parciales), 499500)
+        debeSer(elemento(parciales, 0), 4950)
+    })
+    probar("con un último bloque a medias", fn() {
+        var x = secuencia(0.0, 1005.0, 1.0)
+        var parciales = ceros(11)
+        para d en todos() {
+            usarDispositivo(d)
+            paralelo(11, sumaBloques, x, parciales, 100)
+            debeSer(suma(parciales), 1004 * 1005 / 2)
+            debeSer(elemento(parciales, 10), 1000 + 1001 + 1002 + 1003 + 1004)
+        }
+    })
+})
+
+grupo("histograma con sumarAtomico", fn() {
+    probar("cada dato cae en su cubeta y no se pierde ninguno", fn() {
+        var datos = arreglo([0.5, 1.5, 1.7, 2.2, 2.9, 2.0, 3.99, 0.0], "real")
+        para d en todos() {
+            usarDispositivo(d)
+            var cub = ceros(4, "entero")
+            paralelo(8, histo, datos, cub, 1.0)
+            debeSer(aListaA(cub), [2, 2, 3, 1])
+            debeSer(suma(cub), 8)
+        }
+    })
+    probar("con muchos hilos contra pocas cubetas (los atómicos se notan)", fn() {
+        var datos = secuencia(0.0, 10000.0, 1.0)
+        para d en todos() {
+            usarDispositivo(d)
+            var cub = ceros(4, "entero")
+            paralelo(10000, histo, datos, cub, 2500.0)
+            debeSer(aListaA(cub), [2500, 2500, 2500, 2500])
+        }
+    })
+    probar("fuera de un núcleo también vale: a[j] += v", fn() {
+        var a = ceros(3)
+        sumarAtomico(a, 1, 2.5)
+        sumarAtomico(a, 1, 0.5)
+        debeSer(aListaA(a), [0, 3.0, 0])
+        debeFallarCon(fn() { sumarAtomico(a, 3, 1.0) }, "se sale del arreglo")
+    })
+})
+
+grupo("Monte Carlo de π con azarHilo", fn() {
+    probar("se acerca a π", fn() {
+        debeSerCerca(estimarPi("jit", 128, 2000), |PI, 0.01)
+    })
+    si HAY_NATIVO {
+        probar("y da EL MISMO número en jit y en nativo (el azar es por contador)", fn() {
+            debeSer(estimarPi("nativo", 128, 2000), estimarPi("jit", 128, 2000))
+        })
+    } sino {
+        saltar("y da EL MISMO número en jit y en nativo (el azar es por contador)", fn() { })
+    }
+    probar("azarHilo es una función pura: mismos enteros, mismo número", fn() {
+        debeSer(azarHilo(7, 3, 0), azarHilo(7, 3, 0))
+        debeSerFalso(azarHilo(7, 3, 0) == azarHilo(7, 3, 1))
+        debeSerFalso(azarHilo(7, 3, 0) == azarHilo(8, 3, 0))
+        var r = ceros(4)
+        usarDispositivo("jit")
+        paralelo(4, fn(i, r) { r[i] = azarHilo(7, i, 0) }, r)
+        debeSer(elemento(r, 3), azarHilo(7, 3, 0))
+    })
+    probar("y sus enteros tienen que ser enteros", fn() {
+        debeFallarCon(fn() { azarHilo(1.5, 0, 0) }, "tiene que ser entero")
+    })
+})
+
+grupo("mandelbrot pequeño", fn() {
+    probar("una esquina escapa enseguida y el origen no escapa nunca", fn() {
+        var r = mandelEn("jit")
+        debeSer(r[0], 1)
+        debeSer(r[12 * 30 + 20], 50)
+    })
+    probar("el mismo dibujo, píxel a píxel, en todos los dispositivos", fn() {
+        var ref = mandelEn("jit")
+        para d en todos() { debeSer(mandelEn(d), ref) }
+    })
+})
+
+grupo("lo que no se puede compilar se dice, con la línea", fn() {
+    var r = ceros(4)
+    probar("texto", fn() {
+        usarDispositivo("jit")
+        debeFallarCon(fn() { paralelo(4, fn(i, r) { var t = "hola" }, r) }, "usa texto")
+    })
+    probar("imprimir dentro de un núcleo", fn() {
+        debeFallarCon(fn() { paralelo(4, fn(i, r) { imprimir(i) }, r) }, "«imprimir» no se puede llamar dentro de un núcleo")
+    })
+    probar("una variable de fuera", fn() {
+        var factor = 3.0
+        debeFallarCon(fn() { paralelo(4, fn(i, r) { r[i] = factor }, r) }, "pásalas como argumentos")
+    })
+    probar("la línea está en el mensaje", fn() {
+        debeFallarCon(fn() {
+            paralelo(4, fn(i, r) {
+                r[i] = 1.0
+                var l = [1, 2, 3]
+            }, r)
+        }, "línea 234: crea una lista")
+    })
+    probar("un real en un arreglo entero", fn() {
+        var e = ceros(4, "entero")
+        debeFallarCon(fn() { paralelo(4, fn(i, e) { e[i] = 0.5 }, e) }, "se guarda un real en el arreglo entero «e»")
+    })
+    probar("los fallos en ejecución dicen el hilo y la línea", fn() {
+        para d en todos() {
+            usarDispositivo(d)
+            debeFallarCon(fn() { paralelo(4, fn(i, r) { r[i] = 1.0 / (i - 2) }, r) }, "el hilo i = 2 falló en la línea 245: división entre cero")
+        }
+    })
+})
+
+grupo("el código generado", fn() {
+    probar("codigoC es C con OpenMP y sin FMA", fn() {
+        var c = codigoC(saxpy, 2.5, arreglo([1.0], "real"), arreglo([1.0], "real"))
+        debeContener(c, "void c1en_nucleo(int64_t n, double p1, double* p2")
+        debeContener(c, "-ffp-contract=off")
+        debeContener(c, "#pragma omp parallel for")
+    })
+    probar("codigoCuda es un __global__ que recorre la cuadrícula", fn() {
+        var c = codigoCuda(saxpy)
+        debeContener(c, "extern \"C\" __global__ void c1en_nucleo(long long n, double p1, double* p2")
+        debeContener(c, "--fmad=false")
+        debeContener(c, "blockIdx.x")
+    })
+})
+
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(resumenPruebas())
