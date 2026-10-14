@@ -164,6 +164,8 @@ module.exports = {
   crearCarpeta: 'crearCarpeta("salida/informes")\nimprimir(esCarpeta("salida/informes"))',
   borrarArchivo: 'escribirTexto("temporal.txt", "x")\nimprimir(borrarArchivo("temporal.txt"), borrarArchivo("temporal.txt"))',
   tamanoArchivo: 'imprimir(tamanoArchivo("datos/notas.txt"), "bytes")',
+  escribirArregloBinario: 'usar arreglo de "numerico"\n\n# float64 e int32 crudos: el formato de NumPy (tofile / fromfile)\nescribirArregloBinario("salida/muestras.bin", arreglo([[1.5, 2.0], [3.25, 4.0]], "real"))\nimprimir(tamanoArchivo("salida/muestras.bin"), "bytes")',
+  leerArregloBinario: 'usar arreglo, aListaA de "numerico"\n\nescribirArregloBinario("salida/muestras.bin", arreglo([[1.5, 2.0], [3.25, 4.0]], "real"))\n# la forma y el tipo no van en el archivo: los dice quien lee\nimprimir(aListaA(leerArregloBinario("salida/muestras.bin", "real", [2, 2])))',
   argumentos: 'fijo a = argumentos()\nsi longitud(a) == 0 { imprimir("sin argumentos") } sino { imprimir("me dieron", a) }',
   entorno: 'imprimir(entorno("USUARIO", "nadie"), entorno("NO_EXISTE", "por defecto"))',
   ejecutar: 'usar recortar de "texto"\n\nfijo r = ejecutar("echo", ["hola", "mundo"])\nimprimir("código", r["codigo"], "dijo", recortar(r["salida"]))',

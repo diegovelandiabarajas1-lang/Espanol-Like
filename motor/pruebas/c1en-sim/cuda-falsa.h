@@ -23,7 +23,7 @@ extern "C" {
 double sqrt(double); double exp(double); double log(double); double log10(double);
 double sin(double); double cos(double); double tan(double); double asin(double);
 double acos(double); double atan(double); double atan2(double, double); double pow(double, double);
-double fabs(double); double floor(double); double ceil(double); double fmod(double, double);
+double fabs(double); double floor(double); double ceil(double); double trunc(double); double fmod(double, double);
 }
 
 struct c1en_dim3 { unsigned int x, y, z; };

@@ -29,7 +29,7 @@ desktop.ini
 *.swp
 *~
 
-# Nota: «motor/bundle.js», «espanol-like-v4.html» y «referencia-stdlib.html» SÍ
+# Nota: «motor/bundle.js», «bundle-c1en.js», «espanol-like-v4.html», «c1en.html» y «referencia-stdlib.html» SÍ
 # van al repositorio aunque se generen. El argumento del proyecto es «abre este
 # archivo y ya»; si hubiera que construirlos primero, eso deja de ser verdad.
 
@@ -39,6 +39,7 @@ desktop.ini
 # escribe la misma orden que escribe los buenos. Son 1,35 MB duplicados: la
 # cuarta parte del repositorio, cambiando en cada construcción.
 motor/publicar-ide.html
+motor/publicar-c1en.html
 motor/publicar-referencia.html
 
 # Lo que escriben los ejemplos al correr de verdad (48 y 49 crean «salida/»).

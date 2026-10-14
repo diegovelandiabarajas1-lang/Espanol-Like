@@ -14,9 +14,15 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const R = require('../rutas.js');
-require(R.bundle);
+// Perfil del motor: «node motor/util/n-node.js --c1en programa.esl» carga el
+// bundle de C1EÑ, con numerico y nen abiertos sin «usar». También con la
+// variable N_PERFIL=c1en, para no repetirlo en cada orden.
+const argsCrudos = process.argv.slice(2);
+const quiereC1en = argsCrudos.includes('--c1en') || process.env.N_PERFIL === 'c1en';
+if (quiereC1en) argsCrudos.splice(argsCrudos.indexOf('--c1en'), argsCrudos.includes('--c1en') ? 1 : 0);
+require(quiereC1en ? R.bundleC1en : R.bundle);
 
-const args = process.argv.slice(2);
+const args = argsCrudos;
 // Opciones del intérprete: van ANTES del programa; lo que va después es del programa.
 // En la consola no hay tope de instrucciones por defecto: un programa largo —una
 // simulación de horas— es trabajo legítimo, y uno desbocado se para con Ctrl+C,
@@ -48,6 +54,8 @@ const intenta = (m, f) => { try { return f(); } catch (e) { falla(m + (e && e.co
 
 const archivos = {
   leer: r => intenta('no se pudo leer ' + r, () => fs.readFileSync(r, 'utf8')),
+  leerBytes: r => intenta('no se pudo leer ' + r, () => fs.readFileSync(r)),
+  escribirBytes: (r, b) => intenta('no se pudo escribir ' + r, () => fs.writeFileSync(r, b)),
   escribir: (r, t) => intenta('no se pudo escribir ' + r, () => fs.writeFileSync(r, t, 'utf8')),
   agregar: (r, t) => intenta('no se pudo abrir ' + r, () => fs.appendFileSync(r, t, 'utf8')),
   existe: r => fs.existsSync(r),

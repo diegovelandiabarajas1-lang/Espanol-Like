@@ -223,13 +223,18 @@ const C1EN_FUNCIONES = {
   arcoseno: 1, arcocoseno: 1, arcotangente: 1, angulo: 2,
   absoluto: 1, piso: 1, techo: 1, minimo: 2, maximo: 2,
   longitud: 1, tamano: 1, azarHilo: 3, sumarAtomico: 3,
+  // conversiones explícitas: «entero» trunca hacia cero como el entero() de Ñ,
+  // «real» ensancha. Existen para que el verificador de tipos de Ñ y el de C1EÑ
+  // digan lo mismo: piso() de la biblioteca devuelve real para el verificador y
+  // entero para C1EÑ; entero(piso(x)) es entero para los dos.
+  entero: 1, real: 1,
 };
 const C1EN_TRASC = { exp: 'exp', log: 'log', log10: 'log10', seno: 'sin', coseno: 'cos', tangente: 'tan',
   arcoseno: 'asin', arcocoseno: 'acos', arcotangente: 'atan' };
 const C1EN_TRASC_JS = { exp: 'Math.exp', log: 'Math.log', log10: 'Math.log10', seno: 'Math.sin', coseno: 'Math.cos',
   tangente: 'Math.tan', arcoseno: 'Math.asin', arcocoseno: 'Math.acos', arcotangente: 'Math.atan' };
 const C1EN_LISTA = 'raiz, exp, log, log10, seno, coseno, tangente, arcoseno, arcocoseno, arcotangente, ' +
-  'angulo, absoluto, piso, techo, minimo, maximo, longitud, tamano, azarHilo y sumarAtomico';
+  'angulo, absoluto, piso, techo, minimo, maximo, entero, real, longitud, tamano, azarHilo y sumarAtomico';
 
 function instalarNenC1en(vm, def) {
   const c1en = crearC1en(vm);
@@ -300,6 +305,19 @@ function instalarNenC1en(vm, def) {
   }, 'sumarAtomico(a, j, v) — a[j] += v sin que dos hilos se pisen; en arreglos entero es determinista, en reales el orden de las sumas no');
 }
 
+// La palabra de error del núcleo en la GPU: 8 bytes por GPU y por proceso,
+// reservados una vez y subidos solo cuando un núcleo la ensució (el valor «sin
+// error» es todo unos). Compartida por todos los motores del proceso.
+const errPorGpu = new Map();
+const errLimpio = new Map();
+// El registro de arreglos residentes en la GPU (ver «Residencia en la GPU» más
+// abajo). Es del proceso, no de cada motor: la memoria de la GPU es una sola.
+const residentes = new WeakMap();
+const vivos = new Set();                     // WeakRef de cada arreglo residente
+const porLiberar = [];                       // [d, gpu] pendientes de liberar
+const finalizador = typeof FinalizationRegistry === 'function'
+  ? new FinalizationRegistry(({ d, gpu }) => porLiberar.push([d, gpu])) : null;
+
 // ============================================================================
 //  El motor: compilar, elegir dispositivo y lanzar
 // ============================================================================
@@ -363,7 +381,7 @@ function crearC1en(vm) {
   // contiguo: si ya lo es, se le pasa su trozo de memoria tal cual (cero copias,
   // y los cambios caen en su sitio); si no, se copia a uno contiguo, se corre y
   // se copia de vuelta.
-  function prepararArreglo(x, quien, k) {
+  function prepararArreglo(x, quien, k, paraGpu) {
     if (x.tipo !== 'real' && x.tipo !== 'entero')
       vm.error(`«${quien}»: el argumento ${k} es un arreglo de tipo ${x.tipo}, y en un núcleo solo entran arreglos real o entero`,
         x.tipo === 'bool' ? 'conviértelo con aTipo(a, "entero")' : 'separa la parte real y la imaginaria en dos arreglos reales');
@@ -371,12 +389,86 @@ function crearC1en(vm) {
     let contiguo = true;
     for (let d = 0; d < z.length; d++) if (x.forma[d] > 1 && z[d] !== x.zancadas[d]) contiguo = false;
     const n = x.tamano;
+    // Un arreglo dueño de su memoria y contiguo puede quedarse RESIDENTE en la
+    // GPU; se toca «_d» a secas para no disparar la bajada que hace «datos».
+    // Todo lo demás (vistas, trozos) va por el camino de copiar, y leer
+    // «x.datos» ya trae de la GPU lo que hiciera falta.
+    if (contiguo && paraGpu && x.base === null) return { vista: x._d.subarray(x.desp, x.desp + n), devolver: null, residible: true };
     if (contiguo) return { vista: x.datos.subarray(x.desp, x.desp + n), devolver: null };
     const vista = new x.datos.constructor(n);
     let i = 0;
     for (const p of x.posiciones()) vista[i++] = x.datos[p];
     return { vista, devolver: () => { let j = 0; for (const p of x.posiciones()) x.datos[p] = vista[j++]; } };
   }
+
+  // ── Residencia en la GPU ──────────────────────────────────────────────────
+  // En la v1 cada «paralelo» reservaba, subía, bajaba y liberaba todos sus
+  // arreglos: con mil economías de ECOSIM-G eran 250 MB por tick por el PCIe,
+  // y la GPU se pasaba el tiempo esperando al bus. Ahora un arreglo se sube
+  // UNA vez y se queda; tras el núcleo la copia buena está en la GPU, y se
+  // baja solo cuando alguien la lee desde la CPU (el «get datos()» de
+  // ObjArreglo llama a «residente»). Un acceso desde la CPU marca el arreglo
+  // como «tocado» (pudo ser una escritura), y el siguiente núcleo lo vuelve a
+  // subir. La memoria de la GPU se libera cuando el arreglo muere (registro de
+  // finalización), cuando cambia su «datos» o cuando cambia de GPU.
+  //   reg = { d, bytes, gpu, enGpu (la GPU tiene la copia buena), tocado }
+  function liberarPendientes(cu) {
+    for (let i = porLiberar.length - 1; i >= 0; i--) {
+      if (porLiberar[i][1] !== indiceGpu) continue;
+      try { cu.liberar(porLiberar[i][0]); } catch (_) { /* nada */ }
+      porLiberar.splice(i, 1);
+    }
+  }
+  // Trae la copia de la GPU si está allí (y marca «tocado»); con soltar=true
+  // además libera la memoria de la GPU y deja de ser residente.
+  function sincronizarHost(x, soltar) {
+    const reg = residentes.get(x);
+    if (!reg) { x.residente = null; return; }
+    const cu = c1enCuda();
+    const otraGpu = reg.gpu !== indiceGpu;
+    try {
+      if (otraGpu) cu.usar(reg.gpu);
+      if (reg.enGpu) {
+        const vista = x._d.subarray(x.desp, x.desp + x.tamano);
+        if (vista.byteLength === reg.bytes) cu.bajar(vista, reg.d);
+        reg.enGpu = false;
+      }
+      if (soltar) { cu.liberar(reg.d); reg.d = null; }
+    } finally {
+      if (otraGpu) cu.usar(indiceGpu);
+    }
+    reg.tocado = true;
+    if (soltar) { vivos.delete(reg.ref); residentes.delete(x); x.residente = null; if (finalizador) finalizador.unregister(x); }
+  }
+  // Baja todo lo residente a la CPU y libera la memoria de la GPU. Lo llama
+  // quien quiera dejar la GPU limpia (las pruebas, o un programa largo entre
+  // dos fases); los programas normales no lo necesitan.
+  function liberarResidentes() {
+    for (const ref of [...vivos]) {
+      const x = ref.deref();
+      if (x) sincronizarHost(x, true); else vivos.delete(ref);
+    }
+    const cu = c1enCuda();
+    if (cu) liberarPendientes(cu);
+  }
+  // Deja el arreglo residente en la GPU actual con los datos al día y devuelve
+  // el puntero de dispositivo.
+  function asegurarResidente(x, vista, cu) {
+    let reg = residentes.get(x);
+    if (reg && (reg.gpu !== indiceGpu || reg.bytes !== vista.byteLength)) { sincronizarHost(x, true); reg = null; }
+    if (!reg) {
+      const d = cu.reservar(Math.max(8, vista.byteLength));
+      reg = { d, bytes: vista.byteLength, gpu: indiceGpu, enGpu: false, tocado: true };
+      residentes.set(x, reg);
+      reg.ref = new WeakRef(x);
+      vivos.add(reg.ref);
+      x.residente = soltar => sincronizarHost(x, soltar === true);
+      if (finalizador) finalizador.register(x, { d, gpu: indiceGpu }, x);
+    }
+    if (reg.tocado) { cu.subir(reg.d, vista); reg.tocado = false; }
+    return reg;
+  }
+
   // Dos argumentos que comparten memoria sin ser el mismo arreglo (una vista y
   // su dueño, dos trozos del mismo) no se pueden llevar a la GPU: se copiarían
   // por separado y al volver uno pisaría al otro. Se rechaza en todos los
@@ -384,7 +476,7 @@ function crearC1en(vm) {
   function exigirSinSolape(arrs, quien) {
     for (let p = 0; p < arrs.length; p++) for (let q = p + 1; q < arrs.length; q++) {
       const A = arrs[p], B = arrs[q];
-      if (A.x !== B.x && A.x.datos === B.x.datos)
+      if (A.x !== B.x && A.x._d === B.x._d)
         vm.error(`«${quien}»: los argumentos ${A.k} y ${B.k} comparten memoria (uno es una vista del otro)`,
           'pasa el mismo arreglo una sola vez, o haz una copia con copia(a)');
     }
@@ -473,7 +565,7 @@ function crearC1en(vm) {
     const preps = [];
     const arrs = [];
     args.forEach((v, k) => {
-      if (v instanceof ObjArreglo) { arrs.push({ x: v, k: k + 3 }); preps[k] = prepararArreglo(v, quien, k + 3); }
+      if (v instanceof ObjArreglo) { arrs.push({ x: v, k: k + 3 }); preps[k] = prepararArreglo(v, quien, k + 3, actual === 'gpu'); }
     });
     exigirSinSolape(arrs, quien);
     let fallo = null;
@@ -541,34 +633,51 @@ function crearC1en(vm) {
     const lanz = [{ t: 'i64', v: n }];
     const memorias = [];
     const bajadas = [];
+    const residentesAqui = [];
     const err = new BigUint64Array([0xffffffffffffffffn]);
     try {
+      liberarPendientes(cu);
       args.forEach((v, k) => {
         if (v instanceof ObjArreglo) {
           const vista = preps[k].vista;
-          const d = cu.reservar(Math.max(8, vista.byteLength));
-          memorias.push(d);
-          cu.subir(d, vista);
-          bajadas.push([vista, d]);
-          lanz.push({ t: 'ptr', v: d }, { t: 'i64', v: vista.length });
+          if (preps[k].residible) {
+            const reg = asegurarResidente(v, vista, cu);
+            residentesAqui.push(reg);
+            lanz.push({ t: 'ptr', v: reg.d }, { t: 'i64', v: vista.length });
+          } else {
+            const d = cu.reservar(Math.max(8, vista.byteLength));
+            memorias.push(d);
+            cu.subir(d, vista);
+            bajadas.push([vista, d]);
+            lanz.push({ t: 'ptr', v: d }, { t: 'i64', v: vista.length });
+          }
         } else if (typeof v === 'boolean') lanz.push({ t: 'i64', v: v ? 1 : 0 });
         else lanz.push({ t: r.modelo.params[k + 1].tipoEntrada === 'real' ? 'f64' : 'i64', v });
       });
-      const de = cu.reservar(8);
-      memorias.push(de);
-      cu.subir(de, err);
+      const de = errGpu(cu);
+      if (!errLimpio.get(indiceGpu)) { cu.subir(de, err); errLimpio.set(indiceGpu, true); }
       lanz.push({ t: 'ptr', v: de });
+      // desde aquí la copia buena de los residentes está en la GPU, pase lo que pase
+      for (const reg of residentesAqui) reg.enGpu = true;
       cu.lanzar(fun, c1enBloques(n, cu), C1EN_HILOS_BLOQUE, lanz);
       cu.sincronizar();
       for (const [vista, d] of bajadas) cu.bajar(vista, d);
       cu.bajar(err, de);
+      if (err[0] !== 0xffffffffffffffffn) errLimpio.set(indiceGpu, false);   // hay que volver a limpiarla
     } catch (e) {
+      errLimpio.set(indiceGpu, false);
       if (e instanceof ErrorTiempoEjecucion) throw e;
       vm.error(`«${quien}»: la GPU falló: ${e.message}`);
     } finally {
       for (const d of memorias) { try { cu.liberar(d); } catch (_) { /* ya no hay nada que hacer */ } }
     }
     return c1enLeerClave(err[0]);
+  }
+
+  function errGpu(cu) {
+    let d = errPorGpu.get(indiceGpu);
+    if (!d) { d = cu.reservar(8); errPorGpu.set(indiceGpu, d); }
+    return d;
   }
 
   function codigo(cierre, ejemplos, destino, quien) {
@@ -782,7 +891,7 @@ function crearC1en(vm) {
   return {
     get dispositivo() { elegirInicial(); return actual; },
     get gpu() { elegirInicial(); return actual === 'gpu' ? indiceGpu : null; },
-    usar, describir, disponibles, paralelo, codigo, kernel, reducir,
+    usar, describir, disponibles, paralelo, codigo, kernel, reducir, liberarResidentes,
     // Para las pruebas y para quien quiera ver el JavaScript que corre en "jit".
     codigoJS(cierre, ejemplos) {
       const r = modeloDe(cierre, tiposParaLlamada(cierre, ejemplos, 'codigoJS'), 'codigoJS');
@@ -1080,6 +1189,12 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien) {
         if (f === 'raiz') { sitio(n, 'raiz', '«raiz» de un número negativo'); return 'real'; }
         if (f === 'log' || f === 'log10') { sitio(n, 'log', `«${f}» necesita un número positivo`); return 'real'; }
         if (f === 'absoluto') return ts[0];
+        if (f === 'real') return 'real';
+        if (f === 'entero') {
+          if (ts[0] === 'ent') return 'ent';
+          sitio(n, 'piso', '«entero» de un número que no es finito (infinito, NaN o más de 2^53)');
+          return 'ent';
+        }
         if (f === 'piso' || f === 'techo') {
           if (ts[0] === 'ent') return 'ent';
           sitio(n, 'piso', `«${f}» de un número que no es un entero exacto (infinito, NaN o más de 2^53)`);
@@ -1379,6 +1494,13 @@ function c1enEmitir(M, destino) {
         if (t === 'real') return `${js ? 'Math.abs' : 'fabs'}(${a0()})`;
         const x = tmp('ent');
         return `(${x} = ${a0()}, ${x} < 0 ? -${x} : ${x})`;
+      }
+      case 'real': return t0 === 'real' ? a0() : (js ? a0() : `(double)(${a0()})`);
+      case 'entero': {
+        if (t0 === 'ent') return a0();
+        const x = tmp('real');
+        const r = js ? `Math.trunc(${x})` : `(${TY.ent})trunc(${x})`;
+        return `(${x} = ${a0()}, (${x} >= -9007199254740992.0 && ${x} <= 9007199254740992.0) ? ${r} : ${FALLA(M.sitio(n, 'piso'))})`;
       }
       case 'piso': case 'techo': {
         if (t0 === 'ent') return a0();

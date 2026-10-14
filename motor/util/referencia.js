@@ -152,7 +152,10 @@ const corridos = {};
       listar: r => [...disco2.keys()].filter(k => k.startsWith(r + '/')).map(k => k.slice(r.length + 1)),
       crearCarpeta: r => carpetas.add(r),
       borrar: r => disco2.delete(r),
-      tamano: r => (disco2.get(r) || '').length,
+      tamano: r => { const v = disco2.get(r); return v ? (typeof v === 'string' ? v.length : v.byteLength) : 0; },
+      // bytes crudos, para los arreglos en binario
+      leerBytes: r => { const v = disco2.get(r); if (!v || typeof v === 'string') throw new Error('no se pudo leer ' + r); return v; },
+      escribirBytes: (r, b) => disco2.set(r, new Uint8Array(b)),
     };
     const sistema = {
       argumentos: () => ['informe.csv', '--todo'],

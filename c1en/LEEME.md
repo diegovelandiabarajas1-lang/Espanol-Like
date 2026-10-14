@@ -30,6 +30,40 @@ benchmark en tabla y el reparto entre las dos GPU con un proceso por GPU.
 - La celda de las dos T4: la suma de las dos mitades es **exactamente** la
   cuenta de una sola GPU (el azar es por contador, no por estado).
 
+## Desde Python: `c1en.py`
+
+`c1en/c1en.py` es el puente para usar Ñ como una biblioteca de Python, con
+NumPy de por medio y la GPU cuando hay. `kaggle-python.ipynb` lo enseña paso a
+paso; en resumen:
+
+```python
+import sys, os
+os.environ['N_RAIZ'] = '/kaggle/working/n'        # la carpeta del proyecto
+sys.path.insert(0, '/kaggle/working/n/c1en')
+import c1en, numpy as np
+
+# un programa de Ñ entero, en el perfil C1EÑ (sin «usar»)
+print(c1en.correr('imprimir(derivarFormula("x^3 - 6x^2 + 11x - 6", "x"))'))
+
+# una función de Ñ llamada desde Python; «paralelo» la corre en la T4
+tirar = c1en.funcion('''
+fn tirar(i, dentro) {
+  fijo x = azarHilo(7, i, 0)
+  fijo y = azarHilo(7, i, 1)
+  si x * x + y * y < 1.0 { sumarAtomico(dentro, 0, 1) }
+}''', paralelo=True)
+dentro = np.zeros(1, dtype=np.int32)
+tirar(20_000_000, dentro)                           # el arreglo vuelve modificado
+print(4 * dentro[0] / 20_000_000, tirar.ultimo_dispositivo)
+```
+
+Cómo funciona: cada llamada lanza Node con `bundle-c1en.js` y le pasa el programa;
+los arreglos de NumPy viajan como `float64` / `int32` crudos
+(`escribirArregloBinario` / `leerArregloBinario` en Ñ, `tofile` / `fromfile` en
+NumPy), así que millones de elementos cuestan milisegundos. Arrancar Node son
+~100 ms por llamada; para muchos núcleos pequeños conviene agruparlos en un
+programa de Ñ. `c1en.funcion(..., dispositivo='gpu', gpu=1)` fija el dispositivo.
+
 ## Fuera de Kaggle
 
 Lo mismo funciona en cualquier Linux con GPU NVIDIA, driver y toolkit de CUDA
@@ -44,3 +78,46 @@ Lo mismo funciona en cualquier Linux con GPU NVIDIA, driver y toolkit de CUDA
 | `C1EN_CC=gcc` · `C1EN_CACHE=carpeta` | el compilador de C y la caché del dispositivo nativo |
 
 Sin GPU, sin gcc o en el navegador, `paralelo` corre igual en `jit`.
+
+## ECOSIM-G: un Monte Carlo de economías en la GPU
+
+`ecosim/ecosim-g.esl` es la economía cerrada de `ecosim/` (hasta la v5: compradores
+con colchón, empresas con máquinas y quiebras, accionistas de tres estilos con
+euforia y pánico, bancos con doble entrada, encaje, margen y castigos, clubes
+de compañeros con participaciones y corridas) reescrita para C1EÑ: muchas
+economías («mundos») avanzan a la vez en arreglos planos de tamaño
+`economías × N`, y cada regla es un núcleo que corre una vez por agente, por
+empresa, por club, por banco o por economía. Dinero (depósitos − préstamos =
+base), deudas, acciones, bienes y participaciones se verifican cada minuto
+simulado, y la corrida da los mismos bits en `jit`, `nativo` y `gpu`.
+
+```
+node motor/util/n-node.js --c1en ecosim/ecosim-g.esl [economias] [ticks] [compradores] [semilla] [salida.csv|-] [empresasPorSector] [credito]
+```
+
+Un tick es un segundo simulado (7200 = 2 h). La economía `k` usa la semilla
+`semilla + k`. El CSV trae, cada 10 minutos y por economía: paro, índice de
+bolsa (centavos; 10000 = la salida a 100 monedas), empresas activas,
+quiebras, fundadas (y por clubes), producido, consumido, préstamos vivos,
+clubes, socios, llamadas de margen, castigos, horas de iliquidez bancaria y
+corridas. Al final se resume en cuántos mundos hubo crisis de empleo
+(paro > 5 %), caída de bolsa (≥ 20 % en una hora), burbuja (índice ≥ 2× la
+salida), crisis de liquidez, llamadas de margen y corridas, y los 5 inversores
+y 5 clubes más ricos del mundo 0.
+
+## Residencia en la GPU
+
+Un arreglo que entra en un `paralelo` en la GPU se sube UNA vez y se queda
+allí; tras el núcleo la copia buena está en la GPU y solo baja cuando el
+programa la lee desde la CPU (cualquier acceso: `elemento`, `imprimir`, otra
+función de la biblioteca). Un acceso desde la CPU marca el arreglo como
+«tocado» y el siguiente núcleo lo vuelve a subir. ECOSIM-G con 3 economías
+pasó de 1.940 MB por el PCIe a 0,4 MB. `C1EN_ESTADISTICAS=1` imprime al salir
+los lanzamientos y los MB subidos y bajados; `vm.c1en.liberarResidentes()`
+baja todo y libera la memoria de la GPU (las pruebas lo usan).
+
+Los arreglos enteros son de 32 bits (como en Ñ), así que el dinero de UNA
+economía debe caber en 2^31 centavos ≈ 21 millones de monedas: con 10.000
+compradores van 16 millones. `c1en/kaggle-ecosim-g.ipynb` corre 1.000
+economías en las dos T4 (500 por GPU, un proceso por GPU) y pinta la
+distribución.

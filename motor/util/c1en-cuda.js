@@ -252,8 +252,15 @@ function crear() {
     return big(d[0]);
   }
   function liberar(d) { asegurar(); ok(C.cuMemFree_v2(big(d)), 'cuMemFree'); }
-  function subir(d, typed) { asegurar(); ok(C.cuMemcpyHtoD_v2(big(d), typed, typed.byteLength), 'cuMemcpyHtoD'); }
-  function bajar(typed, d) { asegurar(); ok(C.cuMemcpyDtoH_v2(typed, big(d), typed.byteLength), 'cuMemcpyDtoH'); }
+  // Cuentas del tráfico por el PCIe, para saber si la residencia está haciendo
+  // su trabajo: con C1EN_ESTADISTICAS=1 se imprimen al salir.
+  const cuentas = { subidas: 0, bytesSubidos: 0, bajadas: 0, bytesBajados: 0, lanzamientos: 0 };
+  if (process.env.C1EN_ESTADISTICAS) process.on('exit', () => {
+    const mb = b => (b / 1048576).toFixed(1) + ' MB';
+    process.stderr.write(`[c1en gpu] ${cuentas.lanzamientos} lanzamientos · ${cuentas.subidas} subidas (${mb(cuentas.bytesSubidos)}) · ${cuentas.bajadas} bajadas (${mb(cuentas.bytesBajados)})\n`);
+  });
+  function subir(d, typed) { asegurar(); cuentas.subidas++; cuentas.bytesSubidos += typed.byteLength; ok(C.cuMemcpyHtoD_v2(big(d), typed, typed.byteLength), 'cuMemcpyHtoD'); }
+  function bajar(typed, d) { asegurar(); cuentas.bajadas++; cuentas.bytesBajados += typed.byteLength; ok(C.cuMemcpyDtoH_v2(typed, big(d), typed.byteLength), 'cuMemcpyDtoH'); }
 
   // kernelParams es un arreglo de PUNTEROS, uno por argumento, cada uno a la
   // memoria donde está el VALOR de ese argumento (8 bytes cada uno: los i32 van
@@ -261,6 +268,7 @@ function crear() {
   // El driver copia los valores en el momento del lanzamiento, así que la
   // memoria se puede soltar en cuanto cuLaunchKernel vuelve.
   function lanzar(fun, bloques, hilos, args) {
+    cuentas.lanzamientos++;
     asegurar();
     const n = args.length;
     const valores = koffi.alloc('uint64_t', Math.max(1, n));

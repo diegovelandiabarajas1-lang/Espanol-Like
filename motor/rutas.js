@@ -13,6 +13,7 @@ module.exports = {
   util: f => path.join(motor, 'util', f),
   pruebas: f => path.join(motor, 'pruebas', f),
   bundle: path.join(motor, 'bundle.js'),
+  bundleC1en: path.join(motor, 'bundle-c1en.js'),  // el mismo motor con numerico y nen abiertos
   // Lo que se publica y se abre: va en la raíz del proyecto, a la vista.
   entrega: f => path.join(proyecto, f),
   FUENTES: ['01-front.js', '02-check-compile.js', '03-vm-jit.js', '04-stdlib.js', '05-serial.js', '06-modulos.js',

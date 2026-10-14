@@ -132,7 +132,15 @@ const tamanoDe = forma => forma.reduce((a, b) => a * b, 1);
 class ObjArreglo {
   constructor(datos, forma, tipo, zancadas, desp, base) {
     this.clase = 'arreglo';
-    this.datos = datos;                                  // Float64Array | Int32Array
+    this._d = datos;                                     // Float64Array | Int32Array
+    // RESIDENCIA EN LA GPU (C1EÑ). Cuando un núcleo corrió en la GPU, la copia
+    // buena puede estar allí y no aquí. C1EÑ deja en «residente» una función
+    // que la trae; «datos» la llama antes de entregar la memoria, así que
+    // cualquier lectura o escritura desde la CPU —la VM, el JIT, una función
+    // de la biblioteca— ve siempre los datos buenos sin saber nada de la GPU.
+    // Una vista mira a su dueño («base»). Sin GPU, «residente» es null y el
+    // acceso cuesta una comparación.
+    this.residente = null;
     this.forma = forma;                                  // [2, 3]
     this.tipo = tipo || 'real';                          // 'real' | 'entero'
     this.zancadas = zancadas || zancadasDe(forma);
@@ -142,6 +150,15 @@ class ObjArreglo {
     this.base = base || null;
     this.id = SIG_ID++;
     this.marca = false;
+  }
+  get datos() {
+    const r = this.residente || (this.base !== null && this.base.residente);
+    if (r) r();
+    return this._d;
+  }
+  set datos(v) {
+    if (this.residente) this.residente(true);           // la GPU suelta la vieja
+    this._d = v;
   }
   get tamano() { return tamanoDe(this.forma); }
   get dimensiones() { return this.forma.length; }

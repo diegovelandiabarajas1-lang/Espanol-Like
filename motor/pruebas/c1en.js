@@ -163,6 +163,10 @@ const casos = [
     v => [arr(v, [0])], r => r[0][0] === 3.5],
   ['piso y techo dan enteros que sirven de índice', 'fn nucleo(i, a, r) {\n  r[piso(a[i])] = techo(a[i])\n}', 3,
     v => [arr(v, [0.5, 1.5, 2.25]), arr(v, [0, 0, 0], 'entero')], r => r[1].join() === '1,2,3'],
+  ['entero(piso(x)) y real(n): la conversión explícita que un núcleo puede anotar', 'fn nucleo(i, a, r, q) {\n  fijo k: entero = entero(piso(a[i] * 3.7))\n  r[i] = k * 2\n  q[i] = real(k) / 2.0\n}', 3,
+    v => [arr(v, [0.5, 1.5, 2.25]), arr(v, [0, 0, 0], 'entero'), arr(v, [0, 0, 0])], r => r[1].join() === '2,10,16' && r[2].join() === '0.5,2.5,4'],
+  ['entero de un real con decimales trunca hacia cero', 'fn nucleo(i, a, r) {\n  r[i] = entero(a[i])\n}', 2,
+    v => [arr(v, [2.9, -2.9]), arr(v, [0, 0], 'entero')], r => r[0 + 1].join() === '2,-2'],
   ['minimo, maximo y absoluto', 'fn nucleo(i, a, r) {\n  r[i] = maximo(minimo(a[i], 2.0), 0.0 - 2.0) + absoluto(0 - i)\n}', 4,
     v => [arr(v, [5, -5, 1.5, 0]), arr(v, [0, 0, 0, 0])], r => r[1].join() === '2,-1,3.5,3'],
   ['|PI, potencias pequeñas y raíz', 'fn nucleo(i, r) {\n  r[i] = |PI * i ** 2 + raiz(2.0) ** 3\n}', 3,
@@ -425,11 +429,26 @@ else {
     const lib = koffi.load(process.env.C1EN_CUDA_LIB);
     const vivas = lib.func('long long c1en_sim_reservas_vivas(void)');
     const lanz = lib.func('long long c1en_sim_lanzamientos(void)');
-    comprobar('no queda memoria de la GPU sin liberar', Number(vivas()) === 0, vivas());
+    // Los arreglos se quedan RESIDENTES en la GPU hasta que mueren o alguien
+    // los suelta; lo que no puede quedar vivo es nada más: tras soltar, solo la
+    // palabra de error (una por GPU y proceso).
+    const antes = Number(vivas());
+    comprobar('los arreglos quedan residentes en la GPU (hay memoria viva tras el núcleo)', antes >= 1, antes);
+    e.vm.c1en.liberarResidentes();
+    comprobar('al soltar los residentes no queda memoria de la GPU sin liberar (salvo la palabra de error)', Number(vivas()) <= 2, vivas());
     comprobar('se lanzó de verdad por cuLaunchKernel', Number(lanz()) > 10, lanz());
     const e2 = nucleoDe('fn nucleo(i, r) {\n  r[i] = 1.0 / (i - 3)\n}');
     enTodos(e2, 10, [arr(e2.vm, new Array(10).fill(0))], ['gpu']);
-    comprobar('ni después de un núcleo que falla', Number(vivas()) === 0, vivas());
+    e2.vm.c1en.liberarResidentes();
+    comprobar('ni después de un núcleo que falla', Number(vivas()) <= 2, vivas());
+    // y la residencia es invisible: escribir desde la CPU entre dos núcleos se ve en el segundo
+    const e4 = nucleoDe('fn nucleo(i, r) {\n  r[i] = r[i] * 2\n}');
+    const a4 = arr(e4.vm, [1, 2, 3]);
+    e4.vm.c1en.usar('gpu', 0);
+    e4.vm.c1en.paralelo(3, e4.f, [a4], 'paralelo');
+    a4.datos[0] = 100;                                   // la CPU lee (baja) y escribe
+    e4.vm.c1en.paralelo(3, e4.f, [a4], 'paralelo');
+    comprobar('escribir desde la CPU entre dos núcleos residentes se respeta', a4.datos.join() === '200,8,12', a4.datos.join());
   }
   const e3 = nucleoDe('fn nucleo(i, r) {\n  r[i] = i\n}');
   e3.vm.c1en.usar('gpu', 1);
@@ -450,6 +469,13 @@ console.log('\n── trascendentes: cerca, no al bit (V8, glibc y CUDA tienen l
 
 // ============================================================================
 console.log(`\n── fuzz: ${FUZZ} núcleos al azar, ${DEVS.join(' / ')}, comparados al bit`);
+// En la GPU real salieron 10 de 300 núcleos distintos de la CPU, y no era el
+// compilador: era el generador. Hacía que el hilo i leyera k[m % n] mientras
+// otro hilo escribía k[i], una carrera. En CPU los hilos van en orden y gana
+// siempre el mismo; en la GPU gana uno distinto cada vez, y eso está
+// documentado como «depende del dispositivo». Así que los núcleos del fuzz
+// leen de «x» y «k» y escriben SOLO en «y» y «ko»: cada hilo su casilla, y
+// solo «h» se comparte, por sumarAtomico, que es para eso.
 function fuzz(semilla) {
   let s = semilla >>> 0;
   const R = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -464,7 +490,7 @@ function fuzz(semilla) {
     switch (op) {
       case 0: return elige(REALES);
       case 1: return 's';
-      case 2: return `x[(${ent(d - 1)}) % longitud(x)]`;
+      case 2: return `x[(${ent(d - 1)}) % longitud(x)]`;      // solo lectura
       case 3: { const v = vars('real'); return v.length ? elige(v) : 's'; }
       case 4: case 5: case 6: return `(${real(d - 1)} ${elige(['+', '-', '*'])} ${real(d - 1)})`;
       case 7: return R() < 0.9 ? `(${real(d - 1)} / (${real(d - 1)} * ${real(d - 1)} + 0.5))` : `(${real(d - 1)} / ${real(d - 1)})`;
@@ -488,7 +514,7 @@ function fuzz(semilla) {
       case 1: return 'i';
       case 2: return 'm';
       case 3: { const v = vars('ent'); return v.length ? elige(v) : 'i'; }
-      case 4: return `k[(${ent(d - 1)}) % longitud(k)]`;
+      case 4: return `k[(${ent(d - 1)}) % longitud(k)]`;      // solo lectura
       case 5: case 6: return `(${ent(d - 1)} ${elige(['+', '-'])} ${ent(d - 1)})`;
       case 7: return `(${ent(d - 1)} * ${elige(['2', '3', '(0 - 4)', '5'])})`;
       case 8: return `(${ent(d - 1)} // ${R() < 0.85 ? elige(['3', '(0 - 2)', '7']) : ent(d - 1)})`;
@@ -519,7 +545,7 @@ function fuzz(semilla) {
       case 1: { const nm = `e${nv++}`; lineas.push(`${t}var ${nm} = ${ent(2)}`); a.ent.push(nm); return; }
       case 2: { const v = vars('real'); if (v.length) lineas.push(`${t}${elige(v)} ${elige(['=', '+=', '-=', '*='])} ${real(2)}`); else lineas.push(`${t}y[i] = ${real(2)}`); return; }
       case 3: lineas.push(`${t}y[i] ${elige(['=', '+=', '-='])} ${real(2)}`); return;
-      case 4: lineas.push(`${t}k[i] ${elige(['=', '+='])} ${ent(2)}`); return;
+      case 4: lineas.push(`${t}ko[i] ${elige(['=', '+='])} ${ent(2)}`); return;
       case 5: lineas.push(`${t}sumarAtomico(h, (${ent(1)}) % 8, ${ent(1)})`); return;
       case 6: case 7: {
         lineas.push(`${t}si ${cond(2)} {`);
@@ -553,7 +579,7 @@ function fuzz(semilla) {
   const bloque = (d, ind, enBucle) => { const k = 1 + ri(3); for (let q = 0; q < k; q++) sent(d, ind, enBucle); };
   bloque(3, 2, false);
   lineas.push(`  y[i] = y[i] + ${vars('real').length ? elige(vars('real')) : 's'}`);
-  return { src: `fn nucleo(i, x, y, k, h, s, m) {\n${lineas.join('\n')}\n}`, R, ri };
+  return { src: `fn nucleo(i, x, y, k, ko, h, s, m) {\n${lineas.join('\n')}\n}`, R, ri };
 }
 {
   const N = 40;
@@ -572,7 +598,7 @@ function fuzz(semilla) {
       ys.push((R() - 0.5) * 2);
       ks.push(ri(41) - 20);
     }
-    const args = [arr(vm, xs), arr(vm, ys), arr(vm, ks, 'entero'), arr(vm, new Array(8).fill(0), 'entero'), (R() - 0.5) * 6, ri(30)];
+    const args = [arr(vm, xs), arr(vm, ys), arr(vm, ks, 'entero'), arr(vm, new Array(N).fill(0), 'entero'), arr(vm, new Array(8).fill(0), 'entero'), (R() - 0.5) * 6, ri(30)];
     const res = enTodos(e, N, args);
     vistos++;
     const dif = igualesEnTodos(res);

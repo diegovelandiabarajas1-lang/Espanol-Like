@@ -839,6 +839,45 @@ function instalarBiblioteca(vm, host) {
     const r = txt(a[0], 1, 'tamanoArchivo');
     return conArchivo('tamanoArchivo', r, () => arch.tamano(r)) | 0;
   }, 'tamanoArchivo(ruta) — su tamaño en bytes');
+  // Arreglos en binario crudo: real → float64, entero → int32, en el orden de
+  // la memoria y sin cabecera. Es el formato con el que NumPy escribe y lee
+  // (tofile / fromfile), y por eso existe: es el puente entre Ñ y Python sin
+  // pasar millones de números por JSON. La forma y el tipo no van en el
+  // archivo; quien lee los conoce (el puente los manda aparte).
+  def('leerArregloBinario', 'texto, texto, lista -> arreglo', a => {
+    const r = txt(a[0], 1, 'leerArregloBinario');
+    const tipo = txt(a[1], 2, 'leerArregloBinario');
+    if (tipo !== 'real' && tipo !== 'entero') vm.error(`«leerArregloBinario»: el tipo es «real» o «entero», no «${tipo}»`);
+    const forma = lst(a[2], 3, 'leerArregloBinario').items.map(x => num(x, 3, 'leerArregloBinario') | 0);
+    if (!arch || !arch.leerBytes) faltaArch('leerArregloBinario');
+    const bytes = conArchivo('leerArregloBinario', r, () => arch.leerBytes(r));
+    const out = vm.arrNuevo(forma, tipo);
+    const esperado = out.datos.byteLength;
+    if (bytes.byteLength !== esperado)
+      vm.error(`«leerArregloBinario»: el archivo tiene ${bytes.byteLength} bytes y la forma ${forma.join('×')} de ${tipo} pide ${esperado}`);
+    new Uint8Array(out.datos.buffer, out.datos.byteOffset, esperado).set(new Uint8Array(bytes.buffer, bytes.byteOffset, esperado));
+    vm.cobrar(out.tamano);
+    return out;
+  }, 'leerArregloBinario(ruta, tipo, forma) — un arreglo desde bytes crudos (float64 o int32), el formato de NumPy');
+  def('escribirArregloBinario', 'texto, arreglo -> nulo', a => {
+    const r = txt(a[0], 1, 'escribirArregloBinario');
+    const arr = a[1];
+    if (!(arr instanceof ObjArreglo)) vm.error(`«escribirArregloBinario»: el argumento 2 debe ser un arreglo y es ${tipoDe(arr)}`);
+    if (arr.tipo !== 'real' && arr.tipo !== 'entero') vm.error(`«escribirArregloBinario»: solo arreglos real o entero, no ${arr.tipo}`);
+    if (!arch || !arch.escribirBytes) faltaArch('escribirArregloBinario');
+    // Una vista no contigua se copia primero en orden lógico: lo que se escribe
+    // es lo que el programa ve, no lo que hay en memoria.
+    let plano;
+    if (arr.seguida) plano = arr.datos.subarray(arr.desp, arr.desp + arr.tamano);
+    else {
+      plano = new arr.datos.constructor(arr.tamano);
+      let i = 0;
+      for (const q of arr.posiciones()) plano[i++] = arr.datos[q];
+    }
+    conArchivo('escribirArregloBinario', r, () => arch.escribirBytes(r, new Uint8Array(plano.buffer, plano.byteOffset, plano.byteLength)));
+    vm.cobrar(arr.tamano);
+    return null;
+  }, 'escribirArregloBinario(ruta, arreglo) — lo guarda como bytes crudos (float64 o int32), el formato de NumPy');
 
   def('argumentos', ' -> lista<texto>', () => {
     if (!sis) faltaSis('argumentos');
@@ -1137,8 +1176,48 @@ function instalarBiblioteca(vm, host) {
   });
   // El interruptor va al final: es la unión de los de arriba.
   instalarClasico(vm);
+  // Y los eDSL que este motor trae ABIERTOS: en el ámbito global, sin «usar».
+  abrirEdsls(vm, (host && host.abiertos) || (typeof C1EN_ABIERTOS !== 'undefined' ? C1EN_ABIERTOS : null));
 
   return vm;
+}
+
+// ================================================================ eDSL abiertos
+// Un perfil del motor puede traer eDSL ya abiertos: sus nombres están en el
+// ámbito global desde el arranque, como «imprimir», y no hace falta «usar».
+// Es lo que hace el motor C1EÑ con numerico y nen: quien hace matemáticas no
+// tiene por qué saber en qué eDSL vive «derivar».
+//
+// Cómo: cada nativa de un eDSL ya existe en «globals» con la clave del módulo
+// delante («ñ:nen\0derivar»). Abrirlo es registrar EL MISMO objeto también bajo
+// su nombre corto. No se copia nada: el verificador ve una global más (con la
+// misma firma), el JIT y la VM llaman al mismo cuerpo, y «usar derivar de
+// "nen"» sigue funcionando igual, así que un programa escrito para el motor
+// normal corre sin cambios en el perfil.
+//
+// La única regla: un nombre abierto no puede tapar a uno del núcleo ni a otro
+// eDSL abierto. Si pasa, es un error al construir el motor, no un silencio.
+function abrirEdsls(vm, nombres) {
+  if (!nombres || !nombres.length) return;
+  const origen = new Map();
+  for (const nombre of nombres) {
+    const r = vm.edsls.get(nombre);
+    if (!r) throw new Error(`no se puede abrir el eDSL «${nombre}»: no existe`);
+    for (const [corto] of r.exporta) {
+      const largo = nombreGlobalModulo(r.clave, corto);
+      const obj = vm.globals.get(largo);
+      if (vm.globals.has(corto)) {
+        const quien = origen.get(corto);
+        throw new Error(quien
+          ? `al abrir «${nombre}»: «${corto}» ya lo trae abierto «${quien}»`
+          : `al abrir «${nombre}»: «${corto}» taparía al «${corto}» del núcleo`);
+      }
+      vm.globals.set(corto, obj);
+      origen.set(corto, nombre);
+    }
+    r.abierto = true;
+  }
+  vm.edslsAbiertos = nombres.slice();
 }
 
 // ======================================================= eDSL que vienen dentro

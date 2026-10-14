@@ -14,6 +14,22 @@ aplicación de verdad» enseña de una vez lo que hace falta para escribir una:
 eventos, memoria que sobrevive a cerrar la página y un repintado que no borra
 lo que estabas escribiendo.
 
+### C1EÑ, el mismo motor para quien hace matemáticas
+
+**`c1en.html`** es el mismo entorno con otro perfil: los eDSL `numerico` y `nen`
+—cálculo, fórmulas, tensores y la ejecución en paralelo— están **abiertos en el
+ámbito global**, así que `derivar`, `einstein` o `paralelo` se escriben sin
+ningún `usar`, como `imprimir`. No es otro motor: `bundle-c1en.js` sale de las
+mismas fuentes que `bundle.js` y solo cambia una constante al principio; un
+programa con `usar … de "nen"` corre igual en los dos. Desde la consola:
+
+```
+node motor/util/n-node.js --c1en programa.esl      # o N_PERFIL=c1en
+```
+
+En la consola C1EÑ corre en el mejor dispositivo que haya —GPU por CUDA, CPU
+nativa con gcc, o el JIT—; en el navegador, en el JIT.
+
 Fuera del navegador hay dos intérpretes de línea de órdenes, con el mismo motor
 y el mismo anfitrión de archivos y procesos:
 
@@ -97,6 +113,8 @@ node motor/util/mudar.js --escribir   # lo escribe · córrelo hasta que diga 0
 
 ```
 espanol-like-v4.html     el entorno completo, listo para abrir
+c1en.html                el mismo entorno con numerico y nen abiertos (perfil C1EÑ)
+c1en/                    el cuaderno de Kaggle para correr C1EÑ en las T4
 referencia-stdlib.html   el libro: las 452 entradas de la biblioteca, cada una con su
                          firma y la salida REAL de su ejemplo · se regenera
 auditoria-motor.html     la auditoría del motor y su plan de trabajo
@@ -141,8 +159,8 @@ ide/             el entorno, partido en dos documentos
   app.html             la plantilla de una aplicación exportada
 
 util/            herramientas
-  construir.js         src/*.js              → bundle.js
-  construir-ide.js     bundle + ide/         → espanol-like-v4.html
+  construir.js         src/*.js              → bundle.js y bundle-c1en.js
+  construir-ide.js     bundle + ide/         → espanol-like-v4.html  (--c1en → c1en.html)
   construir-app.js     un .esl               → una aplicación de un solo archivo
   construir-binario.js el motor              → n.exe, sin dependencias
   referencia.js        el motor + los ejemplos → referencia-stdlib.html

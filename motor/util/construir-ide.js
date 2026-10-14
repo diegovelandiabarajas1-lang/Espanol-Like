@@ -7,7 +7,11 @@
 const fs = require('fs');
 const R = require('../rutas.js');
 
-const bundle = fs.readFileSync(R.bundle, 'utf8');
+// Dos IDE del mismo documento: el de Ñ y el de C1EÑ (numerico y nen abiertos,
+// sin «usar»). Cambian el bundle que entra en la zona aislada y la marca.
+const PERFIL = process.argv.includes('--c1en') ? 'c1en' : 'n';
+const esC1en = PERFIL === 'c1en';
+const bundle = fs.readFileSync(esC1en ? R.bundleC1en : R.bundle, 'utf8');
 const anfitrion = fs.readFileSync(R.ide('anfitrion.js'), 'utf8');
 // La plantilla de las aplicaciones exportadas viaja dentro del hijo, en base64.
 // No lleva el motor: el hijo ya lo tiene y lo lee de su propio <script> al
@@ -37,14 +41,21 @@ if (/[^A-Za-z0-9+/=]/.test(b64)) throw new Error('base64 con caracteres inespera
 let padre = fs.readFileSync(R.ide('padre.html'), 'utf8');
 if (!padre.includes('/*__HIJO__*/')) throw new Error('falta el marcador __HIJO__ en padre.html');
 padre = padre.replace('/*__HIJO__*/', () => b64);
+if (esC1en) {
+  // La marca dice qué motor es; lo demás es idéntico.
+  padre = padre.replace('<title>Español-Like</title>', '<title>C1EÑ · Ñ para matemáticas</title>');
+  padre = padre.replace('<h1>Español-Like</h1><span class="v">v4.0</span>',
+    '<h1>C1EÑ</h1><span class="v">Ñ · numerico y nen abiertos</span>');
+}
 
 // Dos salidas del mismo documento.
 //   · la de disco lleva su propio <!doctype> y, sobre todo, su <meta charset>:
 //     sin él, un archivo local queda a merced de lo que adivine el navegador,
 //     y los acentos salen rotos en cuanto cambia el tamaño del contenido.
 //   · la de publicar va sin esqueleto, porque claude.ai se lo pone encima.
-fs.writeFileSync(R.motor + '/publicar-ide.html', padre);
-fs.writeFileSync(R.entrega('espanol-like-v4.html'), envolver(padre, 'Español-Like'));
+const salida = esC1en ? 'c1en.html' : 'espanol-like-v4.html';
+fs.writeFileSync(R.motor + (esC1en ? '/publicar-c1en.html' : '/publicar-ide.html'), padre);
+fs.writeFileSync(R.entrega(salida), envolver(padre, esC1en ? 'C1EÑ' : 'Español-Like'));
 
 function envolver(cuerpo, titulo) {
   const corte = cuerpo.indexOf('</style>') + '</style>'.length;
@@ -55,5 +66,5 @@ function envolver(cuerpo, titulo) {
 console.log(
   'app   ', (plantilla.length / 1024).toFixed(1).padStart(4), 'KB  la plantilla de las aplicaciones\n' +
   'hijo  ', (hijo.length / 1024).toFixed(0).padStart(4), 'KB  →  base64', (b64.length / 1024).toFixed(0), 'KB\n' +
-  'salida', (padre.length / 1024).toFixed(0).padStart(4), 'KB  espanol-like-v4.html'
+  'salida', (padre.length / 1024).toFixed(0).padStart(4), 'KB  ' + salida
 );

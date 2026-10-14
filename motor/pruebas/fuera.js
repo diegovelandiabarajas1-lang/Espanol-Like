@@ -250,6 +250,46 @@ console.log('\n── 5b. el motor como ejecutable ──');
   }
 }
 
+console.log('\n── 5c. arreglos en binario: el puente con NumPy ──');
+{
+  // Solo Node: QuickJS no tiene los dos métodos de bytes del anfitrión todavía.
+  const bin = prog('arreglo.bin');
+  const r = correr('node', `usar arreglo, ceros, transpuesta, aListaA from "numerico"`.replace(' from ', ' de ') + `
+fijo a = arreglo([[1.5, -2.25, 3], [4, 5.5, 1e-9]], "real")
+escribirArregloBinario("${bin}", a)
+imprimir(tamanoArchivo("${bin}"))
+imprimir(aListaA(leerArregloBinario("${bin}", "real", [2, 3])) == aListaA(a))
+escribirArregloBinario("${bin}", arreglo([7, -8, 2147483647, -2147483648], "entero"))
+imprimir(tamanoArchivo("${bin}"), aListaA(leerArregloBinario("${bin}", "entero", [4])))
+escribirArregloBinario("${bin}", transpuesta(arreglo([[1, 2, 3], [4, 5, 6]], "real")))
+imprimir(aListaA(leerArregloBinario("${bin}", "real", [3, 2])))
+escribirArregloBinario("${bin}", ceros([4], "real"))
+intentar { leerArregloBinario("${bin}", "real", [5]) } capturar (e) { imprimir(e.mensaje) }
+intentar { leerArregloBinario("${bin}", "texto", [4]) } capturar (e) { imprimir(e.mensaje) }`);
+  const l = r.salida.split('\n');
+  comprobar('un real ocupa 8 bytes y da la vuelta igual', l[0] === '48' && l[1] === 'cierto', r.salida + r.error);
+  comprobar('un entero ocupa 4 bytes, con los extremos de int32', l[2] === '16 [7, -8, 2147483647, -2147483648]', l[2]);
+  comprobar('una vista no contigua se escribe en orden lógico', l[3] === '[[1, 4], [2, 5], [3, 6]]', l[3]);
+  comprobar('la forma tiene que cuadrar con los bytes', /32 bytes/.test(l[4] || ''), l[4]);
+  comprobar('y el tipo es real o entero', /«real» o «entero»/.test(l[5] || ''), l[5]);
+  // Y el formato es el de NumPy de verdad: lo lee Python sin más.
+  const py = spawnSync('python3', ['-c', `import numpy as n,sys;a=n.fromfile(sys.argv[1],dtype=n.float64);print(a.tolist())`, bin], { encoding: 'utf8' });
+  if (py.status === 0) comprobar('NumPy lee el archivo tal cual', py.stdout.trim() === '[0.0, 0.0, 0.0, 0.0]', py.stdout + py.stderr);
+  else saltar('NumPy lee el archivo tal cual', 'no hay python3 con numpy');
+  // El puente entero: Python → Ñ → NumPy, con «c1en.py».
+  const puente = spawnSync('python3', ['-c', `
+import sys, os; os.environ['N_RAIZ'] = sys.argv[1]; sys.path.insert(0, sys.argv[1] + '/c1en')
+import c1en, numpy as np
+f = c1en.funcion('fn doblar(i, a, b) { b[i] = 2.0 * a[i] + 1.0 }', paralelo=True, dispositivo='jit')
+a = np.arange(5, dtype=np.float64); b = np.zeros(5)
+f(5, a, b); print(b.tolist(), f.ultimo_dispositivo)
+g = c1en.funcion('fn cuadrados(n) { devolver mapear(rango(n), funcion(k) { devolver k * k }) }')
+print(g(4))
+print(c1en.correr('imprimir(derivarFormula("x^2", "x"))'))`, R.proyecto], { encoding: 'utf8' });
+  if (py.status === 0) comprobar('c1en.py: una función de Ñ llamada desde Python con NumPy, y de vuelta',
+    puente.stdout.trim() === '[1.0, 3.0, 5.0, 7.0, 9.0] jit\n[0, 1, 4, 9]\n2x', puente.stdout + puente.stderr);
+}
+
 console.log('\n── 6. la frontera del navegador sigue donde estaba ──');
 {
   // Lo importante: esto NO puede aparecer dentro de una página. El anfitrión de
