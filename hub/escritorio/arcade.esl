@@ -1,0 +1,170 @@
+# ARCADE Ñ — la app de escritorio: UNA ventana, un menú, y los juegos hechos en Ñ
+# corriendo dentro de ella. Esc vuelve al menú; en el menú, Esc cierra.
+#
+#   arcade.esl          el menú y el bucle de cuadros (este archivo)
+#   lib/pantalla.esl    la ventana: raylib por FFI, mundo 540×960 escalado, letra con Ñ
+#   lib/records.esl     los récords, en un archivo JSON
+#   juegos/flappy.esl   NEON FLAPPY Ñ
+#   juegos/galaga.esl   GALAGA Ñ
+#
+# Correr:      node motor/util/n-node.js hub/escritorio/arcade.esl     (con raylib.dll aquí)
+# Empaquetar:  hub\escritorio\construir.cmd  →  dist\arcade\arcade.exe
+#
+# Agregar un juego: escribir juegos/nuevo.esl con entrar(), paso(),
+# mejorPuntaje() y miniatura(x, y); ponerlo en JUEGOS; y una línea en
+# mejorDe(), entrarEn(), jugar() y miniatura().
+usar "lib/pantalla.esl" como p
+usar "juegos/flappy.esl" como flappy
+usar "juegos/galaga.esl" como galaga
+
+fijo ANCHO = 540
+fijo ALTO = 960
+
+fijo JUEGOS = [
+    {"id": "flappy", "titulo": "NEON FLAPPY Ñ", "linea1": "Aletea entre los tubos.",
+     "linea2": "Espacio · ↑ · clic", "acento": "#FFD23F"},
+    {"id": "galaga", "titulo": "GALAGA Ñ", "linea1": "40 naves, picadas y olas.",
+     "linea2": "← → mover · espacio disparar", "acento": "#19F2FF"}
+]
+fijo TARJ_X = 40
+fijo TARJ_Y = 300
+fijo TARJ_ANCHO = 460
+fijo TARJ_ALTO = 210
+fijo TARJ_PASO = 240
+
+var modo = "menu"              # menu · el id de un juego
+var elegido = 0
+var cuadroMenu = 0
+
+fn mejorDe(id: texto): entero {
+    si id == "flappy" { devolver flappy.mejorPuntaje() }
+    si id == "galaga" { devolver galaga.mejorPuntaje() }
+    devolver 0
+}
+
+fn entrarEn(id: texto) {
+    si id == "flappy" { flappy.entrar() }
+    si id == "galaga" { galaga.entrar() }
+    modo = id
+    imprimir("arcade: entra en " + id)
+}
+
+fn jugar(id: texto) {
+    si id == "flappy" { flappy.paso() }
+    si id == "galaga" { galaga.paso() }
+}
+
+# ─────────────────────────────────────────────── el menú
+fn tarjetaY(i: entero): entero { devolver TARJ_Y + i * TARJ_PASO }
+
+fn marco(x, y, w, h, g) {
+    p.rect(x, y, w, g)
+    p.rect(x, y + h - g, w, g)
+    p.rect(x, y, g, h)
+    p.rect(x + w - g, y, g, h)
+}
+
+# cada juego dibuja su propia miniatura (130×170): el menú no sabe de sprites
+fn miniatura(id: texto, x, y) {
+    p.color("#0B0B18")
+    p.rect(x, y, 130, 170)
+    si id == "flappy" { flappy.miniatura(x, y) }
+    si id == "galaga" { galaga.miniatura(x, y) }
+}
+
+fn menu() {
+    cuadroMenu = cuadroMenu + 1
+    fijo r = p.raton()
+    # teclado
+    si p.pulsada(p.ABAJO) o p.pulsada(p.S) { elegido = (elegido + 1) % longitud(JUEGOS) }
+    si p.pulsada(p.ARRIBA) o p.pulsada(p.W) { elegido = (elegido + longitud(JUEGOS) - 1) % longitud(JUEGOS) }
+    var abrir = p.pulsada(p.ENTER) o p.pulsada(p.ESPACIO)
+    # ratón: encima elige, clic abre
+    para i en rango(longitud(JUEGOS)) {
+        fijo ty = tarjetaY(i)
+        si r["x"] >= TARJ_X y r["x"] < TARJ_X + TARJ_ANCHO y r["y"] >= ty y r["y"] < ty + TARJ_ALTO {
+            elegido = i
+            si r["clic"] { abrir = cierto }
+        }
+    }
+
+    # fondo: estrellas que bajan despacio
+    p.limpiar("#05050C")
+    p.color("#2A2D5A")
+    para i en rango(60) {
+        p.punto((i * 97) % ANCHO, (i * 57 + cuadroMenu * (1 + i % 3) * 0.4) % ALTO)
+    }
+    # título
+    p.color("#19F2FF")
+    p.letra(80, "centro", "negrita mono")
+    p.escribirEn(ANCHO / 2, 150, "ARCADE Ñ")
+    p.color("#8E92B4")
+    p.letra(22, "centro", "mono")
+    p.escribirEn(ANCHO / 2, 196, "juegos hechos en Ñ, en una ventana")
+    p.color("#FF3EA5")
+    p.rect(ANCHO / 2 - 60, 222, 120, 3)
+
+    # tarjetas
+    para i en rango(longitud(JUEGOS)) {
+        fijo j = JUEGOS[i]
+        fijo ty = tarjetaY(i)
+        fijo activo = i == elegido
+        p.color("#10101F")
+        p.rect(TARJ_X, ty, TARJ_ANCHO, TARJ_ALTO)
+        si activo {
+            p.color(j["acento"])
+            marco(TARJ_X, ty, TARJ_ANCHO, TARJ_ALTO, 3)
+        } sino {
+            p.color("#24244A")
+            marco(TARJ_X, ty, TARJ_ANCHO, TARJ_ALTO, 1)
+        }
+        miniatura(j["id"], TARJ_X + 20, ty + 20)
+        fijo tx = TARJ_X + 172
+        p.color("#EDEFFF")
+        p.letra(30, "izquierda", "negrita mono")
+        p.escribirEn(tx, ty + 58, j["titulo"])
+        p.color("#B9BCD8")
+        p.letra(19, "izquierda", "sans")
+        p.escribirEn(tx, ty + 96, j["linea1"])
+        p.color("#8E92B4")
+        p.letra(16, "izquierda", "mono")
+        p.escribirEn(tx, ty + 124, j["linea2"])
+        p.color(j["acento"])
+        p.letra(18, "izquierda", "negrita mono")
+        p.escribirEn(tx, ty + 176, "RÉCORD " + texto(mejorDe(j["id"])))
+        si activo y cuadroMenu % 60 < 40 {
+            p.letra(18, "derecha", "negrita mono")
+            p.escribirEn(TARJ_X + TARJ_ANCHO - 20, ty + 176, "JUGAR ▸")
+        }
+    }
+
+    # pie
+    p.color("#5A5F8A")
+    p.letra(16, "centro", "mono")
+    p.escribirEn(ANCHO / 2, ALTO - 64, "↑ ↓ elegir · Enter jugar · Esc salir")
+    p.escribirEn(ANCHO / 2, ALTO - 38, "F11 pantalla completa")
+
+    si abrir { entrarEn(JUEGOS[elegido]["id"]) }
+}
+
+# ─────────────────────────────────────────────── el bucle
+p.abrir("ARCADE Ñ")
+mientras no p.debeCerrar() {
+    p.empezar()
+    si modo == "menu" {
+        si p.pulsada(p.ESC) { p.salir() }
+        menu()
+    } sino {
+        si p.pulsada(p.ESC) {
+            si modo == "galaga" { imprimir("galaga: " + galaga.resumen()) }
+            imprimir("arcade: vuelve al menú desde " + modo)
+            modo = "menu"
+            menu()
+        } sino {
+            jugar(modo)
+        }
+    }
+    p.terminar()
+}
+p.cerrar()
+imprimir("arcade: cerrado tras " + texto(p.cuadro()) + " cuadros")

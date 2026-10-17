@@ -1,0 +1,60 @@
+usar redondear de "numerico"
+
+# Tres pruebas clásicas, el mismo algoritmo que en las otras versiones.
+# Todo el trabajo va dentro de funciones: el JIT de Ñ solo compila funciones,
+# no los bucles del nivel superior.
+
+fn fib(n) {
+  si n < 2 { devolver n }
+  devolver fib(n - 1) + fib(n - 2)
+}
+
+fn criba(n) {
+  var marca = []
+  para i en rango(n + 1) { agregar(marca, cierto) }
+  marca[0] = falso
+  marca[1] = falso
+  var i = 2
+  mientras i * i <= n {
+    si marca[i] {
+      var j = i * i
+      mientras j <= n { marca[j] = falso  j = j + i }
+    }
+    i = i + 1
+  }
+  var cuantos = 0
+  para k en rango(n + 1) { si marca[k] { cuantos = cuantos + 1 } }
+  devolver cuantos
+}
+
+fn mandelbrot(ancho, alto, maxIter) {
+  var dentro = 0
+  para py en rango(alto) {
+    para px en rango(ancho) {
+      fijo cr = (px / ancho) * 3.5 - 2.5
+      fijo ci = (py / alto) * 2.0 - 1.0
+      var zr = 0.0
+      var zi = 0.0
+      var k = 0
+      mientras k < maxIter y zr * zr + zi * zi <= 4.0 {
+        fijo t = zr * zr - zi * zi + cr
+        zi = 2.0 * zr * zi + ci
+        zr = t
+        k = k + 1
+      }
+      si k == maxIter { dentro = dentro + 1 }
+    }
+  }
+  devolver dentro
+}
+
+fn medir(nombre, f) {
+  fijo t0 = reloj()
+  fijo r = f()
+  fijo ms = reloj() - t0
+  imprimir(nombre, "=", r, "en", redondear(ms), "ms")
+}
+
+medir("fib(30)", funcion() { devolver fib(30) })
+medir("criba(2000000)", funcion() { devolver criba(2000000) })
+medir("mandelbrot(400x300x200)", funcion() { devolver mandelbrot(400, 300, 200) })

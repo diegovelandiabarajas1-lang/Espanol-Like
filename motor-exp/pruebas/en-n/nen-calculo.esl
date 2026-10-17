@@ -1,0 +1,827 @@
+# Las pruebas de NEÑ, parte «cálculo», en Ñ.
+#
+# Nada de «devuelve un número»: cada prueba compara contra algo que se sabe por
+# otro camino. Primitivas conocidas (∫₀^π sen = 2), identidades (Γ(n) = (n−1)!,
+# Γ(½) = √π, erf(∞) = 1), raíces que al sustituirlas dan cero, soluciones
+# exactas de ecuaciones diferenciales, y valores de tabla (sacados de mpmath y
+# scipy con 25 cifras al escribir esta suite). Las tolerancias son las que el
+# método promete de verdad, no las que hacen pasar la prueba: si un día bajan,
+# es que algo se rompió.
+
+usar probar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCerca, debeSerCierto,
+     debeSerFalso, debeFallarCon, debeTener, debeSerMenor, debeSerMayor de "probar"
+usar seno, coseno, exp, log, raiz, absoluto, semilla, arreglo, elemento, parteReal,
+     parteImaginaria, tamano, forma, tipoArreglo, arcotangente, azarNormal de "numerico"
+usar derivar, derivarN, gradiente, jacobiano, hessiano, integrar, integrarDoble,
+     integrarMontecarlo, integrarDatos, integrarAcumulado, derivarDatos, sumaSerie, limite,
+     longitudArco, volumenRevolucion, areaEntre, polinomioTaylor de "nen"
+usar resolverEcuacion, raizNewton, raices, raicesReales, resolverNoLineal, puntoFijo de "nen"
+usar minimizar1D, minimizar, minimizarBFGS, maximizar, ajustarCurva, optimizarLineal de "nen"
+usar resolverEDO, rk4, resolverEDORigida de "nen"
+usar evaluarPolinomio, derivarPolinomio, integrarPolinomio, sumarPolinomios, restarPolinomios,
+     multiplicarPolinomios, dividirPolinomios, polinomioDesdeRaices, ajustePolinomico,
+     textoPolinomio de "nen"
+usar interpolarLineal, interpolarLagrange, polinomioInterpolante, splineCubico, interpolar de "nen"
+usar gamma, lnGamma, beta, digamma, erf, erfc, erfInversa, gammaIncompleta, betaIncompleta,
+     besselJ, zeta de "nen"
+usar normalDensidad, normalAcumulada, normalInversa, tStudentAcumulada, tStudentInversa,
+     chiCuadradoAcumulada, chiCuadradoInversa, fisherAcumulada, binomialProb, binomialAcumulada,
+     poissonProb, poissonAcumulada, exponencialAcumulada de "nen"
+usar potenciaModular, inversoModular, mcdExtendido, restoChino, fibonacci, totiente, factorizar,
+     esCuadradoPerfecto, siguientePrimo de "nen"
+
+fijo PI = |PI
+
+# ═════════════════════════════════════════════════════════════════ CÁLCULO
+
+grupo("derivadas", fn() {
+    probar("la derivada del seno es el coseno", fn() {
+        para x en [0.0, 0.7, 2.0, -1.3] {
+            debeSerCerca(derivar(seno, x), coseno(x), 0.0000000001)
+        }
+    })
+    probar("exp es su propia derivada, también lejos del origen", fn() {
+        # en x = 10 la función vale 22026: se pide error RELATIVO de 10⁻¹¹
+        debeSerCerca(derivar(exp, 10.0) / exp(10.0), 1.0, 0.00000000001)
+    })
+    probar("log cerca de su borde: el paso se achica solo", fn() {
+        # con h = 0.1 se evaluaría log de un negativo
+        debeSerCerca(derivar(log, 0.05), 20.0, 0.000000001)
+    })
+    probar("las derivadas altas del seno dan la vuelta", fn() {
+        debeSerCerca(derivarN(seno, 0.7, 2), 0.0 - seno(0.7), 0.0000000001)
+        debeSerCerca(derivarN(seno, 0.7, 3), 0.0 - coseno(0.7), 0.000000001)
+        debeSerCerca(derivarN(seno, 0.7, 4), seno(0.7), 0.00000001)
+        debeSerCerca(derivarN(fn(x) { devolver x ** 5 }, 2.0, 5), 120.0, 0.000001)
+        debeSerCerca(derivarN(seno, 0.7, 0), seno(0.7))
+    })
+    probar("derivarN se niega a órdenes sin cifras", fn() {
+        debeFallarCon(fn() { derivarN(seno, 1.0, 12) }, "entre 0 y 8")
+    })
+    probar("gradiente de x²·y en (1, 2) es (4, 1)", fn() {
+        fijo g = gradiente(fn(p) { devolver p[0] * p[0] * p[1] }, [1.0, 2.0])
+        debeSerCerca(g[0], 4.0, 0.0000000001)
+        debeSerCerca(g[1], 1.0, 0.0000000001)
+    })
+    probar("y con un arreglo devuelve un arreglo", fn() {
+        fijo g = gradiente(fn(p) { devolver elemento(p, 0) * elemento(p, 1) }, arreglo([3.0, 5.0]))
+        debeSer(tipoArreglo(g), "real")
+        debeSerCerca(elemento(g, 0), 5.0, 0.0000000001)
+        debeSerCerca(elemento(g, 1), 3.0, 0.0000000001)
+    })
+    probar("el jacobiano de (x·y, sen x)", fn() {
+        fijo J = jacobiano(fn(p) { devolver [p[0] * p[1], seno(p[0])] }, [1.0, 2.0])
+        debeSerCerca(J[0][0], 2.0, 0.0000000001)
+        debeSerCerca(J[0][1], 1.0, 0.0000000001)
+        debeSerCerca(J[1][0], coseno(1.0), 0.0000000001)
+        debeSerCerca(J[1][1], 0.0, 0.0000000001)
+    })
+    probar("el hessiano es simétrico y da las segundas derivadas", fn() {
+        # f = x²·y + e^y  →  H = [[2y, 2x], [2x, e^y]]
+        fijo H = hessiano(fn(p) { devolver p[0] * p[0] * p[1] + exp(p[1]) }, [1.0, 2.0])
+        debeSerCerca(H[0][0], 4.0, 0.0000001)
+        debeSerCerca(H[0][1], 2.0, 0.0000001)
+        debeSer(H[0][1], H[1][0])
+        debeSerCerca(H[1][1], exp(2.0), 0.0000001)
+    })
+    probar("una función que no devuelve un número se dice", fn() {
+        debeFallarCon(fn() { derivar(fn(x) { devolver "hola" }, 1.0) }, "tiene que devolver un número")
+    })
+})
+
+grupo("integrales", fn() {
+    probar("∫₀^π sen = 2", fn() {
+        debeSerCerca(integrar(seno, 0.0, PI), 2.0, 0.000000000001)
+    })
+    probar("al revés cambia el signo", fn() {
+        debeSerCerca(integrar(seno, PI, 0.0), -2.0, 0.000000000001)
+        debeSer(integrar(seno, 1.0, 1.0), 0)
+    })
+    probar("un polinomio contra su primitiva", fn() {
+        # ∫₁³ (3x² − 2x) dx = [x³ − x²]₁³ = 18 − 0
+        debeSerCerca(integrar(fn(x) { devolver 3.0 * x * x - 2.0 * x }, 1.0, 3.0), 18.0, 0.000000000001)
+    })
+    probar("Gauss: ∫ e^(−x²) de −∞ a ∞ = √π", fn() {
+        debeSerCerca(integrar(fn(x) { devolver exp(0.0 - x * x) }, -|INFINITO, |INFINITO), raiz(PI), 0.000000000001)
+    })
+    probar("colas infinitas por cada lado", fn() {
+        debeSerCerca(integrar(fn(x) { devolver 1.0 / (x * x) }, 1.0, |INFINITO), 1.0, 0.0000000001)
+        debeSerCerca(integrar(exp, -|INFINITO, 0.0), 1.0, 0.0000000001)
+        # ∫₀^∞ x·e^(−x) = Γ(2) = 1
+        debeSerCerca(integrar(fn(x) { devolver x * exp(0.0 - x) }, 0.0, |INFINITO), 1.0, 0.0000000001)
+    })
+    probar("singularidades integrables en un borde", fn() {
+        debeSerCerca(integrar(fn(x) { devolver 1.0 / raiz(x) }, 0.0, 1.0), 2.0, 0.0000000001)
+        debeSerCerca(integrar(log, 0.0, 1.0), -1.0, 0.0000000001)
+    })
+    probar("una integral que diverge lo dice en vez de inventar", fn() {
+        debeFallarCon(fn() { integrar(fn(x) { devolver 1.0 / x }, 0.0, 1.0) }, "no converge")
+    })
+    probar("integral doble con límites que dependen de x", fn() {
+        # ∫₀¹ ∫₀ˣ x·y dy dx = ∫₀¹ x³/2 dx = 1/8
+        debeSerCerca(integrarDoble(fn(x, y) { devolver x * y }, 0.0, 1.0, 0.0, fn(x) { devolver x }), 0.125, 0.000000001)
+        # el área del círculo unidad
+        debeSerCerca(integrarDoble(fn(x, y) { devolver 1.0 }, -1.0, 1.0,
+            fn(x) { devolver 0.0 - raiz(1.0 - x * x) }, fn(x) { devolver raiz(1.0 - x * x) }), PI, 0.0000001)
+    })
+    probar("Montecarlo: el valor cae dentro de su propio error", fn() {
+        semilla(42)
+        # ∫∫ (x² + y²) en el cuadrado unidad = 2/3
+        fijo r = integrarMontecarlo(fn(p) { devolver p[0] * p[0] + p[1] * p[1] }, [[0.0, 1.0], [0.0, 1.0]], 20000)
+        debeSerMenor(absoluto(r["valor"] - 2.0 / 3.0), 4.0 * r["error"])
+        debeSerMenor(r["error"], 0.01)
+    })
+    probar("Montecarlo es repetible con semilla", fn() {
+        semilla(7)
+        fijo a = integrarMontecarlo(seno, [0.0, PI], 1000)
+        semilla(7)
+        fijo b = integrarMontecarlo(seno, [0.0, PI], 1000)
+        debeSer(a["valor"], b["valor"])
+        debeSerMenor(absoluto(a["valor"] - 2.0), 4.0 * a["error"])
+    })
+    probar("Simpson es exacto en parábolas, aunque las x sean irregulares", fn() {
+        fijo xs = [0.0, 0.3, 0.5, 1.1, 1.7, 2.0]
+        var ys: lista = []
+        para x en xs { ys = ys + [x * x] }
+        # cinco intervalos: el último va con la corrección de scipy
+        debeSerCerca(integrarDatos(xs, ys), 8.0 / 3.0, 0.000000000001)
+        debeSerCerca(integrarDatos([0.0, 1.0, 2.0], [0.0, 1.0, 4.0]), 8.0 / 3.0, 0.000000000001)
+        # el trapecio, en cambio, se pasa
+        debeSerMayor(integrarDatos(xs, ys, "trapecio"), 8.0 / 3.0)
+    })
+    probar("la integral acumulada termina en la integral", fn() {
+        fijo c = integrarAcumulado([0.0, 1.0, 2.0, 3.0], [1.0, 1.0, 1.0, 1.0])
+        debeSer(c, [0, 1, 2, 3])
+    })
+    probar("derivarDatos es exacto en parábolas, bordes incluidos", fn() {
+        fijo d = derivarDatos([0.0, 0.3, 0.5, 1.1, 2.0], [0.0, 0.09, 0.25, 1.21, 4.0])
+        debeSerCerca(d[0], 0.0, 0.000000000001)
+        debeSerCerca(d[2], 1.0, 0.000000000001)
+        debeSerCerca(d[4], 4.0, 0.000000000001)
+    })
+    probar("datos mal dados", fn() {
+        debeFallarCon(fn() { integrarDatos([0.0, 2.0, 1.0], [1.0, 2.0, 3.0]) }, "orden creciente")
+        debeFallarCon(fn() { integrarDatos([0.0, 1.0], [1.0]) }, "hay 2 valores de x y 1 de y")
+    })
+    probar("longitud, volumen y área entre curvas", fn() {
+        # la parábola y = x² de 0 a 1 mide (2√5 + asinh 2)/4
+        debeSerCerca(longitudArco(fn(x) { devolver x * x }, 0.0, 1.0), 1.478942857544597, 0.000000001)
+        # el cono: y = x de 0 a 1 girado → π/3
+        debeSerCerca(volumenRevolucion(fn(x) { devolver x }, 0.0, 1.0), PI / 3.0, 0.000000001)
+        # entre y = x e y = x² hay 1/6, y entre sen y cos en [0, π] hay 2√2
+        debeSerCerca(areaEntre(fn(x) { devolver x }, fn(x) { devolver x * x }, 0.0, 1.0), 1.0 / 6.0, 0.000000001)
+        debeSerCerca(areaEntre(seno, coseno, 0.0, PI), 2.0 * raiz(2.0), 0.0000001)
+    })
+})
+
+grupo("series y límites", fn() {
+    probar("Basilea: Σ 1/k² = π²/6 (acelerada: la suma directa necesitaría 10¹⁰ términos)", fn() {
+        debeSerCerca(sumaSerie(fn(k) { devolver 1.0 / (k * k) }, 1), PI * PI / 6.0, 0.0000000001)
+    })
+    probar("alternadas: ln 2 y π/4", fn() {
+        debeSerCerca(sumaSerie(fn(k) { devolver (-1.0) ** k / (k + 1) }, 0), log(2.0), 0.000000000001)
+        debeSerCerca(sumaSerie(fn(k) { devolver (-1.0) ** k / (2 * k + 1) }, 0), PI / 4.0, 0.000000000001)
+    })
+    probar("la geométrica y la de e", fn() {
+        debeSerCerca(sumaSerie(fn(k) { devolver 0.5 ** k }, 0), 2.0, 0.000000000001)
+        var fact: real = 1.0
+        debeSerCerca(sumaSerie(fn(k) {
+            var f: real = 1.0
+            para i en rango(1, k + 1) { f = f * i }
+            devolver 1.0 / f
+        }, 0), exp(1.0), 0.000000000001)
+    })
+    probar("la armónica diverge y se dice", fn() {
+        debeFallarCon(fn() { sumaSerie(fn(k) { devolver 1.0 / k }, 1) }, "no converge")
+    })
+    probar("sen x / x → 1 sin evaluar en 0", fn() {
+        debeSerCerca(limite(fn(x) { devolver seno(x) / x }, 0.0), 1.0, 0.000000001)
+        debeSerCerca(limite(fn(x) { devolver (exp(x) - 1.0) / x }, 0.0), 1.0, 0.000000001)
+    })
+    probar("(1 + 1/x)^x → e cuando x → ∞", fn() {
+        debeSerCerca(limite(fn(x) { devolver (1.0 + 1.0 / x) ** x }, |INFINITO), exp(1.0), 0.000000001)
+    })
+    probar("los laterales distintos y los infinitos se dicen", fn() {
+        debeFallarCon(fn() { limite(fn(x) { devolver absoluto(x) / x }, 0.0) }, "no coinciden")
+        debeSerCerca(limite(fn(x) { devolver absoluto(x) / x }, 0.0, "derecha"), 1.0, 0.000000001)
+        debeSerCerca(limite(fn(x) { devolver absoluto(x) / x }, 0.0, "izquierda"), -1.0, 0.000000001)
+        debeFallarCon(fn() { limite(fn(x) { devolver 1.0 / (x * x) }, 0.0) }, "no parece existir")
+    })
+    probar("Taylor de e^x en 0 son los 1/k!", fn() {
+        fijo p = polinomioTaylor(exp, 0.0, 4)
+        debeSerCerca(p[0], 1.0, 0.0000000001)
+        debeSerCerca(p[1], 1.0, 0.0000000001)
+        debeSerCerca(p[2], 0.5, 0.00000001)
+        debeSerCerca(p[3], 1.0 / 6.0, 0.0000001)
+        debeSerCerca(p[4], 1.0 / 24.0, 0.000001)
+    })
+    probar("Taylor alrededor de otro punto se puede evaluar tal cual", fn() {
+        # un polinomio es su propio Taylor
+        fijo p = polinomioTaylor(fn(x) { devolver x * x * x - 2.0 * x }, 1.5, 3)
+        debeSerCerca(evaluarPolinomio(p, 4.0), 56.0, 0.00001)
+    })
+})
+
+# ═══════════════════════════════════════════════════════════════ ECUACIONES
+
+grupo("ecuaciones de una variable", fn() {
+    probar("√2 con Brent, hasta el redondeo", fn() {
+        fijo r = resolverEcuacion(fn(x) { devolver x * x - 2.0 }, 0.0, 2.0)
+        debeSerCerca(r, raiz(2.0), 0.000000000000001)
+    })
+    probar("cos x = x, el número de Dottie", fn() {
+        fijo r = resolverEcuacion(fn(x) { devolver coseno(x) - x }, 0.0, 1.0)
+        debeSerCerca(coseno(r), r, 0.000000000000001)
+        debeSerCerca(r, 0.7390851332151607, 0.000000000000001)
+    })
+    probar("sin cambio de signo no hay garantía, y lo dice", fn() {
+        debeFallarCon(fn() { resolverEcuacion(fn(x) { devolver x * x + 1.0 }, -1.0, 1.0) }, "no cambia de signo")
+    })
+    probar("Newton con y sin derivada", fn() {
+        debeSerCerca(raizNewton(fn(x) { devolver x ** 3 - 2.0 * x - 5.0 }, 2.0), 2.0945514815423265, 0.000000000001)
+        debeSerCerca(raizNewton(fn(x) { devolver x * x - 2.0 }, 1.0, fn(x) { devolver 2.0 * x }), raiz(2.0), 0.000000000000001)
+    })
+    probar("Newton amortiguado no se escapa con arcotangente", fn() {
+        # Newton puro desde x = 2 diverge; con el amortiguamiento llega a 0
+        debeSerCerca(raizNewton(arcotangente, 2.0), 0.0, 0.000000000001)
+    })
+    probar("Newton sin raíz real se atasca y lo dice", fn() {
+        debeFallarCon(fn() { raizNewton(fn(x) { devolver x * x + 1.0 }, 1.0) }, "atasc")
+    })
+})
+
+grupo("raíces de polinomios", fn() {
+    probar("(x−1)(x−2)(x−3): las tres, reales", fn() {
+        fijo r = raicesReales([-6.0, 11.0, -6.0, 1.0])
+        debeTener(r, 3)
+        debeSerCerca(r[0], 1.0, 0.000000000001)
+        debeSerCerca(r[1], 2.0, 0.000000000001)
+        debeSerCerca(r[2], 3.0, 0.000000000001)
+    })
+    probar("x² + 1 tiene ±i y ninguna real", fn() {
+        fijo z = raices([1.0, 0.0, 1.0])
+        debeSer(tipoArreglo(z), "complejo")
+        debeSerCerca(elemento(parteImaginaria(z), 0), -1.0, 0.000000000001)
+        debeSerCerca(elemento(parteImaginaria(z), 1), 1.0, 0.000000000001)
+        debeSerCerca(elemento(parteReal(z), 0), 0.0, 0.000000000001)
+        debeTener(raicesReales([1.0, 0.0, 1.0]), 0)
+    })
+    probar("las cinco raíces quintas de −1 tienen módulo 1 y anulan el polinomio", fn() {
+        fijo z = raices([1.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+        debeSer(tamano(z), 5)
+        fijo re = parteReal(z)
+        fijo im = parteImaginaria(z)
+        para k en rango(5) {
+            fijo a = elemento(re, k)
+            fijo b = elemento(im, k)
+            debeSerCerca(a * a + b * b, 1.0, 0.000000000001)
+        }
+        debeTener(raicesReales([1.0, 0.0, 0.0, 0.0, 0.0, 1.0]), 1)
+    })
+    probar("Wilkinson de grado 10: las raíces 1…10, y al sustituirlas da ~0", fn() {
+        fijo p = polinomioDesdeRaices([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+        fijo r = raicesReales(p)
+        debeTener(r, 10)
+        para k en rango(10) { debeSerCerca(r[k], k + 1, 0.000001) }
+    })
+    probar("una raíz doble pierde la mitad de las cifras, como debe", fn() {
+        fijo r = raicesReales([1.0, -2.0, 1.0])
+        debeTener(r, 2)
+        debeSerCerca(r[0], 1.0, 0.0000001)
+    })
+    probar("ceros en el origen y el polinomio constante", fn() {
+        debeSer(raicesReales([0.0, 0.0, 2.0, -2.0]), [0, 0, 1])
+        debeFallarCon(fn() { raices([5.0]) }, "constante")
+    })
+})
+
+grupo("sistemas no lineales y punto fijo", fn() {
+    probar("círculo y recta: x² + y² = 4, x = y", fn() {
+        fijo s = resolverNoLineal(fn(v) { devolver [v[0] * v[0] + v[1] * v[1] - 4.0, v[0] - v[1]] }, [1.0, 0.5])
+        debeSerCerca(s[0], raiz(2.0), 0.000000000001)
+        debeSerCerca(s[1], raiz(2.0), 0.000000000001)
+    })
+    probar("con un número de partida es una ecuación sola", fn() {
+        debeSerCerca(resolverNoLineal(fn(x) { devolver exp(x) - 2.0 }, 5.0), log(2.0), 0.000000000001)
+    })
+    probar("un sistema de 3 ecuaciones y su comprobación", fn() {
+        fijo F = fn(v) { devolver [v[0] + v[1] + v[2] - 6.0, v[0] * v[1] * v[2] - 6.0, v[0] * v[0] + v[1] - 3.0] }
+        fijo s = resolverNoLineal(F, [0.8, 2.3, 2.9])
+        para r en F(s) { debeSerCerca(r, 0.0, 0.000000001) }
+    })
+    probar("más ecuaciones que incógnitas no", fn() {
+        debeFallarCon(fn() { resolverNoLineal(fn(v) { devolver [v[0], v[1], 1.0] }, [1.0, 1.0]) }, "tantas ecuaciones como incógnitas")
+    })
+    probar("punto fijo de cos y la divergencia de 2x+1", fn() {
+        debeSerCerca(puntoFijo(coseno, 1.0), 0.7390851332151607, 0.000000000001)
+        debeFallarCon(fn() { puntoFijo(fn(x) { devolver 2.0 * x + 1.0 }, 1.0) }, "diverge")
+    })
+})
+
+# ═════════════════════════════════════════════════════════════ OPTIMIZACIÓN
+
+grupo("optimización", fn() {
+    probar("el mínimo de una parábola", fn() {
+        fijo r = minimizar1D(fn(x) { devolver (x - 2.0) * (x - 2.0) + 1.0 }, 0.0, 5.0)
+        debeSerCerca(r["x"], 2.0, 0.00000001)
+        debeSerCerca(r["valor"], 1.0, 0.000000000001)
+    })
+    probar("si el mínimo está en el borde, es el borde", fn() {
+        debeSer(minimizar1D(fn(x) { devolver x }, 0.0, 5.0)["x"], 0)
+    })
+    probar("Rosenbrock con Nelder–Mead", fn() {
+        fijo r = minimizar(fn(p) { devolver 100.0 * (p[1] - p[0] * p[0]) ** 2 + (1.0 - p[0]) ** 2 }, [-1.2, 1.0])
+        debeSerCerca(r["x"][0], 1.0, 0.000001)
+        debeSerCerca(r["x"][1], 1.0, 0.000001)
+        debeSerMenor(r["valor"], 0.000000001)
+    })
+    probar("Rosenbrock con BFGS, con y sin gradiente", fn() {
+        fijo f = fn(p) { devolver 100.0 * (p[1] - p[0] * p[0]) ** 2 + (1.0 - p[0]) ** 2 }
+        fijo r = minimizarBFGS(f, [-1.2, 1.0])
+        debeSerCerca(r["x"][0], 1.0, 0.000001)
+        debeSerCerca(r["x"][1], 1.0, 0.000001)
+        fijo g = fn(p) { devolver [-400.0 * p[0] * (p[1] - p[0] * p[0]) - 2.0 * (1.0 - p[0]), 200.0 * (p[1] - p[0] * p[0])] }
+        fijo r2 = minimizarBFGS(f, [-1.2, 1.0], g)
+        debeSerCerca(r2["x"][0], 1.0, 0.000001)
+    })
+    probar("cinco dimensiones: el mínimo de Σ (xᵢ − i)²", fn() {
+        fijo r = minimizar(fn(p) {
+            var s: real = 0.0
+            para i en rango(5) { s = s + (p[i] - i) ** 2 }
+            devolver s
+        }, [0.0, 0.0, 0.0, 0.0, 0.0])
+        para i en rango(5) { debeSerCerca(r["x"][i], i, 0.000001) }
+    })
+    probar("maximizar en 1D y en varias", fn() {
+        fijo r = maximizar(seno, 0.0, 3.0)
+        debeSerCerca(r["x"], PI / 2.0, 0.00000001)
+        debeSerCerca(r["valor"], 1.0, 0.000000000001)
+        fijo r2 = maximizar(fn(p) { devolver 0.0 - (p[0] - 1.0) ** 2 - (p[1] + 2.0) ** 2 + 3.0 }, [0.0, 0.0])
+        debeSerCerca(r2["valor"], 3.0, 0.000000001)
+        debeSerCerca(r2["x"][1], -2.0, 0.00001)
+    })
+    probar("ajustarCurva recupera los parámetros de unos datos exactos", fn() {
+        var xs: lista = []
+        var ys: lista = []
+        para i en rango(10) {
+            fijo x = i * 0.5
+            xs = xs + [x]
+            ys = ys + [3.0 * exp(-0.7 * x)]
+        }
+        fijo r = ajustarCurva(fn(x, p) { devolver p[0] * exp(p[1] * x) }, xs, ys, [1.0, -0.1])
+        debeSerCerca(r["parametros"][0], 3.0, 0.00000001)
+        debeSerCerca(r["parametros"][1], -0.7, 0.00000001)
+        debeSerMenor(r["residuo"], 0.0000000001)
+    })
+    probar("y con ruido, el error estándar es coherente", fn() {
+        semilla(3)
+        var xs: lista = []
+        var ys: lista = []
+        para i en rango(40) {
+            xs = xs + [i * 0.25]
+            ys = ys + [2.0 + 1.5 * i * 0.25 + azarNormal(0.0, 0.1)]
+        }
+        fijo r = ajustarCurva(fn(x, p) { devolver p[0] + p[1] * x }, xs, ys, [0.0, 0.0])
+        # la pendiente verdadera está a pocos errores estándar de la estimada
+        debeSerMenor(absoluto(r["parametros"][1] - 1.5), 4.0 * r["errores"][1])
+        debeSerMenor(r["errores"][1], 0.05)
+    })
+    probar("símplex: el problema de los libros (Hillier)", fn() {
+        # max 3x + 5y  con  x ≤ 4, 2y ≤ 12, 3x + 2y ≤ 18  →  (2, 6), 36
+        fijo r = optimizarLineal([3.0, 5.0], [[1.0, 0.0], [0.0, 2.0], [3.0, 2.0]], [4.0, 12.0, 18.0], "maximizar")
+        debeSerCerca(r["valor"], 36.0, 0.000000001)
+        debeSerCerca(r["x"][0], 2.0, 0.000000001)
+        debeSerCerca(r["x"][1], 6.0, 0.000000001)
+    })
+    probar("símplex con una restricción «≥» (fase 1)", fn() {
+        # min 2x + 3y  con  x + y ≥ 4, x ≤ 3  →  (3, 1), 9
+        fijo r = optimizarLineal([2.0, 3.0], [[-1.0, -1.0], [1.0, 0.0]], [-4.0, 3.0])
+        debeSerCerca(r["valor"], 9.0, 0.000000001)
+    })
+    probar("no acotado y no factible, en palabras", fn() {
+        debeFallarCon(fn() { optimizarLineal([1.0, 1.0], [[-1.0, 1.0]], [1.0], "maximizar") }, "no está acotado")
+        debeFallarCon(fn() { optimizarLineal([1.0, 1.0], [[1.0, 1.0], [-1.0, -1.0]], [1.0, -3.0]) }, "no es factible")
+    })
+})
+
+# ═══════════════════════════════════════════════════ ECUACIONES DIFERENCIALES
+
+grupo("ecuaciones diferenciales", fn() {
+    probar("y′ = −y da e^(−t)", fn() {
+        fijo r = resolverEDO(fn(t, y) { devolver 0.0 - y }, 0.0, 1.0, 5.0)
+        fijo n = longitud(r["t"])
+        debeSer(r["t"][n - 1], 5)
+        debeSerCerca(r["y"][n - 1] / exp(-5.0), 1.0, 0.00000001)
+    })
+    probar("el oscilador: y″ = −y en los tiempos pedidos (salida densa)", fn() {
+        fijo r = resolverEDO(fn(t, y) { devolver [y[1], 0.0 - y[0]] }, 0.0, [0.0, 1.0], 10.0, [0.0, 1.0, 2.5, 7.0, 10.0])
+        debeSer(r["t"], [0, 1, 2.5, 7, 10])
+        para k en rango(5) {
+            fijo t = r["t"][k]
+            debeSerCerca(r["y"][k][0], seno(t), 0.00000001)
+            debeSerCerca(r["y"][k][1], coseno(t), 0.00000001)
+        }
+    })
+    probar("la energía del oscilador se conserva", fn() {
+        fijo r = resolverEDO(fn(t, y) { devolver [y[1], 0.0 - y[0]] }, 0.0, [1.0, 0.0], 20.0, 40)
+        debeTener(r["t"], 41)
+        para y en r["y"] { debeSerCerca(y[0] * y[0] + y[1] * y[1], 1.0, 0.0000001) }
+    })
+    probar("con arreglos devuelve una matriz de estados", fn() {
+        fijo r = resolverEDO(fn(t, y) { devolver 0.0 - y }, 0.0, arreglo([1.0, 2.0]), 1.0, 4)
+        debeSer(forma(r["y"]), [5, 2])
+        debeSerCerca(elemento(r["y"], 4, 1), 2.0 * exp(-1.0), 0.00000001)
+    })
+    probar("hacia atrás en el tiempo", fn() {
+        fijo r = resolverEDO(fn(t, y) { devolver 0.0 - y }, 5.0, exp(-5.0), 0.0)
+        fijo n = longitud(r["y"])
+        debeSerCerca(r["y"][n - 1], 1.0, 0.00000001)
+    })
+    probar("una solución que explota se detiene con aviso", fn() {
+        # y′ = y², y(0) = 1  →  y = 1/(1 − t), que explota en t = 1
+        debeFallarCon(fn() { resolverEDO(fn(t, y) { devolver y * y }, 0.0, 1.0, 2.0) }, "demasiado pequeño")
+    })
+    probar("RK4 clásico tiene error de orden 4", fn() {
+        fijo e1 = absoluto(rk4(fn(t, y) { devolver 0.0 - y }, 0.0, 1.0, 1.0, 10)["y"][10] - exp(-1.0))
+        fijo e2 = absoluto(rk4(fn(t, y) { devolver 0.0 - y }, 0.0, 1.0, 1.0, 20)["y"][20] - exp(-1.0))
+        # doblar los pasos divide el error por ~2⁴ = 16
+        debeSerCerca(e1 / e2, 16.0, 1.5)
+    })
+    probar("un sistema rígido con BDF2", fn() {
+        # y′ = −1000 (y − cos t): la solución exacta, sin la parte transitoria,
+        # vale (a² cos t + a sen t)/(a² + 1) con a = 1000
+        fijo r = resolverEDORigida(fn(t, y) { devolver -1000.0 * (y - coseno(t)) }, 0.0, 0.0, 1.0, 200)
+        fijo a = 1000.0
+        fijo exacta = (a * a * coseno(1.0) + a * seno(1.0)) / (a * a + 1.0)
+        debeSerCerca(r["y"][200], exacta, 0.0000001)
+    })
+    probar("BDF2 converge con orden 2", fn() {
+        fijo e1 = absoluto(resolverEDORigida(fn(t, y) { devolver 0.0 - y }, 0.0, 1.0, 1.0, 100)["y"][100] - exp(-1.0))
+        fijo e2 = absoluto(resolverEDORigida(fn(t, y) { devolver 0.0 - y }, 0.0, 1.0, 1.0, 200)["y"][200] - exp(-1.0))
+        debeSerCerca(e1 / e2, 4.0, 0.5)
+    })
+    probar("la derivada tiene que tener la forma del estado", fn() {
+        debeFallarCon(fn() { resolverEDO(fn(t, y) { devolver [1.0] }, 0.0, [1.0, 2.0], 1.0) }, "una derivada por cada componente")
+    })
+})
+
+# ═══════════════════════════════════════════════════════════════ POLINOMIOS
+
+grupo("polinomios", fn() {
+    probar("evaluar con Horner, también sobre listas", fn() {
+        # 1 − 2x + 3x²
+        debeSer(evaluarPolinomio([1.0, -2.0, 3.0], 2.0), 9)
+        debeSer(evaluarPolinomio([1.0, -2.0, 3.0], [0.0, 1.0, 2.0]), [1, 2, 9])
+    })
+    probar("derivar e integrar se deshacen", fn() {
+        fijo p = [5.0, -1.0, 4.0, 2.0]
+        debeSer(derivarPolinomio(integrarPolinomio(p)), p)
+        debeSer(derivarPolinomio([1.0, 2.0, 3.0]), [2, 6])
+        debeSer(integrarPolinomio([0.0, 2.0], 7.0), [7, 0, 1])
+    })
+    probar("la integral de un polinomio por los dos caminos", fn() {
+        fijo p = [1.0, -3.0, 0.0, 2.0]
+        fijo P = integrarPolinomio(p)
+        debeSerCerca(evaluarPolinomio(P, 2.0) - evaluarPolinomio(P, -1.0),
+                     integrar(fn(x) { devolver evaluarPolinomio(p, x) }, -1.0, 2.0), 0.000000000001)
+    })
+    probar("sumar, restar y multiplicar", fn() {
+        debeSer(sumarPolinomios([1.0, 2.0], [0.0, 0.0, 3.0]), [1, 2, 3])
+        debeSer(restarPolinomios([1.0, 2.0, 3.0], [0.0, 0.0, 3.0]), [1, 2])
+        # (x + 1)(x − 1) = x² − 1
+        debeSer(multiplicarPolinomios([1.0, 1.0], [-1.0, 1.0]), [-1, 0, 1])
+    })
+    probar("dividir: cociente·divisor + resto = dividendo", fn() {
+        fijo p = [3.0, 0.0, -2.0, 5.0, 1.0]
+        fijo q = [1.0, 2.0, 1.0]
+        fijo r = dividirPolinomios(p, q)
+        fijo vuelta = sumarPolinomios(multiplicarPolinomios(r["cociente"], q), r["resto"])
+        para k en rango(5) { debeSerCerca(vuelta[k], p[k], 0.000000000001) }
+        # x³ − 1 entre x − 1 es exacto
+        debeSer(dividirPolinomios([-1.0, 0.0, 0.0, 1.0], [-1.0, 1.0])["cociente"], [1, 1, 1])
+        debeFallarCon(fn() { dividirPolinomios([1.0], [0.0]) }, "polinomio cero")
+    })
+    probar("desde las raíces y de vuelta", fn() {
+        fijo p = polinomioDesdeRaices([1.0, 2.0, 3.0])
+        debeSer(p, [-6, 11, -6, 1])
+        para x en [1.0, 2.0, 3.0] { debeSer(evaluarPolinomio(p, x), 0) }
+    })
+    probar("el ajuste de grado 3 a una cúbica exacta la recupera", fn() {
+        fijo xs = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        var ys: lista = []
+        para x en xs { ys = ys + [1.0 - 2.0 * x + 0.5 * x * x * x] }
+        fijo p = ajustePolinomico(xs, ys, 3)
+        debeSerCerca(p[0], 1.0, 0.000000001)
+        debeSerCerca(p[1], -2.0, 0.000000001)
+        debeSerCerca(p[2], 0.0, 0.000000001)
+        debeSerCerca(p[3], 0.5, 0.000000001)
+        debeFallarCon(fn() { ajustePolinomico([1.0, 2.0], [1.0, 2.0], 3) }, "hacen falta al menos 4 puntos")
+    })
+    probar("como en la pizarra", fn() {
+        debeSer(textoPolinomio([1.0, -2.0, 3.0]), "3x² − 2x + 1")
+        debeSer(textoPolinomio([-1.0, 0.0, 0.0, 0.5]), "0.5x³ − 1")
+        debeSer(textoPolinomio([0.0, 1.0], "t"), "t")
+        debeSer(textoPolinomio([0.0]), "0")
+    })
+})
+
+# ═════════════════════════════════════════════════════════════ INTERPOLACIÓN
+
+grupo("interpolación", fn() {
+    probar("lineal: en los nodos da los datos y entre ellos, la recta", fn() {
+        debeSer(interpolarLineal([0.0, 1.0, 3.0], [0.0, 10.0, 30.0], 2.0), 20)
+        debeSer(interpolarLineal([0.0, 1.0, 3.0], [0.0, 10.0, 30.0], [0.0, 0.5, 3.0]), [0, 5, 30])
+        debeFallarCon(fn() { interpolarLineal([0.0, 1.0], [0.0, 1.0], 2.0) }, "fuera del rango")
+    })
+    probar("Lagrange por 4 puntos de x³ es x³", fn() {
+        debeSerCerca(interpolarLagrange([0.0, 1.0, 2.0, 3.0], [0.0, 1.0, 8.0, 27.0], 1.5), 3.375, 0.000000000001)
+        debeSerCerca(interpolarLagrange([0.0, 1.0, 2.0, 3.0], [0.0, 1.0, 8.0, 27.0], -1.0), -1.0, 0.000000000001)
+        debeFallarCon(fn() { interpolarLagrange([1.0, 1.0], [0.0, 1.0], 0.5) }, "repetida")
+    })
+    probar("el polinomio interpolante, con sus coeficientes", fn() {
+        fijo p = polinomioInterpolante([1.0, 2.0, 4.0], [1.0, 4.0, 16.0])
+        debeSerCerca(p[0], 0.0, 0.000000000001)
+        debeSerCerca(p[1], 0.0, 0.000000000001)
+        debeSerCerca(p[2], 1.0, 0.000000000001)
+    })
+    probar("el spline es una función de verdad", fn() {
+        fijo s = splineCubico([0.0, 1.0, 2.0, 3.0], [0.0, 1.0, 8.0, 27.0])
+        # pasa por los nodos
+        debeSerCerca(s(0.0), 0.0, 0.000000000001)
+        debeSerCerca(s(2.0), 8.0, 0.000000000001)
+        # el natural tiene curvatura cero en los extremos (segunda diferencia
+        # hacia dentro: con una centrada se saldría del rango)
+        debeSerCerca((s(0.002) - 2.0 * s(0.001) + s(0.0)) / 0.000001, 0.0, 0.05)
+        # y derivar en el borde explica por qué no puede
+        debeFallarCon(fn() { derivarN(s, 0.0, 2) }, "fuera del rango")
+        debeFallarCon(fn() { s(4.0) }, "fuera del rango")
+    })
+    probar("«noNodo» reproduce una cúbica exacta", fn() {
+        fijo s = splineCubico([0.0, 1.0, 2.0, 3.0, 4.0], [0.0, 1.0, 8.0, 27.0, 64.0], "noNodo")
+        debeSerCerca(s(2.5), 15.625, 0.000000000001)
+        debeSerCerca(s(0.3), 0.027, 0.000000000001)
+    })
+    probar("el spline aproxima bien una función suave", fn() {
+        var xs: lista = []
+        var ys: lista = []
+        para i en rango(21) { xs = xs + [i * 0.15]; ys = ys + [seno(i * 0.15)] }
+        fijo s = splineCubico(xs, ys, "noNodo")
+        debeSerCerca(s(1.7), seno(1.7), 0.00001)
+        # y se puede pasar a cualquier cosa que espere una función
+        debeSerCerca(integrar(s, 0.0, 3.0), 1.0 - coseno(3.0), 0.00001)
+    })
+    probar("interpolar elige el método", fn() {
+        fijo xs = [0.0, 1.0, 2.0]
+        fijo ys = [0.0, 1.0, 4.0]
+        debeSer(interpolar(xs, ys, 1.5), 2.5)
+        debeSerCerca(interpolar(xs, ys, 1.5, "lagrange"), 2.25, 0.000000000001)
+        debeFallarCon(fn() { interpolar(xs, ys, 1.5, "cubica") }, "no es una opción")
+    })
+})
+
+# ═══════════════════════════════════════════════════════ FUNCIONES ESPECIALES
+
+grupo("gamma y compañía", fn() {
+    probar("Γ(n) = (n−1)! exacto en los enteros", fn() {
+        debeSer(gamma(1.0), 1)
+        debeSer(gamma(5.0), 24)
+        debeSer(gamma(11.0), 3628800)
+    })
+    probar("Γ(½) = √π y la recurrencia Γ(x+1) = x·Γ(x)", fn() {
+        debeSerCerca(gamma(0.5), raiz(PI), 0.000000000000001)
+        para x en [0.3, 2.7, 7.3, -0.5, -2.7] {
+            debeSerCerca(gamma(x + 1.0) / (x * gamma(x)), 1.0, 0.00000000000001)
+        }
+    })
+    probar("la reflexión: Γ(x)·Γ(1−x) = π / sen(πx)", fn() {
+        debeSerCerca(gamma(0.3) * gamma(0.7), PI / seno(0.3 * PI), 0.00000000000001)
+    })
+    probar("los polos y el desbordamiento se dicen", fn() {
+        debeFallarCon(fn() { gamma(0.0) }, "polo")
+        debeFallarCon(fn() { gamma(-3.0) }, "polo")
+        debeFallarCon(fn() { gamma(200.0) }, "no cabe")
+    })
+    probar("lnGamma donde Γ ya no cabe", fn() {
+        debeSerCerca(lnGamma(100.0), 359.1342053695754, 0.000000000001)
+        debeSerCerca(lnGamma(1000.5) - lnGamma(999.5), log(999.5), 0.00000000001)
+        debeSerCerca(lnGamma(10.0), log(362880.0), 0.000000000001)
+    })
+    probar("beta por sus dos definiciones", fn() {
+        debeSerCerca(beta(2.0, 3.0), 1.0 / 12.0, 0.000000000000001)
+        debeSerCerca(beta(0.5, 0.5), PI, 0.00000000000001)
+        debeSerCerca(beta(2.5, 1.5), integrar(fn(t) { devolver t ** 1.5 * (1.0 - t) ** 0.5 }, 0.0, 1.0), 0.0000000001)
+    })
+    probar("digamma: ψ(1) = −γ y ψ(x+1) = ψ(x) + 1/x", fn() {
+        debeSerCerca(digamma(1.0), -0.5772156649015329, 0.000000000000001)
+        debeSerCerca(digamma(3.7) - digamma(2.7), 1.0 / 2.7, 0.000000000000001)
+        # es la derivada de lnGamma
+        debeSerCerca(derivar(lnGamma, 4.2), digamma(4.2), 0.0000000001)
+    })
+})
+
+grupo("la función error", fn() {
+    probar("valores de tabla", fn() {
+        debeSerCerca(erf(1.0), 0.8427007929497149, 0.0000000000000002)
+        debeSerCerca(erfc(3.0) / 0.00002209049699858544, 1.0, 0.00000000000001)
+        # erfc(10) ≈ 2·10⁻⁴⁵: calculado como 1 − erf daría 0
+        debeSerCerca(erfc(10.0) / 2.088487583762545e-45, 1.0, 0.00000000000001)
+    })
+    probar("erf(∞) = 1, impar, y erf + erfc = 1", fn() {
+        debeSer(erf(|INFINITO), 1)
+        debeSer(erf(-0.8), 0.0 - erf(0.8))
+        para x en [-2.0, 0.1, 1.5, 2.5] { debeSerCerca(erf(x) + erfc(x), 1.0, 0.000000000000001) }
+    })
+    probar("es la integral de su definición", fn() {
+        debeSerCerca(erf(1.3), 2.0 / raiz(PI) * integrar(fn(t) { devolver exp(0.0 - t * t) }, 0.0, 1.3), 0.000000000000001)
+    })
+    probar("erfInversa deshace erf, también en las colas", fn() {
+        para y en [0.0000000001, 0.1, 0.5, 0.9, 0.999, -0.3] {
+            debeSerCerca(erf(erfInversa(y)) / y, 1.0, 0.00000000000001)
+        }
+        # cerca de 1 la información está en 1 − y: se mira con erfc
+        debeSerCerca(erfc(erfInversa(0.9999999)) / 0.0000001, 1.0, 0.000000001)
+        debeSer(erfInversa(1.0), |INFINITO)
+        debeFallarCon(fn() { erfInversa(1.5) }, "entre −1 y 1")
+    })
+})
+
+grupo("incompletas, Bessel y zeta", fn() {
+    probar("P(1, x) = 1 − e^(−x) y P + Q = 1", fn() {
+        debeSerCerca(gammaIncompleta(1.0, 2.0), 1.0 - exp(-2.0), 0.000000000000001)
+        debeSerCerca(gammaIncompleta(3.0, 2.0), 0.3233235838169365, 0.000000000000001)
+        debeSerCerca(gammaIncompleta(3.0, 10.0) + gammaIncompleta(3.0, 10.0, "superior"), 1.0, 0.000000000000001)
+        # P(½, x²) = erf(x)
+        debeSerCerca(gammaIncompleta(0.5, 1.69), erf(1.3), 0.000000000000001)
+    })
+    probar("Iₓ(a, b) contra su integral, y la simetría", fn() {
+        debeSerCerca(betaIncompleta(2.0, 3.0, 0.4), 0.5248, 0.000000000000001)
+        debeSerCerca(betaIncompleta(2.5, 4.0, 0.3), 1.0 - betaIncompleta(4.0, 2.5, 0.7), 0.000000000000001)
+        fijo B = beta(2.5, 4.0)
+        debeSerCerca(betaIncompleta(2.5, 4.0, 0.3),
+            integrar(fn(t) { devolver t ** 1.5 * (1.0 - t) ** 3.0 }, 0.0, 0.3) / B, 0.0000000001)
+    })
+    probar("Bessel: valores de tabla", fn() {
+        debeSerCerca(besselJ(0, 1.0), 0.7651976865579666, 0.000000000000001)
+        debeSerCerca(besselJ(1, 2.5), 0.4970941024642741, 0.000000000000001)
+        debeSerCerca(besselJ(2, 10.0), 0.2546303136851206, 0.000000000000001)
+        debeSerCerca(besselJ(5, 3.0), 0.04302843487704758, 0.000000000000001)
+    })
+    probar("Bessel: la recurrencia Jₙ₋₁ + Jₙ₊₁ = (2n/x)·Jₙ y la simetría", fn() {
+        para n en [1, 3, 7] {
+            para x en [0.5, 4.0, 25.0] {
+                debeSerCerca(besselJ(n - 1, x) + besselJ(n + 1, x), 2.0 * n / x * besselJ(n, x), 0.00000000000001)
+            }
+        }
+        debeSer(besselJ(-3, 4.0), 0.0 - besselJ(3, 4.0))
+    })
+    probar("zeta: Basilea, Apéry y la continuación a los negativos", fn() {
+        debeSerCerca(zeta(2.0), PI * PI / 6.0, 0.000000000000001)
+        debeSerCerca(zeta(4.0), PI ** 4 / 90.0, 0.000000000000001)
+        debeSerCerca(zeta(3.0), 1.202056903159594, 0.000000000000001)
+        debeSerCerca(zeta(-1.0), -1.0 / 12.0, 0.000000000000001)
+        debeSerCerca(zeta(0.5), -1.460354508809587, 0.000000000000001)
+        debeSer(zeta(-2.0), 0)
+        debeFallarCon(fn() { zeta(1.0) }, "polo")
+    })
+    probar("zeta coincide con la serie (acelerada) que la define", fn() {
+        debeSerCerca(sumaSerie(fn(k) { devolver 1.0 / k ** 3 }, 1), zeta(3.0), 0.0000000001)
+    })
+})
+
+# ═════════════════════════════════════════════════════════════ PROBABILIDAD
+
+grupo("distribuciones continuas", fn() {
+    probar("la normal: la densidad integra 1 y la acumulada es su integral", fn() {
+        debeSerCerca(integrar(normalDensidad, -|INFINITO, |INFINITO), 1.0, 0.000000000001)
+        debeSerCerca(normalAcumulada(1.3), integrar(normalDensidad, -|INFINITO, 1.3), 0.000000000001)
+        debeSerCerca(normalDensidad(0.0), 1.0 / raiz(2.0 * PI), 0.000000000000001)
+    })
+    probar("con media y desviación es un cambio de escala", fn() {
+        debeSerCerca(normalAcumulada(130.0, 100.0, 15.0), normalAcumulada(2.0), 0.000000000000001)
+        debeSerCerca(normalDensidad(130.0, 100.0, 15.0), normalDensidad(2.0) / 15.0, 0.000000000000001)
+        debeFallarCon(fn() { normalAcumulada(1.0, 0.0, -1.0) }, "positiva")
+    })
+    probar("los valores críticos de siempre", fn() {
+        debeSerCerca(normalInversa(0.975), 1.959963984540054, 0.000000000000001)
+        debeSerCerca(normalInversa(0.5), 0.0, 0.000000000000001)
+        debeSerCerca(normalInversa(0.975, 100.0, 15.0), 100.0 + 15.0 * 1.959963984540054, 0.00000000000001)
+    })
+    probar("la inversa deshace la acumulada, colas incluidas", fn() {
+        para p en [0.0000000001, 0.001, 0.3, 0.999999] {
+            debeSerCerca(normalAcumulada(normalInversa(p)) / p, 1.0, 0.000000000001)
+        }
+    })
+    probar("t de Student: el 2.228 de las tablas y su inversa", fn() {
+        debeSerCerca(tStudentInversa(0.975, 10.0), 2.228138851986274, 0.000000000001)
+        debeSerCerca(tStudentAcumulada(2.228138851986274, 10.0), 0.975, 0.000000000001)
+        # con 1 grado de libertad es la de Cauchy: ½ + arctan(t)/π
+        debeSerCerca(tStudentAcumulada(3.0, 1.0), 0.5 + arcotangente(3.0) / PI, 0.000000000000001)
+        debeSerCerca(tStudentAcumulada(0.0, 7.0), 0.5, 0.000000000000001)
+    })
+    probar("χ²: el 3.84 de un grado y la relación con la normal", fn() {
+        debeSerCerca(chiCuadradoInversa(0.95, 1.0), 3.841458820694124, 0.000000000001)
+        # χ²₁ es Z²: P(χ² ≤ z²) = P(|Z| ≤ z)
+        debeSerCerca(chiCuadradoAcumulada(4.0, 1.0), normalAcumulada(2.0) - normalAcumulada(-2.0), 0.000000000000001)
+        # χ²₂ es una exponencial de media 2
+        debeSerCerca(chiCuadradoAcumulada(3.0, 2.0), exponencialAcumulada(3.0, 0.5), 0.000000000000001)
+    })
+    probar("F de Fisher contra la tabla y contra la t", fn() {
+        debeSerCerca(fisherAcumulada(2.0, 3.0, 10.0), 0.8219925926248245, 0.000000000001)
+        # F(1, ν) es t²
+        debeSerCerca(fisherAcumulada(4.0, 1.0, 6.0), 2.0 * tStudentAcumulada(2.0, 6.0) - 1.0, 0.000000000001)
+    })
+    probar("la exponencial", fn() {
+        debeSerCerca(exponencialAcumulada(1.0, 1.0), 1.0 - exp(-1.0), 0.000000000000001)
+        debeSer(exponencialAcumulada(-1.0, 2.0), 0)
+    })
+})
+
+grupo("distribuciones discretas", fn() {
+    probar("binomial: las probabilidades suman 1 y dan la acumulada", fn() {
+        var s: real = 0.0
+        para k en rango(11) { s = s + binomialProb(k, 10, 0.3) }
+        debeSerCerca(s, 1.0, 0.000000000000001)
+        debeSerCerca(binomialProb(3, 10, 0.5), 0.1171875, 0.000000000000001)
+        debeSerCerca(binomialAcumulada(3, 10, 0.5), 0.171875, 0.000000000000001)
+    })
+    probar("binomial grande sin desbordar", fn() {
+        # C(1000, 500)/2¹⁰⁰⁰ tiene 300 cifras arriba y abajo
+        debeSerCerca(binomialProb(500, 1000, 0.5), 0.02522501817836, 0.0000000000001)
+    })
+    probar("Poisson: valores y la acumulada como suma", fn() {
+        debeSerCerca(poissonProb(0, 2.0), exp(-2.0), 0.000000000000001)
+        debeSerCerca(poissonProb(3, 2.0), 0.18044704431548356, 0.000000000000001)
+        var s: real = 0.0
+        para k en rango(4) { s = s + poissonProb(k, 2.0) }
+        debeSerCerca(poissonAcumulada(3, 2.0), s, 0.000000000000001)
+    })
+    probar("probabilidades fuera de [0, 1] se rechazan", fn() {
+        debeFallarCon(fn() { binomialProb(1, 2, 1.5) }, "de 0 a 1")
+    })
+})
+
+# ════════════════════════════════════════════════════════ TEORÍA DE NÚMEROS
+
+grupo("teoría de números", fn() {
+    probar("potencia modular sin desbordar", fn() {
+        debeSer(potenciaModular(2, 10, 1000), 24)
+        debeSer(potenciaModular(2, 100, 1000000007), 976371285)
+        # Fermat: a^(p−1) ≡ 1 (mod p)
+        debeSer(potenciaModular(123456789, 1000000006, 1000000007), 1)
+    })
+    probar("el inverso modular por definición", fn() {
+        debeSer(inversoModular(3, 11), 4)
+        debeSer((17 * inversoModular(17, 3120)) % 3120, 1)
+        debeFallarCon(fn() { inversoModular(4, 8) }, "no tiene inverso")
+    })
+    probar("Bézout: a·x + b·y = mcd", fn() {
+        fijo r = mcdExtendido(240, 46)
+        debeSer(r["mcd"], 2)
+        debeSer(240 * r["x"] + 46 * r["y"], 2)
+    })
+    probar("el resto chino de Sunzi", fn() {
+        # x ≡ 2 (mod 3), x ≡ 3 (mod 5), x ≡ 2 (mod 7)  →  23 (mod 105)
+        fijo r = restoChino([2, 3, 2], [3, 5, 7])
+        debeSer(r["resto"], 23)
+        debeSer(r["modulo"], 105)
+        # módulos no coprimos pero compatibles
+        debeSer(restoChino([1, 3], [4, 6])["resto"], 9)
+        debeFallarCon(fn() { restoChino([1, 2], [4, 6]) }, "se contradicen")
+    })
+    probar("Fibonacci exacto y la identidad de Cassini", fn() {
+        debeSer(fibonacci(10), 55)
+        debeSer(fibonacci(78), 8944394323791464)
+        # F(n−1)·F(n+1) − F(n)² = (−1)ⁿ
+        para n en [5, 20, 30] {
+            debeSer(fibonacci(n - 1) * fibonacci(n + 1) - fibonacci(n) * fibonacci(n), (-1) ** n)
+        }
+    })
+    probar("factorizar y volver a multiplicar", fn() {
+        debeSer(factorizar(360), [2, 2, 2, 3, 3, 5])
+        debeSer(factorizar(600851475143), [71, 839, 1471, 6857])
+        fijo f = factorizar(9007199254740991)
+        var p: entero = 1
+        para x en f { p = p * x }
+        debeSer(p, 9007199254740991)
+        debeSer(factorizar(1), [])
+    })
+    probar("totiente: primos, potencias y multiplicativa", fn() {
+        debeSer(totiente(13), 12)
+        debeSer(totiente(36), 12)
+        debeSer(totiente(9 * 16), totiente(9) * totiente(16))
+    })
+    probar("cuadrados perfectos, también cerca de 2⁵³", fn() {
+        debeSerCierto(esCuadradoPerfecto(144))
+        debeSerFalso(esCuadradoPerfecto(145))
+        debeSerCierto(esCuadradoPerfecto(94906265 * 94906265))
+        debeSerFalso(esCuadradoPerfecto(94906265 * 94906265 + 1))
+    })
+    probar("el siguiente primo", fn() {
+        debeSer(siguientePrimo(100), 101)
+        debeSer(siguientePrimo(1000000000000), 1000000000039)
+    })
+})
+
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(resumenPruebas())

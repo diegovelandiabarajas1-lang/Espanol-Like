@@ -1,0 +1,248 @@
+# Las pruebas del eDSL «fecha», escritas en Ñ.
+#
+# Esto es lo que antes no se podía hacer: hasta ahora las 800 pruebas del
+# lenguaje estaban en JavaScript, así que cada eDSL nuevo costaba cincuenta
+# bloques de prueba en otro idioma. Ya no.
+
+usar probar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCierto, debeSerFalso,
+     debeFallarCon, debeSerMayor, debeSerTipo, debeContener de "probar"
+usar fecha, fechaHora, aFecha, desdeMarca, anio, mes, dia, hora, minuto,
+     diaSemana, diaDelAnio, semana, trimestre, nombreMes, nombreDia, mesCorto, diaCorto,
+     sumarDias, sumarSemanas, sumarMeses, sumarAnios, sumarHoras, sumarMinutos,
+     inicioDia, finDia, inicioSemana, finSemana, inicioMes, finMes, inicioAnio, finAnio,
+     diasEntre, horasEntre, minutosEntre, mesesEntre, aniosEntre, duracion,
+     esBisiesto, diasDelMes, esFinDeSemana, esMismoDia, estaEntre, esAntesDe, esDespuesDe,
+     deFecha, aIso, aMarca de "fecha"
+
+grupo("construir y validar", fn() {
+    probar("el mes se escribe como se dice, de 1 a 12", fn() {
+        debeSer(mes(fecha(2026, 9, 29)), 9)
+        debeSer(dia(fecha(2026, 9, 29)), 29)
+        debeSer(anio(fecha(2026, 9, 29)), 2026)
+    })
+    probar("un día que no existe no es una fecha", fn() {
+        debeFallarCon(fn() { fecha(2026, 2, 30) }, "no es un día de febrero")
+        debeFallarCon(fn() { fecha(2026, 13, 1) }, "el mes 13 no existe")
+    })
+    probar("el 29 de febrero existe solo en año bisiesto", fn() {
+        debeSer(dia(fecha(2024, 2, 29)), 29)
+        debeFallarCon(fn() { fecha(2026, 2, 29) }, "no es un día de febrero")
+    })
+    probar("fechaHora guarda la hora", fn() {
+        var f: fecha = fechaHora(2026, 9, 29, 14, 30)
+        debeSer(hora(f), 14)
+        debeSer(minuto(f), 30)
+    })
+    probar("es de tipo fecha", fn() { debeSerTipo(fecha(2026, 1, 1), "fecha") })
+})
+
+grupo("leer el texto de una fecha", fn() {
+    probar("lee el formato ISO", fn() { debeSer(aFecha("2026-09-29"), fecha(2026, 9, 29)) })
+    probar("lee el formato de aquí, con barras", fn() {
+        debeSer(aFecha("29/09/2026"), fecha(2026, 9, 29))
+    })
+    probar("lee la hora si viene", fn() {
+        debeSer(aFecha("2026-09-29 14:30"), fechaHora(2026, 9, 29, 14, 30))
+    })
+    probar("no se inventa nada con un texto raro", fn() {
+        debeFallarCon(fn() { aFecha("el martes") }, "no entiendo")
+        debeFallarCon(fn() { aFecha("31/02/2026") }, "no es un día de febrero")
+    })
+    probar("aIso y aFecha son ida y vuelta", fn() {
+        var f: fecha = fechaHora(2026, 9, 29, 14, 30, 5)
+        debeSer(aFecha(aIso(f)), f)
+    })
+})
+
+grupo("mover en el calendario", fn() {
+    probar("sumar días cruza el fin de mes", fn() {
+        debeSer(sumarDias(fecha(2026, 1, 31), 1), fecha(2026, 2, 1))
+    })
+    probar("31 de enero más un mes es 28 de febrero, no 3 de marzo", fn() {
+        debeSer(sumarMeses(fecha(2026, 1, 31), 1), fecha(2026, 2, 28))
+    })
+    probar("y en año bisiesto es el 29", fn() {
+        debeSer(sumarMeses(fecha(2024, 1, 31), 1), fecha(2024, 2, 29))
+    })
+    probar("29 de febrero más un año es 28 de febrero", fn() {
+        debeSer(sumarAnios(fecha(2024, 2, 29), 1), fecha(2025, 2, 28))
+    })
+    probar("restar es sumar en negativo", fn() {
+        debeSer(sumarMeses(fecha(2026, 3, 31), -1), fecha(2026, 2, 28))
+        debeSer(sumarDias(fecha(2026, 1, 1), -1), fecha(2025, 12, 31))
+    })
+    probar("sumar meses ida y vuelta no siempre vuelve al mismo día", fn() {
+        # Y está bien que sea así: es el calendario, no un fallo.
+        debeSer(sumarMeses(sumarMeses(fecha(2026, 1, 31), 1), -1), fecha(2026, 1, 28))
+    })
+    probar("las horas no tienen horario de verano", fn() {
+        debeSer(sumarHoras(fechaHora(2026, 3, 29, 1, 0), 1), fechaHora(2026, 3, 29, 2, 0))
+        debeSer(sumarMinutos(fechaHora(2026, 1, 1, 23, 59), 2), fechaHora(2026, 1, 2, 0, 1))
+    })
+})
+
+grupo("los bordes", fn() {
+    probar("inicioDia y finDia", fn() {
+        var f: fecha = fechaHora(2026, 9, 29, 14, 30)
+        debeSer(inicioDia(f), fecha(2026, 9, 29))
+        debeSer(hora(finDia(f)), 23)
+    })
+    probar("la semana empieza el lunes", fn() {
+        # el 29 de septiembre de 2026 es martes
+        debeSer(inicioSemana(fecha(2026, 9, 29)), fecha(2026, 9, 28))
+        debeSer(dia(finSemana(fecha(2026, 9, 29))), 4)
+    })
+    probar("inicioMes y finMes saben cuántos días tiene el mes", fn() {
+        debeSer(inicioMes(fecha(2026, 2, 15)), fecha(2026, 2, 1))
+        debeSer(dia(finMes(fecha(2026, 2, 15))), 28)
+        debeSer(dia(finMes(fecha(2024, 2, 15))), 29)
+        debeSer(dia(finMes(fecha(2026, 4, 15))), 30)
+    })
+    probar("inicioAnio y finAnio", fn() {
+        debeSer(inicioAnio(fecha(2026, 6, 6)), fecha(2026, 1, 1))
+        debeSer(mes(finAnio(fecha(2026, 6, 6))), 12)
+    })
+})
+
+grupo("medir distancias", fn() {
+    probar("días hasta navidad", fn() {
+        debeSer(diasEntre(fecha(2026, 9, 29), fecha(2026, 12, 25)), 87)
+    })
+    probar("al revés sale negativo", fn() {
+        debeSer(diasEntre(fecha(2026, 12, 25), fecha(2026, 9, 29)), -87)
+    })
+    probar("cuenta tiempo transcurrido y trunca", fn() {
+        debeSer(horasEntre(fechaHora(2026, 1, 1, 10, 0), fechaHora(2026, 1, 1, 11, 59)), 1)
+        debeSer(minutosEntre(fechaHora(2026, 1, 1, 10, 0), fechaHora(2026, 1, 1, 11, 59)), 119)
+    })
+    probar("para días de calendario se compone con inicioDia", fn() {
+        var a: fecha = fechaHora(2026, 1, 1, 23, 0)
+        var b: fecha = fechaHora(2026, 1, 2, 1, 0)
+        debeSer(diasEntre(a, b), 0)
+        debeSer(diasEntre(inicioDia(a), inicioDia(b)), 1)
+    })
+    probar("mesesEntre cuenta meses cumplidos", fn() {
+        # La regla es la del aniversario, no la del recorte: el 28 de febrero
+        # todavía no llegó al 31, así que no hay un mes cumplido.
+        debeSer(mesesEntre(fecha(2026, 1, 31), fecha(2026, 2, 28)), 0)
+        debeSer(mesesEntre(fecha(2026, 1, 15), fecha(2026, 3, 15)), 2)
+        debeSer(mesesEntre(fecha(2026, 1, 15), fecha(2026, 3, 14)), 1)
+        # Hacia atrás, y con el mismo día: exactamente dos meses, no uno.
+        debeSer(mesesEntre(fecha(2026, 3, 15), fecha(2026, 1, 15)), -2)
+        debeSer(mesesEntre(fecha(2026, 3, 15), fecha(2026, 1, 20)), -1)
+        # Y la hora cuenta cuando el día es el mismo.
+        debeSer(mesesEntre(fechaHora(2026, 1, 15, 10, 0), fechaHora(2026, 2, 15, 9, 0)), 0)
+        debeSer(mesesEntre(fechaHora(2026, 1, 15, 10, 0), fechaHora(2026, 2, 15, 10, 0)), 1)
+    })
+    probar("aniosEntre sirve para una edad", fn() {
+        debeSer(aniosEntre(fecha(1998, 6, 15), fecha(2026, 9, 29)), 28)
+        debeSer(aniosEntre(fecha(1998, 12, 15), fecha(2026, 9, 29)), 27)
+        # Nacido un 29 de febrero: cumple el 28 de febrero o el 1 de marzo.
+        debeSer(aniosEntre(fecha(2000, 2, 29), fecha(2026, 2, 28)), 25)
+        debeSer(aniosEntre(fecha(2000, 2, 29), fecha(2026, 3, 1)), 26)
+    })
+    probar("duracion parte la distancia", fn() {
+        var d: dic = duracion(fecha(2026, 1, 1), fechaHora(2026, 1, 3, 5, 30))
+        debeSer(d["dias"], 2)
+        debeSer(d["horas"], 5)
+        debeSer(d["minutos"], 30)
+    })
+})
+
+grupo("preguntar", fn() {
+    probar("los años bisiestos son los que son", fn() {
+        debeSerCierto(esBisiesto(fecha(2024, 1, 1)))
+        debeSerFalso(esBisiesto(fecha(2026, 1, 1)))
+        debeSerFalso(esBisiesto(fecha(1900, 1, 1)))
+        debeSerCierto(esBisiesto(fecha(2000, 1, 1)))
+    })
+    probar("días del mes", fn() {
+        debeSer(diasDelMes(fecha(2026, 2, 1)), 28)
+        debeSer(diasDelMes(fecha(2026, 12, 1)), 31)
+    })
+    probar("el fin de semana es sábado y domingo", fn() {
+        debeSerCierto(esFinDeSemana(fecha(2026, 10, 3)))
+        debeSerCierto(esFinDeSemana(fecha(2026, 10, 4)))
+        debeSerFalso(esFinDeSemana(fecha(2026, 10, 5)))
+    })
+    probar("esMismoDia no mira la hora", fn() {
+        debeSerCierto(esMismoDia(fechaHora(2026, 1, 1, 0, 1), fechaHora(2026, 1, 1, 23, 59)))
+        debeSerFalso(esMismoDia(fecha(2026, 1, 1), fecha(2026, 1, 2)))
+    })
+    probar("estaEntre incluye los extremos", fn() {
+        debeSerCierto(estaEntre(fecha(2026, 1, 1), fecha(2026, 1, 1), fecha(2026, 1, 31)))
+        debeSerCierto(estaEntre(fecha(2026, 1, 31), fecha(2026, 1, 1), fecha(2026, 1, 31)))
+        debeSerFalso(estaEntre(fecha(2026, 2, 1), fecha(2026, 1, 1), fecha(2026, 1, 31)))
+    })
+})
+
+grupo("el tipo, que es la razón de todo esto", fn() {
+    probar("dos fechas se comparan con los operadores", fn() {
+        debeSerCierto(fecha(2026, 1, 1) < fecha(2026, 2, 1))
+        debeSerCierto(fecha(2026, 2, 1) > fecha(2026, 1, 1))
+        debeSerCierto(fecha(2026, 1, 1) <= fecha(2026, 1, 1))
+    })
+    probar("y el texto que las miente no", fn() {
+        # Esto es el fallo que el tipo quita: como texto, "10/02" < "9/01".
+        debeSerCierto("10/02/2026" < "9/01/2026")
+        debeSerFalso(aFecha("10/02/2026") < aFecha("9/01/2026"))
+    })
+    probar("dos fechas del mismo instante son iguales", fn() {
+        debeSer(fecha(2026, 1, 1), fecha(2026, 1, 1))
+        debeSerCierto(fecha(2026, 1, 1) == desdeMarca(aMarca(fecha(2026, 1, 1))))
+    })
+    probar("ordenar las ordena bien", fn() {
+        var ls: lista = ordenar([fecha(2026, 10, 2), fecha(2026, 9, 9), fecha(2026, 1, 15)])
+        debeSer(ls[0], fecha(2026, 1, 15))
+        debeSer(ls[2], fecha(2026, 10, 2))
+    })
+    probar("maximo y minimo también", fn() {
+        debeSer(maximo([fecha(2026, 3, 1), fecha(2026, 1, 1)]), fecha(2026, 3, 1))
+        debeSer(minimo([fecha(2026, 3, 1), fecha(2026, 1, 1)]), fecha(2026, 1, 1))
+    })
+    probar("una fecha con un número no se compara", fn() {
+        var f: cualquiera = fecha(2026, 1, 1)
+        debeFallarCon(fn() { debeSerCierto(f < 5) }, "no se pueden comparar")
+    })
+    probar("esAntesDe y esDespuesDe dicen lo mismo, leyéndose mejor", fn() {
+        debeSerCierto(esAntesDe(fecha(2026, 1, 1), fecha(2026, 2, 1)))
+        debeSerCierto(esDespuesDe(fecha(2026, 2, 1), fecha(2026, 1, 1)))
+    })
+})
+
+grupo("nombres y formatos en español", fn() {
+    probar("los meses van en minúscula", fn() {
+        debeSer(nombreMes(fecha(2026, 9, 1)), "septiembre")
+        debeSer(mesCorto(fecha(2026, 9, 1)), "sep")
+    })
+    probar("los días también", fn() {
+        debeSer(nombreDia(fecha(2026, 9, 29)), "martes")
+        debeSer(diaCorto(fecha(2026, 9, 29)), "mar")
+    })
+    probar("diaSemana cuenta desde el lunes", fn() {
+        debeSer(diaSemana(fecha(2026, 9, 28)), 1)
+        debeSer(diaSemana(fecha(2026, 10, 4)), 7)
+    })
+    probar("los formatos con nombre", fn() {
+        var f: fecha = fechaHora(2026, 9, 29, 14, 30)
+        debeSer(deFecha(f, "corta"), "29/09/2026")
+        debeSer(deFecha(f, "larga"), "29 de septiembre de 2026")
+        debeSer(deFecha(f, "mes"), "septiembre de 2026")
+        debeSer(deFecha(f, "hora"), "14:30")
+        debeContener(deFecha(f, "completa"), "martes")
+    })
+    probar("un formato que no existe se dice", fn() {
+        debeFallarCon(fn() { deFecha(fecha(2026, 1, 1), "bonito") }, "no conozco el formato")
+    })
+    probar("diaDelAnio, semana y trimestre", fn() {
+        debeSer(diaDelAnio(fecha(2026, 1, 1)), 1)
+        debeSer(diaDelAnio(fecha(2026, 12, 31)), 365)
+        debeSer(diaDelAnio(fecha(2024, 12, 31)), 366)
+        debeSer(semana(fecha(2026, 1, 1)), 1)
+        debeSer(trimestre(fecha(2026, 4, 1)), 2)
+    })
+})
+
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(resumenPruebas())

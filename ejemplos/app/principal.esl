@@ -1,0 +1,65 @@
+# Una app de ventana en Ñ, en varios archivos:
+#   principal.esl      — la interfaz: el bucle de cuadros, botones, dibujo
+#   lib/contador.esl   — el modelo (sin ventana, probable aparte)
+#   ../lib/ventana.esl — el módulo que envuelve raylib
+#
+# Correr:      node motor/util/n-node.js ejemplos/app/principal.esl   (con raylib.dll junto al programa)
+# Empaquetar:  node motor/util/empaquetar.js --ventana ejemplos/app/principal.esl
+#              → dist/principal/principal.exe, que abre la ventana sin terminal.
+usar "../lib/ventana.esl" como v
+usar "lib/contador.esl" como contador
+
+fijo ANCHO = 480
+fijo ALTO = 320
+fijo FONDO  = v.color(15, 15, 21)
+fijo TINTA  = v.color(236, 236, 244)
+fijo SUAVE  = v.color(108, 107, 128)
+fijo ACENTO = v.color(79, 63, 212)
+fijo ACENTO2 = v.color(212, 63, 79)
+
+# un botón: rectángulo, texto, y devuelve si se hizo clic en él este cuadro
+fn boton(g, r: dic, x: entero, y: entero, ancho: entero, alto: entero, etiqueta: texto, fondo: dic): bool {
+    fijo encima = v.dentro(r["x"], r["y"], x, y, ancho, alto)
+    var c = fondo
+    si encima y r["abajo"] {
+        fijo fr: entero = fondo["r"]
+        fijo fg: entero = fondo["g"]
+        fijo fb: entero = fondo["b"]
+        c = v.color(fr // 2, fg // 2, fb // 2)
+    }
+    g["caja"](x, y, ancho, alto, c)
+    si encima { g["borde"](x, y, ancho, alto, TINTA) }
+    fijo tx = x + (ancho - v.medir(etiqueta, 20)) // 2
+    g["texto"](etiqueta, tx, y + (alto - 20) // 2, 20, TINTA)
+    devolver encima y r["clic"]
+}
+
+v.abrir(ANCHO, ALTO, "Contador · Ñ")
+var cuadros = 0
+mientras no v.debeCerrar() {
+    fijo r = v.raton()
+    cuadros = cuadros + 1
+    v.pintar(fn(g) {
+        g["fondo"](FONDO)
+        g["texto"]("Contador", 24, 20, 28, TINTA)
+        g["texto"]("hecho en Ñ, en {3} archivos", 24, 54, 14, SUAVE)
+        fijo n = texto(contador.actual())
+        g["texto"](n, (ANCHO - v.medir(n, 64)) // 2, 100, 64, TINTA)
+        si boton(g, r, 40, 200, 120, 48, "+1", ACENTO) { contador.sumar(1) }
+        si boton(g, r, 180, 200, 120, 48, "+10", ACENTO) { contador.sumar(10) }
+        si boton(g, r, 320, 200, 120, 48, "Reiniciar", ACENTO2) { contador.reiniciar() }
+        # el historial, como barras pequeñas
+        var x = 40
+        fijo h = contador.ultimos()
+        var tope = 1
+        para u en h { si u > tope { tope = u } }
+        para u en h {
+            fijo alto = 1 + 28 * u // tope
+            g["caja"](x, 296 - alto, 28, alto, SUAVE)
+            x = x + 34
+        }
+        g["texto"]("Esc o la X para salir", ANCHO - 24 - v.medir("Esc o la X para salir", 12), 296, 12, SUAVE)
+    })
+}
+v.cerrar()
+imprimir("la app cerró tras {cuadros} cuadros con el contador en {contador.actual()}")

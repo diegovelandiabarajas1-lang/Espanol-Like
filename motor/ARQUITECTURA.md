@@ -149,6 +149,45 @@ cuelgue. El descodificador de UTF-8 tuvo que hacerse estricto por esto: una
 secuencia corrupta hacía saltar un `RangeError` de JavaScript por encima del
 error de bytecode.
 
+### Varios archivos: el paquete (`ESLP`)
+
+`util/paquete-elb.js` y `util/elb.js`, no `src/`: el motor no cambió ni un byte.
+
+```
+ESLP · versión del paquete (1) · huella de la tabla de opcodes (uint32)
+  nº de módulos
+    por cada uno:  clave (UTF-8) · tamaño · un .elb completo (ESLB…)
+  tamaño · el .elb del programa principal
+```
+
+Dos ideas lo hacen posible sin tocar el núcleo:
+
+**Las claves las pone el anfitrión.** El motor no sabe de rutas: le pide a
+`host.modulos` que resuelva y usa como clave lo que le devuelvan, y esa clave
+queda escrita en el bytecode (en los nombres de los globales, `lib/x.esl\0f`, y
+en cada ` usar`). `elb.js` compila con un cargador que devuelve rutas
+**relativas a la carpeta del principal**, con `/` —lo mismo que ya hacía
+`empaquetar.js` con `/app/`—. Resultado: el paquete sale idéntico byte a byte
+compilado en cualquier carpeta, y no lleva nada de la máquina que lo hizo.
+
+**Correr un programa de varios archivos ya existía.** `correr(fn, avisos,
+modulos)` arma el registro que consulta ` usar`, y ` usar` no lee ningún disco:
+busca la clave en ese registro. Así que un paquete corre igual en la consola y
+en el IDE, donde no hay módulos porque no hay disco.
+
+Lo que verifica el lector, antes de devolver nada: marca, versión, huella; que
+haya al menos un módulo (si no, es un `.elb` normal); cada clave —ni absoluta,
+ni con `\` o `:`, ni `.` o tramos vacíos, `..` solo al principio, sin repetir,
+como mucho 1 KB—; cada `.elb` de dentro con las seis comprobaciones de siempre;
+y que no sobre nada al final. Un módulo roto rechaza el paquete entero: no corre
+ni una línea. Probado (`pruebas/elb-varios.js`, 42) con los 796 prefijos
+truncados de un paquete real —todos rechazados con error de bytecode— y 3.000
+mutaciones al azar: 2.578 rechazadas, 422 aceptadas, cero errores internos.
+
+Lo que no se hizo: `n.js` (QuickJS) no carga paquetes todavía, y
+`empaquetar.js` sigue llevando los módulos como texto (podría llevar el
+paquete y ocultar el código, a cambio del JIT).
+
 ### Tamaño
 
 El bytecode de los diez ejemplos ocupa un 108 % de su código fuente. No
@@ -614,11 +653,11 @@ cambia, y **los `.elb` de antes siguen valiendo**. La fase 2 rechazó los de la
 fase 1 porque añadió tres instrucciones y eso era el mecanismo funcionando; aquí
 no hacía falta añadir ninguna, y no añadirla es mejor que rechazarlos.
 
-Lo que sí se dice en voz alta: un programa con `usar` **no se puede guardar como
-`.elb`**. El formato guarda una función y su árbol de funciones anidadas; esto
-son varios archivos que se resuelven contra un disco, y meterlos dentro querría
-decir cambiar el formato —y con él la huella— para guardar rutas absolutas que en
-otra máquina no valen. `serializar` lo dice y no lo hace.
+Lo que sí se dice en voz alta: `serializar`, el del motor, **no guarda** un
+programa con `usar` de archivos. El formato guarda una función y su árbol, y las
+claves de la consola son rutas absolutas que en otra máquina no valen. Lo que lo
+resolvió (16-oct-2026) no fue cambiar el formato sino **meterlo**: el paquete
+`ESLP`, en la sección siguiente, que vive fuera del núcleo.
 
 ### El programa principal no lleva prefijo
 

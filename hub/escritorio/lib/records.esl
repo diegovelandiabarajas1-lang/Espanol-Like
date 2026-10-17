@@ -1,0 +1,49 @@
+# records.esl — lo que el escritorio guarda entre partidas (los récords).
+#
+# En la web, guardar/recuperar usan el localStorage del navegador. En
+# escritorio no hay navegador: aquí es un archivo JSON, uno solo para todo el
+# arcade, con claves por juego («flappy.mejor», «galaga.mejor») para que dos
+# juegos no se pisen —la misma lección que el localStorage cruzado de la web—.
+#
+# Dónde vive:
+#   · N_ARCADE_DATOS=ruta.json si está puesta (lo usan las pruebas)
+#   · en Windows: %LOCALAPPDATA%\ArcadeÑ\records.json — sobrevive a volver a
+#     empaquetar (dist/ se rehace entera; los récords no deben irse con ella)
+#   · si no: records.json junto al programa
+fn calcularRuta(): texto {
+    fijo propia = entorno("N_ARCADE_DATOS", "")
+    si propia != "" { devolver propia }
+    fijo base = entorno("LOCALAPPDATA", "")
+    si base != "" {
+        fijo dir = base + "\\ArcadeÑ"
+        si no existeArchivo(dir) { crearCarpeta(dir) }
+        devolver dir + "\\records.json"
+    }
+    devolver "records.json"
+}
+fijo RUTA = calcularRuta()
+
+fn cargar(): dic {
+    si no existeArchivo(RUTA) { devolver {} }
+    intentar {
+        fijo d = deJson(leerTexto(RUTA))
+        si tipo(d) == "dic" { devolver d }
+    } capturar (e) {
+        # un archivo roto no tumba el arcade: se empieza de cero y se dice
+        imprimir("records: «" + RUTA + "» no se pudo leer (" + e.mensaje + "); empiezo de cero")
+    }
+    devolver {}
+}
+var datos = cargar()
+
+publico fn recuperar(clave: texto, defecto) {
+    si contiene(datos, clave) { devolver datos[clave] }
+    devolver defecto
+}
+
+publico fn guardar(clave: texto, valor) {
+    datos[clave] = valor
+    escribirTexto(RUTA, aJson(datos))
+}
+
+publico fn ruta(): texto { devolver RUTA }

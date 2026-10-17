@@ -39,7 +39,8 @@
     "referencia": "node motor/util/referencia.js",
     "contexto": "node motor/util/referencia.js --contexto",
     "ejemplos": "node motor/util/correr-ejemplos.js ejemplos",
-    "pseudocodigo": "node PSeInt/correr.js"
+    "pseudocodigo": "node PSeInt/correr.js",
+    "empaquetar": "node motor/util/empaquetar.js"
   },
   "files": [
     "motor/src/",
@@ -65,7 +66,8 @@
     "koffi": "^3.3.2"
   },
   "devDependencies": {
-    "playwright": "^1.63.0"
+    "playwright": "^1.63.0",
+    "postject": "^1.0.0-alpha.6"
   },
   "comentario": [
     "koffi es opcional a propósito: solo hace falta para llamar a código nativo",
@@ -80,6 +82,7 @@
     "«abre este archivo y ya».",
     "El repositorio se llama «Espanol-Like» —el nombre viejo del proyecto— y el",
     "paquete «n-lenguaje». Si el repo se renombra en GitHub, hay que cambiar",
-    "las tres URLs de arriba; GitHub redirige la antigua, pero npm no sabe eso."
+    "las tres URLs de arriba; GitHub redirige la antigua, pero npm no sabe eso.",
+    "postject es solo para motor/util/empaquetar.js: cose el programa dentro de una copia de node y hace un ejecutable único. El script lo instala solo si falta."
   ]
 }

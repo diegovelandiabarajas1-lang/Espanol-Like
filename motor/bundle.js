@@ -4149,6 +4149,7 @@ function instalarBiblioteca(vm, host) {
   gfx('circulo', '... -> nulo', null, 'circulo(x,y,radio,relleno?)');
   gfx('punto', 'real, real -> nulo', null, 'punto(x,y)');
   gfx('escribirEn', 'real, real, texto -> nulo', null, 'escribirEn(x,y,texto)');
+  gfx('letra', '... -> nulo', null, 'letra(tamaño, alineación?, estilo?) — cómo escribe escribirEn: px · «izquierda» «centro» «derecha» · «negrita» «mono»');
   def('graficar', '... -> nulo', a => {
     if (!g.graficar) sinLienzo('graficar');
     const xs = a[0] instanceof ObjLista ? a[0].items : [];

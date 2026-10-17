@@ -1,0 +1,424 @@
+--- motor/util/nativo-koffi.js	2026-10-16 21:02:36.726056512 +0000
++++ motor-exp/util/nativo-koffi.js	2026-10-17 02:31:35.894317345 +0000
+@@ -28,6 +28,11 @@
+   texto: 'str',            // const char * — entra y sale como texto de Ñ
+   puntero: 'uintptr_t',    // una dirección, y en Ñ es un entero: cuídala tú
+   tamano: 'size_t',
++  // (motor-exp, S1) Un arreglo de Ñ pasa SIN COPIAR: C recibe la dirección de
++  // sus números y lo que escriba se ve en el arreglo. «memoria» es un bloque
++  // de bytes (memoria(n) en el eDSL «nativo»): char *, void *, uint8_t *.
++  'arreglo real': 'double *', 'arreglo entero': 'int32_t *', 'arreglo real32': 'float *',
++  memoria: 'void *',
+ };
+ const NOMBRES = Object.keys(TIPOS).join(', ');
+ const MAX_BIBLIOTECAS = 32;
+@@ -79,12 +84,43 @@
+   }
+ }
+ 
++// (motor-exp, S1) Un tipo de koffi, contado en palabras que el motor entiende
++// sin saber nada de koffi. Es lo que le deja a la biblioteca estándar comprobar
++// que un arreglo de reales va a un «double *» y no a un «int *» —koffi lo
++// dejaría pasar y C leería basura (se vio: 6,9·10⁻³¹⁰)—, quitar de la llamada
++// los parámetros de salida, y envolver una función de Ñ como retrollamada.
++const NUMEROS = { Int8: 'entero', UInt8: 'entero', Int16: 'entero', UInt16: 'entero', Int32: 'entero',
++  UInt32: 'entero', Int64: 'entero', UInt64: 'entero', Float32: 'real32', Float64: 'real',
++  Int16S: 'entero', UInt16S: 'entero', Int32S: 'entero', UInt32S: 'entero', Int64S: 'entero', UInt64S: 'entero' };
++function describir(t) {
++  if (!t) return { clase: 'nulo', c: 'void' };
++  const p = t.primitive, c = t.name;
++  if (p === 'Void') return { clase: 'nulo', c };
++  if (p === 'Bool') return { clase: 'bool', c };
++  if (NUMEROS[p]) return { clase: 'numero', elem: NUMEROS[p], c, entero: NUMEROS[p] === 'entero' };
++  if (p === 'String' || p === 'String16' || p === 'String32') return { clase: 'texto', c };
++  if (p === 'Record' || p === 'Union') return { clase: 'estructura', c };
++  if (p === 'Array') return { clase: 'lista', c };
++  if (p === 'Callback') return { clase: 'retrollamada', c, proto: t.proto && t.proto.name,
++    resultado: describir(t.proto && t.proto.result) };
++  if (p === 'Pointer') {
++    const r = t.ref || null, rp = r ? r.primitive : 'Void';
++    // A qué apunta: un número (un arreglo de Ñ puede ir ahí), una estructura
++    // (un dic de salida), o nada en concreto (void *, FILE *: un puntero opaco).
++    return { clase: 'puntero', c, apunta: NUMEROS[rp] ? 'numero' : (rp === 'Record' || rp === 'Union') ? 'estructura' : 'opaco',
++      elem: NUMEROS[rp] || null, byte: rp === 'Int8' || rp === 'UInt8', ancho: r ? r.size : 0 };
++  }
++  return { clase: 'otro', c };
++}
++const DIRECCION = { Input: 'entra', Output: 'sale', 'Input/Output': 'entra y sale' };
++
+ function crear() {
+   const koffi = cargarKoffi();
+   if (!koffi) return null;   // sin koffi no hay código nativo, y ya está
+ 
+   const abiertas = new Map();      // nombre → { lib, firmas:Set }
+   const estructuras = new Map();   // nombre → huella de sus campos
++  const tiposC = new Map();        // (S1) nombre → declaración, de tipoNativo()
+ 
+   // Traduce un nombre de tipo de Ñ. Una estructura ya declarada vale como tipo,
+   // y ahí está la razón de llevar la cuenta: para poder decir «no lo conozco»
+@@ -96,6 +132,7 @@
+     const t = TIPOS[n];
+     if (t) return t;
+     if (estructuras.has(n)) return n;
++    if (tiposC.has(n)) return n + ' *';       // (S1) de tipoNativo: se pasa por puntero
+     throw new Error(`${donde}: no conozco el tipo «${n}» (los que hay: ${NOMBRES}` +
+       (estructuras.size ? `, y las estructuras declaradas: ${[...estructuras.keys()].join(', ')}` : '') + ')');
+   }
+@@ -152,16 +189,93 @@
+     catch (e) {
+       throw new Error(`«${simbolo}» en «${biblioteca}»: ${enEspanol(e)}`);
+     }
++    return envolver(fn, entrada, biblioteca);
++  }
++
++  // Lo que comparten las dos formas de declarar: la llamada, la llamada en
++  // segundo plano, y la descripción de cada parámetro para el motor.
++  function envolver(fn, entrada, biblioteca) {
+     const firma = { viva: true };
+     entrada.firmas.add(firma);
+-    return (crudos) => {
+-      if (!firma.viva)
+-        throw new Error(`la biblioteca «${biblioteca}» se descargó; esta función ya no se puede llamar`);
++    const muerta = () => new Error(`la biblioteca «${biblioteca}» se descargó; esta función ya no se puede llamar`);
++    const llamar = (crudos) => {
++      if (!firma.viva) throw muerta();
+       return fn(...crudos);
+     };
++    llamar.enFondo = (crudos, listo) => {
++      if (!firma.viva) throw muerta();
++      fn.async(...crudos, listo);
++    };
++    const info = fn.info || { name: '?', arguments: [], result: null };
++    llamar.nombre = info.name;
++    llamar.parametros = info.arguments.map(a => Object.assign(describir(a.type), { dir: DIRECCION[a.direction] || 'entra' }));
++    llamar.resultado = describir(info.result);
++    return llamar;
++  }
++
++  // (motor-exp, S1) nativa(biblioteca, "double cos(double)"): la firma tal
++  // como está en el .h. Los nombres de C sirven tal cual, y también las
++  // estructuras de estructuraNativa y los tipos de tipoNativo. «_Out_ int *q»
++  // marca un parámetro de salida: no se pasa, se devuelve.
++  function funcionC(biblioteca, prototipo) {
++    if (/\.\.\./.test(prototipo))
++      throw new Error('las funciones con «...» (como printf) todavía no se pueden declarar: C no dice de qué tipo es cada argumento extra, y adivinarlo es leer basura');
++    cargar(biblioteca);
++    const entrada = abiertas.get(biblioteca);
++    let fn;
++    try { fn = entrada.lib.func(prototipo); }
++    catch (e) {
++      const t = enEspanol(e);
++      const desconocido = /Unknown or invalid type name '([^']+)'/.exec(t);
++      throw new Error(desconocido
++        ? `en «${prototipo}» no conozco el tipo «${desconocido[1]}»: si es una estructura, declárala con estructuraNativa; si es un puntero a función o un tipo opaco, con tipoNativo`
++        : `no entiendo la firma «${prototipo}» en «${biblioteca}»: ${t}`);
++    }
++    return envolver(fn, entrada, biblioteca);
+   }
+ 
+-  return { cargar, descargar, estructura, funcion, abiertas: () => [...abiertas.keys()] };
++  // tipoNativo("int Comparar(const void *, const void *)") declara un tipo de
++  // función, para pasar retrollamadas; tipoNativo("FILE") un tipo opaco, del
++  // que solo se manejan punteros. Repetirlo igual no es un error.
++  function tipoC(decl) {
++    decl = String(decl).trim();
++    const esFuncion = decl.includes('(');
++    const nombre = esFuncion ? (/([A-Za-z_]\w*)\s*\(/.exec(decl) || [])[1] : decl;
++    if (!nombre || !/^[A-Za-z_]\w*$/.test(nombre))
++      throw new Error(`no entiendo «${decl}»: es «int Nombre(int, double)» para un tipo de función, o un nombre para un tipo opaco`);
++    const antes = tiposC.get(nombre);
++    if (antes !== undefined) {
++      if (antes === decl) return nombre;
++      throw new Error(`el tipo «${nombre}» ya se declaró de otra forma («${antes}»)`);
++    }
++    try { esFuncion ? koffi.proto(decl) : koffi.opaque(nombre); }
++    catch (e) { throw new Error(`no se pudo declarar «${decl}»: ${enEspanol(e)}`); }
++    tiposC.set(nombre, decl);
++    return nombre;
++  }
++
++  // Una retrollamada que vive más que una llamada (C la guarda y la llama
++  // luego). Hay que soltarla a mano: C no avisa de cuándo deja de usarla.
++  function registrar(f, nombre) {
++    if (!tiposC.has(nombre) || !tiposC.get(nombre).includes('('))
++      throw new Error(`«${nombre}» no es un tipo de función declarado con tipoNativo`);
++    return koffi.register(f, koffi.pointer(nombre));
++  }
++  const desregistrar = h => koffi.unregister(h);
++
++  // Memoria: tipo en palabras de Ñ (real, entero, texto…) o de C (double, int…).
++  const tipoMem = n => (n === 'texto' ? 'char' : TIPOS[n] && !TIPOS[n].includes('*') ? TIPOS[n] : n);
++  const leer = (p, t, n) => {
++    if (t === 'texto') return koffi.decode(p, 'char', n === undefined || n === null ? -1 : n);
++    return n === undefined || n === null ? koffi.decode(p, tipoMem(t)) : koffi.decode(p, tipoMem(t), n);
++  };
++  const escribir = (p, t, v, n) => (n === undefined || n === null ? koffi.encode(p, tipoMem(t), v) : koffi.encode(p, tipoMem(t), v, n));
++  const tamano = t => koffi.sizeof(tipoMem(t));
++  const direccion = b => koffi.address(b);
++
++  return { cargar, descargar, estructura, funcion, abiertas: () => [...abiertas.keys()],
++           funcionC, tipoC, registrar, desregistrar, leer, escribir, tamano, direccion,
++           memoria: n => Buffer.alloc(n), errno: () => koffi.errno() };
+ }
+ 
+ // Para que el intérprete pueda decir por qué no hay código nativo, en vez de
+--- motor/util/n-node.js	2026-10-16 21:02:36.726023697 +0000
++++ motor-exp/util/n-node.js	2026-10-17 02:40:06.591546485 +0000
+@@ -13,7 +13,8 @@
+ 'use strict';
+ const fs = require('fs');
+ const path = require('path');
+-const { execFileSync } = require('child_process');
++const { execFileSync, execFile } = require('child_process');
++const os = require('os');
+ const R = require('../rutas.js');
+ // Perfil del motor: «node motor/util/n-node.js --c1en programa.esl» carga el
+ // bundle de C1EÑ, con numerico y nen abiertos sin «usar». También con la
+@@ -69,6 +70,56 @@
+   crearCarpeta: r => intenta('no se pudo crear ' + r, () => { fs.mkdirSync(r, { recursive: true }); }),
+   borrar: r => { if (!fs.existsSync(r)) return false; intenta('no se pudo borrar ' + r, () => fs.rmSync(r)); return true; },
+   tamano: r => intenta('no existe ' + r, () => fs.statSync(r).size),
++  // (motor-exp, S2)
++  copiar: (a, b) => intenta('no se pudo copiar ' + a + ' a ' + b, () => fs.cpSync(a, b, { recursive: true })),
++  mover: (a, b) => intenta('no se pudo mover ' + a + ' a ' + b, () => fs.renameSync(a, b)),
++  info: r => {
++    const st = intenta('no existe ' + r, () => fs.statSync(r));
++    return { tamano: st.size, modificado: st.mtimeMs, creado: st.birthtimeMs, esCarpeta: st.isDirectory(), esArchivo: st.isFile() };
++  },
++  // Línea a línea, sin cargar el archivo entero: lee trozos de 64 KB y va
++  // soltando líneas. Devuelve una función que da la siguiente, o undefined al
++  // acabar (y entonces cierra el archivo).
++  lineas(r) {
++    const fd = intenta('no se pudo abrir ' + r, () => fs.openSync(r, 'r'));
++    const buf = Buffer.alloc(65536);
++    let resto = Buffer.alloc(0), fin = false, cerrado = false;
++    const cerrar = () => { if (!cerrado) { cerrado = true; try { fs.closeSync(fd); } catch (_) {} } };
++    const siguiente = () => {
++      for (;;) {
++        const nl = resto.indexOf(10);
++        if (nl >= 0) {
++          let linea = resto.subarray(0, nl);
++          resto = resto.subarray(nl + 1);
++          if (linea.length && linea[linea.length - 1] === 13) linea = linea.subarray(0, linea.length - 1);
++          return linea.toString('utf8');
++        }
++        if (fin) {
++          cerrar();
++          if (!resto.length) return undefined;
++          const ultima = resto.toString('utf8').replace(/\r$/, ''); resto = Buffer.alloc(0);
++          return ultima;
++        }
++        const n = fs.readSync(fd, buf, 0, buf.length, null);
++        if (n === 0) fin = true;
++        else resto = Buffer.concat([resto, buf.subarray(0, n)]);
++      }
++    };
++    siguiente.cerrar = cerrar;
++    return siguiente;
++  },
++};
++// Rutas: las de este sistema operativo (\\ en Windows, / en el resto).
++const rutas = {
++  unir: partes => path.join(...partes),
++  absoluta: r => path.resolve(r),
++  normalizar: r => path.normalize(r),
++  nombre: r => path.basename(r),
++  extension: r => path.extname(r),
++  carpeta: r => path.dirname(r),
++  esAbsoluta: r => path.isAbsolute(r),
++  relativa: (de, a) => path.relative(de, a),
++  separador: path.sep,
+ };
+ 
+ // ------------------------------------------------------------------- módulos
+@@ -98,32 +149,90 @@
+   },
+ };
+ 
+-// La entrada se lee entera de golpe y se va sirviendo por líneas: el motor es
+-// síncrono y no hay forma de esperar a que llegue una línea a mitad de turno.
+-let lineas = null, iLinea = 0;
+-function entradaEntera() {
+-  if (lineas !== null) return;
+-  let t = '';
+-  try { t = fs.readFileSync(0, 'utf8'); } catch (_) { t = ''; }
+-  lineas = t.length ? t.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n') : [];
++// (motor-exp, S2) La entrada se lee de verdad línea a línea. En el LTS se leía
++// ENTERA de golpe, y en una terminal eso es esperar al Ctrl+D: un programa que
++// pregunta «¿cómo te llamas?» se quedaba colgado sin enseñar nada. Ahora se
++// lee lo que haya llegado (en una terminal, hasta que se pulsa Intro) y se
++// guarda lo que sobre para la siguiente línea.
++let pendienteEntrada = Buffer.alloc(0), finEntrada = false;
++const bufEntrada = Buffer.alloc(4096);
++const dormirSync = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
++function siguienteLinea() {
++  for (;;) {
++    const nl = pendienteEntrada.indexOf(10);
++    if (nl >= 0) {
++      let l = pendienteEntrada.subarray(0, nl);
++      pendienteEntrada = pendienteEntrada.subarray(nl + 1);
++      if (l.length && l[l.length - 1] === 13) l = l.subarray(0, l.length - 1);
++      return l.toString('utf8');
++    }
++    if (finEntrada) {
++      if (!pendienteEntrada.length) return null;
++      const u = pendienteEntrada.toString('utf8'); pendienteEntrada = Buffer.alloc(0);
++      return u;
++    }
++    let n;
++    try { n = fs.readSync(0, bufEntrada, 0, bufEntrada.length, null); }
++    catch (e) {
++      if (e.code === 'EAGAIN') { dormirSync(10); continue; }   // entrada no bloqueante: esperar un poco
++      if (e.code === 'EOF') n = 0; else n = 0;
++    }
++    if (n === 0) finEntrada = true;
++    else pendienteEntrada = Buffer.concat([pendienteEntrada, bufEntrada.subarray(0, n)]);
++  }
++}
++
++function opcionesProceso(op, sincrono) {
++  op = op || {};
++  const o = { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 };
++  if (op.carpeta) o.cwd = op.carpeta;
++  if (op.entorno) o.env = Object.assign({}, process.env, op.entorno);
++  if (op.espera) o.timeout = op.espera;
++  if (sincrono) {
++    if (typeof op.entrada === 'string') { o.input = op.entrada; o.stdio = ['pipe', 'pipe', 'pipe']; }
++    else o.stdio = ['ignore', 'pipe', 'pipe'];
++  }
++  return o;
++}
++function resultadoFallido(e) {
++  const muerto = e.code === 'ETIMEDOUT' || (e.signal === 'SIGTERM' && e.killed);
++  return { codigo: e.status === undefined || e.status === null ? -1 : e.status,
++           salida: e.stdout ? String(e.stdout) : '',
++           error: muerto ? 'se pasó del tiempo de espera y se paró' : e.stderr ? String(e.stderr) : String(e.message || e) };
+ }
+ 
+ const sistema = {
+   argumentos: () => args.slice(1),
+   entorno: n => (n in process.env ? process.env[n] : null),
+-  ejecutar(orden, extra) {
++  ejecutar(orden, extra, op) {
+     // Sin shell, igual que en la versión de QuickJS: la orden y sus argumentos
+     // van por separado y un dato con espacios no se convierte en otra orden.
++    // (motor-exp, S2) op: { entrada, carpeta, entorno, espera } — todas opcionales.
+     try {
+-      const salida = execFileSync(orden, extra, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
++      const salida = execFileSync(orden, extra, opcionesProceso(op, true));
+       return { codigo: 0, salida, error: '' };
+-    } catch (e) {
+-      return { codigo: e.status === undefined || e.status === null ? -1 : e.status,
+-               salida: e.stdout ? String(e.stdout) : '',
+-               error: e.stderr ? String(e.stderr) : String(e.message || e) };
+-    }
++    } catch (e) { return resultadoFallido(e); }
+   },
+-  leerLinea() { entradaEntera(); return iLinea < lineas.length ? lineas[iLinea++] : null; },
++  // (motor-exp, S2) Lo mismo sin esperar: «listo» recibe el resultado.
++  ejecutarFondo(orden, extra, op, listo) {
++    const hijo = execFile(orden, extra, opcionesProceso(op, false), (e, salida, error) => {
++      if (!e) return listo({ codigo: 0, salida: String(salida), error: String(error) });
++      const codigo = typeof e.code === 'number' ? e.code : -1;      // ENOENT y compañía llegan como texto
++      const msg = e.killed ? 'se pasó del tiempo de espera y se paró'
++        : String(error || '') || (typeof e.code === 'string' ? `no se pudo lanzar «${orden}» (${e.code})` : String(e.message || e));
++      listo({ codigo, salida: String(salida || ''), error: msg });
++    });
++    if (op && typeof op.entrada === 'string') { hijo.stdin.end(op.entrada); }
++    else if (hijo.stdin) hijo.stdin.end();
++  },
++  carpetaActual: () => process.cwd(),
++  cambiarCarpeta: r => process.chdir(r),
++  info: () => ({ so: process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'mac' : process.platform,
++                 arquitectura: process.arch, procesadores: os.cpus().length, memoria: os.totalmem(),
++                 libre: os.freemem(), usuario: os.userInfo().username, personal: os.homedir(),
++                 temporal: os.tmpdir(), equipo: os.hostname(), motor: 'node ' + process.version }),
++  leerLinea() { return siguienteLinea(); },
++  indicar: t => { try { fs.writeSync(1, t); } catch (_) { console.log(t); } },
+   salir: c => process.exit(c),
+ };
+ 
+@@ -184,9 +293,82 @@
+   },
+ } : null;
+ 
++// (motor-exp, S2) Lo que llega de fuera cuando el programa principal ya acabó
++// —un temporizador, una respuesta, una petición al servidor— es un turno. Si
++// falla, se dice y el proceso acabará con código 1, pero lo demás sigue: un
++// servidor no se cae porque una petición falle.
++const errorEnTurno = e => { console.log(e && e.formato ? e.formato() : String((e && e.message) || e)); process.exitCode = 1; };
++function turno(vm, fn, args) {
++  try { vm.nuevoTurno(); vm.invocar(fn, args || []); }
++  catch (e) { errorEnTurno(e); }
++}
++// El reloj. En el LTS la consola no tenía: «luego», «cada» y (en el clon)
++// «dormir» y todo lo asíncrono solo funcionaban en el IDE.
++const temporizadores = new Map();
++let sigTemp = 1;
++const tiempo = {
++  luego(ms, fn, vm) {
++    const id = sigTemp++;
++    temporizadores.set(id, setTimeout(() => { temporizadores.delete(id); turno(vm, fn, []); }, Math.max(0, ms)));
++    return id;
++  },
++  cada(ms, fn, vm) {
++    const id = sigTemp++;
++    temporizadores.set(id, setInterval(() => turno(vm, fn, []), Math.max(1, ms)));
++    return id;
++  },
++  detener(id) {
++    const h = temporizadores.get(id);
++    if (!h) return false;
++    clearTimeout(h); clearInterval(h); temporizadores.delete(id);
++    return true;
++  },
++};
++// El servidor HTTP: «servir(puerto, fn)» del eDSL «sistema». El motor recibe
++// la petición en datos planos y devuelve la respuesta por «responder».
++const http = require('http');
++const servidores = new Map();
++let sigServ = 1;
++const MAX_CUERPO = 8 * 1024 * 1024;
++const servidor = {
++  escuchar(puerto, anfitrionIp, manejar, listo) {
++    const id = sigServ++;
++    const srv = http.createServer((req, res) => {
++      const trozos = [];
++      let largo = 0, cortado = false;
++      req.on('data', c => { largo += c.length; if (largo > MAX_CUERPO) { cortado = true; req.destroy(); } else trozos.push(c); });
++      req.on('end', () => {
++        if (cortado) return;
++        const u = new URL(req.url, 'http://x');
++        const consulta = {};
++        for (const [k, v] of u.searchParams) consulta[k] = v;
++        manejar({ metodo: req.method, ruta: decodeURIComponent(u.pathname), consulta,
++                  cabeceras: Object.assign({}, req.headers), cuerpo: Buffer.concat(trozos).toString('utf8'),
++                  ip: req.socket.remoteAddress || '' },
++          r => {
++            if (res.headersSent) return;
++            res.writeHead(r.estado, Object.assign({ 'Content-Type': r.tipo }, r.cabeceras || {}));
++            res.end(r.cuerpo);
++          });
++      });
++    });
++    srv.on('error', e => listo(e.code === 'EADDRINUSE' ? 'el puerto ' + puerto + ' ya está en uso' : String(e.message || e)));
++    srv.listen(puerto, anfitrionIp, () => listo(null, srv.address().port));
++    servidores.set(id, srv);
++    return id;
++  },
++  cerrar(id) {
++    const s = servidores.get(id);
++    if (!s) return false;
++    s.close(); if (s.closeAllConnections) s.closeAllConnections();
++    servidores.delete(id);
++    return true;
++  },
++};
++
+ const m = globalThis.EspanolLike.crearMotor({
+   salida: s => console.log(s),
+-  host: Object.assign({ archivos, sistema, modulos },
++  host: Object.assign({ archivos, sistema, modulos, rutas, tiempo, servidor, errorEnTurno },
+                       nativo ? { nativo } : null,
+                       red ? { red } : null),
+   limiteInstr: limite,

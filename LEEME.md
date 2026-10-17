@@ -168,7 +168,9 @@ util/            herramientas
   mudar.js             añade los «usar» que faltan, guiado por los errores del
                        compilador · córrelo hasta que diga 0
   n.js                 intérprete de línea de órdenes, para QuickJS
-  n-node.js            el mismo, para Node
+  n-node.js            el mismo, para Node (también corre .elb y paquetes .elb)
+  elb.js               un .esl → .elb; con módulos, un paquete con todos dentro
+  paquete-elb.js       el formato del paquete (ESLP): armar, leer y verificar
 
 pruebas/
   todas.js             pasa las 13 suites y resume
@@ -187,6 +189,7 @@ pruebas/
   aislado.js            92 · el IDE entero en un navegador de verdad
   ejemplos-ide.js       16 · los ejemplos del selector, uno por uno
   hostil.esl           un programa que intenta salirse del aislamiento
+  elb-varios.js         42 · el .elb de varios archivos: portable, verificado entero
 
 archivo/         cosas de la auditoría; pueden no correr con el árbol de hoy
 ```
@@ -322,7 +325,34 @@ valores; el por qué está en `motor/ARQUITECTURA.md`.
 Y un límite que no es un descuido: **dentro del navegador no hay módulos**.
 La zona aislada no tiene sistema de archivos que leer, y traerlos por la red
 sería el `cargar()` que este proyecto decidió no tener. Un `usar` en el IDE dice
-que hace falta un anfitrión con módulos y por dónde se prueba.
+que hace falta un anfitrión con módulos y por dónde se prueba. Lo que sí entra
+es un programa de varios archivos **ya compilado** en un solo `.elb` (abajo).
+
+### Varios archivos en un solo `.elb`
+
+```
+node motor/util/elb.js ejemplos/resumen.esl          # → ejemplos/resumen.elb
+node motor/util/n-node.js ejemplos/resumen.elb       # lo corre, sin los .esl
+node motor/util/elb.js --ver ejemplos/resumen.elb    # qué lleva dentro
+```
+
+Si el programa no importa archivos sale el `.elb` de siempre (`ESLB`). Si los
+importa sale un **paquete** (`ESLP`): el principal y cada módulo, cada uno un
+`.elb` normal, con su ruta delante. Las rutas van **relativas a la carpeta del
+programa principal** (`lib/tabla.esl`, `../comun/x.esl`), así que el archivo no
+lleva nada de tu máquina y sale byte a byte igual compilado en cualquier carpeta.
+
+Al cargarlo se verifica **todo** antes de correr nada: cada `.elb` de dentro con
+sus seis comprobaciones, y las rutas (ni absolutas, ni con `\`, ni con `..` en
+medio, ni repetidas). Un módulo estropeado no deja que empiece ni el principal.
+Corre con `n-node.js` y también en el IDE —panel Bytecode, «Importar y
+ejecutar»—, donde no hay disco: los módulos ya vienen dentro. `--texto` lo
+escribe en base64 (`.elb.txt`) para cuando solo se puede mover texto.
+
+Lo que cuesta: un `.elb` corre **sin JIT**, siempre —es la regla del formato:
+lo que viene de un archivo no trae árbol sintáctico y el JIT no puede tocarlo—.
+El ARCADE de escritorio pasa de 1,6 a 2,4 ms por cuadro (medido sin GPU); un cálculo largo nota
+más la diferencia. El intérprete de QuickJS (`n.js`) todavía no carga paquetes.
 
 ## Fuera del navegador
 
@@ -369,6 +399,45 @@ mucho. Elige según lo que hagas, no por la etiqueta.
 En Windows hace falta un `qjsc.exe`. Las releases oficiales de quickjs-ng
 publican `qjs` pero **no** `qjsc`; hay compilaciones de la comunidad que traen
 los dos.
+
+## Una app como un solo ejecutable (con ventana, sin terminal)
+
+Lo de arriba es el *intérprete* como binario: le pasas el `.esl` por fuera y no
+tiene FFI. Lo otro es una *app*: tu programa, sus módulos y el motor cosidos en
+un ejecutable que se abre con doble clic:
+
+```
+node motor/util/empaquetar.js --ventana ejemplos/app/principal.esl
+# → dist/principal/principal.exe   (en Linux, dist/principal/principal)
+```
+
+El motor analiza el programa sin ejecutarlo para saber qué archivos entran (los
+`usar`, verificados cruzando archivos), los mete como texto en un programa de
+arranque junto con el bundle y un anfitrión igual al de `n-node.js`, y Node lo
+cose dentro de una copia de sí mismo (una «aplicación de un solo ejecutable»).
+La carpeta `dist/<nombre>/` entera es la app: el ejecutable, `lib/` con koffi
+(el FFI, que es un módulo nativo y no se puede coser), y las `.dll`/`.so` que
+hubiera junto al programa (raylib). El ejecutable trabaja en su propia carpeta,
+así que `leerTexto("datos.csv")` y `nativa("./raylib.dll", …)` encuentran lo que
+está al lado, se abra desde donde se abra.
+
+`--ventana` es para apps que abren su propia ventana y no quieren una consola
+negra detrás: en Windows el `.exe` se marca como aplicación gráfica, lo que
+`imprimir` escriba va a `<nombre>.log` junto al ejecutable, y un error se
+muestra en un cuadro de diálogo. `--con=archivo` añade datos a la carpeta;
+`--c1en` mete el bundle de C1EÑ.
+
+El ejemplo `ejemplos/app/` es una app de ventana en tres archivos:
+`principal.esl` (el bucle de cuadros, los botones, el dibujo), `lib/contador.esl`
+(el modelo, sin ventana, probable aparte) y `../lib/ventana.esl` (raylib
+envuelto en español, con ratón y teclado). Hace falta `raylib.dll` junto al
+programa: [raylib.com](https://www.raylib.com), la versión *win64 msvc* trae
+`raylib.dll` en `lib/`.
+
+Lo que cuesta: ~120 MB por app (es Node entero), y la firma de `node.exe` deja
+de valer al coserle el programa, así que SmartScreen puede avisar la primera
+vez. Se empaqueta para la plataforma en la que se empaqueta: un `.exe` se hace
+en Windows.
 
 ## Llamar a C
 
@@ -447,8 +516,12 @@ lo que separa a Ñ de poder escribir un servicio, y es el camino hacia la idea d
 usarlo como userland.
 
 De los módulos falta lo de grado: no hay forma de renombrar lo que se importa
-(`… como otro nombre` por nombre suelto), ni de importar solo por su efecto, ni
-de guardar un programa de varios archivos como un solo `.elb`.
+(`… como otro nombre` por nombre suelto), ni de importar solo por su efecto. Un
+programa de varios archivos ya se guarda como un solo `.elb` (`util/elb.js`); el
+empaquetador todavía lleva los módulos como texto, y `n.js` (QuickJS) aún no
+carga paquetes. Del FFI faltan los manejadores: que C pueda llamar a una
+función de Ñ; raylib no los necesita porque se pregunta por el ratón y el teclado
+en cada cuadro, pero una interfaz nativa de Windows sí.
 
 Dentro del navegador ya no falta lo básico: hay eventos, controles con estilo,
 memoria entre ejecuciones y temporizadores. Lo que queda es de grado, no de

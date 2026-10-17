@@ -1,0 +1,420 @@
+diff -ru '--exclude=bundle.js' '--exclude=bundle-c1en.js' '--exclude=salida' '--exclude=EXPERIMENTAL.md' '--exclude=publicar-*' '--exclude=banco.js' '--exclude=exp-rendimiento.js' '--exclude=CAMBIOS-R1.diff' motor/pruebas/fuera.js motor-exp/pruebas/fuera.js
+--- motor/pruebas/fuera.js	2026-10-16 21:02:36.725027357 +0000
++++ motor-exp/pruebas/fuera.js	2026-10-16 21:09:13.846076734 +0000
+@@ -224,7 +224,7 @@
+   if (!hayQjsc) saltar('el motor como ejecutable', 'no hay qjsc en esta máquina');
+   else {
+     const r = spawnSync(process.execPath, [R.util('construir-binario.js')], { encoding: 'utf8' });
+-    const bin = path.join(R.proyecto, process.platform === 'win32' ? 'n.exe' : 'n');
++    const bin = R.salida(process.platform === 'win32' ? 'n.exe' : 'n');
+     comprobar('se construye', r.status === 0 && fs.existsSync(bin), (r.stdout || '') + (r.stderr || ''));
+     if (fs.existsSync(bin)) {
+       const tam = fs.statSync(bin).size;
+diff -ru '--exclude=bundle.js' '--exclude=bundle-c1en.js' '--exclude=salida' '--exclude=EXPERIMENTAL.md' '--exclude=publicar-*' '--exclude=banco.js' '--exclude=exp-rendimiento.js' '--exclude=CAMBIOS-R1.diff' motor/pruebas/todas.js motor-exp/pruebas/todas.js
+--- motor/pruebas/todas.js	2026-10-16 21:02:36.725248768 +0000
++++ motor-exp/pruebas/todas.js	2026-10-16 21:27:53.163226434 +0000
+@@ -24,6 +24,7 @@
+   ['perfil C1EÑ', 'perfil-c1en.js',  'el bundle con numerico y nen abiertos: sin «usar», y el mismo código que Ñ'],
+   ['empaquetar',  'empaquetar.js',   'un programa de varios archivos cosido en un ejecutable, de consola y de ventana'],
+   ['.elb varios', 'elb-varios.js',   'un programa con sus módulos en un solo .elb: portable, verificado entero'],
++  ['exp: rendim.', 'exp-rendimiento.js', 'motor-exp R1: a[i] en arreglos, rango sin lista, a[i] y agregar en línea, autollamada'],
+ ];
+ 
+ let fallan = 0, saltadas = 0;
+diff -ru '--exclude=bundle.js' '--exclude=bundle-c1en.js' '--exclude=salida' '--exclude=EXPERIMENTAL.md' '--exclude=publicar-*' '--exclude=banco.js' '--exclude=exp-rendimiento.js' '--exclude=CAMBIOS-R1.diff' motor/rutas.js motor-exp/rutas.js
+--- motor/rutas.js	2026-10-16 21:02:36.724028677 +0000
++++ motor-exp/rutas.js	2026-10-16 21:08:52.865806425 +0000
+@@ -14,8 +14,12 @@
+   pruebas: f => path.join(motor, 'pruebas', f),
+   bundle: path.join(motor, 'bundle.js'),
+   bundleC1en: path.join(motor, 'bundle-c1en.js'),  // el mismo motor con numerico y nen abiertos
+-  // Lo que se publica y se abre: va en la raíz del proyecto, a la vista.
+-  entrega: f => path.join(proyecto, f),
++  // CLON EXPERIMENTAL (motor-exp). Lo que este clon CONSTRUYE —el IDE, la
++  // referencia, el contexto— va a motor-exp/salida/ y nunca a la raíz, para no
++  // pisar lo que publica el motor LTS. Lo que LEE (ejemplos/, PSeInt/, la DLL
++  // de raylib) sigue saliendo de la raíz del proyecto, que es compartida.
++  salida: f => path.join(motor, 'salida', f),
++  entrega: f => /\.(html|txt)$/.test(f) ? path.join(motor, 'salida', f) : path.join(proyecto, f),
+   FUENTES: ['01-front.js', '02-check-compile.js', '03-vm-jit.js', '04-stdlib.js', '05-serial.js', '06-modulos.js',
+     '07-edsl-formato.js', '08-edsl-fecha.js', '09-edsl-probar.js', '10-edsl-texto.js', '11-edsl-numerico.js', '12-edsl-datos.js', '13-edsl-estilo.js',
+     '14-c1en.js', '15-nen-calculo.js', '16-nen-formulas.js', '17-nen-tensores.js'],
+diff -ru '--exclude=bundle.js' '--exclude=bundle-c1en.js' '--exclude=salida' '--exclude=EXPERIMENTAL.md' '--exclude=publicar-*' '--exclude=banco.js' '--exclude=exp-rendimiento.js' '--exclude=CAMBIOS-R1.diff' motor/src/02-check-compile.js motor-exp/src/02-check-compile.js
+--- motor/src/02-check-compile.js	2026-10-16 21:02:36.724120826 +0000
++++ motor-exp/src/02-check-compile.js	2026-10-16 21:10:08.283632201 +0000
+@@ -184,8 +184,8 @@
+         let elem = T.cualquiera;
+         if (it.k === 'lista') elem = it.elem;
+         else if (it.k === 'texto') elem = T.texto;
+-        else if (it.k !== 'cualquiera' && it.k !== 'dic')
+-          err(n, `no se puede recorrer un valor de tipo ${tipoATexto(it)}`, 'usa una lista, un texto o rango(n)');
++        else if (it.k !== 'cualquiera' && it.k !== 'dic' && it.k !== 'arreglo')
++          err(n, `no se puede recorrer un valor de tipo ${tipoATexto(it)}`, 'usa una lista, un texto, un arreglo o rango(n)');
+         const sub = new Ambito(amb);
+         sub.declarar(n.nombre, elem, false);
+         bloqueTipos(n.cuerpo, sub);
+@@ -358,6 +358,10 @@
+         if (o.k === 'lista') { if (!esNum(i)) err(n, `el índice de una lista debe ser entero y es ${tipoATexto(i)}`); return o.elem; }
+         if (o.k === 'texto') return T.texto;
+         if (o.k === 'dic') return o.valor;
++        // a[i] sobre un arreglo (motor-exp): un número si es de 1 dimensión, una
++        // vista de la fila si tiene más. El número de dimensiones no está en el
++        // tipo, así que el resultado es «cualquiera»; el índice sí se comprueba.
++        if (o.k === 'arreglo') { if (!esNum(i)) err(n, `el índice de un arreglo debe ser entero y es ${tipoATexto(i)}`); return T.cualquiera; }
+         if (o.k !== 'cualquiera') err(n, `no se puede indexar un valor de tipo ${tipoATexto(o)}`);
+         return T.cualquiera;
+       }
+diff -ru '--exclude=bundle.js' '--exclude=bundle-c1en.js' '--exclude=salida' '--exclude=EXPERIMENTAL.md' '--exclude=publicar-*' '--exclude=banco.js' '--exclude=exp-rendimiento.js' '--exclude=CAMBIOS-R1.diff' motor/src/03-vm-jit.js motor-exp/src/03-vm-jit.js
+--- motor/src/03-vm-jit.js	2026-10-16 21:02:36.724151943 +0000
++++ motor-exp/src/03-vm-jit.js	2026-10-16 21:31:55.196841728 +0000
+@@ -617,6 +617,26 @@
+     return v;
+   }
+   exigeEnt(v, n, f) { return Math.trunc(this.exigeNum(v, n, f)); }
++  // Los argumentos de rango(…), validados. La comparten la nativa «rango» y el
++  // JIT, que compila «para i en rango(n)» sin construir la lista: los dos
++  // caminos tienen que rechazar lo mismo con el mismo mensaje, tope incluido.
++  prepararRango(a) {
++    let ini = 0, fin = 0, paso = 1;
++    if (a.length === 1) fin = this.exigeNum(a[0], 1, 'rango');
++    else if (a.length === 2) { ini = this.exigeNum(a[0], 1, 'rango'); fin = this.exigeNum(a[1], 2, 'rango'); }
++    else if (a.length === 3) { ini = this.exigeNum(a[0], 1, 'rango'); fin = this.exigeNum(a[1], 2, 'rango'); paso = this.exigeNum(a[2], 3, 'rango'); }
++    else this.error('«rango» acepta 1, 2 o 3 argumentos');
++    if (paso === 0) this.error('«rango»: el paso no puede ser 0');
++    // La cuenta se hace ANTES de construir nada. Estaba después, así que
++    // «rango(1000000000)» intentaba primero llenar la lista y salía por un
++    // error de JavaScript en crudo —«Invalid array length»— en vez de por el
++    // mensaje de Ñ que había justo debajo.
++    const cuantos = Math.max(0, Math.ceil((fin - ini) / paso));
++    if (cuantos > 5e6)
++      this.error(`«rango» generaría ${cuantos.toLocaleString('es')} elementos y el tope son 5 millones`,
++        'si solo quieres contar, usa «repetir n { … }», que no construye la lista');
++    return { ini, fin, paso, cuantos };
++  }
+   exigeTexto(v, n, f) {
+     if (typeof v !== 'string') this.error(`«${f}»: el argumento ${n} debe ser texto y es ${tipoDe(v)}`);
+     return v;
+@@ -1467,9 +1487,46 @@
+     // De una tabla, sus FILAS. Es lo que alguien pregunta al escribir
+     // longitud(t), y para las columnas está «columnas(t)».
+     if (o instanceof ObjTabla) return o.filas;
++    // De un arreglo, lo que mide su PRIMER eje — como len() de NumPy. Es lo que
++    // hace que «para x en a» y «a[i]» cuadren: se recorre el primer eje.
++    if (o instanceof ObjArreglo) {
++      if (o.forma.length === 0) this.error('un arreglo de 0 dimensiones no tiene longitud', 'es un solo número: sácalo con elemento(a)');
++      return o.forma[0];
++    }
+     this.error(`no se puede recorrer ni medir un valor de tipo ${tipoDe(o)}`);
+   }
++  // ── a[i] sobre un arreglo (motor-exp) ──────────────────────────────────
++  // Hasta ahora un arreglo solo se leía con elemento(a, i, j) y se escribía con
++  // ponerElemento(a, i, j, v). a[i] hace lo mismo con la sintaxis de una lista:
++  //   · 1 dimensión  → el número de esa posición (lo mismo que elemento)
++  //   · N dimensiones → una VISTA de la fila i: misma memoria, un eje menos.
++  //     a[i][j] funciona solo, y escribir en la vista escribe en el original,
++  //     como en NumPy y como ya hacen trozo() y las demás vistas.
++  // Los negativos cuentan desde el final, igual que en una lista.
++  arrIndice(o, i, quien) {
++    if (typeof i !== 'number' || !Number.isInteger(i))
++      this.error(`el índice de un arreglo debe ser un entero y es ${typeof i === 'number' ? i : tipoDe(i)}`);
++    if (o.tipo === 'complejo')
++      this.error('a[i] todavía no sabe trabajar con arreglos complejos',
++        'pasa a reales primero con parteReal, parteImaginaria o absoluto');
++    if (o.forma.length === 0) this.error('un arreglo de 0 dimensiones no se indexa', 'es un solo número: sácalo con elemento(a)');
++    const n = o.forma[0];
++    const k = i < 0 ? n + i : i;
++    if (k < 0 || k >= n)
++      this.error(`índice ${i} fuera de rango (el eje 0 del arreglo mide ${n})`,
++        n ? `los índices válidos van de 0 a ${n - 1}, o de -1 a -${n}` : 'el arreglo está vacío');
++    return k;
++  }
++  arrFila(o, k) {
++    return this.nuevoArreglo(o._d, o.forma.slice(1), o.tipo, o.zancadas.slice(1),
++      o.desp + k * o.zancadas[0], o.base || o);
++  }
+   indiceObtener(o, i) {
++    if (o instanceof ObjArreglo) {
++      const k = this.arrIndice(o, i);
++      if (o.forma.length === 1) return o.datos[o.desp + k * o.zancadas[0]];
++      return this.arrFila(o, k);
++    }
+     if (o instanceof ObjError) {
+       const v = o.campo(String(i));
+       if (v === undefined) this.error(`un error no tiene «${i}»`, 'sus campos son tipo, mensaje y linea');
+@@ -1496,6 +1553,16 @@
+     this.error(`no se puede indexar un valor de tipo ${tipoDe(o)}`);
+   }
+   indiceAsignar(o, i, v) {
++    if (o instanceof ObjArreglo) {
++      const k = this.arrIndice(o, i);
++      if (o.forma.length !== 1)
++        this.error(`a[${i}] = … solo vale en un arreglo de 1 dimensión y este tiene ${o.forma.length}`,
++          'baja hasta el número: a[i][j] = v');
++      // Mismo control que ponerElemento: en un arreglo solo entran números.
++      const x = (typeof v === 'boolean' && o.tipo === 'bool') ? (v ? 1 : 0) : this.exigeNum(v, 2, 'a[i] =');
++      o.datos[o.desp + k * o.zancadas[0]] = x;
++      return;
++    }
+     if (o instanceof ObjLista) {
+       if (typeof i !== 'number') this.error(`el índice de una lista debe ser un número y es ${tipoDe(i)}`);
+       let k = i < 0 ? o.items.length + i : i;
+@@ -1534,9 +1601,11 @@
+       // mapa de globales ni despacho por llamada.
+       // eslint-disable-next-line no-new-func
+       const cie = (typeof gen === 'string' ? null : gen.cierres) || [];
+-      const factoria = new Function('rt', 'nt', 'pr', 'cf', '"use strict";return ' + src);
++      // «LI» es la clase ObjLista: el código generado la usa para el camino
++      // rápido de a[i] y de «para x en lista» sin pasar por rt (motor-exp).
++      const factoria = new Function('rt', 'nt', 'pr', 'cf', 'LI', '"use strict";return ' + src);
+       fn.jit = factoria(rt, nat.map(x => x.nat.fn), (typeof gen === 'string' ? null : gen.protos) || [],
+-                        cie.map(x => x.cl));
++                        cie.map(x => x.cl), ObjLista);
+       if (nat.length || cie.length) {
+         if (this.atados === null) { this.atados = new Set(); this.compiladas = new Set(); }
+         for (const x of nat) this.atados.add(x.nombre);
+@@ -1616,6 +1685,10 @@
+     // «call» y argumentos sueltos cuesta mucho menos, porque no se asigna el
+     // array y V8 puede meter la llamada en línea. La nativa atada, que es una
+     // llamada directa de toda la vida, cuesta 1,25 ns: ese es el suelo.
++    // (motor-exp) Para la autollamada directa: el tope y el error, sin pasar
++    // por yaN. Es el mismo mensaje que da yaN.
++    MAX: MAX_FRAMES,
++    desborde() { vm.profJS--; vm.error('desbordamiento de pila: demasiadas llamadas anidadas', 'suele indicar una recursión sin caso base'); },
+     ya0(c) {
+       if (++vm.profJS > MAX_FRAMES) { vm.profJS--; vm.error('desbordamiento de pila: demasiadas llamadas anidadas', 'suele indicar una recursión sin caso base'); }
+       const r = c.fn.jit.call(c.upvalues);
+@@ -1739,6 +1812,11 @@
+   // nombre aparece aquí igual. Una local capturada se compila como una CAJA
+   // —un ObjUpvalue cerrado— para que la función y el cierre compartan la misma
+   // variable y no dos copias: si el cierre le escribe, el de fuera lo ve.
++  // El nombre de la función de JavaScript que se está generando (motor-exp:
++  // lo usa la autollamada directa).
++  // Lleva prefijo propio: un parámetro o una local del programa nunca empieza
++  // por «_yo$», así que no puede taparlo.
++  const yo = '_yo$' + jsNom(fn.nombre === '<anónima>' ? 'anon' : fn.nombre);
+   const cajas = new Set();
+   (function buscarCapturas(nodo) {
+     if (!nodo || typeof nodo !== 'object') return;
+@@ -1832,6 +1910,21 @@
+   }
+   const nativas = [];
+   const iNativa = new Map();
++  // (motor-exp) Una nativa de la biblioteca que el JIT conoce por dentro
++  // —«rango», «agregar»— y para la que emite código propio en vez de llamarla.
++  // Se ata igual que las demás aunque su aridad sea variable, por dos razones:
++  // queda en la lista de invalidación (si alguien redefine el nombre, se tira
++  // lo compilado) y sirve de camino lento cuando el atajo no aplica.
++  function conocida(nombre, cual) {
++    if (!vm) return -1;
++    const g = vm.globals.get(nombre);
++    if (!(g instanceof ObjNativa) || g.puro !== cual) return -1;
++    if (iNativa.has(nombre)) return iNativa.get(nombre);
++    const i = nativas.length;
++    nativas.push({ nombre, nat: g });
++    iNativa.set(nombre, i);
++    return i;
++  }
+   function atar(nombre, nArgs) {
+     if (!vm) return -1;
+     const g = vm.globals.get(nombre);
+@@ -1884,6 +1977,30 @@
+       }
+       case 'Para': {
+         const it = '_it$' + (nTmp++), i = '_i$' + (nTmp++);
++        // (motor-exp) «para i en rango(…)» sin construir la lista. Antes,
++        // rango(2000000) llenaba dos millones de casillas para recorrerlas una
++        // vez. Los argumentos se validan con la misma función que usa la
++        // nativa, así que los errores —y el tope de 5 millones— son los mismos.
++        const itn = n.iterable;
++        if (itn.tipo === 'Llamada' && itn.callee.tipo === 'Variable' && !declarada(itn.callee.nombre) &&
++            itn.args.length >= 1 && itn.args.length <= 3 && conocida(gl(itn.callee.nombre), 'rango') >= 0) {
++          const R = '_R$' + (nTmp++), v = '_v$$' + (nTmp++), lim = '_f$' + (nTmp++), p = '_p$' + (nTmp++),
++                up = '_s$' + (nTmp++), c = '_c$' + (nTmp++);
++          const args = itn.args.map(ex);
++          locales.push(new Set([n.nombre]));
++          const cuerpo = n.cuerpo.cuerpo.map(x => sent(x, ind + 2)).join('\n');
++          locales.pop();
++          return `${t}const ${R} = rt.vm.prepararRango([${args.join(',')}]);\n` +
++                 `${t}let ${c} = 0;\n` +
++                 // Con 1 o 2 argumentos el paso es 1 y se sabe al compilar: el
++                 // bucle queda como un «for» de JavaScript de toda la vida, que
++                 // es lo que V8 optimiza mejor. Con paso hay que mirar el signo.
++                 (itn.args.length < 3
++                   ? `${t}for (let ${v} = ${R}.ini, ${lim} = ${R}.fin; ${v} < ${lim}; ${v}++) {\n`
++                   : `${t}for (let ${v} = ${R}.ini, ${lim} = ${R}.fin, ${p} = ${R}.paso, ${up} = ${p} > 0; ${up} ? ${v} < ${lim} : ${v} > ${lim}; ${v} += ${p}) {\n`) +
++                 `${t}  if ((${c} = ${c} + 1 | 0) > 1023) { ${c} = 0; rt.tic(1024); }\n` +
++                 `${t}  let ${jsNom(n.nombre)} = ${envolver(n.nombre, v)};\n${cuerpo}\n${t}}`;
++        }
+         locales.push(new Set([n.nombre]));
+         const cuerpo = n.cuerpo.cuerpo.map(x => sent(x, ind + 2)).join('\n');
+         locales.pop();
+@@ -1891,7 +2008,7 @@
+         return `${t}let ${it} = ${ex(n.iterable)}, ${c} = 0;\n` +
+                `${t}for (let ${i} = 0, _l = rt.len(${it}); ${i} < _l; ${i}++) {\n` +
+                `${t}  if ((${c} = ${c} + 1 | 0) > 1023) { ${c} = 0; rt.tic(1024); }\n` +
+-               `${t}  let ${jsNom(n.nombre)} = ${envolver(n.nombre, `rt.idxg(${it}, ${i})`)};\n${cuerpo}\n${t}}`;
++               `${t}  let ${jsNom(n.nombre)} = ${envolver(n.nombre, `((${it} instanceof LI && ${i} < ${it}.items.length) ? ${it}.items[${i}] : rt.idxg(${it}, ${i}))`)};\n${cuerpo}\n${t}}`;
+       }
+       case 'Romper': return `${t}break;`;
+       case 'Continuar': return `${t}continue;`;
+@@ -1936,7 +2053,13 @@
+         }
+         const d = n.destino;
+         if (d.tipo === 'Variable') return escribirVar(d.nombre, ex(n.valor));
+-        if (d.tipo === 'Indice') return `rt.idxs(${ex(d.obj)}, ${ex(d.indice)}, ${ex(n.valor)})`;
++        if (d.tipo === 'Indice') {
++          // (motor-exp) El mismo camino rápido para escribir. El orden de
++          // evaluación no cambia: objeto, índice, valor.
++          const x = tmp(), y = tmp(), z = tmp();
++          return `((${x}=${ex(d.obj)}, ${y}=${ex(d.indice)}, ${z}=${ex(n.valor)}, ${x} instanceof LI && typeof ${y} === 'number' && ${y} >= 0 && ${y} < ${x}.items.length && (${y} | 0) === ${y})` +
++                 ` ? (${x}.items[${y}] = ${z}) : rt.idxs(${x}, ${y}, ${z}))`;
++        }
+         if (d.tipo === 'Propiedad') return `rt.idxs(${ex(d.obj)}, ${JSON.stringify(d.nombre)}, ${ex(n.valor)})`;
+         return rendirse();
+       }
+@@ -1995,6 +2118,15 @@
+                  ` ? rt.ya${n.args.length}(${v}${as.length ? ',' + as.join(',') : ''})` +
+                  ` : rt.call(${v}, [${as.join(',')}]))`;
+         }
++        if (n.callee.tipo === 'Variable' && !declarada(n.callee.nombre) && n.args.length === 2) {
++          // (motor-exp) agregar(lista, x): un push. Si el primero no es una
++          // lista, la nativa de siempre da el error de siempre.
++          const k = conocida(gl(n.callee.nombre), 'agregar');
++          if (k >= 0) {
++            const x = tmp(), y = tmp();
++            return `((${x}=${ex(n.args[0])}, ${y}=${ex(n.args[1])}, ${x} instanceof LI) ? (${x}.items.push(${y}), ${x}) : nt[${k}]([${x}, ${y}], rt.vm))`;
++          }
++        }
+         if (n.callee.tipo === 'Variable' && !declarada(n.callee.nombre)) {
+           const i = atar(gl(n.callee.nombre), n.args.length);
+           if (i >= 0) return `nt[${i}]([${n.args.map(ex).join(',')}], rt.vm)`;
+@@ -2005,6 +2137,20 @@
+           // dos cosas se arreglan solas: mientras no haya código se va por el
+           // camino de siempre, y en cuanto lo hay se va derecho.
+           const j = n.args.length <= 4 ? atarCierre(gl(n.callee.nombre), n.args.length) : -1;
++          // (motor-exp) La función se llama a sí misma por su nombre —fib(n-1)—:
++          // el código que se está generando ES el destino, así que se llama
++          // derecho a sí mismo, sin guardia de «jit» ni yaN. Lo que no se salta
++          // es el control de profundidad. Si el nombre se reasigna después, el
++          // atado de arriba tira esta compilación igual que antes.
++          // Solo sin capturas: con capturas, el cierre del global podría ser
++          // OTRA instancia del mismo prototipo, con otras variables, y «this»
++          // sería el equivocado.
++          if (j >= 0 && cierres[j].cl.fn === fn && fn.nUpvalues === 0) {
++            const as = n.args.map(ex);
++            const r = tmp();
++            const vm_ = 'rt.vm';
++            return `((++${vm_}.profJS > rt.MAX ? rt.desborde() : 0), ${r} = ${yo}.call(this${as.length ? ',' + as.join(',') : ''}), ${vm_}.profJS--, ${r})`;
++          }
+           if (j >= 0) {
+             // Los argumentos aparecen dos veces en el TEXTO y una sola en la
+             // ejecución: de un condicional solo se evalúa la rama que se toma.
+@@ -2017,7 +2163,15 @@
+         }
+         return `rt.call(${ex(n.callee)}, [${n.args.map(ex).join(',')}])`;
+       }
+-      case 'Indice': return `rt.idxg(${ex(n.obj)}, ${ex(n.indice)})`;
++      case 'Indice': {
++        // (motor-exp) Camino rápido de a[i] para una lista con un índice entero
++        // dentro de rango, que es casi siempre. Todo lo demás —negativos,
++        // textos, diccionarios, arreglos, errores— sigue yendo a idxg, que es
++        // el mismo código del intérprete.
++        const x = tmp(), y = tmp();
++        return `((${x}=${ex(n.obj)}, ${y}=${ex(n.indice)}, ${x} instanceof LI && typeof ${y} === 'number' && ${y} >= 0 && ${y} < ${x}.items.length && (${y} | 0) === ${y})` +
++               ` ? ${x}.items[${y}] : rt.idxg(${x}, ${y}))`;
++      }
+       case 'Propiedad': {
+         // «m.algo» con m alias de módulo es un global, igual que en el bytecode.
+         const g = (n.obj.tipo === 'Variable' && !declarada(n.obj.nombre))
+@@ -2073,7 +2227,7 @@
+     .map(p => `  ${jsNom(p.nombre)} = rt.caja(${jsNom(p.nombre)});\n`).join('');
+   const decl = temps.length ? `  let ${temps.join(', ')};\n` : '';
+   return { nativas, protos, cierres,
+-    src: `(function ${jsNom(fn.nombre === '<anónima>' ? 'anon' : fn.nombre)}(${params}) {\n${encajar}${decl}${cuerpo}\n  return null;\n})` };
++    src: `(function ${yo}(${params}) {\n${encajar}${decl}${cuerpo}\n  return null;\n})` };
+ }
+ 
+ if (typeof module !== 'undefined') module.exports = {
+diff -ru '--exclude=bundle.js' '--exclude=bundle-c1en.js' '--exclude=salida' '--exclude=EXPERIMENTAL.md' '--exclude=publicar-*' '--exclude=banco.js' '--exclude=exp-rendimiento.js' '--exclude=CAMBIOS-R1.diff' motor/src/04-stdlib.js motor-exp/src/04-stdlib.js
+--- motor/src/04-stdlib.js	2026-10-16 21:02:36.724201192 +0000
++++ motor-exp/src/04-stdlib.js	2026-10-16 21:10:27.670302655 +0000
+@@ -45,20 +45,10 @@
+   def('tipo', 'cualquiera -> texto', (a) => tipoDe(a[0]), 'devuelve el nombre del tipo');
+   def('longitud', 'cualquiera -> entero', (a) => vm.longitud(a[0]), 'longitud de un texto, lista o diccionario');
+   def('rango', '... -> lista<entero>', (a) => {
+-    let ini = 0, fin = 0, paso = 1;
+-    if (a.length === 1) fin = num(a[0], 1, 'rango');
+-    else if (a.length === 2) { ini = num(a[0], 1, 'rango'); fin = num(a[1], 2, 'rango'); }
+-    else if (a.length === 3) { ini = num(a[0], 1, 'rango'); fin = num(a[1], 2, 'rango'); paso = num(a[2], 3, 'rango'); }
+-    else vm.error('«rango» acepta 1, 2 o 3 argumentos');
+-    if (paso === 0) vm.error('«rango»: el paso no puede ser 0');
+-    // La cuenta se hace ANTES de construir nada. Estaba después, así que
+-    // «rango(1000000000)» intentaba primero llenar la lista y salía por un
+-    // error de JavaScript en crudo —«Invalid array length»— en vez de por el
+-    // mensaje de Ñ que había justo debajo.
+-    const cuantos = Math.max(0, Math.ceil((fin - ini) / paso));
+-    if (cuantos > 5e6)
+-      vm.error(`«rango» generaría ${cuantos.toLocaleString('es')} elementos y el tope son 5 millones`,
+-        'si solo quieres contar, usa «repetir n { … }», que no construye la lista');
++    // La validación vive en la VM (vm.prepararRango) porque el JIT la necesita
++    // igual: «para i en rango(n)» compilado no construye la lista, pero tiene
++    // que dar exactamente los mismos errores que si la construyera.
++    const { ini, fin, paso, cuantos } = vm.prepararRango(a);
+     const out = new Array(cuantos);
+     let n = 0;
+     if (paso > 0) for (let i = ini; i < fin; i += paso) out[n++] = i;
+@@ -66,6 +56,10 @@
+     out.length = n;
+     return L(out);
+   }, 'rango(n) · rango(ini,fin) · rango(ini,fin,paso)');
++  // Marcas para el JIT (motor-exp): son ESTAS funciones y no otras con el
++  // mismo nombre. Si un programa las tapa con su propio «fn», la marca no está
++  // y el JIT no toma el atajo.
++  vm.globals.get('rango').puro = 'rango';
+   def('afirmar', '... -> nulo', (a) => {
+     if (!verdad(a[0])) vm.error(a.length > 1 ? repr(a[1], 0) : 'la afirmación resultó falsa');
+     return null;
+@@ -139,6 +133,7 @@
+   // ----------------------------------------------------------------- listas
+   seccion('listas');
+   def('agregar', '... -> lista', a => { const l = lst(a[0], 1, 'agregar'); for (let i = 1; i < a.length; i++) l.items.push(a[i]); return l; });
++  vm.globals.get('agregar').puro = 'agregar';
+   def('quitar', 'lista, cualquiera -> lista', a => {
+     const l = lst(a[0], 1, 'quitar');
+     const i = l.items.findIndex(x => iguales(x, a[1]));
+diff -ru '--exclude=bundle.js' '--exclude=bundle-c1en.js' '--exclude=salida' '--exclude=EXPERIMENTAL.md' '--exclude=publicar-*' '--exclude=banco.js' '--exclude=exp-rendimiento.js' '--exclude=CAMBIOS-R1.diff' motor/util/construir-binario.js motor-exp/util/construir-binario.js
+--- motor/util/construir-binario.js	2026-10-16 21:02:36.725741193 +0000
++++ motor-exp/util/construir-binario.js	2026-10-16 21:09:13.844116106 +0000
+@@ -37,7 +37,7 @@
+ const salida = path.join(R.motor, 'n-completo.js');
+ fs.writeFileSync(salida, `${imports}\n\n/* ── el motor ── */\n${bundle}\n/* ── el intérprete ── */\n${cli}\n`, 'utf8');
+ 
+-const destino = path.join(R.proyecto, process.platform === 'win32' ? 'n.exe' : 'n');
++const destino = R.salida(process.platform === 'win32' ? 'n.exe' : 'n');   // clon: a salida/, no a la raíz
+ try {
+   execFileSync('qjsc', ['-o', destino, salida], { stdio: 'inherit' });
+ } catch (e) {
+diff -ru '--exclude=bundle.js' '--exclude=bundle-c1en.js' '--exclude=salida' '--exclude=EXPERIMENTAL.md' '--exclude=publicar-*' '--exclude=banco.js' '--exclude=exp-rendimiento.js' '--exclude=CAMBIOS-R1.diff' motor/util/construir.js motor-exp/util/construir.js
+--- motor/util/construir.js	2026-10-16 21:02:36.725774195 +0000
++++ motor-exp/util/construir.js	2026-10-16 21:09:13.849995029 +0000
+@@ -29,7 +29,7 @@
+   tiposGlobales, ErrorFuente, firma, textoATipo, aridadDe, instalarEdsl, instalarClasico,
+   serializar, deserializar, verificarBytecode: verificar, aTexto, deTexto, ErrorBytecode,
+   Modulos, enlazar, exportacionesDe, SEP_MODULO, nombreGlobalModulo, CLAVE_EDSL, claveEdsl,
+-  version: '4.0', perfil: typeof C1EN_ABIERTOS !== 'undefined' ? 'C1EÑ' : 'Ñ',
++  version: '4.1-exp', perfil: typeof C1EN_ABIERTOS !== 'undefined' ? 'C1EÑ' : 'Ñ',
+   abiertos: typeof C1EN_ABIERTOS !== 'undefined' ? C1EN_ABIERTOS : [] };
+ })(typeof globalThis !== 'undefined' ? globalThis : this);
+ `;
+diff -ru '--exclude=bundle.js' '--exclude=bundle-c1en.js' '--exclude=salida' '--exclude=EXPERIMENTAL.md' '--exclude=publicar-*' '--exclude=banco.js' '--exclude=exp-rendimiento.js' '--exclude=CAMBIOS-R1.diff' motor/util/empaquetar.js motor-exp/util/empaquetar.js
+--- motor/util/empaquetar.js	2026-10-16 21:02:36.725957915 +0000
++++ motor-exp/util/empaquetar.js	2026-10-16 21:09:13.848142328 +0000
+@@ -75,7 +75,7 @@
+   process.exit(2);
+ }
+ const nombre = path.basename(principal).replace(/\.esl$/i, '');
+-const salida = path.resolve(args[1] || path.join(R.proyecto, 'dist', nombre));
++const salida = path.resolve(args[1] || R.salida(path.join('dist', nombre)));
+ const dirApp = path.dirname(principal);
+ const major = Number(process.versions.node.split('.')[0]);
+ if (major < 20) { console.log(`hace falta Node 20 o más nuevo para empaquetar (este es ${process.version})`); process.exit(2); }

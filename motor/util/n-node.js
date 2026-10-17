@@ -5,6 +5,7 @@
 // primera línea.
 // Intérprete de Ñ de línea de órdenes, para Node.
 //   node motor/util/n-node.js [--limite=N] programa.esl [argumentos…]
+//   node motor/util/n-node.js programa.elb [argumentos…]      (bytecode: util/elb.js)
 // El mismo motor y el mismo anfitrión de archivos y sistema que la versión de
 // QuickJS; cambia solo cómo se le pide al sistema operativo. Existe porque Node
 // ya está donde se desarrolla, y bajar un binario aparte para probar un
@@ -35,9 +36,13 @@ while (args.length && args[0].startsWith('--')) {
   if (m) limite = Number(m[1]);
   else { console.log('opción desconocida ' + op + ' · la única es --limite=N'); process.exit(2); }
 }
-if (!args.length) { console.log('uso: node motor/util/n-node.js [--limite=N] programa.esl [argumentos…]'); process.exit(2); }
-let fuente;
-try { fuente = fs.readFileSync(args[0], 'utf8'); }
+if (!args.length) { console.log('uso: node motor/util/n-node.js [--limite=N] programa.esl|programa.elb [argumentos…]'); process.exit(2); }
+// Un .elb (o su versión en base64, .elb.txt) no se compila: se verifica y se
+// corre. Puede ser de un archivo (ESLB) o un paquete con sus módulos (ESLP,
+// util/paquete-elb.js); los dos se hacen con «node motor/util/elb.js».
+const esBytecode = /\.elb(\.txt)?$/i.test(args[0]);
+let fuente, bytecode;
+try { if (esBytecode) bytecode = fs.readFileSync(args[0]); else fuente = fs.readFileSync(args[0], 'utf8'); }
 catch (e) { console.log('no se pudo abrir ' + args[0]); process.exit(2); }
 // La clave canónica del programa: contra ella se resuelven las rutas relativas
 // de sus «usar», y con ella se reconoce que dos rutas distintas son el mismo
@@ -186,7 +191,18 @@ const m = globalThis.EspanolLike.crearMotor({
                       red ? { red } : null),
   limiteInstr: limite,
 });
-const r = m.ejecutar(fuente, claveRaiz);
+let r;
+if (esBytecode) {
+  const P = require('./paquete-elb.js').crear(globalThis.EspanolLike);
+  if (P.esPaquete(bytecode)) {
+    // Todo el paquete se verifica antes de correr nada: un módulo roto no deja
+    // que empiece ni el principal.
+    let p = null;
+    try { p = P.leer(bytecode); }
+    catch (e) { r = { ok: false, errores: [e] }; }
+    if (p) r = m.correr(p.fn, [], p.modulos);
+  } else r = m.ejecutarBytecode(bytecode);
+} else r = m.ejecutar(fuente, claveRaiz);
 if (!r.ok) {
   for (const e of r.errores) console.log(e.formato ? e.formato() : e.message);
   process.exit(1);

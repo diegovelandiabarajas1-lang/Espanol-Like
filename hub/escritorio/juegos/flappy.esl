@@ -1,0 +1,182 @@
+# NEON FLAPPY Ñ — versión de escritorio (ventana con raylib, dentro del ARCADE Ñ).
+# Hermano de hub/juegos/flappy/flappy.esl (la web). La física y el dibujo son
+# los mismos; cambian tres cosas:
+#   · el teclado: se pregunta a la ventana cada cuadro (pulsada), no hay eventos
+#   · los carteles: van dibujados en el lienzo, porque aquí no hay página
+#   · el récord: va a records.esl (un archivo), no al localStorage
+# Reglas: espacio, ↑, W o clic para aletear; cada tubo superado suma un punto.
+usar "../lib/pantalla.esl" como p
+usar "../lib/records.esl" como records
+usar azar, absoluto de "numerico"
+
+# ─────────────────────────────────────────────── el mundo
+fijo ANCHO = 540
+fijo ALTO = 960
+fijo PAJARO_X = 110
+fijo GRAVEDAD = 0.6
+fijo SALTO = -10.5
+fijo RADIO = 18
+fijo TUBO_ANCHO = 78
+fijo HUECO_INICIAL = 260
+fijo VELOCIDAD_INICIAL = 4.0
+
+var estado = "inicio"          # inicio · jugando · muerto
+var y = ALTO / 2
+var vy = 0.0
+var tubos = []                 # cada uno: {"x", "arriba", "abajo", "contado"}
+var puntos = 0
+var mejor = entero(records.recuperar("flappy.mejor", 0))
+var cuadro = 0
+var muertoCuadros = 0
+
+fn reiniciar() {
+    y = ALTO / 2
+    vy = 0.0
+    tubos = []
+    puntos = 0
+    cuadro = 0
+    estado = "jugando"
+}
+
+fn hueco(): real { devolver maximo(HUECO_INICIAL - puntos * 4, 165) }
+fn velocidad(): real { devolver VELOCIDAD_INICIAL + puntos * 0.1 }
+
+fn nuevoTubo() {
+    fijo h = hueco()
+    fijo arriba = 80 + azar() * (ALTO - h - 200)
+    agregar(tubos, {"x": ANCHO + 10.0, "arriba": arriba, "abajo": arriba + h, "contado": falso})
+}
+
+fn aletear() {
+    si estado == "jugando" { vy = SALTO }
+    # tras chocar, medio segundo de pausa: que un aleteo de más no reinicie solo
+    sino si estado == "inicio" o muertoCuadros > 30 { reiniciar() }
+}
+
+fn choca(t): bool {
+    fijo dentroX = PAJARO_X + RADIO > t["x"] y PAJARO_X - RADIO < t["x"] + TUBO_ANCHO
+    si no dentroX { devolver falso }
+    devolver y - RADIO < t["arriba"] o y + RADIO > t["abajo"]
+}
+
+fn morir() {
+    si estado != "jugando" { devolver }
+    estado = "muerto"
+    muertoCuadros = 0
+    si puntos > mejor {
+        mejor = puntos
+        records.guardar("flappy.mejor", mejor)
+    }
+    imprimir("flappy: fin · puntos " + texto(puntos) + " · mejor " + texto(mejor))
+}
+
+# ─────────────────────────────────────────────── lo que ve el arcade
+publico fn entrar() {
+    estado = "inicio"
+    tubos = []
+    y = ALTO / 2
+    vy = 0.0
+}
+publico fn mejorPuntaje(): entero { devolver mejor }
+publico fn estadoActual(): texto { devolver estado }
+# el dibujito de la tarjeta del menú, en una caja de 130×170
+publico fn miniatura(x, y) {
+    p.color("#19F2FF")
+    p.rect(x + 78, y, 30, 52)
+    p.rect(x + 78, y + 118, 30, 52)
+    p.color("#7FF8FF")
+    p.rect(x + 82, y, 3, 52)
+    p.rect(x + 82, y + 118, 3, 52)
+    p.color("#FFD23F")
+    p.circulo(x + 40, y + 86, 13)
+    p.color("#07070E")
+    p.circulo(x + 46, y + 82, 3)
+    p.color("#FF3EA5")
+    p.grosor(3)
+    p.linea(x + 27, y + 86, x + 12, y + 94)
+}
+publico fn puntosActuales(): entero { devolver puntos }
+
+# un cuadro: leer teclas, mover, dibujar (el arcade abre y cierra el cuadro)
+publico fn paso() {
+    fijo r = p.raton()
+    si p.pulsada(p.ESPACIO) o p.pulsada(p.ARRIBA) o p.pulsada(p.W) o r["clic"] { aletear() }
+
+    cuadro = cuadro + 1
+    si estado == "muerto" { muertoCuadros = muertoCuadros + 1 }
+    si estado == "jugando" {
+        vy = vy + GRAVEDAD
+        y = y + vy
+        si cuadro % 90 == 0 { nuevoTubo() }
+        fijo v = velocidad()
+        para t en tubos {
+            t["x"] = t["x"] - v
+            si no t["contado"] y t["x"] + TUBO_ANCHO < PAJARO_X {
+                t["contado"] = cierto
+                puntos = puntos + 1
+            }
+            si choca(t) { morir() }
+        }
+        tubos = filtrar(tubos, fn(t) { devolver t["x"] + TUBO_ANCHO > -5 })
+        si y + RADIO >= ALTO - 3 o y - RADIO <= 0 { morir() }
+    }
+    dibujar()
+}
+
+fn dibujar() {
+    p.limpiar("#07070E")
+    # estrellas de fondo, fijas por índice para no gastar memoria
+    p.color("#2A2D5A")
+    para i en rango(70) {
+        fijo ex = (i * 97 + cuadro * 0.3) % ANCHO
+        fijo ey = (i * 57) % ALTO
+        p.punto(ex, ey)
+    }
+    # tubos
+    para t en tubos {
+        p.color("#19F2FF")
+        p.rect(t["x"], 0, TUBO_ANCHO, t["arriba"])
+        p.rect(t["x"], t["abajo"], TUBO_ANCHO, ALTO - t["abajo"])
+        p.color("#7FF8FF")
+        p.rect(t["x"] + 5, 0, 5, t["arriba"])
+        p.rect(t["x"] + 5, t["abajo"], 5, ALTO - t["abajo"])
+    }
+    # suelo
+    p.color("#FF3EA5")
+    p.rect(0, ALTO - 3, ANCHO, 3)
+    # el pájaro: cuerpo, ojo y una estela según la velocidad
+    p.color("#FFD23F")
+    p.circulo(PAJARO_X, y, RADIO)
+    p.color("#07070E")
+    p.circulo(PAJARO_X + 8, y - 5, 4)
+    p.color("#FF3EA5")
+    p.grosor(4)
+    p.linea(PAJARO_X - RADIO, y, PAJARO_X - RADIO - 12 - minimo(absoluto(vy) * 2, 26), y - vy * 1.5)
+    # marcador
+    p.color("#EDEFFF")
+    p.letra(84, "centro", "negrita mono")
+    p.escribirEn(ANCHO / 2, 110, texto(puntos))
+    p.color("#8E92B4")
+    p.letra(22, "izquierda", "mono")
+    p.escribirEn(18, 36, "MEJOR " + texto(mejor))
+    # los carteles que en la web eran la página
+    si estado == "inicio" {
+        p.color("#EDEFFF")
+        p.letra(44, "centro", "negrita mono")
+        p.escribirEn(ANCHO / 2, 400, "NEON FLAPPY Ñ")
+        p.color("#8E92B4")
+        p.letra(22, "centro", "mono")
+        p.escribirEn(ANCHO / 2, 444, "espacio o clic para empezar")
+    } sino si estado == "muerto" {
+        p.color("#FF3EA5")
+        p.letra(48, "centro", "negrita mono")
+        p.escribirEn(ANCHO / 2, 400, "GAME OVER · " + texto(puntos))
+        p.color("#8E92B4")
+        p.letra(22, "centro", "mono")
+        p.escribirEn(ANCHO / 2, 444, "mejor " + texto(mejor))
+        si muertoCuadros > 30 { p.escribirEn(ANCHO / 2, 476, "espacio para otra") }
+    }
+    p.color("#4A4E78")
+    p.letra(16, "izquierda", "mono")
+    p.escribirEn(14, ALTO - 16, "Esc  menú")
+}

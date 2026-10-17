@@ -102,6 +102,7 @@ module.exports = {
   circulo: 'lienzo(200, 100)\ncirculo(100, 50, 40)\ncirculo(100, 50, 20, falso)',
   punto: 'lienzo(100, 100)\npara i en rango(100) { punto(i, i) }',
   escribirEn: 'lienzo(200, 60)\nescribirEn(10, 30, "hola")',
+  letra: 'lienzo(300, 90)\nletra(32, "centro", "negrita mono")\nescribirEn(150, 50, "PUNTOS 1200")\nletra(12)\nescribirEn(10, 80, "y otra vez la de siempre")',
   graficar: 'usar seno de "numerico"\n\nvar ys: lista<real> = mapear(rango(0, 60), funcion(i: entero) -> real { devolver seno(i / 6.0) })\ngraficar(ys, "seno")',
   barras: 'barras([3, 9, 4, 7], ["ene", "feb", "mar", "abr"], "ventas")',
   dispersion: 'dispersion([1, 2, 3, 4], [2, 5, 6, 9], "nube")',

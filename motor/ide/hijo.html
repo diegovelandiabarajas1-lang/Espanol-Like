@@ -78,6 +78,7 @@
 
 <script id="motor">/*__MOTOR__*/</script>
 <script id="anfitrion">/*__ANFITRION__*/</script>
+<script id="paquete">/*__PAQUETE_ELB__*/</script>
 <script>
 // ============================================================================
 //  Zona aislada. Aquí dentro vive el motor y todo lo que el programa del
@@ -306,7 +307,16 @@
     limpiarTodo();
     irA('consola');
     motor = nuevoMotor();
-    const r = motor.ejecutarBytecode(b64);
+    // Un paquete (ESLP) trae el principal y sus módulos, cada uno un .elb
+    // verificado; se corre como un programa de varios archivos, sin disco: los
+    // módulos ya vienen compilados dentro. Un .elb de un archivo, como siempre.
+    const P = globalThis.PaqueteElb.crear(globalThis.EspanolLike);
+    let r;
+    if (P.esPaquete(b64)) {
+      let p = null;
+      try { p = P.leer(b64); } catch (e) { r = { ok: false, errores: [e] }; }
+      if (p) r = motor.correr(p.fn, [], p.modulos);
+    } else r = motor.ejecutarBytecode(b64);
     ultimoFn = r.fn || null;
     if (!r.ok) for (const e of r.errores) linea(fmtErr(e), 'err');
     aPadre({

@@ -485,7 +485,9 @@ fn invertirMaquinas(h: entero, activa, sector, caja, deudaEmp, trab, inv, precio
       si te != h y activa[te] == 1 y sector[te] == 2 y inv[te] > 0 {
         fijo p = precio[te] * 20
         si caja[h] >= reserva + p {
-          caja[h] = caja[h] - p
+          # la propia caja también con atómico: una tecnológica puede estar comprando
+          # una máquina mientras otra le paga la suya (en la T4 salió dinero fantasma)
+          sumarAtomico(caja, h, 0 - p)
           sumarAtomico(caja, te, p)
           sumarAtomico(inv, te, 0 - 1)
           sumarAtomico(ventasHora, te, 1)
@@ -899,52 +901,12 @@ fn bolsa(h: entero, activa, precioAcc, precioAccH, tenencia, saldoInv, deudaInv,
     var cruzan = compras
     si ventas < cruzan { cruzan = ventas }
     si cruzan > 0 {
-      # vendedores: tesorería primero, luego inversores y clubes en proporción
-      var quedan = cruzan
-      var deTes = ofertaTes
-      si quedan < deTes { deTes = quedan }
-      tenencia[h * ten] = tenencia[h * ten] - deTes
-      caja[h] = caja[h] + deTes * pNuevo
-      quedan = quedan - deTes
-      para q en rango(nInv) {
-        fijo hq = k * nInv + q
-        fijo r = azarHilo(s + k, 5000 + h % nEmp + 97 * q, 80 + t % 17)
-        fijo r2 = azarHilo(s + k, 5000 + h % nEmp + 97 * q, 100 + t % 17)
-        fijo estilo = q % 3
-        var vende = 0
-        si forzadoInv[hq] == 1 { vende = 2 }
-        sino {
-          si estilo == 0 y p * 10 > valor * 11 { vende = 1 }
-          si estilo == 1 y r2 < 0.17 y pH > 0 y p * 100 < pH * 98 { vende = 1 }
-          si estilo == 2 y r >= umbral { vende = 1 }
-        }
-        si vende > 0 y quedan > 0 {
-          fijo tengo: entero = tenencia[h * ten + 1 + q]
-          var v: entero = tengo
-          si vende == 1 { v = tengo * (1 + entero(piso(r * 5))) // 100 }
-          si v > quedan { v = quedan }
-          tenencia[h * ten + 1 + q] = tengo - v
-          sumarAtomico(saldoInv, hq, v * pNuevo)
-          quedan = quedan - v
-        }
-      }
-      para c en rango(nEmp) {
-        fijo kc = k * nEmp + c
-        si clubExiste[kc] == 1 y quedan > 0 {
-          fijo tengoC: entero = tenencia[h * ten + 1 + nInv + c]
-          var v: entero = 0
-          si forzadoClub[kc] == 1 { v = tengoC }
-          sino si r3 < 0.17 y objetivoClub[kc] != h y gh < 0 { v = tengoC // 20 }
-          si v > quedan { v = quedan }
-          si v > 0 {
-            tenencia[h * ten + 1 + nInv + c] = tengoC - v
-            sumarAtomico(saldoClub, kc, v * pNuevo)
-            quedan = quedan - v
-          }
-        }
-      }
-      fijo vendidas = cruzan - quedan
-      var porRepartir = vendidas
+      # PRIMERO los compradores: cada uno toma su parte de lo cruzado en proporción a
+      # lo que quería, mientras le alcance el presupuesto, y paga. DESPUÉS los
+      # vendedores entregan exactamente lo comprado: tesorería primero, luego
+      # inversores y clubes. Así nunca se paga una acción que nadie recibió (antes la
+      # tesorería recompraba lo sobrante y su caja podía quedar en negativo).
+      var porRepartir = cruzan
       var cmp = compras
       si cmp < 1 { cmp = 1 }
       para q en rango(nInv) {
@@ -974,7 +936,7 @@ fn bolsa(h: entero, activa, precioAcc, precioAccH, tenencia, saldoInv, deudaInv,
           }
           si presupuesto > 0 {
             fijo quiere: entero = (presupuesto * (1 + entero(piso(r * 5))) // 100 // nAct) // pp
-            var c = quiere * vendidas // cmp
+            var c = quiere * cruzan // cmp
             si c > porRepartir { c = porRepartir }
             si c * pNuevo > presupuesto { c = presupuesto // pNuevo }
             si c > 0 {
@@ -993,7 +955,7 @@ fn bolsa(h: entero, activa, precioAcc, precioAccH, tenencia, saldoInv, deudaInv,
           si pp < 1 { pp = 1 }
           si ef > 0 {
             fijo quiere: entero = (ef // 20) // pp
-            var cc = quiere * vendidas // cmp
+            var cc = quiere * cruzan // cmp
             si cc > porRepartir { cc = porRepartir }
             si cc * pNuevo > ef { cc = ef // pNuevo }
             si cc > 0 {
@@ -1004,11 +966,57 @@ fn bolsa(h: entero, activa, precioAcc, precioAccH, tenencia, saldoInv, deudaInv,
           }
         }
       }
-      # lo que nadie pudo comprar vuelve a la tesorería: ninguna acción se pierde
-      si porRepartir > 0 {
-        tenencia[h * ten] = tenencia[h * ten] + porRepartir
-        caja[h] = caja[h] - porRepartir * pNuevo
-        si caja[h] < 0 { caja[h] = 0 }
+      # lo que de verdad se compró es lo que los vendedores entregan
+      var quedan = cruzan - porRepartir
+      var deTes = ofertaTes
+      si quedan < deTes { deTes = quedan }
+      tenencia[h * ten] = tenencia[h * ten] - deTes
+      caja[h] = caja[h] + deTes * pNuevo
+      quedan = quedan - deTes
+      para q en rango(nInv) {
+        fijo hq = k * nInv + q
+        fijo r = azarHilo(s + k, 5000 + h % nEmp + 97 * q, 80 + t % 17)
+        fijo r2 = azarHilo(s + k, 5000 + h % nEmp + 97 * q, 100 + t % 17)
+        fijo estilo = q % 3
+        var vende = 0
+        si forzadoInv[hq] == 1 { vende = 2 }
+        sino {
+          si estilo == 0 y p * 10 > valor * 11 { vende = 1 }
+          si estilo == 1 y r2 < 0.17 y pH > 0 y p * 100 < pH * 98 { vende = 1 }
+          si estilo == 2 y r >= umbral { vende = 1 }
+        }
+        si vende > 0 y quedan > 0 {
+          fijo tengo: entero = tenencia[h * ten + 1 + q]
+          var v: entero = tengo
+          si vende == 1 { v = tengo * (1 + entero(piso(r * 5))) // 100 }
+          si v > quedan { v = quedan }
+          si v > 0 {
+            tenencia[h * ten + 1 + q] = tengo - v
+            sumarAtomico(saldoInv, hq, v * pNuevo)
+            quedan = quedan - v
+          }
+        }
+      }
+      para c en rango(nEmp) {
+        fijo kc = k * nEmp + c
+        si clubExiste[kc] == 1 y quedan > 0 {
+          fijo tengoC: entero = tenencia[h * ten + 1 + nInv + c]
+          var v: entero = 0
+          si forzadoClub[kc] == 1 { v = tengoC }
+          sino si r3 < 0.17 y objetivoClub[kc] != h y gh < 0 { v = tengoC // 20 }
+          si v > quedan { v = quedan }
+          si v > 0 {
+            tenencia[h * ten + 1 + nInv + c] = tengoC - v
+            sumarAtomico(saldoClub, kc, v * pNuevo)
+            quedan = quedan - v
+          }
+        }
+      }
+      # no debería quedar nada (los vendedores ofrecieron al menos lo cruzado); si
+      # queda, lo entrega la tesorería y la invariante de acciones lo delataría
+      si quedan > 0 {
+        tenencia[h * ten] = tenencia[h * ten] - quedan
+        caja[h] = caja[h] + quedan * pNuevo
       }
     }
     precioAcc[h] = pNuevo

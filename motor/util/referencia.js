@@ -233,7 +233,7 @@ const EFECTO = {
   lienzo: 'prepara el área de dibujo y abre la pestaña Lienzo',
   limpiar: 'borra el lienzo entero', color: 'fija el color de lo que se dibuje a partir de ahí',
   grosor: 'fija el grosor de línea', linea: 'dibuja un segmento', rect: 'dibuja un rectángulo',
-  circulo: 'dibuja un círculo', punto: 'pinta un píxel', escribirEn: 'escribe texto sobre el lienzo',
+  circulo: 'dibuja un círculo', punto: 'pinta un píxel', escribirEn: 'escribe texto sobre el lienzo', letra: 'fija tamaño, alineación y estilo de lo que escriba escribirEn',
   graficar: 'dibuja una línea con ejes y rejilla', barras: 'dibuja un diagrama de barras',
   dispersion: 'dibuja una nube de puntos con su recta de ajuste',
   eco: 'escribe HTML crudo en la pestaña Página, sin pasar por el árbol',

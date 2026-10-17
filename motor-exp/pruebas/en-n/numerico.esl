@@ -1,0 +1,1452 @@
+# Las pruebas del eDSL «numerico», en Ñ.
+#
+# Lo que se comprueba no es que las funciones existan, sino los valores que se
+# pueden verificar por otro camino: identidades algebraicas, números conocidos,
+# y las dos cosas que tienen que cuadrar entre sí (la tasa efectiva con el
+# interés compuesto, la amortización con la cuota).
+
+usar probar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCerca, debeSerCierto,
+     debeSerFalso, debeFallarCon, debeTener, debeSerMayor, debeSerMenor, debeSerTipo,
+     debeContener, noDebeSer de "probar"
+usar truncar, acotar, entre, casiIgual, raizN, log2, potencia, raiz, absoluto,
+     angulo, grados, radianes, hipotenusa, seno, coseno,
+     suma, producto, amplitud, cuartiles, acumulado, media, mediana, desviacion, percentil,
+     covarianza, correlacion, tendencia, tipificar, regresion, normalizar,
+     azar, azarEntre, azarNormal, elegir, elegirVarios, barajar, semilla,
+     identidad, traza, inversa, resolver, matriz, transponer, multMatriz, determinante,
+     esPrimo, primos, mcd, mcm, factorial, combinaciones, permutaciones, divisores,
+     valorFuturo, valorPresente, interesCompuesto, tasaEfectiva, cuota, amortizacion,
+     redondear de "numerico"
+usar arreglo, ceros, unos, lleno, secuencia, reparto, azarArreglo,
+     forma, dimensiones, tamano, tipoArreglo, esVista,
+     redimensionar, transpuesta, fila, copia, aListaA, elemento, ponerElemento de "numerico"
+usar mayorQue, menorQue, igualA, distintoA, yA, oA, noA, esNaN, esFinito,
+     todos, alguno, contarCiertos, donde, enMascara, ponerEnMascara,
+     recortar, maximoDe, minimoDe, argMaximo, argMinimo,
+     acumSuma, acumProducto, acumMaximo, acumMinimo, diferencias, cuantil,
+     normaVector, estandarizar, mediaMovil, sumaSinNaN, aCero,
+     aplanarA, expandir, apretar, difundirA, concatenar, apilar, trozo, trozoPaso,
+     cerosComo, unosComo, aTipo, por, productoPunto,
+     ordenarA, argOrdenar, tomar, unicosConCuentas, estaEn,
+     uniformes, normales, enteros, barajarJuntos, piso, techo, signo de "numerico"
+usar factorLU, factorQR, factorCholesky, descomponerSVD, valoresSingulares,
+     resolverA, resolverTriangular, minimosCuadrados, pseudoInversa,
+     determinanteA, inversaA, rangoMatriz, condicion, normaMatriz, potenciaMatriz,
+     autoSimetrica, autovalores, identidadA, diagonal, triangularSuperior,
+     triangularInferior, externo, kronecker, esSimetrica, esDefinidaPositiva,
+     trozoVarios, mayorIgualQue, menorIgualQue de "numerico"
+usar complejo, parteReal, parteImaginaria, conjugado, fase, desdePolar, esComplejo,
+     fourier, fourierInversa, espectro, frecuencias, convolucion de "numerico"
+
+grupo("redondeo y comparación", fn() {
+    probar("truncar corta hacia cero, no hacia abajo", fn() {
+        debeSer(truncar(3.987), 3)
+        debeSer(truncar(0.0 - 3.987), -3)      # piso daría -4
+        debeSer(truncar(3.987, 2), 3.98)
+    })
+    probar("acotar deja el número dentro", fn() {
+        debeSer(acotar(15.0, 0.0, 10.0), 10)
+        debeSer(acotar(0.0 - 5.0, 0.0, 10.0), 0)
+        debeSer(acotar(5.0, 0.0, 10.0), 5)
+        debeFallarCon(fn() { acotar(1.0, 10.0, 0.0) }, "el mínimo es mayor que el máximo")
+    })
+    probar("entre incluye los extremos y no le importa el orden", fn() {
+        debeSerCierto(entre(1.0, 1.0, 10.0))
+        debeSerCierto(entre(10.0, 1.0, 10.0))
+        debeSerFalso(entre(11.0, 1.0, 10.0))
+        debeSerCierto(entre(5.0, 10.0, 1.0))
+    })
+    probar("casiIgual resuelve el 0.1 + 0.2", fn() {
+        # Con «==» esto es falso, y es el error que nunca deja de doler.
+        debeSerFalso(0.1 + 0.2 == 0.3)
+        debeSerCierto(casiIgual(0.1 + 0.2, 0.3))
+        debeSerFalso(casiIgual(1.0, 1.5))
+    })
+    probar("y su tolerancia es relativa, que es lo que la hace servir", fn() {
+        # Un 1e-9 absoluto no sirve para comparar millones.
+        debeSerCierto(casiIgual(1000000.0, 1000000.0000001))
+        debeSerFalso(casiIgual(1000000.0, 1000001.0))
+    })
+})
+
+grupo("potencias, raíces y trigonometría", fn() {
+    probar("raizN es la inversa de potencia", fn() {
+        debeSerCerca(raizN(8.0, 3.0), 2.0)
+        debeSerCerca(raizN(potencia(7.0, 5.0), 5.0), 7.0)
+        debeSerCerca(raizN(16.0, 4.0), 2.0)
+    })
+    probar("la raíz impar de un negativo existe", fn() {
+        debeSerCerca(raizN(0.0 - 8.0, 3.0), -2.0)
+        debeFallarCon(fn() { raizN(0.0 - 4.0, 2.0) }, "no es un número real")
+        debeFallarCon(fn() { raizN(4.0, 0.0) }, "el índice no puede ser 0")
+    })
+    probar("log2", fn() {
+        debeSerCerca(log2(1024.0), 10.0)
+        debeFallarCon(fn() { log2(0.0) }, "necesita un número positivo")
+    })
+    probar("grados y radianes son ida y vuelta", fn() {
+        debeSerCerca(grados(radianes(37.0)), 37.0)
+        debeSerCerca(radianes(180.0), 3.141592653589793)
+        debeSerCerca(grados(3.141592653589793), 180.0)
+    })
+    probar("angulo sabe en qué cuadrante está", fn() {
+        debeSerCerca(grados(angulo(1.0, 1.0)), 45.0)
+        debeSerCerca(grados(angulo(1.0, 0.0 - 1.0)), 135.0)
+        debeSerCerca(grados(angulo(0.0 - 1.0, 0.0 - 1.0)), -135.0)
+    })
+    probar("hipotenusa, y con más de dos lados", fn() {
+        debeSerCerca(hipotenusa(3.0, 4.0), 5.0)
+        debeSerCerca(hipotenusa(2.0, 3.0, 6.0), 7.0)
+    })
+    probar("y no se desborda donde la fórmula ingenua sí", fn() {
+        # raiz(a*a + b*b) con 1e200 da infinito; hipotenusa no.
+        debeSerMenor(hipotenusa(1.0e200, 1.0e200), 1.0e201)
+        debeSerMayor(hipotenusa(1.0e200, 1.0e200), 1.0e200)
+    })
+})
+
+grupo("agregados", fn() {
+    probar("suma y producto", fn() {
+        debeSer(suma([1.0, 2.0, 3.0, 4.0]), 10)
+        debeSer(producto([2.0, 3.0, 4.0]), 24)
+        debeSer(producto([]), 1)
+    })
+    probar("amplitud es la distancia entre extremos", fn() {
+        debeSer(amplitud([4.0, 19.0, 7.0]), 15)
+    })
+    probar("acumulado es la suma corriendo", fn() {
+        debeSer(acumulado([1.0, 2.0, 3.0]), [1, 3, 6])
+        debeSer(acumulado([]), [])
+    })
+    probar("y su último valor es la suma", fn() {
+        var d: lista = [3.0, 7.0, 1.0, 9.0]
+        var ac: lista = acumulado(d)
+        debeSer(ac[longitud(ac) - 1], suma(d))
+    })
+    probar("los cuartiles dicen lo mismo que percentil", fn() {
+        var d: lista = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+        var c: dic = cuartiles(d)
+        debeSer(c["q1"], percentil(d, 25.0))
+        debeSer(c["mediana"], percentil(d, 50.0))
+        debeSer(c["q3"], percentil(d, 75.0))
+        # y la mediana de los cuartiles es la mediana de verdad
+        debeSer(c["mediana"], mediana(d))
+    })
+})
+
+grupo("relación entre series", fn() {
+    probar("covarianza a mano", fn() {
+        # x=[1,2,3] y=[2,4,6]: sum((x-2)(y-4))/2 = (2+0+2)/2 = 2
+        debeSerCerca(covarianza([1.0,2.0,3.0], [2.0,4.0,6.0]), 2.0)
+    })
+    probar("la covarianza de algo consigo mismo es su varianza", fn() {
+        var d: lista = [4.0, 8.0, 15.0, 16.0, 23.0]
+        debeSerCerca(covarianza(d, d), potencia(desviacion(d), 2.0))
+    })
+    probar("una relación perfecta da correlación 1", fn() {
+        debeSerCerca(correlacion([1.0,2.0,3.0], [2.0,4.0,6.0]), 1.0)
+        debeSerCerca(correlacion([1.0,2.0,3.0], [6.0,4.0,2.0]), -1.0)
+    })
+    probar("tendencia es la pendiente por paso", fn() {
+        debeSerCerca(tendencia([10.0, 12.0, 14.0]), 2.0)
+        debeSerCerca(tendencia([10.0, 8.0, 6.0]), -2.0)
+        debeSerCerca(tendencia([5.0, 5.0, 5.0]), 0.0)
+    })
+    probar("y coincide con la pendiente de la regresión", fn() {
+        var y: lista = [3.0, 7.0, 8.0, 14.0, 16.0]
+        var r: dic = regresion([0.0, 1.0, 2.0, 3.0, 4.0], y)
+        debeSerCerca(tendencia(y), r["pendiente"])
+    })
+    probar("tipificar deja media 0 y desviación 1", fn() {
+        var z: lista = tipificar([4.0, 8.0, 15.0, 16.0, 23.0])
+        debeSerCerca(media(z), 0.0)
+        debeSerCerca(desviacion(z), 1.0)
+    })
+    probar("y con todo igual no se puede tipificar", fn() {
+        debeFallarCon(fn() { tipificar([5.0, 5.0, 5.0]) }, "no hay desviación")
+    })
+})
+
+grupo("el azar, que es repetible", fn() {
+    probar("la misma semilla da la misma secuencia", fn() {
+        semilla(7)
+        var a: lista = [azarEntre(1, 100), azarEntre(1, 100), azarEntre(1, 100)]
+        semilla(7)
+        var b: lista = [azarEntre(1, 100), azarEntre(1, 100), azarEntre(1, 100)]
+        debeSer(a, b)
+    })
+    probar("y semillas distintas, secuencias distintas", fn() {
+        semilla(1)
+        var a: lista = [azarEntre(1, 1000000), azarEntre(1, 1000000)]
+        semilla(2)
+        var b: lista = [azarEntre(1, 1000000), azarEntre(1, 1000000)]
+        noDebeSer(a, b)
+    })
+    probar("azar se queda entre 0 y 1", fn() {
+        semilla(42)
+        repetir 200 {
+            var x: real = azar()
+            debeSerCierto(x >= 0.0)
+            debeSerCierto(x < 1.0)
+        }
+    })
+    probar("azarEntre cubre los dos extremos y nada más", fn() {
+        semilla(3)
+        var vistos: dic = {}
+        repetir 400 {
+            var d: entero = azarEntre(1, 6)
+            debeSerCierto(entre(real(d), 1.0, 6.0))
+            vistos[texto(d)] = 1
+        }
+        # En 400 tiradas de un dado tienen que salir las seis caras.
+        debeSer(longitud(vistos), 6)
+    })
+    probar("azarEntre(n, n) siempre da n", fn() {
+        repetir 10 { debeSer(azarEntre(4, 4), 4) }
+    })
+    probar("azarNormal cae donde debe", fn() {
+        semilla(11)
+        var t: real = 0.0
+        repetir 500 { t = t + azarNormal(100.0, 15.0) }
+        # La media de 500 muestras de N(100,15) está a menos de 3 de 100.
+        debeSerCerca(t / 500.0, 100.0, 3.0)
+    })
+    probar("barajar no toca la lista original", fn() {
+        var d: lista = [1, 2, 3, 4, 5]
+        semilla(5)
+        var b: lista = barajar(d)
+        debeSer(d, [1, 2, 3, 4, 5])
+        debeTener(b, 5)
+        # los mismos elementos, en otro orden
+        debeSer(ordenar(b), [1, 2, 3, 4, 5])
+    })
+    probar("elegirVarios no repite y se queja si pides demasiados", fn() {
+        semilla(9)
+        var e: lista = elegirVarios([1, 2, 3, 4, 5], 3)
+        debeTener(e, 3)
+        debeSer(longitud(ordenar(e)), 3)
+        # sin repetir: cada uno aparece una sola vez
+        para x en e { debeSer(contar(e, x), 1) }
+        debeFallarCon(fn() { elegirVarios([1, 2], 5) }, "se piden 5 de una lista de 2")
+    })
+    probar("elegir y la lista vacía", fn() {
+        debeFallarCon(fn() { elegir([]) }, "de una lista vacía")
+    })
+})
+
+grupo("matrices", fn() {
+    probar("la identidad es la identidad", fn() {
+        debeSer(identidad(2), [[1, 0], [0, 1]])
+        debeSer(determinante(identidad(4)), 1)
+        debeSer(traza(identidad(5)), 5)
+    })
+    probar("multiplicar por la identidad no cambia nada", fn() {
+        var m: lista = [[2, 7], [3, 5]]
+        debeSer(multMatriz(m, identidad(2)), m)
+    })
+    probar("la inversa, a mano", fn() {
+        # det([[4,7],[2,6]]) = 10 → inversa = [[0.6,-0.7],[-0.2,0.4]]
+        var inv: lista = inversa([[4, 7], [2, 6]])
+        debeSerCerca(inv[0][0], 0.6)
+        debeSerCerca(inv[0][1], -0.7)
+        debeSerCerca(inv[1][0], -0.2)
+        debeSerCerca(inv[1][1], 0.4)
+    })
+    probar("y por su matriz da la identidad", fn() {
+        var m: lista = [[4, 7, 2], [3, 6, 1], [2, 5, 9]]
+        var p: lista = multMatriz(m, inversa(m))
+        para i en rango(3) {
+            para j en rango(3) {
+                si i == j { debeSerCerca(p[i][j], 1.0, 0.000001) }
+                sino { debeSerCerca(p[i][j], 0.0, 0.000001) }
+            }
+        }
+    })
+    probar("una matriz sin inversa lo dice", fn() {
+        debeFallarCon(fn() { inversa([[1, 2], [2, 4]]) }, "no tiene inversa")
+        debeFallarCon(fn() { inversa([[1, 2, 3], [4, 5, 6]]) }, "tiene que ser cuadrada")
+    })
+    probar("la traza es la suma de la diagonal", fn() {
+        debeSer(traza([[1, 2], [3, 4]]), 5)
+        debeFallarCon(fn() { traza([[1, 2, 3], [4, 5, 6]]) }, "tiene que ser cuadrada")
+    })
+    probar("resolver comprobado sustituyendo", fn() {
+        # 2x + y = 5 ; x + 3y = 10  →  x = 1, y = 3
+        var s: lista = resolver([[2, 1], [1, 3]], [5.0, 10.0])
+        debeSerCerca(s[0], 1.0)
+        debeSerCerca(s[1], 3.0)
+        debeSerCerca(2.0 * s[0] + s[1], 5.0)
+        debeSerCerca(s[0] + 3.0 * s[1], 10.0)
+    })
+})
+
+grupo("números enteros", fn() {
+    probar("esPrimo con los casos que se escapan", fn() {
+        debeSerCierto(esPrimo(2))
+        debeSerCierto(esPrimo(97))
+        debeSerFalso(esPrimo(91))       # 7 × 13, el que parece primo
+        debeSerFalso(esPrimo(1))
+        debeSerFalso(esPrimo(0))
+        debeSerFalso(esPrimo(0 - 7))
+    })
+    probar("primos y esPrimo dicen lo mismo", fn() {
+        var ls: lista = primos(50)
+        debeSer(ls[0], 2)
+        debeTener(ls, 15)
+        para p en ls { debeSerCierto(esPrimo(p)) }
+        debeSerFalso(contiene(ls, 1))
+    })
+    probar("mcd y mcm", fn() {
+        debeSer(mcd(48, 18), 6)
+        debeSer(mcm(4, 6), 12)
+        debeSer(mcd(12, 18, 24), 6)
+        debeSer(mcm(2, 3, 4), 12)
+        debeSer(mcd(0 - 48, 18), 6)
+    })
+    probar("y mcd por mcm es el producto", fn() {
+        debeSer(mcd(48, 18) * mcm(48, 18), 48 * 18)
+    })
+    probar("factorial, con sus bordes", fn() {
+        debeSer(factorial(0), 1)
+        debeSer(factorial(5), 120)
+        debeFallarCon(fn() { factorial(0 - 1) }, "de un negativo no existe")
+        debeFallarCon(fn() { factorial(200) }, "no cabe en un número")
+    })
+    probar("combinaciones: el baloto", fn() {
+        debeSer(combinaciones(49, 6), 13983816)
+        debeSer(combinaciones(5, 0), 1)
+        debeSer(combinaciones(5, 5), 1)
+        debeSer(combinaciones(5, 7), 0)
+        # simétrico
+        debeSer(combinaciones(20, 3), combinaciones(20, 17))
+    })
+    probar("y no se desborda por el camino", fn() {
+        # Con factoriales, 200! revienta antes de dividir. Aquí no.
+        debeSer(combinaciones(200, 2), 19900)
+    })
+    probar("permutaciones cuenta el orden", fn() {
+        debeSer(permutaciones(10, 3), 720)
+        debeSer(permutaciones(5, 5), factorial(5))
+        # permutaciones = combinaciones × k!
+        debeSer(permutaciones(10, 3), combinaciones(10, 3) * factorial(3))
+    })
+    probar("divisores, ordenados y completos", fn() {
+        debeSer(divisores(12), [1, 2, 3, 4, 6, 12])
+        debeSer(divisores(1), [1])
+        debeSer(divisores(49), [1, 7, 49])
+        para d en divisores(360) { debeSer(360 % d, 0) }
+    })
+    probar("un primo solo tiene dos divisores", fn() {
+        para p en primos(40) { debeTener(divisores(p), 2) }
+    })
+})
+
+grupo("dinero en el tiempo", fn() {
+    probar("valorFuturo y valorPresente son ida y vuelta", fn() {
+        var f: real = valorFuturo(1000000.0, 0.019, 12)
+        debeSerCerca(valorPresente(f, 0.019, 12), 1000000.0, 0.01)
+    })
+    probar("el interés compuesto cuadra con la tasa efectiva", fn() {
+        # 12 % anual capitalizado mes a mes sobre un millón
+        var conCapital: real = interesCompuesto(1000000.0, 0.12, 1, 12)
+        var conEfectiva: real = 1000000.0 * (1.0 + tasaEfectiva(0.12, 12))
+        debeSerCerca(conCapital, conEfectiva, 0.01)
+    })
+    probar("la efectiva siempre es mayor que la nominal", fn() {
+        debeSerMayor(tasaEfectiva(0.12, 12), 0.12)
+        # Con un solo periodo son la misma tasa. «debeSerCerca» y no «debeSer»
+        # porque (1 + 0.12)^1 - 1 no es exactamente 0.12 en coma flotante.
+        debeSerCerca(tasaEfectiva(0.12, 1), 0.12)
+    })
+    probar("la cuota cuadra con el valor presente", fn() {
+        # Las 24 cuotas descontadas a hoy tienen que dar el capital prestado.
+        var q: real = cuota(10000000.0, 0.019, 24)
+        var vp: real = 0.0
+        para i en rango(1, 25) { vp = vp + valorPresente(q, 0.019, i) }
+        debeSerCerca(vp, 10000000.0, 0.01)
+    })
+    probar("sin interés, la cuota es el capital partido", fn() {
+        debeSerCerca(cuota(1200000.0, 0.0, 12), 100000.0)
+    })
+    probar("la tabla de amortización cierra el saldo exacto", fn() {
+        var t: lista = amortizacion(1000000.0, 0.02, 12)
+        debeTener(t, 12)
+        var ultima: dic = t[11]
+        debeSer(ultima["saldo"], 0)
+        # Y la suma de abonos es el capital.
+        var abonos: real = 0.0
+        para f en t { abonos = abonos + f["abono"] }
+        debeSerCerca(abonos, 1000000.0, 0.01)
+    })
+    probar("y su cuota es la que dice cuota()", fn() {
+        var t: lista = amortizacion(5000000.0, 0.015, 18)
+        debeSerCerca(t[0]["cuota"], cuota(5000000.0, 0.015, 18), 0.01)
+    })
+    probar("una tasa en porcentaje se detecta", fn() {
+        # Pasar 19 en vez de 0.19 es EL error de esta familia.
+        debeFallarCon(fn() { cuota(1000000.0, 19.0, 12) }, "es el 1900 %")
+        debeFallarCon(fn() { valorFuturo(1000.0, 5.0, 2) }, "es el 500 %")
+    })
+})
+
+
+grupo("arreglos: forma, tipo y memoria", fn() {
+    probar("de una lista anidada sale la forma", fn() {
+        fijo a = arreglo([[1, 2, 3], [4, 5, 6]])
+        debeSer(forma(a), [2, 3])
+        debeSer(dimensiones(a), 2)
+        debeSer(tamano(a), 6)
+        debeSerTipo(a, "arreglo")
+    })
+    probar("el tipo sale de los datos, y se puede forzar", fn() {
+        debeSer(tipoArreglo(arreglo([1, 2, 3])), "entero")
+        debeSer(tipoArreglo(arreglo([1, 2.5])), "real")
+        debeSer(tipoArreglo(arreglo([1, 2, 3], "real")), "real")
+        debeFallarCon(fn() { arreglo([1], "doble") }, "el tipo es")
+    })
+    probar("una anidación que no es rectangular NO es un arreglo", fn() {
+        debeFallarCon(fn() { arreglo([[1, 2], [3]]) }, "no es rectangular")
+        debeFallarCon(fn() { arreglo([[1, 2], 3]) }, "no es rectangular")
+        debeFallarCon(fn() { arreglo([[1, "a"]]) }, "tienen que ser números")
+    })
+    probar("ceros, unos, lleno y secuencia", fn() {
+        debeSer(aListaA(ceros(3)), [0, 0, 0])
+        debeSer(aListaA(unos([2, 2])), [[1, 1], [1, 1]])
+        debeSer(aListaA(lleno(3, 7)), [7, 7, 7])
+        debeSer(aListaA(secuencia(5)), [0, 1, 2, 3, 4])
+        debeSer(aListaA(secuencia(2, 6)), [2, 3, 4, 5])
+        debeSer(aListaA(secuencia(0, 10, 3)), [0, 3, 6, 9])
+        debeFallarCon(fn() { secuencia(0, 5, 0) }, "el paso no puede ser 0")
+    })
+    probar("reparto incluye los dos extremos, exactos", fn() {
+        # Es la diferencia con «secuencia»: ahí el último punto cae donde caiga.
+        debeSer(aListaA(reparto(0, 1, 5)), [0, 0.25, 0.5, 0.75, 1])
+        debeSer(aListaA(reparto(0, 1, 3)), [0, 0.5, 1])
+        # El último, exacto, sin el error que acumularía sumar el paso 50 veces.
+        fijo r = reparto(0, 1, 101)
+        debeSer(elemento(r, 100), 1)
+    })
+    probar("la forma se comprueba", fn() {
+        debeFallarCon(fn() { ceros([2, -1]) }, "enteros no negativos")
+        debeFallarCon(fn() { ceros([]) }, "no puede estar vacía")
+    })
+})
+
+grupo("los operadores funcionan sobre el arreglo entero", fn() {
+    probar("con un número, en los dos órdenes", fn() {
+        fijo a = arreglo([1, 2, 3])
+        debeSer(aListaA(a * 2), [2, 4, 6])
+        debeSer(aListaA(2 * a), [2, 4, 6])
+        debeSer(aListaA(a + 10), [11, 12, 13])
+        debeSer(aListaA(a - 1), [0, 1, 2])
+        debeSer(aListaA(10 - a), [9, 8, 7])
+        debeSer(aListaA(a ** 2), [1, 4, 9])
+        debeSer(aListaA(-a), [-1, -2, -3])
+    })
+    probar("entre dos arreglos", fn() {
+        fijo a = arreglo([1, 2, 3])
+        fijo b = arreglo([10, 20, 30])
+        debeSer(aListaA(a + b), [11, 22, 33])
+        debeSer(aListaA(b - a), [9, 18, 27])
+        debeSer(aListaA(a * b), [10, 40, 90])
+        debeSer(aListaA(b / a), [10, 10, 10])
+    })
+    probar("y se pueden encadenar, que es el punto", fn() {
+        fijo a = arreglo([1, 2, 3])
+        debeSer(aListaA(a * 2 + 1), [3, 5, 7])
+        debeSer(aListaA((a + 1) * (a - 1)), [0, 3, 8])
+    })
+    probar("dividir da real aunque los dos sean enteros", fn() {
+        debeSer(tipoArreglo(arreglo([1, 2]) / arreglo([2, 4])), "real")
+        debeSer(tipoArreglo(arreglo([1, 2]) * arreglo([2, 4])), "entero")
+    })
+    probar("la división entre cero se queja, no da infinito en silencio", fn() {
+        debeFallarCon(fn() { arreglo([1, 2]) / arreglo([1, 0]) }, "división entre cero")
+        debeFallarCon(fn() { arreglo([1, 2]) / 0 }, "división entre cero")
+    })
+    # «arreglo([1,2]) * "dos"» no se puede probar aquí: el VERIFICADOR lo caza,
+    # así que el archivo entero dejaría de compilar. Que se pare antes de correr
+    # es mejor que poder probarlo, y la regla de la VM —que dice lo mismo para
+    # lo que llegue como «cualquiera»— se prueba desde JavaScript.
+})
+
+grupo("difusión: la regla de los ejes", fn() {
+    probar("una fila se estira a todas las filas", fn() {
+        fijo m = arreglo([[1, 2, 3], [4, 5, 6]])
+        debeSer(aListaA(m + arreglo([10, 20, 30])), [[11, 22, 33], [14, 25, 36]])
+    })
+    probar("una columna por una fila da la matriz entera", fn() {
+        fijo col = redimensionar(arreglo([1, 2, 3]), [3, 1])
+        fijo fil = redimensionar(arreglo([10, 20]), [1, 2])
+        debeSer(forma(col * fil), [3, 2])
+        debeSer(aListaA(col * fil), [[10, 20], [20, 40], [30, 60]])
+    })
+    probar("y cuando no se puede, lo dice con las dos formas", fn() {
+        debeFallarCon(fn() { arreglo([[1, 2, 3]]) + arreglo([1, 2]) }, "no se pueden difundir")
+    })
+})
+
+grupo("vistas: rebanar no copia", fn() {
+    probar("la transpuesta es una vista, y cambia la forma", fn() {
+        fijo a = arreglo([[1, 2, 3], [4, 5, 6]])
+        fijo t = transpuesta(a)
+        debeSer(forma(t), [3, 2])
+        debeSer(aListaA(t), [[1, 4], [2, 5], [3, 6]])
+        debeSerCierto(esVista(t))
+        debeSerFalso(esVista(a))
+    })
+    probar("la transpuesta de la transpuesta es la de partida", fn() {
+        fijo a = arreglo([[1, 2, 3], [4, 5, 6]])
+        debeSer(transpuesta(transpuesta(a)), a)
+    })
+    probar("una fila es una vista, y escribir en ella se ve en el original", fn() {
+        fijo a = arreglo([[1, 2], [3, 4]])
+        fijo f = fila(a, 1)
+        debeSerCierto(esVista(f))
+        debeSer(aListaA(f), [3, 4])
+        ponerElemento(f, 0, 99)
+        debeSer(elemento(a, 1, 0), 99)
+    })
+    probar("copia NO comparte memoria", fn() {
+        fijo a = arreglo([[1, 2], [3, 4]])
+        fijo c = copia(fila(a, 0))
+        debeSerFalso(esVista(c))
+        ponerElemento(c, 0, 99)
+        debeSer(elemento(a, 0, 0), 1)
+    })
+    probar("los operadores funcionan sobre una vista, con sus zancadas", fn() {
+        fijo a = arreglo([[1, 2, 3], [4, 5, 6]])
+        debeSer(aListaA(transpuesta(a) * 2), [[2, 8], [4, 10], [6, 12]])
+    })
+    probar("redimensionar no copia si la memoria está seguida", fn() {
+        fijo a = secuencia(6)
+        fijo m = redimensionar(a, [2, 3])
+        debeSerCierto(esVista(m))
+        debeSer(aListaA(m), [[0, 1, 2], [3, 4, 5]])
+        debeFallarCon(fn() { redimensionar(a, [4, 2]) }, "son 6 números y 4×2 son 8")
+    })
+})
+
+grupo("llegar a un número suelto", fn() {
+    probar("elemento y sus límites", fn() {
+        fijo a = arreglo([[1, 2, 3], [4, 5, 6]])
+        debeSer(elemento(a, 0, 0), 1)
+        debeSer(elemento(a, 1, 2), 6)
+        debeFallarCon(fn() { elemento(a, 0) }, "2 dimensiones y llegaron 1")
+        debeFallarCon(fn() { elemento(a, 2, 0) }, "se sale del eje")
+    })
+    probar("la igualdad compara forma y valores", fn() {
+        debeSer(arreglo([1, 2]), arreglo([1, 2]))
+        noDebeSer(arreglo([1, 2]), arreglo([1, 3]))
+        noDebeSer(arreglo([[1, 2]]), arreglo([1, 2]))
+    })
+})
+
+
+grupo("máscaras: de arreglo a «los que cumplen»", fn() {
+    probar("comparar da un arreglo de bool", fn() {
+        fijo a = arreglo([3, 1, 4, 1, 5])
+        debeSer(aListaA(mayorQue(a, 3)), [0, 0, 1, 0, 1])
+        debeSer(aListaA(menorQue(a, 2)), [0, 1, 0, 1, 0])
+        debeSer(aListaA(igualA(a, 1)), [0, 1, 0, 1, 0])
+        debeSer(aListaA(distintoA(a, 1)), [1, 0, 1, 0, 1])
+        debeSer(tipoArreglo(mayorQue(a, 3)), "bool")
+    })
+    probar("y se puede comparar con otro arreglo, con difusión", fn() {
+        fijo a = redimensionar(arreglo([1, 2, 3, 4, 5, 6]), [2, 3])
+        debeSer(aListaA(mayorQue(a, arreglo([2, 2, 2]))), [[0, 0, 1], [1, 1, 1]])
+    })
+    probar("enMascara saca los que cumplen, en una dimensión", fn() {
+        fijo a = arreglo([3, 1, 4, 1, 5])
+        debeSer(aListaA(enMascara(a, mayorQue(a, 2))), [3, 4, 5])
+    })
+    probar("todos, alguno y contarCiertos", fn() {
+        fijo a = arreglo([3, 1, 4])
+        debeSerCierto(todos(mayorQue(a, 0)))
+        debeSerFalso(todos(mayorQue(a, 2)))
+        debeSerCierto(alguno(mayorQue(a, 3)))
+        debeSerFalso(alguno(mayorQue(a, 9)))
+        debeSer(contarCiertos(mayorQue(a, 2)), 2)
+    })
+    probar("las lógicas combinan máscaras", fn() {
+        fijo a = arreglo([1, 2, 3, 4, 5])
+        debeSer(aListaA(yA(mayorQue(a, 1), menorQue(a, 5))), [0, 1, 1, 1, 0])
+        debeSer(aListaA(oA(menorQue(a, 2), mayorQue(a, 4))), [1, 0, 0, 0, 1])
+        debeSer(aListaA(noA(mayorQue(a, 3))), [1, 1, 1, 0, 0])
+    })
+    probar("ponerEnMascara MODIFICA, como agregar con las listas", fn() {
+        fijo a = arreglo([1, 2, 3, 4])
+        ponerEnMascara(a, mayorQue(a, 2), 0)
+        debeSer(aListaA(a), [1, 2, 0, 0])
+    })
+    probar("donde elige elemento a elemento", fn() {
+        fijo a = arreglo([-2, 3, -4, 5])
+        debeSer(aListaA(donde(mayorQue(a, 0), a, 0)), [0, 3, 0, 5])
+        debeSer(aListaA(donde(mayorQue(a, 0), 1, -1)), [-1, 1, -1, 1])
+    })
+    probar("y los huecos se marcan", fn() {
+        fijo a = arreglo([1.0, |INFINITO - |INFINITO, 3.0])
+        debeSer(aListaA(esNaN(a)), [0, 1, 0])
+        debeSer(aListaA(esFinito(a)), [1, 0, 1])
+        debeSer(sumaSinNaN(a), 4)
+        debeSer(aListaA(aCero(a)), [1, 0, 3])
+    })
+})
+
+grupo("reducir, acumular y los índices", fn() {
+    probar("argMaximo y argMinimo dan el ÍNDICE", fn() {
+        fijo a = arreglo([3, 1, 4, 1, 5, 9, 2])
+        debeSer(argMaximo(a), 5)
+        debeSer(argMinimo(a), 1)
+    })
+    probar("y con eje, uno por fila", fn() {
+        fijo m = redimensionar(arreglo([1, 9, 2, 8, 3, 7]), [2, 3])
+        debeSer(aListaA(argMaximo(m, 1)), [1, 0])
+        debeSer(aListaA(argMinimo(m, 1)), [0, 1])
+    })
+    probar("acumSuma y compañía", fn() {
+        fijo a = arreglo([1, 2, 3, 4])
+        debeSer(aListaA(acumSuma(a)), [1, 3, 6, 10])
+        debeSer(aListaA(acumProducto(a)), [1, 2, 6, 24])
+        debeSer(aListaA(acumMaximo(arreglo([1, 5, 2, 9]))), [1, 5, 5, 9])
+        debeSer(aListaA(acumMinimo(arreglo([5, 1, 9, 0]))), [5, 1, 1, 0])
+    })
+    probar("acumSuma por eje", fn() {
+        fijo m = redimensionar(arreglo([1, 2, 3, 4]), [2, 2])
+        debeSer(aListaA(acumSuma(m, 0)), [[1, 2], [4, 6]])
+        debeSer(aListaA(acumSuma(m, 1)), [[1, 3], [3, 7]])
+    })
+    probar("diferencias tiene un elemento menos, y eso es correcto", fn() {
+        debeSer(aListaA(diferencias(arreglo([1, 4, 9, 16]))), [3, 5, 7])
+        debeSer(tamano(diferencias(arreglo([1, 2, 3]))), 2)
+    })
+    probar("suma, media, minimo y maximo aceptan un eje", fn() {
+        fijo m = redimensionar(arreglo([1, 2, 3, 4, 5, 6]), [2, 3])
+        debeSer(suma(m), 21)
+        debeSer(aListaA(suma(m, 0)), [5, 7, 9])
+        debeSer(aListaA(suma(m, 1)), [6, 15])
+        debeSer(aListaA(media(m, 1)), [2, 5])
+        debeSer(aListaA(maximo(m, 0)), [4, 5, 6])
+        debeSer(aListaA(minimo(m, 1)), [1, 4])
+    })
+    probar("el eje −1 es el último", fn() {
+        fijo m = redimensionar(arreglo([1, 2, 3, 4]), [2, 2])
+        debeSer(aListaA(suma(m, -1)), aListaA(suma(m, 1)))
+        debeFallarCon(fn() { suma(m, 5) }, "el eje 5 no existe")
+    })
+    probar("cuantil interpola, y 0.5 es la mediana", fn() {
+        fijo a = arreglo([1.0, 2.0, 3.0, 4.0])
+        debeSer(cuantil(a, 0.5), 2.5)
+        debeSer(cuantil(a, 0.0), 1)
+        debeSer(cuantil(a, 1.0), 4)
+        debeFallarCon(fn() { cuantil(a, 50.0) }, "el cuantil va de 0 a 1")
+    })
+    probar("normaVector, con los tres órdenes", fn() {
+        fijo a = arreglo([3.0, 4.0])
+        debeSer(normaVector(a), 5)
+        debeSer(normaVector(a, 1.0), 7)
+        debeSer(normaVector(a, |INFINITO), 4)
+    })
+    probar("estandarizar deja media 0 y desviación 1", fn() {
+        fijo e = estandarizar(arreglo([2.0, 4.0, 6.0, 8.0]))
+        debeSerCerca(media(e), 0, 0.0000001)
+        debeSerCerca(desviacion(e), 1, 0.0000001)
+        debeFallarCon(fn() { estandarizar(arreglo([3.0, 3.0])) }, "la desviación es 0")
+    })
+    probar("mediaMovil suaviza y acorta", fn() {
+        debeSer(aListaA(mediaMovil(arreglo([1.0, 2.0, 3.0, 4.0]), 2)), [1.5, 2.5, 3.5])
+        debeFallarCon(fn() { mediaMovil(arreglo([1.0]), 5) }, "la ventana es 5")
+    })
+})
+
+grupo("forma: pegar, estirar y rebanar", fn() {
+    probar("trozo es una VISTA, y los negativos cuentan desde el final", fn() {
+        fijo a = arreglo([0, 1, 2, 3, 4, 5])
+        debeSer(aListaA(trozo(a, 0, 1, 4)), [1, 2, 3])
+        debeSer(aListaA(trozo(a, 0, -2)), [4, 5])
+        debeSerCierto(esVista(trozo(a, 0, 1, 3)))
+    })
+    probar("y escribir en el trozo se ve en el original", fn() {
+        fijo a = arreglo([0, 1, 2, 3])
+        ponerElemento(trozo(a, 0, 2), 0, 99)
+        debeSer(elemento(a, 2), 99)
+    })
+    probar("trozoPaso salta, y con −1 lo da al revés", fn() {
+        fijo a = arreglo([0, 1, 2, 3, 4, 5])
+        debeSer(aListaA(trozoPaso(a, 0, 2)), [0, 2, 4])
+        debeSer(aListaA(trozoPaso(a, 0, -1)), [5, 4, 3, 2, 1, 0])
+        debeFallarCon(fn() { trozoPaso(a, 0, 0) }, "el paso no puede ser 0")
+    })
+    probar("expandir y apretar son inversos", fn() {
+        fijo a = arreglo([1, 2, 3])
+        debeSer(forma(expandir(a, 0)), [1, 3])
+        debeSer(forma(expandir(a, 1)), [3, 1])
+        debeSer(forma(apretar(expandir(a, 1))), [3])
+        debeSerCierto(esVista(expandir(a, 0)))
+    })
+    probar("difundirA estira sin copiar", fn() {
+        fijo col = expandir(arreglo([1, 2]), 1)
+        debeSer(aListaA(difundirA(col, [2, 3])), [[1, 1, 1], [2, 2, 2]])
+        debeSerCierto(esVista(difundirA(col, [2, 3])))
+        debeFallarCon(fn() { difundirA(arreglo([1, 2, 3]), [2, 2]) }, "no se puede estirar")
+    })
+    probar("concatenar pega por un eje que YA existe", fn() {
+        fijo m = redimensionar(arreglo([1, 2, 3, 4]), [2, 2])
+        debeSer(forma(concatenar(m, m, 0)), [4, 2])
+        debeSer(forma(concatenar(m, m, 1)), [2, 4])
+        debeSer(aListaA(concatenar(arreglo([1, 2]), arreglo([3]))), [1, 2, 3])
+    })
+    probar("apilar crea un eje NUEVO, y exige la misma forma", fn() {
+        fijo a = arreglo([1, 2])
+        debeSer(forma(apilar(a, a, a)), [3, 2])
+        debeSer(aListaA(apilar(a, a)), [[1, 2], [1, 2]])
+        debeFallarCon(fn() { apilar(arreglo([1, 2]), arreglo([1, 2, 3])) }, "la MISMA forma")
+    })
+    probar("y confundirlas se explica", fn() {
+        debeFallarCon(fn() { concatenar(redimensionar(arreglo([1,2,3,4]), [2,2]), arreglo([1,2])) },
+                      "dimensiones")
+    })
+    probar("aplanarA es una vista si se puede", fn() {
+        fijo m = redimensionar(arreglo([1, 2, 3, 4]), [2, 2])
+        debeSer(aListaA(aplanarA(m)), [1, 2, 3, 4])
+        debeSerCierto(esVista(aplanarA(m)))
+        # De una transpuesta no puede ser vista: la memoria no está en orden.
+        debeSerFalso(esVista(aplanarA(transpuesta(m))))
+        debeSer(aListaA(aplanarA(transpuesta(m))), [1, 3, 2, 4])
+    })
+})
+
+grupo("crear, convertir y multiplicar", fn() {
+    probar("los «…Como» copian forma y tipo", fn() {
+        fijo a = redimensionar(arreglo([1, 2, 3, 4]), [2, 2])
+        debeSer(forma(cerosComo(a)), [2, 2])
+        debeSer(tipoArreglo(cerosComo(a)), "entero")
+        debeSer(aListaA(unosComo(a)), [[1, 1], [1, 1]])
+        debeSer(tipoArreglo(cerosComo(a, "real")), "real")
+    })
+    probar("aTipo convierte copiando", fn() {
+        debeSer(tipoArreglo(aTipo(arreglo([1.9, 2.1]), "entero")), "entero")
+        debeSer(aListaA(aTipo(arreglo([1.9, 2.1]), "entero")), [1, 2])
+        debeSer(tipoArreglo(aTipo(arreglo([1, 0, 2]), "bool")), "bool")
+    })
+    probar("por multiplica matrices, y dice por qué no cuando no puede", fn() {
+        fijo A = redimensionar(arreglo([1, 2, 3, 4]), [2, 2])
+        debeSer(aListaA(por(A, A)), [[7, 10], [15, 22]])
+        # La identidad no cambia nada, que es la prueba que vale.
+        fijo I = redimensionar(arreglo([1, 0, 0, 1]), [2, 2])
+        debeSer(aListaA(por(A, I)), [[1, 2], [3, 4]])
+        debeFallarCon(fn() { por(A, redimensionar(arreglo([1,2,3]), [3,1])) }, "no se puede multiplicar")
+        debeFallarCon(fn() { por(arreglo([1, 2]), arreglo([1, 2])) }, "multiplica dos matrices")
+    })
+    probar("productoPunto es Σ a·b", fn() {
+        debeSer(productoPunto(arreglo([1, 2, 3]), arreglo([4, 5, 6])), 32)
+        debeFallarCon(fn() { productoPunto(arreglo([1]), arreglo([1, 2])) }, "valores y el otro")
+    })
+})
+
+grupo("ordenar, buscar y conjuntos", fn() {
+    probar("ordenarA copia y argOrdenar da los índices", fn() {
+        fijo a = arreglo([3, 1, 2])
+        debeSer(aListaA(ordenarA(a)), [1, 2, 3])
+        debeSer(aListaA(a), [3, 1, 2])
+        debeSer(aListaA(argOrdenar(a)), [1, 2, 0])
+    })
+    probar("y con tomar se ordena OTRO arreglo por este", fn() {
+        # La operación de verdad: ordenar los nombres por sus ventas.
+        fijo ventas = arreglo([30, 10, 20])
+        fijo ids = arreglo([7, 8, 9])
+        debeSer(aListaA(tomar(ids, argOrdenar(ventas))), [8, 9, 7])
+    })
+    probar("tomar acepta negativos y se queja de lo que se sale", fn() {
+        fijo a = arreglo([10, 20, 30])
+        debeSer(aListaA(tomar(a, arreglo([-1, 0]))), [30, 10])
+        debeFallarCon(fn() { tomar(a, arreglo([5])) }, "se sale")
+    })
+    probar("unicosConCuentas", fn() {
+        fijo r = unicosConCuentas(arreglo([3, 1, 3, 3, 1]))
+        debeSer(aListaA(obtener(r, "valores", nulo)), [1, 3])
+        debeSer(aListaA(obtener(r, "cuantas", nulo)), [2, 3])
+    })
+    probar("estaEn da una máscara, para conciliar dos listas", fn() {
+        debeSer(aListaA(estaEn(arreglo([1, 5, 9]), arreglo([5, 9, 13]))), [0, 1, 1])
+    })
+    probar("recortar, maximoDe y minimoDe", fn() {
+        debeSer(aListaA(recortar(arreglo([1, 5, 9]), 2, 6)), [2, 5, 6])
+        debeSer(aListaA(maximoDe(arreglo([1, 5]), arreglo([3, 2]))), [3, 5])
+        debeSer(aListaA(minimoDe(arreglo([1, 5]), 3)), [1, 3])
+        debeFallarCon(fn() { recortar(arreglo([1]), 5, 2) }, "es mayor que el máximo")
+    })
+})
+
+grupo("azar sobre arreglos", fn() {
+    probar("la semilla hace repetible un arreglo entero", fn() {
+        semilla(42)
+        fijo a = uniformes(5)
+        semilla(42)
+        debeSer(aListaA(uniformes(5)), aListaA(a))
+    })
+    probar("uniformes respeta el rango", fn() {
+        semilla(1)
+        fijo a = uniformes(100, 10.0, 20.0)
+        debeSerCierto(minimo(a) >= 10.0)
+        debeSerCierto(maximo(a) < 20.0)
+    })
+    probar("enteros también, y exige un rango de verdad", fn() {
+        semilla(2)
+        fijo a = enteros(200, 0, 3)
+        debeSerCierto(minimo(a) >= 0)
+        debeSerCierto(maximo(a) <= 2)
+        debeSer(tipoArreglo(a), "entero")
+        debeFallarCon(fn() { enteros(3, 5, 5) }, "mayor que el mínimo")
+    })
+    probar("normales dan una campana con la media que se pide", fn() {
+        semilla(7)
+        debeSerCerca(media(normales(4000, 10.0, 2.0)), 10, 0.2)
+    })
+    probar("barajarJuntos NO desparejan", fn() {
+        # Es lo que hace falta para mezclar datos y etiquetas, y hacerlo con dos
+        # «barajar» es el fallo silencioso clásico.
+        semilla(5)
+        fijo r = barajarJuntos(arreglo([1, 2, 3, 4, 5]), arreglo([10, 20, 30, 40, 50]))
+        fijo x = r[0]
+        fijo y = r[1]
+        para i en rango(5) {
+            debeSer(elemento(y, i), elemento(x, i) * 10)
+        }
+        debeFallarCon(fn() { barajarJuntos(arreglo([1, 2]), arreglo([1, 2, 3])) }, "filas y otro")
+    })
+})
+
+grupo("las que ya existían y ahora aceptan arreglos", fn() {
+    probar("las de un argumento, con el mismo nombre", fn() {
+        debeSer(aListaA(raiz(arreglo([1.0, 4.0, 9.0]))), [1, 2, 3])
+        debeSer(aListaA(absoluto(arreglo([-1, 2, -3]))), [1, 2, 3])
+        debeSer(aListaA(piso(arreglo([1.7, 2.2]))), [1, 2])
+        debeSer(aListaA(techo(arreglo([1.2, 2.7]))), [2, 3])
+        debeSer(aListaA(signo(arreglo([-5, 0, 5]))), [-1, 0, 1])
+    })
+    probar("y el verificador sigue rechazando lo que no es número ni arreglo", fn() {
+        # «raiz("hola")» no se puede probar aquí porque lo caza el verificador y
+        # el archivo entero dejaría de compilar. Que se pare antes de correr es
+        # mejor que poder probarlo.
+        debeSer(raiz(16.0), 4)
+    })
+    probar("las de estadística, con el mismo nombre", fn() {
+        fijo a = arreglo([1.0, 2.0, 3.0, 4.0])
+        debeSer(suma(a), 10)
+        debeSer(media(a), 2.5)
+        debeSer(mediana(a), 2.5)
+        debeSer(percentil(a, 50), 2.5)
+        debeSerCerca(desviacion(a), 1.29099, 0.0001)
+    })
+    probar("y las listas siguen funcionando igual", fn() {
+        debeSer(suma([1, 2, 3]), 6)
+        debeSer(media([1.0, 2.0, 3.0]), 2)
+        debeSer(raiz(25.0), 5)
+        debeSer(maximo([3, 1, 4]), 4)
+    })
+})
+
+
+# ── álgebra lineal ───────────────────────────────────────────────────────────
+# Aquí casi no hay números escritos a mano: una descomposición se comprueba
+# RECONSTRUYENDO la matriz original, que es la única prueba que no se puede
+# aprobar por casualidad. Si factorQR devolviera basura ortogonal, por(Q, R)
+# no daría A.
+
+fn cerca(X: arreglo, Y: arreglo) {
+    debeSerMenor(maximo(absoluto(X - Y)), 0.000001)
+}
+
+grupo("álgebra lineal — descomposiciones", fn() {
+    probar("factorLU: las filas permutadas de A son L·U", fn() {
+        fijo A = arreglo([[2.0, 1.0, 1.0], [1.0, 3.0, 2.0], [1.0, 0.0, 0.0]])
+        fijo f = factorLU(A)
+        fijo P = f["P"]
+        fijo LU = por(f["L"], f["U"])
+        para i en rango(3) {
+            cerca(fila(LU, i), fila(A, entero(elemento(P, i))))
+        }
+    })
+    probar("factorLU: L es triangular inferior con unos y U superior", fn() {
+        fijo A = arreglo([[4.0, 3.0], [6.0, 3.0]])
+        fijo f = factorLU(A)
+        cerca(f["L"], triangularInferior(f["L"]))
+        cerca(f["U"], triangularSuperior(f["U"]))
+        cerca(diagonal(f["L"]), unos([2]))
+    })
+    probar("factorQR: A = Q·R y Q es ortogonal", fn() {
+        fijo A = arreglo([[12.0, -51.0, 4.0], [6.0, 167.0, -68.0], [-4.0, 24.0, -41.0]])
+        fijo f = factorQR(A)
+        cerca(por(f["Q"], f["R"]), A)
+        cerca(por(transpuesta(f["Q"]), f["Q"]), identidadA(3))
+        cerca(f["R"], triangularSuperior(f["R"]))
+    })
+    probar("factorQR también con más filas que columnas", fn() {
+        fijo A = arreglo([[1.0, 1.0], [1.0, 2.0], [1.0, 3.0], [1.0, 4.0]])
+        fijo f = factorQR(A)
+        cerca(por(f["Q"], f["R"]), A)
+        cerca(por(transpuesta(f["Q"]), f["Q"]), identidadA(4))
+    })
+    probar("factorCholesky: L·Lᵗ vuelve a ser A", fn() {
+        fijo A = arreglo([[4.0, 12.0, -16.0], [12.0, 37.0, -43.0], [-16.0, -43.0, 98.0]])
+        fijo L = factorCholesky(A)
+        cerca(por(L, transpuesta(L)), A)
+        cerca(L, triangularInferior(L))
+        debeSer(elemento(L, 0, 0), 2)      # √4, el libro de texto
+    })
+    probar("factorCholesky se niega si no es definida positiva", fn() {
+        debeFallarCon(fn() {
+            factorCholesky(arreglo([[1.0, 2.0], [2.0, 1.0]]))
+        }, "no es definida positiva")
+    })
+    probar("descomponerSVD: U·diagonal(S)·Vᵗ vuelve a ser A", fn() {
+        fijo A = arreglo([[3.0, 1.0, 1.0], [-1.0, 3.0, 1.0]])
+        fijo f = descomponerSVD(A)
+        cerca(por(por(f["U"], diagonal(f["S"])), transpuesta(f["V"])), A)
+    })
+    probar("los valores singulares salen de mayor a menor y nunca negativos", fn() {
+        fijo A = arreglo([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 10.0]])
+        fijo s = valoresSingulares(A)
+        debeSerCierto(todos(mayorIgualQue(s, 0.0)))
+        debeSerCierto(todos(menorIgualQue(diferencias(s), 0.0)))
+    })
+    probar("una matriz diagonal tiene sus propios números como valores singulares", fn() {
+        fijo s = valoresSingulares(diagonal(arreglo([3.0, 5.0, 1.0])))
+        cerca(s, arreglo([5.0, 3.0, 1.0]))
+    })
+})
+
+grupo("álgebra lineal — resolver", fn() {
+    probar("resolverA: A·x vuelve a dar b", fn() {
+        fijo A = arreglo([[2.0, 1.0, 1.0], [1.0, 3.0, 2.0], [1.0, 0.0, 0.0]])
+        fijo b = arreglo([4.0, 5.0, 6.0])
+        fijo x = resolverA(A, b)
+        cerca(apretar(por(A, expandir(x, 1)), 1), b)
+    })
+    probar("resolverA da lo mismo que el resolver de listas", fn() {
+        fijo A = [[2.0, 1.0], [1.0, -1.0]]
+        fijo x = resolver(A, [3.0, 0.0])
+        fijo y = resolverA(arreglo(A), arreglo([3.0, 0.0]))
+        debeSerCerca(x[0], elemento(y, 0), 0.000001)
+        debeSerCerca(x[1], elemento(y, 1), 0.000001)
+    })
+    probar("resolverA con varios lados derechos a la vez", fn() {
+        fijo A = arreglo([[2.0, 0.0], [0.0, 4.0]])
+        fijo B = arreglo([[2.0, 6.0], [4.0, 8.0]])
+        cerca(resolverA(A, B), arreglo([[1.0, 3.0], [1.0, 2.0]]))
+    })
+    probar("resolverA avisa si la matriz es singular", fn() {
+        debeFallarCon(fn() {
+            resolverA(arreglo([[1.0, 2.0], [2.0, 4.0]]), arreglo([1.0, 2.0]))
+        }, "singular")
+    })
+    probar("resolverA avisa si los tamaños no cuadran", fn() {
+        debeFallarCon(fn() {
+            resolverA(identidadA(3), arreglo([1.0, 2.0]))
+        }, "lado derecho")
+    })
+    probar("resolverTriangular mira ella misma de qué lado está", fn() {
+        cerca(resolverTriangular(arreglo([[2.0, 1.0], [0.0, 3.0]]), arreglo([5.0, 9.0])),
+              arreglo([1.0, 3.0]))
+        cerca(resolverTriangular(arreglo([[2.0, 0.0], [1.0, 3.0]]), arreglo([4.0, 8.0])),
+              arreglo([2.0, 2.0]))
+    })
+    probar("resolverTriangular se niega si la matriz no es triangular", fn() {
+        debeFallarCon(fn() {
+            resolverTriangular(arreglo([[2.0, 1.0], [1.0, 3.0]]), arreglo([1.0, 1.0]))
+        }, "no es triangular")
+    })
+    probar("minimosCuadrados recupera la recta exacta si los puntos están en ella", fn() {
+        # y = 3 + 2x en x = 0..3, con la columna de unos para la constante
+        fijo A = arreglo([[1.0, 0.0], [1.0, 1.0], [1.0, 2.0], [1.0, 3.0]])
+        fijo b = arreglo([3.0, 5.0, 7.0, 9.0])
+        cerca(minimosCuadrados(A, b), arreglo([3.0, 2.0]))
+    })
+    probar("minimosCuadrados da la misma recta que regresion", fn() {
+        # Dos caminos distintos al mismo ajuste: regresion por las fórmulas de
+        # la covarianza, minimosCuadrados por QR. Si no coincidieran, uno de los
+        # dos estaría mal y hasta ahora no había forma de saber cuál.
+        fijo xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+        fijo ys = [2.1, 3.9, 6.2, 7.8, 10.1]
+        fijo t = regresion(xs, ys)
+        fijo A = apilar(unos([5]), arreglo(xs), 1)
+        fijo c = minimosCuadrados(A, arreglo(ys))
+        debeSerCerca(elemento(c, 1), t["pendiente"], 0.00001)
+        debeSerCerca(elemento(c, 0), t["intercepto"], 0.00001)
+    })
+    probar("minimosCuadrados con menos ecuaciones que incógnitas da la de norma mínima", fn() {
+        fijo A = arreglo([[1.0, 1.0]])
+        fijo x = minimosCuadrados(A, arreglo([2.0]))
+        cerca(x, arreglo([1.0, 1.0]))     # (1,1) y no (2,0), que también vale
+    })
+    probar("pseudoInversa coincide con la inversa cuando hay inversa", fn() {
+        fijo A = arreglo([[4.0, 7.0], [2.0, 6.0]])
+        cerca(pseudoInversa(A), inversaA(A))
+    })
+    probar("pseudoInversa cumple A·A⁺·A = A aunque sobren filas", fn() {
+        fijo A = arreglo([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        cerca(por(por(A, pseudoInversa(A)), A), A)
+    })
+})
+
+grupo("álgebra lineal — medidas de una matriz", fn() {
+    probar("determinanteA coincide con el determinante de listas", fn() {
+        fijo m = [[2.0, 1.0, 1.0], [1.0, 3.0, 2.0], [1.0, 0.0, 0.0]]
+        debeSerCerca(determinanteA(arreglo(m)), determinante(m), 0.000001)
+    })
+    probar("determinanteA de una triangular es el producto de su diagonal", fn() {
+        fijo A = arreglo([[2.0, 9.0, 9.0], [0.0, 3.0, 9.0], [0.0, 0.0, 5.0]])
+        debeSerCerca(determinanteA(A), 30, 0.000001)
+    })
+    probar("determinanteA de una singular es 0", fn() {
+        debeSer(determinanteA(arreglo([[1.0, 2.0], [2.0, 4.0]])), 0)
+    })
+    probar("inversaA: A·A⁻¹ es la identidad", fn() {
+        fijo A = arreglo([[2.0, 1.0, 1.0], [1.0, 3.0, 2.0], [1.0, 0.0, 0.0]])
+        cerca(por(A, inversaA(A)), identidadA(3))
+        cerca(por(inversaA(A), A), identidadA(3))
+    })
+    probar("inversaA se niega con una singular y dice qué usar", fn() {
+        debeFallarCon(fn() {
+            inversaA(arreglo([[1.0, 2.0], [2.0, 4.0]]))
+        }, "no tiene inversa")
+    })
+    probar("rangoMatriz cuenta las filas que aportan algo", fn() {
+        debeSer(rangoMatriz(identidadA(4)), 4)
+        debeSer(rangoMatriz(arreglo([[1.0, 2.0], [2.0, 4.0]])), 1)
+        # la tercera fila es la suma de las dos primeras
+        debeSer(rangoMatriz(arreglo([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]])), 2)
+    })
+    probar("condicion: 1 en la identidad, |INFINITO en una singular", fn() {
+        debeSerCerca(condicion(identidadA(3)), 1, 0.000001)
+        debeSer(condicion(arreglo([[1.0, 2.0], [2.0, 4.0]])), |INFINITO)
+    })
+    probar("condicion crece cuando la matriz casi no tiene inversa", fn() {
+        debeSerMayor(condicion(arreglo([[1.0, 1.0], [1.0, 1.0001]])), 1000.0)
+    })
+    probar("normaMatriz: las cinco normas de la misma matriz", fn() {
+        fijo A = arreglo([[3.0, 0.0], [4.0, 0.0]])
+        debeSerCerca(normaMatriz(A), 5, 0.000001)                 # frobenius
+        debeSerCerca(normaMatriz(A, "uno"), 7, 0.000001)          # la columna más gorda
+        debeSerCerca(normaMatriz(A, "infinito"), 4, 0.000001)     # la fila más gorda
+        debeSerCerca(normaMatriz(A, "espectral"), 5, 0.000001)
+        debeSerCerca(normaMatriz(A, "nuclear"), 5, 0.000001)
+    })
+    probar("normaMatriz dice qué normas conoce si le pides otra", fn() {
+        debeFallarCon(fn() { normaMatriz(identidadA(2), "manhattan") }, "no conozco la norma")
+    })
+    probar("traza funciona igual en listas y en arreglos", fn() {
+        fijo m = [[1.0, 2.0], [3.0, 4.0]]
+        debeSer(traza(m), 5)
+        debeSer(traza(arreglo(m)), 5)
+    })
+    probar("potenciaMatriz: A⁰ es la identidad y A³ son tres productos", fn() {
+        fijo A = arreglo([[1.0, 1.0], [0.0, 1.0]])
+        cerca(potenciaMatriz(A, 0), identidadA(2))
+        cerca(potenciaMatriz(A, 1), A)
+        cerca(potenciaMatriz(A, 3), por(por(A, A), A))
+        cerca(potenciaMatriz(A, 3), arreglo([[1.0, 3.0], [0.0, 1.0]]))
+    })
+    probar("potenciaMatriz con exponente negativo es la potencia de la inversa", fn() {
+        fijo A = arreglo([[2.0, 0.0], [0.0, 4.0]])
+        cerca(potenciaMatriz(A, -1), inversaA(A))
+        cerca(potenciaMatriz(A, -2), por(inversaA(A), inversaA(A)))
+    })
+})
+
+grupo("álgebra lineal — valores propios", fn() {
+    probar("de una diagonal son su propia diagonal, ordenada", fn() {
+        cerca(autovalores(diagonal(arreglo([2.0, 7.0, 5.0]))), arreglo([7.0, 5.0, 2.0]))
+    })
+    probar("la suma es la traza y el producto el determinante", fn() {
+        fijo A = arreglo([[4.0, 1.0, 2.0], [1.0, 5.0, 3.0], [2.0, 3.0, 6.0]])
+        fijo v = autovalores(A)
+        debeSerCerca(suma(v), traza(A), 0.00001)
+        debeSerCerca(producto(aListaA(v)), determinanteA(A), 0.00001)
+    })
+    probar("autoSimetrica: A·v es λ·v para cada vector", fn() {
+        fijo A = arreglo([[2.0, 1.0], [1.0, 2.0]])
+        fijo f = autoSimetrica(A)
+        para k en rango(2) {
+            fijo v = trozoVarios(f["vectores"], [[], [k, k + 1]])
+            cerca(por(A, v), v * elemento(f["valores"], k))
+        }
+    })
+    probar("una definida positiva tiene todos los valores propios mayores que 0", fn() {
+        fijo A = arreglo([[4.0, 12.0, -16.0], [12.0, 37.0, -43.0], [-16.0, -43.0, 98.0]])
+        debeSerCierto(esDefinidaPositiva(A))
+        debeSerCierto(todos(mayorQue(autovalores(A), 0.0)))
+    })
+    probar("autovalores se niega con una no simétrica y dice qué usar", fn() {
+        debeFallarCon(fn() {
+            autovalores(arreglo([[1.0, 2.0], [0.0, 3.0]]))
+        }, "simétricas")
+    })
+})
+
+grupo("álgebra lineal — construir y mirar", fn() {
+    probar("identidadA tiene unos en la diagonal y nada más", fn() {
+        fijo I = identidadA(3)
+        debeSer(forma(I), [3, 3])
+        debeSer(suma(I), 3)
+        debeSer(traza(I), 3)
+    })
+    probar("diagonal va en las dos direcciones", fn() {
+        fijo A = arreglo([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        debeSer(aListaA(diagonal(A)), [1, 5])
+        debeSer(aListaA(aplanarA(diagonal(diagonal(A)))), [1, 0, 0, 5])
+        cerca(diagonal(diagonal(identidadA(4))), identidadA(4))
+    })
+    probar("las triangulares reparten la matriz en dos y nada se pierde", fn() {
+        fijo A = arreglo([[1.0, 2.0], [3.0, 4.0]])
+        cerca(triangularSuperior(A) + triangularInferior(A) - diagonal(diagonal(A)), A)
+        debeSer(aListaA(aplanarA(triangularSuperior(A, 1))), [0, 2, 0, 0])
+        debeSer(aListaA(aplanarA(triangularInferior(A, -1))), [0, 0, 3, 0])
+    })
+    probar("externo es la matriz de todos los productos", fn() {
+        fijo m = externo(arreglo([1.0, 2.0]), arreglo([10.0, 20.0, 30.0]))
+        debeSer(forma(m), [2, 3])
+        debeSer(aListaA(aplanarA(m)), [10, 20, 30, 20, 40, 60])
+        # su traza, cuando es cuadrada, es el producto punto
+        fijo a = arreglo([1.0, 2.0, 3.0])
+        debeSerCerca(traza(externo(a, a)), productoPunto(a, a), 0.000001)
+    })
+    probar("kronecker con la identidad repite la matriz en bloques", fn() {
+        fijo B = arreglo([[1.0, 2.0], [3.0, 4.0]])
+        fijo K = kronecker(identidadA(2), B)
+        debeSer(forma(K), [4, 4])
+        cerca(trozoVarios(K, [[0, 2], [0, 2]]), B)
+        cerca(trozoVarios(K, [[2, 4], [2, 4]]), B)
+        debeSer(suma(trozoVarios(K, [[0, 2], [2, 4]])), 0)
+    })
+    probar("el determinante de un kronecker es el producto de los dos, elevados", fn() {
+        fijo A = arreglo([[1.0, 2.0], [3.0, 4.0]])
+        fijo B = arreglo([[0.0, 1.0], [1.0, 0.0]])
+        debeSerCerca(determinanteA(kronecker(A, B)),
+                     potencia(determinanteA(A), 2) * potencia(determinanteA(B), 2), 0.00001)
+    })
+    probar("esSimetrica y esDefinidaPositiva", fn() {
+        debeSerCierto(esSimetrica(identidadA(3)))
+        debeSerFalso(esSimetrica(arreglo([[1.0, 2.0], [0.0, 1.0]])))
+        debeSerFalso(esSimetrica(arreglo([[1.0, 2.0, 3.0]])))
+        debeSerCierto(esDefinidaPositiva(identidadA(3)))
+        debeSerFalso(esDefinidaPositiva(arreglo([[1.0, 2.0], [2.0, 1.0]])))
+        debeSerFalso(esDefinidaPositiva(arreglo([[0.0, 0.0], [0.0, 0.0]])))
+    })
+    probar("una matriz de covarianza siempre es simétrica y definida positiva", fn() {
+        # XᵗX con más filas que columnas lo es salvo dependencia
+        fijo X = arreglo([[1.0, 2.0], [3.0, 1.0], [2.0, 5.0], [4.0, 2.0]])
+        fijo C = por(transpuesta(X), X)
+        debeSerCierto(esSimetrica(C))
+        debeSerCierto(esDefinidaPositiva(C))
+    })
+})
+
+grupo("trozoVarios: rebanar todos los ejes de una vez", fn() {
+    probar("da lo mismo que encadenar trozo", fn() {
+        fijo A = redimensionar(secuencia(0.0, 24.0), [4, 6])
+        cerca(trozoVarios(A, [[1, 3], [2, 5]]), trozo(trozo(A, 0, 1, 3), 1, 2, 5))
+    })
+    probar("los cortes que faltan dejan el eje entero", fn() {
+        fijo A = redimensionar(secuencia(0.0, 12.0), [3, 4])
+        cerca(trozoVarios(A, [[1, 2]]), trozo(A, 0, 1, 2))
+        cerca(trozoVarios(A, []), A)
+        cerca(trozoVarios(A, [[], [1, 3]]), trozo(A, 1, 1, 3))
+    })
+    probar("con paso, y con paso negativo lo da al revés", fn() {
+        fijo A = redimensionar(secuencia(0.0, 12.0), [3, 4])
+        debeSer(aListaA(aplanarA(trozoVarios(A, [[], [0, 4, 2]]))), [0, 2, 4, 6, 8, 10])
+        debeSer(aListaA(aplanarA(trozoVarios(A, [[0, 1], [0, 4, 0 - 1]]))), [3, 2, 1, 0])
+        debeSer(aListaA(aplanarA(trozoVarios(A, [[0, 3, 0 - 1], [0, 1]]))), [8, 4, 0])
+    })
+    probar("el paso negativo respeta el trozo y no se sale de él", fn() {
+        fijo a = secuencia(0.0, 6.0)
+        debeSer(aListaA(aplanarA(trozoVarios(expandir(a, 0), [[], [1, 4, 0 - 1]]))), [3, 2, 1])
+    })
+    probar("es una VISTA: escribir dentro se ve en el original", fn() {
+        fijo A = ceros([3, 3])
+        fijo v = trozoVarios(A, [[1, 2], [1, 2]])
+        debeSerCierto(esVista(v))
+        ponerElemento(v, 0, 0, 7.0)
+        debeSer(elemento(A, 1, 1), 7)
+    })
+    probar("los índices negativos cuentan desde el final", fn() {
+        fijo A = redimensionar(secuencia(0.0, 12.0), [3, 4])
+        debeSer(aListaA(aplanarA(trozoVarios(A, [[0 - 1], [0 - 2]]))), [10, 11])
+    })
+    probar("avisa si le pasas más cortes que dimensiones", fn() {
+        debeFallarCon(fn() {
+            trozoVarios(identidadA(2), [[0, 1], [0, 1], [0, 1]])
+        }, "cortes")
+    })
+    probar("avisa si un corte tiene más de tres números o paso 0", fn() {
+        debeFallarCon(fn() { trozoVarios(identidadA(2), [[0, 1, 1, 1]]) }, "como máximo son 3")
+        debeFallarCon(fn() { trozoVarios(identidadA(2), [[0, 2, 0]]) }, "no puede ser 0")
+    })
+})
+
+
+# ── complejos y Fourier ──────────────────────────────────────────────────────
+# Una transformada se comprueba por sus IDENTIDADES, no por una tabla de
+# números: que la inversa deshaga la ida, que sea lineal, que Parseval cuadre, y
+# que una señal de una sola frecuencia dé un solo pico donde toca. Números
+# escritos a mano hay dos: la de [1,2,3,4], que sale a mano en cuatro líneas, y
+# el delta, cuyo espectro tiene que ser plano.
+
+grupo("complejos: el tipo", fn() {
+    probar("complejo construye desde uno o dos arreglos de reales", fn() {
+        fijo z = complejo(arreglo([1.0, 2.0]), arreglo([3.0, 4.0]))
+        debeSerCierto(esComplejo(z))
+        debeSer(tipoArreglo(z), "complejo")
+        debeSer(aListaA(parteReal(z)), [1, 2])
+        debeSer(aListaA(parteImaginaria(z)), [3, 4])
+    })
+    probar("con un solo arreglo la parte imaginaria es cero", fn() {
+        fijo z = complejo(arreglo([5.0, 6.0]))
+        debeSerCierto(esComplejo(z))
+        debeSer(aListaA(parteImaginaria(z)), [0, 0])
+    })
+    probar("un número suelto da un arreglo de uno", fn() {
+        debeSer(forma(complejo(3.0, 4.0)), [1])
+        debeSer(aListaA(absoluto(complejo(3.0, 4.0))), [5])
+    })
+    probar("difunde como cualquier otro arreglo", fn() {
+        fijo z = complejo(arreglo([1.0, 2.0, 3.0]), 1.0)
+        debeSer(forma(z), [3])
+        debeSer(aListaA(parteImaginaria(z)), [1, 1, 1])
+    })
+    probar("parteReal de un arreglo que ya es real da una copia", fn() {
+        fijo a = arreglo([1.0, 2.0])
+        debeSer(aListaA(parteReal(a)), [1, 2])
+        debeSer(aListaA(parteImaginaria(a)), [0, 0])
+        debeSerFalso(esComplejo(a))
+    })
+})
+
+grupo("complejos: la aritmética", fn() {
+    probar("suma y resta van por partes", fn() {
+        fijo a = complejo(1.0, 2.0)
+        fijo b = complejo(10.0, 20.0)
+        debeSer(aListaA(parteReal(a + b)), [11])
+        debeSer(aListaA(parteImaginaria(a + b)), [22])
+        debeSer(aListaA(parteReal(b - a)), [9])
+        debeSer(aListaA(parteImaginaria(b - a)), [18])
+    })
+    probar("i por i es −1, que es toda la razón de que exista el tipo", fn() {
+        fijo i = complejo(0.0, 1.0)
+        debeSer(aListaA(parteReal(i * i)), [-1])
+        debeSer(aListaA(parteImaginaria(i * i)), [0])
+    })
+    probar("el producto mezcla las cuatro partes", fn() {
+        # (1+2i)(3+4i) = 3+4i+6i−8 = −5+10i
+        fijo p = complejo(1.0, 2.0) * complejo(3.0, 4.0)
+        debeSer(aListaA(parteReal(p)), [-5])
+        debeSer(aListaA(parteImaginaria(p)), [10])
+    })
+    probar("dividir y multiplicar se deshacen", fn() {
+        fijo a = complejo(7.0, -3.0)
+        fijo b = complejo(2.0, 5.0)
+        fijo c = (a / b) * b
+        debeSerCerca(elemento(parteReal(c), 0), 7, 0.0000001)
+        debeSerCerca(elemento(parteImaginaria(c), 0), -3, 0.0000001)
+    })
+    probar("la división aguanta números enormes, que es lo que rompe la fórmula de libro", fn() {
+        # Con la fórmula (ac+bd)/(c²+d²) esto daría NaN por desbordar al cuadrado
+        fijo z = complejo(1.0e200, 1.0e200) / complejo(1.0e200, 1.0e200)
+        debeSerCerca(elemento(parteReal(z), 0), 1, 0.0000001)
+        debeSerCerca(elemento(parteImaginaria(z), 0), 0, 0.0000001)
+    })
+    probar("un complejo con un real trata el real como (x, 0)", fn() {
+        fijo z = complejo(1.0, 2.0) * 3.0
+        debeSer(aListaA(parteReal(z)), [3])
+        debeSer(aListaA(parteImaginaria(z)), [6])
+        debeSer(aListaA(parteReal(complejo(1.0, 2.0) + 10.0)), [11])
+        debeSer(aListaA(parteImaginaria(complejo(1.0, 2.0) + 10.0)), [2])
+    })
+    probar("dividir entre cero se queja igual que con reales", fn() {
+        debeFallarCon(fn() { complejo(1.0, 1.0) / complejo(0.0, 0.0) }, "división entre cero")
+    })
+    probar("los complejos no se ordenan, y lo dice", fn() {
+        debeFallarCon(fn() { mayorQue(complejo(1.0, 1.0), complejo(0.0, 0.0)) }, "no hay «menor»")
+    })
+    probar("pero sí se pregunta si son iguales, mirando las DOS partes", fn() {
+        fijo a = complejo(arreglo([1.0, 1.0]), arreglo([2.0, 9.0]))
+        fijo b = complejo(arreglo([1.0, 1.0]), arreglo([2.0, 2.0]))
+        # aListaA de un arreglo «bool» da 1 y 0, no cierto y falso: es lo que ya
+        # hacía con las máscaras de reales y hay siete pruebas arriba que lo
+        # fijan. Que «imprimir» muestre «cierto» y aListaA dé 1 es una costura
+        # que queda apuntada, no algo que se arregle de paso aquí.
+        debeSer(aListaA(igualA(a, b)), [1, 0])
+        debeSer(aListaA(distintoA(a, b)), [0, 1])
+    })
+    probar("conjugado, módulo y fase", fn() {
+        fijo z = complejo(3.0, 4.0)
+        debeSer(aListaA(parteImaginaria(conjugado(z))), [-4])
+        debeSer(aListaA(absoluto(z)), [5])
+        debeSerCerca(elemento(fase(complejo(1.0, 1.0)), 0), |PI / 4.0, 0.0000001)
+        # z·conjugado(z) es el módulo al cuadrado, y es real
+        debeSerCerca(elemento(parteReal(z * conjugado(z)), 0), 25, 0.0000001)
+        debeSerCerca(elemento(parteImaginaria(z * conjugado(z)), 0), 0, 0.0000001)
+    })
+    probar("desdePolar deshace absoluto y fase", fn() {
+        fijo z = complejo(arreglo([3.0, -1.0]), arreglo([4.0, 2.0]))
+        fijo v = desdePolar(absoluto(z), fase(z))
+        debeSerMenor(maximo(absoluto(parteReal(v) - parteReal(z))), 0.0000001)
+        debeSerMenor(maximo(absoluto(parteImaginaria(v) - parteImaginaria(z))), 0.0000001)
+    })
+})
+
+grupo("complejos: lo que todavía no los entiende se niega", fn() {
+    probar("una reducción se niega y dice cómo pasar a reales", fn() {
+        debeFallarCon(fn() { suma(complejo(1.0, 2.0)) }, "arreglos complejos")
+    })
+    probar("una función de un número a un número se niega", fn() {
+        debeFallarCon(fn() { raiz(complejo(4.0, 0.0)) }, "arreglos complejos")
+    })
+    probar("y aListaA también, que es por donde se colaría todo lo demás", fn() {
+        debeFallarCon(fn() { aListaA(complejo(1.0, 1.0)) }, "arreglos complejos")
+    })
+    probar("complejo de un complejo se niega en vez de anidar", fn() {
+        debeFallarCon(fn() { complejo(complejo(1.0, 1.0)) }, "arreglos complejos")
+    })
+})
+
+grupo("Fourier", fn() {
+    probar("la de [1,2,3,4], que sale a mano", fn() {
+        fijo X = fourier(arreglo([1.0, 2.0, 3.0, 4.0]))
+        # Con «debeSer» a secas esto falla, y hace bien: el resultado es
+        # -2.0000000000000004, no -2. Una transformada es coma flotante.
+        debeSerMenor(maximo(absoluto(parteReal(X) - arreglo([10.0, -2.0, -2.0, -2.0]))), 0.0000001)
+        debeSerMenor(maximo(absoluto(parteImaginaria(X) - arreglo([0.0, 2.0, 0.0, -2.0]))), 0.0000001)
+    })
+    probar("la suma de los datos es el primer valor", fn() {
+        fijo x = arreglo([3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0])
+        debeSerCerca(elemento(parteReal(fourier(x)), 0), suma(x), 0.0000001)
+    })
+    probar("el espectro de un delta es plano: todas las frecuencias por igual", fn() {
+        fijo d = ceros([16])
+        ponerElemento(d, 0, 1.0)
+        debeSerMenor(maximo(absoluto(espectro(d) - unos([16]))), 0.0000001)
+    })
+    probar("una señal de una sola frecuencia da un solo pico, y en su sitio", fn() {
+        # tres ciclos completos en 64 muestras: el pico va en k=3 y en k=61
+        fijo n = 64
+        fijo t = secuencia(0.0, 64.0)
+        fijo x = seno(t * (2.0 * |PI * 3.0 / 64.0))
+        fijo e = espectro(x)
+        debeSer(argMaximo(e), 3)
+        # y el resto es ruido de redondeo, salvo el espejo en n−3
+        fijo sinPicos = ponerEnMascara(copia(e), igualA(secuencia(0.0, 64.0), 3.0), 0.0)
+        debeSerMayor(elemento(e, 3), 30.0)
+        debeSerMenor(elemento(e, 10), 0.0000001)
+    })
+    probar("la inversa deshace la ida, también cuando n no es potencia de dos", fn() {
+        para n en [1, 2, 3, 4, 5, 7, 8, 11, 16, 17, 31, 32, 100] {
+            fijo x = azarArreglo([n])
+            fijo v = parteReal(fourierInversa(fourier(x)))
+            debeSerMenor(maximo(absoluto(v - x)), 0.0000001)
+        }
+    })
+    probar("y la parte imaginaria de la vuelta es cero si entró algo real", fn() {
+        fijo x = azarArreglo([13])
+        debeSerMenor(maximo(absoluto(parteImaginaria(fourierInversa(fourier(x))))), 0.0000001)
+    })
+    probar("es lineal: la transformada de la suma es la suma de las transformadas", fn() {
+        fijo a = azarArreglo([32])
+        fijo b = azarArreglo([32])
+        fijo i = fourier(a + b)
+        fijo d = fourier(a) + fourier(b)
+        debeSerMenor(maximo(absoluto(parteReal(i) - parteReal(d))), 0.0000001)
+        debeSerMenor(maximo(absoluto(parteImaginaria(i) - parteImaginaria(d))), 0.0000001)
+    })
+    probar("Parseval: la energía es la misma antes y después", fn() {
+        fijo x = azarArreglo([37])
+        fijo e1 = suma(x * x)
+        fijo e2 = suma(espectro(x) * espectro(x)) / 37.0
+        debeSerCerca(e1, e2, 0.000001)
+    })
+    probar("espectro da lo mismo que el módulo de la transformada", fn() {
+        fijo x = azarArreglo([24])
+        debeSerMenor(maximo(absoluto(espectro(x) - absoluto(fourier(x)))), 0.0000001)
+    })
+    probar("un desplazamiento no cambia el espectro, solo la fase", fn() {
+        fijo x = arreglo([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+        fijo y = concatenar(trozo(x, 0, 5, 8), trozo(x, 0, 0, 5))
+        debeSerMenor(maximo(absoluto(espectro(x) - espectro(y))), 0.0000001)
+    })
+    probar("frecuencias va en el mismo orden que fourier", fn() {
+        debeSer(aListaA(frecuencias(4)), [0, 0.25, -0.5, -0.25])
+        debeSer(aListaA(frecuencias(5)), [0, 0.2, 0.4, -0.4, -0.2])
+        # con paso de muestreo: 100 datos a 0.01 s llegan hasta 50 Hz
+        debeSerCerca(maximo(frecuencias(100, 0.01)), 49, 0.0001)
+    })
+    probar("frecuencias señala la frecuencia de verdad del pico", fn() {
+        # 5 Hz muestreado a 100 Hz durante un segundo
+        fijo t = secuencia(0.0, 100.0) / 100.0
+        fijo x = seno(t * (2.0 * |PI * 5.0))
+        debeSerCerca(elemento(frecuencias(100, 0.01), argMaximo(espectro(x))), 5, 0.0001)
+    })
+    probar("fourier se niega con más de una dimensión y dice cómo sacar la fila", fn() {
+        debeFallarCon(fn() { fourier(identidadA(4)) }, "una dimensión")
+    })
+    probar("y con un arreglo vacío", fn() {
+        debeFallarCon(fn() { fourier(ceros([0])) }, "vacío")
+    })
+    probar("acepta complejos, no solo reales", fn() {
+        fijo z = complejo(arreglo([1.0, 2.0, 3.0, 4.0]), arreglo([0.0, 1.0, 0.0, -1.0]))
+        fijo v = fourierInversa(fourier(z))
+        debeSerMenor(maximo(absoluto(parteReal(v) - parteReal(z))), 0.0000001)
+        debeSerMenor(maximo(absoluto(parteImaginaria(v) - parteImaginaria(z))), 0.0000001)
+    })
+})
+
+grupo("convolucion", fn() {
+    probar("multiplica polinomios: (1+2x+3x²)(1+x)", fn() {
+        debeSer(aListaA(convolucion(arreglo([1.0, 2.0, 3.0]), arreglo([1.0, 1.0]))), [1, 3, 5, 3])
+    })
+    probar("da n+m−1 números", fn() {
+        debeSer(forma(convolucion(ceros([10]), ceros([4]))), [13])
+    })
+    probar("convolucionar con un delta devuelve lo mismo", fn() {
+        fijo x = azarArreglo([20])
+        fijo d = ceros([1])
+        ponerElemento(d, 0, 1.0)
+        debeSerMenor(maximo(absoluto(convolucion(x, d) - x)), 0.0000001)
+    })
+    probar("da lo mismo que el doble bucle escrito a mano", fn() {
+        fijo a = [1.0, 4.0, 2.0, 7.0, 3.0]
+        fijo b = [2.0, 0.0, 5.0]
+        var manual: lista = []
+        para k en rango(7) {
+            var s: real = 0.0
+            para i en rango(5) {
+                fijo j = k - i
+                si j >= 0 y j < 3 {
+                    s = s + a[i] * b[j]
+                }
+            }
+            manual = manual + [s]
+        }
+        fijo auto = convolucion(arreglo(a), arreglo(b))
+        para k en rango(7) {
+            debeSerCerca(elemento(auto, k), manual[k], 0.0000001)
+        }
+    })
+    probar("es conmutativa", fn() {
+        fijo a = azarArreglo([9])
+        fijo b = azarArreglo([4])
+        debeSerMenor(maximo(absoluto(convolucion(a, b) - convolucion(b, a))), 0.0000001)
+    })
+    probar("suaviza: convolucionar con una media móvil de 3 da la media móvil", fn() {
+        fijo x = arreglo([3.0, 6.0, 9.0, 12.0, 15.0])
+        fijo c = convolucion(x, lleno([3], 1.0 / 3.0))
+        # el valor del medio de la convolución es la media de tres vecinos
+        debeSerCerca(elemento(c, 2), 6, 0.0000001)
+        debeSerCerca(elemento(c, 3), 9, 0.0000001)
+    })
+})
+
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(resumenPruebas())

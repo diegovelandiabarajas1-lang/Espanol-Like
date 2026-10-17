@@ -1,0 +1,407 @@
+# Las pruebas de la GRAMÁTICA, en Ñ.
+#
+# Este archivo nació de un susto. Alguien escribió una gramática EBNF de Ñ
+# —ocho secciones, con pinta de correcta— y al contrastarla contra el parser
+# tenía VEINTIDÓS diferencias. Tres de ellas no eran de estilo: ponían «no» al
+# nivel de «y»/«o», daban un solo nivel a las comparaciones y se olvidaban de
+# «**». Un programa escrito siguiendo ese documento compila y da otro número.
+#
+# Lo que asustó no fue el documento: fue que nada lo habría detectado nunca. El
+# motor tenía seiscientas pruebas y la documentación ninguna. Así que esto es lo
+# que faltaba: cada prueba de aquí afirma UNA regla de la gramática con un valor
+# que se puede mirar. Si alguien cambia la precedencia en 01-front.js, esta
+# suite falla y el documento se corrige con ella.
+#
+# Aquí solo cabe lo que se puede OBSERVAR desde dentro del lenguaje. Lo que hay
+# que comprobar es que el motor RECHACE algo —«no» como nombre, la coma final
+# en una llamada, «1 < 2 < 3»— no se puede escribir en un programa que compila,
+# y vive en pruebas/motor.js, en el grupo «gramática: lo que se rechaza».
+
+usar probar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCierto,
+     debeSerFalso, debeFallar, debeFallarCon, debeTener de "probar"
+
+# ── precedencia ───────────────────────────────────────────────────────────
+# El orden, de más flojo a más apretado:
+#     =  →  o  →  y  →  == !=  →  < <= > >=  →  + -  →  * / // %  →  no -
+#     →  **  →  llamada/índice/campo
+# Cada prueba de este grupo elige un caso donde dos órdenes dan valores
+# DISTINTOS. Un caso donde los dos dan lo mismo no prueba nada.
+
+grupo("«no» aprieta más que la comparación, no menos", fn() {
+    probar("no 1 == 2 es (no 1) == 2", fn() {
+        # Si «no» fuera flojo como «y»/«o», esto sería «no (1 == 2)» = cierto.
+        debeSerFalso(no 1 == 2)
+    })
+    probar("no cierto o cierto es (no cierto) o cierto", fn() {
+        debeSerCierto(no cierto o cierto)
+        debeSerFalso(no (cierto o cierto))
+    })
+    probar("las unarias se encadenan: no es [ \"no\" ], es recursivo", fn() {
+        debeSerCierto(no no cierto)
+        debeSerFalso(no no no cierto)
+        debeSer(- -5, 5)
+        debeSer(- - -5, -5)
+    })
+})
+
+grupo("la igualdad y la comparación son dos niveles distintos", fn() {
+    probar("«==» es más flojo que «<»", fn() {
+        # Con un solo nivel asociativo a la izquierda esto sería
+        # «(cierto == 1) < 2», que no compara. Compila y da cierto porque el
+        # «==» se queda afuera: cierto == (1 < 2).
+        debeSerCierto(cierto == 1 < 2)
+        debeSerCierto(1 < 2 == cierto)
+    })
+    probar("y los dos niveles repiten", fn() {
+        debeSerCierto(1 < 2 == 3 > 2)
+        debeSerFalso(1 == 1 != cierto)
+    })
+})
+
+grupo("la potencia", fn() {
+    probar("asocia a la DERECHA", fn() {
+        # Por la izquierda serían (2**3)**2 = 64.
+        debeSer(2 ** 3 ** 2, 512)
+    })
+    probar("aprieta más que el menos unario", fn() {
+        # Esto es -(2**2), no (-2)**2.
+        debeSer(-2 ** 2, -4)
+        debeSer((-2) ** 2, 4)
+    })
+    probar("y su lado derecho admite una unaria", fn() {
+        debeSer(2 ** -1, 0.5)
+    })
+})
+
+grupo("la aritmética", fn() {
+    probar("«*» antes que «+»", fn() {
+        debeSer(2 + 3 * 4, 14)
+        debeSer((2 + 3) * 4, 20)
+    })
+    probar("«//» divide entero y «%» da el resto", fn() {
+        debeSer(7 // 2, 3)
+        debeSer(7 % 3, 1)
+        debeSer(-7 // 2, -4)
+    })
+    probar("«//» y «%» están al nivel de «*», no más abajo", fn() {
+        debeSer(1 + 7 // 2, 4)
+        debeSer(1 + 7 % 3, 2)
+    })
+})
+
+# ── la asignación es una expresión ────────────────────────────────────────
+
+grupo("la asignación es una expresión, no una sentencia", fn() {
+    probar("se puede encadenar, y asocia a la derecha", fn() {
+        var a: entero = 0
+        var b: entero = 0
+        fijo r = a = b = 7
+        debeSer([r, a, b], [7, 7, 7])
+    })
+    probar("y vale como argumento", fn() {
+        var x: entero = 0
+        debeSer(texto(x = 5), "5")
+        debeSer(x, 5)
+    })
+    probar("los compuestos += -= *= /=", fn() {
+        var a: entero = 10
+        a += 3
+        debeSer(a, 13)
+        a -= 1
+        debeSer(a, 12)
+        a *= 2
+        debeSer(a, 24)
+        a /= 4
+        debeSer(a, 6)
+    })
+    probar("también sobre un índice y sobre un campo", fn() {
+        var l: lista = [1, 2]
+        l[0] += 10
+        debeSer(l[0], 11)
+        var d: dic = {"n": 1}
+        d["n"] *= 5
+        debeSer(d["n"], 5)
+    })
+})
+
+# ── los sufijos ───────────────────────────────────────────────────────────
+
+grupo("llamar, indexar y pedir campo se encadenan sobre cualquier cosa", fn() {
+    probar("una llamada devuelve algo llamable y se llama en el sitio", fn() {
+        fn haz(x: texto) { devolver fn(z: texto) { devolver [x + z] } }
+        debeSer(haz("p")("q")[0], "pq")
+    })
+    probar("índice sobre índice", fn() {
+        fijo m: dic = {"k": [1, 2]}
+        debeSer(m["k"][1], 2)
+    })
+})
+
+# ── las palabras blandas ──────────────────────────────────────────────────
+# «usar», «de», «publico» y «público» no las conoce el lexer: las mira el
+# parser por su texto. Así que son nombres válidos. Y «y»/«o» son a la vez
+# operadores y nombres, que es la rareza más grande de la gramática.
+
+grupo("«usar», «de» y «publico» valen como nombre de variable", fn() {
+    probar("usar", fn() {
+        var usar: entero = 7
+        debeSer(usar * 2, 14)
+    })
+    probar("de", fn() {
+        var de: texto = "preposición"
+        debeSer(de, "preposición")
+    })
+    probar("publico y público", fn() {
+        var publico: entero = 1
+        var público: entero = 2
+        debeSer(publico + público, 3)
+    })
+})
+
+grupo("«y» y «o» son operadores Y nombres, según lo que venga detrás", fn() {
+    probar("como nombre, cuando les sigue «=»", fn() {
+        var y: entero = 2
+        y = y * 3
+        debeSer(y, 6)
+        var o: entero = 5
+        o += 1
+        debeSer(o, 6)
+    })
+    probar("como nombre, cuando les sigue «[»", fn() {
+        var y: lista = [9, 8]
+        debeSer(y[0], 9)
+    })
+    probar("como nombre, cuando les sigue «(»", fn() {
+        var o: funcion = fn() { devolver 4 }
+        debeSer(o(), 4)
+    })
+    probar("y como operadores cuando no", fn() {
+        debeSerCierto(cierto y cierto)
+        debeSerFalso(cierto y falso)
+        debeSerCierto(falso o cierto)
+    })
+})
+
+# ── los literales de texto ────────────────────────────────────────────────
+
+grupo("hay DOS comillas y no hacen lo mismo", fn() {
+    probar("la doble interpola", fn() {
+        fijo n: entero = 3
+        debeSer("vale {n}", "vale 3")
+    })
+    probar("la simple NO interpola: deja las llaves como caracteres", fn() {
+        fijo n: entero = 3
+        debeSer('vale {n}', "vale \{n\}")
+    })
+    probar("y en la doble se escapan para que sean caracteres", fn() {
+        fijo n: entero = 3
+        debeSer("vale \{n\}", 'vale {n}')   # el esperado va en comilla SIMPLE:
+        # en comilla doble, «"vale {n}"» interpolaría y daría «vale 3».
+    })
+})
+
+grupo("los escapes son seis, y lo demás pasa tal cual", fn() {
+    probar("los reconocidos", fn() {
+        debeSer(longitud("a\nb"), 3)
+        debeSer(longitud("a\tb"), 3)
+        debeSer(longitud("a\rb"), 3)
+        debeSer(longitud("a\\b"), 3)
+        debeSer("\{", '{')
+        debeSer("\}", '}')
+    })
+    probar("cualquier otro escape da el carácter sin la barra", fn() {
+        debeSer("a\qb", "aqb")
+        debeSer("a\"b", 'a"b')
+        debeSer(longitud("a\qb"), 3)
+    })
+})
+
+# ── literales compuestos ──────────────────────────────────────────────────
+
+grupo("la coma final", fn() {
+    probar("se admite en una lista", fn() {
+        debeTener([1, 2, 3,], 3)
+    })
+    probar("y en un diccionario", fn() {
+        debeTener({"a": 1, "b": 2,}, 2)
+    })
+    # En los ARGUMENTOS de una llamada no se admite. Eso está en motor.js,
+    # porque un programa con ese error no compila y no se puede escribir aquí.
+})
+
+grupo("la clave de un par va con comillas o sin ellas", fn() {
+    probar("sin comillas", fn() {
+        fijo d: dic = {a: 1, b: 2}
+        debeSer(d["a"], 1)
+    })
+    probar("con comillas", fn() {
+        fijo d: dic = {"a": 1}
+        debeSer(d["a"], 1)
+    })
+})
+
+grupo("las constantes llevan sigilo y no se cierran", fn() {
+    probar("|PI y |E", fn() {
+        debeSerCierto(|PI > 3.14 y |PI < 3.15)
+        debeSerCierto(|E > 2.71 y |E < 2.72)
+    })
+    probar("|INFINITO es mayor que cualquier número", fn() {
+        debeSerCierto(|INFINITO > 1000000000.0)
+    })
+})
+
+# ── sentencias ────────────────────────────────────────────────────────────
+
+grupo("«repetir» lleva «veces» opcional", fn() {
+    probar("con veces", fn() {
+        var n: entero = 0
+        repetir 3 veces { n += 1 }
+        debeSer(n, 3)
+    })
+    probar("y sin veces", fn() {
+        var n: entero = 0
+        repetir 3 { n += 1 }
+        debeSer(n, 3)
+    })
+})
+
+grupo("«sino» va seguido de bloque o de otro «si»", fn() {
+    probar("la cadena si/sino si/sino", fn() {
+        fn clasificar(x: entero): texto {
+            si x < 0 { devolver "negativo" }
+            sino si x == 0 { devolver "cero" }
+            sino { devolver "positivo" }
+        }
+        debeSer([clasificar(-1), clasificar(0), clasificar(1)],
+                ["negativo", "cero", "positivo"])
+    })
+})
+
+grupo("«lanzar» lanza CUALQUIER valor, no solo un error()", fn() {
+    probar("un texto", fn() {
+        debeFallarCon(fn() { lanzar "se rompió" }, "se rompió")
+    })
+    probar("un número", fn() {
+        debeFallarCon(fn() { lanzar 42 }, "42")
+    })
+    probar("una lista", fn() {
+        debeFallar(fn() { lanzar [1, 2] })
+    })
+    probar("y un error() de la biblioteca, que es una función normal", fn() {
+        debeFallarCon(fn() { lanzar error("con mensaje") }, "con mensaje")
+    })
+})
+
+grupo("«intentar» tiene tres formas", fn() {
+    probar("capturar con nombre entre paréntesis", fn() {
+        var visto: texto = ""
+        intentar { lanzar "x" } capturar (e) { visto = "capturado" }
+        debeSer(visto, "capturado")
+    })
+    probar("capturar SIN nombre", fn() {
+        var visto: texto = ""
+        intentar { lanzar "x" } capturar { visto = "capturado" }
+        debeSer(visto, "capturado")
+    })
+    probar("y finalmente sin capturar", fn() {
+        var visto: texto = ""
+        intentar { visto = "cuerpo" } finalmente { visto = visto + "+final" }
+        debeSer(visto, "cuerpo+final")
+    })
+    probar("finalmente corre también cuando se captura", fn() {
+        var pasos: lista = []
+        intentar { lanzar "x" } capturar (e) { pasos = pasos + ["cap"] }
+        finalmente { pasos = pasos + ["fin"] }
+        debeSer(pasos, ["cap", "fin"])
+    })
+})
+
+# ── tipos ─────────────────────────────────────────────────────────────────
+
+grupo("las anotaciones de tipo", fn() {
+    probar("«dic» lleva DOS parámetros: clave y valor", fn() {
+        var d: dic<texto,real> = {"a": 1.5}
+        debeSer(d["a"], 1.5)
+    })
+    probar("«lista» lleva uno", fn() {
+        var l: lista<entero> = [1, 2]
+        debeSer(l[1], 2)
+    })
+    probar("el retorno se escribe con «:» o con «->»", fn() {
+        fn conDosPuntos(x: entero): entero { devolver x * 2 }
+        fn conFlecha(x: entero) -> entero { devolver x * 3 }
+        debeSer([conDosPuntos(2), conFlecha(2)], [4, 6])
+    })
+    probar("y ninguna anotación es obligatoria", fn() {
+        fn libre(x) { devolver x }
+        debeSer(libre("sin tipos"), "sin tipos")
+    })
+})
+
+grupo("las cuatro palabras de «función» son la misma", fn() {
+    probar("fn, funcion, función y definir", fn() {
+        fn a1(): entero { devolver 1 }
+        funcion a2(): entero { devolver 2 }
+        función a3(): entero { devolver 3 }
+        definir a4(): entero { devolver 4 }
+        debeSer(a1() + a2() + a3() + a4(), 10)
+    })
+    probar("y «devolver» es «retornar»", fn() {
+        fn con(): entero { retornar 9 }
+        debeSer(con(), 9)
+    })
+})
+
+grupo("los booleanos tienen sinónimos y mayúscula", fn() {
+    probar("cierto, Cierto y verdadero", fn() {
+        debeSerCierto(cierto)
+        debeSerCierto(Cierto)
+        debeSerCierto(verdadero)
+    })
+    probar("falso y Falso", fn() {
+        debeSerFalso(falso)
+        debeSerFalso(Falso)
+    })
+    probar("nulo y Nulo", fn() {
+        debeSer(nulo, Nulo)
+    })
+})
+
+# ── el salto de línea ─────────────────────────────────────────────────────
+# La indentación no significa nada. El salto de línea sí, en dos sitios, y
+# este es el que se puede ver con un valor.
+
+grupo("el salto de línea termina un «devolver»", fn() {
+    probar("«devolver» solo en su línea devuelve nulo", fn() {
+        fn vacia() {
+            devolver
+        }
+        debeSer(vacia(), nulo)
+    })
+    probar("y no se lleva lo de la línea siguiente", fn() {
+        fn cortada() {
+            devolver
+            5
+        }
+        debeSer(cortada(), nulo)
+    })
+    probar("en la misma línea sí", fn() {
+        fn seguida() { devolver 5 }
+        debeSer(seguida(), 5)
+    })
+})
+
+grupo("todo lo demás cabe en una línea", fn() {
+    probar("función, cuerpo y llamada seguidas", fn() {
+        fn f(): entero { devolver 1 }  fijo v: entero = f()  debeSer(v, 1)
+    })
+    probar("un «si» entero en una línea", fn() {
+        var r: texto = ""
+        si cierto { r = "sí" } sino { r = "no" }
+        debeSer(r, "sí")
+    })
+})
+
+var res: dic = correrPruebas()
+imprimir("")
+imprimir(resumenPruebas())

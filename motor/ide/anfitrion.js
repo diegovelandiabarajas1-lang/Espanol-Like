@@ -30,12 +30,15 @@ function crearAnfitrion(op) {
     caja.appendChild(el('div', 'l' + (c ? ' ' + c : ''), t));
   };
   const almacen = op.almacen || null;
-  const lienzo = { c: null, ctx: null, color: '#4F3FD4', grosor: 2 };
+  // La letra de escribirEn. Por defecto, la de siempre (12 px, sans, a la
+  // izquierda): un programa que no llama a letra() se ve exactamente igual.
+  const LETRA = () => ({ tam: 12, alin: 'left', peso: '', fam: 'sans-serif' });
+  const lienzo = { c: null, ctx: null, color: '#4F3FD4', grosor: 2, letra: LETRA() };
 
   function vaciarLienzo() {
     const caja = $('#cajaLienzo');
     if (caja) caja.innerHTML = op.vacioLienzo || '';
-    lienzo.c = null; lienzo.ctx = null; lienzo.color = '#4F3FD4'; lienzo.grosor = 2;
+    lienzo.c = null; lienzo.ctx = null; lienzo.color = '#4F3FD4'; lienzo.grosor = 2; lienzo.letra = LETRA();
   }
 
   // ─────────────────────────────────────────── lienzo
@@ -79,11 +82,31 @@ function crearAnfitrion(op) {
         : `rgb(${Math.max(0, Math.min(255, a | 0))},${Math.max(0, Math.min(255, b | 0))},${Math.max(0, Math.min(255, c | 0))})`;
     },
     grosor(g) { lienzo.grosor = g; },
+    // letra(tamaño, alineación?, estilo?) — cómo escribe escribirEn desde ahí.
+    // Las palabras son las mismas del eDSL de estilo: «centro», «negrita»…
+    letra(tam, alin, estilo) {
+      const t = Number(tam);
+      if (!(t >= 1 && t <= 400)) throw new Error(`«letra»: el tamaño va de 1 a 400 píxeles, y llegó ${tam}`);
+      const ALIN = { izquierda: 'left', centro: 'center', derecha: 'right' };
+      let a = 'left';
+      if (alin !== undefined && alin !== null) {
+        a = ALIN[alin];
+        if (!a) throw new Error(`«letra»: la alineación es «izquierda», «centro» o «derecha», no «${alin}»`);
+      }
+      const palabras = estilo === undefined || estilo === null ? [] : String(estilo).split(/\s+/).filter(Boolean);
+      for (const w of palabras)
+        if (w !== 'negrita' && w !== 'mono') throw new Error(`«letra»: el estilo admite «negrita» y «mono», no «${w}»`);
+      lienzo.letra = {
+        tam: t, alin: a,
+        peso: palabras.includes('negrita') ? 'bold ' : '',
+        fam: palabras.includes('mono') ? 'ui-monospace, Consolas, "Cascadia Mono", monospace' : 'sans-serif',
+      };
+    },
     linea(x1, y1, x2, y2) { const g = ctx(); g.strokeStyle = lienzo.color; g.lineWidth = lienzo.grosor; g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); },
     rect(x, y, w, h, r) { const g = ctx(); if (r === false) { g.strokeStyle = lienzo.color; g.lineWidth = lienzo.grosor; g.strokeRect(x, y, w, h); } else { g.fillStyle = lienzo.color; g.fillRect(x, y, w, h); } },
     circulo(x, y, rad, r) { const g = ctx(); g.beginPath(); g.arc(x, y, Math.abs(rad), 0, Math.PI * 2); if (r === false) { g.strokeStyle = lienzo.color; g.lineWidth = lienzo.grosor; g.stroke(); } else { g.fillStyle = lienzo.color; g.fill(); } },
     punto(x, y) { const g = ctx(); g.fillStyle = lienzo.color; g.fillRect(x | 0, y | 0, 1, 1); },
-    escribirEn(x, y, t) { const g = ctx(); g.fillStyle = lienzo.color; g.textAlign = 'left'; g.textBaseline = 'alphabetic'; g.font = '12px sans-serif'; g.fillText(String(t), x, y); },
+    escribirEn(x, y, t) { const g = ctx(), L = lienzo.letra; g.fillStyle = lienzo.color; g.textAlign = L.alin; g.textBaseline = 'alphabetic'; g.font = `${L.peso}${L.tam}px ${L.fam}`; g.fillText(String(t), x, y); },
     graficar(xs, ys, titulo) {
       if (!xs.length) return;
       const g = ctx(), c = lienzo.c, e = ejes(g, c.width, c.height, xs, ys, titulo);

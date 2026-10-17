@@ -1,0 +1,239 @@
+# Las pruebas del eDSL «estilo», en Ñ.
+#
+# Esta suite corre SIN página: no hay dónde pintar, así que no puede leer el CSS
+# que sale —eso lo comprueba pruebas/estilos.js, que monta un anfitrión y compara
+# la hoja carácter a carácter—. Lo que se prueba aquí es lo que un programa ve:
+# que los accesores del tema devuelvan la variable, que un token mal escrito se
+# cace, que paleta y escalaTipo den los números que dicen dar, y que cada función
+# que valida algo se queje con el mensaje que toca.
+
+usar probar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCierto,
+     debeFallarCon, debeSerTipo, debeContener, debeSerCerca, debeTener de "probar"
+usar estilo, tema, color, espacio, tipografia, radio, sombraToken, paleta, escalaTipo,
+     alPasar, alEnfocar, siInvalido, alSeleccionar, primero, ultimo, impares, pares,
+     siVacio, siSolo, hijoN, antes, despues, marcador, seleccion, pista,
+     dentro, hijoDirecto, hermano, hermanoSiguiente, cuando,
+     enPantalla, enAlto, enOscuro, enClaro, enTactil, enApaisado,
+     enFila, enColumna, centrado, separado, envuelto, rejillaDe, apilado, pegadoArriba,
+     transicion, animar, aparecer, deslizar, fotogramas, reiniciar, estiloGlobal,
+     cssCrudo de "estilo"
+usar subtexto, indiceDe de "texto"
+
+grupo("un estilo es un valor", fn() {
+    probar("se compone y es del tipo estilo", fn() {
+        debeSerTipo(estilo({"color": "rojo"}), "estilo")
+        debeSerTipo(estilo(estilo({"relleno": 4}), {"color": "azul"}), "estilo")
+    })
+    probar("una función que devuelve estilo es un mixin", fn() {
+        debeSerTipo(caja(12), "estilo")
+    })
+    probar("todo lo que anida devuelve estilo, no otra cosa", fn() {
+        para f en [alPasar, alEnfocar, siInvalido, alSeleccionar, primero, ultimo,
+                   impares, pares, siVacio, siSolo, antes, despues, marcador,
+                   seleccion, pista, enOscuro, enClaro, enTactil, enApaisado,
+                   centrado, apilado] {
+            debeSerTipo(f({"color": "rojo"}), "estilo")
+        }
+    })
+    probar("y los que llevan hueco o selector delante, también", fn() {
+        debeSerTipo(enFila(8), "estilo")
+        debeSerTipo(enColumna(), "estilo")
+        debeSerTipo(separado(4), "estilo")
+        debeSerTipo(envuelto(), "estilo")
+        debeSerTipo(rejillaDe(3, 8), "estilo")
+        debeSerTipo(pegadoArriba(), "estilo")
+        debeSerTipo(dentro("p", {"margen": 0}), "estilo")
+        debeSerTipo(hijoDirecto("p", {"margen": 0}), "estilo")
+        debeSerTipo(hermano("p", {"margen": 0}), "estilo")
+        debeSerTipo(hermanoSiguiente("p", {"margen": 0}), "estilo")
+        debeSerTipo(cuando(".x", {"margen": 0}), "estilo")
+        debeSerTipo(hijoN(3, {"margen": 0}), "estilo")
+        debeSerTipo(enPantalla(600, {"relleno": 4}), "estilo")
+        debeSerTipo(enAlto(400, {"relleno": 4}), "estilo")
+        debeSerTipo(estiloGlobal("body", {"margen": 0}), "estilo")
+    })
+    probar("estilo no traga lo que no es diccionario ni estilo", fn() {
+        debeFallarCon(fn() { estilo("color: red") }, "solo acepta diccionarios")
+        debeFallarCon(fn() { estilo(3) }, "solo acepta diccionarios")
+    })
+    probar("un nombre de propiedad imposible se caza al construir", fn() {
+        debeFallarCon(fn() { estilo({"a b": 1}) }, "no es un nombre")
+    })
+    probar("y un valor no puede cerrar la regla", fn() {
+        debeFallarCon(fn() { estilo({"color": "red; margin: 0"}) }, "romperían la hoja")
+    })
+})
+
+fn caja(n: entero): estilo {
+    devolver estilo({"relleno": n, "redondeo": 8})
+}
+
+grupo("los tokens del tema", fn() {
+    probar("el accesor devuelve la variable de CSS, no el valor", fn() {
+        tema({"color": {"acento": "#4F3FD4"}, "espacio": {"m": 16}})
+        debeSer(color("acento"), "var(--color-acento)")
+        debeSer(espacio("m"), "var(--espacio-m)")
+    })
+    probar("los cinco grupos tienen su accesor", fn() {
+        tema({"color": {"a": "#fff"}, "espacio": {"a": 4}, "tipografia": {"a": 14},
+              "radio": {"a": 8}, "sombra": {"a": "0 1px 2px #0002"}})
+        debeSer(color("a"), "var(--color-a)")
+        debeSer(espacio("a"), "var(--espacio-a)")
+        debeSer(tipografia("a"), "var(--tipografia-a)")
+        debeSer(radio("a"), "var(--radio-a)")
+        debeSer(sombraToken("a"), "var(--sombra-a)")
+    })
+    probar("un token mal escrito se caza y dice los que hay", fn() {
+        tema({"color": {"acento": "#4F3FD4", "fondo": "blanco"}})
+        debeFallarCon(fn() { color("acnto") }, "no declara «acnto»")
+    })
+    probar("«reiniciar» no lleva nada, y pasarle algo no llega ni a correr", fn() {
+        # Aquí solo se puede comprobar la mitad buena: «reiniciar({…})» es un
+        # error del VERIFICADOR, no de ejecución, así que no hay forma de
+        # meterlo en un debeFallarCon —el archivo entero dejaría de compilar—.
+        # Que se cace antes de correr es mejor que poder probarlo aquí.
+        debeSerTipo(reiniciar(), "estilo")
+    })
+    # El caso «ningún tema ha declarado este grupo» NO se puede probar en este
+    # archivo: los nombres que declara «tema» se apuntan por motor, y este
+    # archivo entero es un motor. Cualquier prueba de arriba que declare el grupo
+    # se lo deja declarado a las de abajo. Está en pruebas/estilos.js, donde cada
+    # programa corre en un motor nuevo. Y de aquí sale una regla de uso que vale
+    # la pena decir: declara el tema ANTES de usar sus tokens.
+    probar("tema se queja de lo que no es un grupo de nombre → valor", fn() {
+        debeFallarCon(fn() { tema({"color": "#fff"}) }, "tiene que ser un diccionario")
+        debeFallarCon(fn() { tema({"color": {"a b": "#fff"}}) }, "no sirve como nombre de token")
+    })
+    probar("el tema es un estilo, así que se compone como cualquier otro", fn() {
+        debeSerTipo(tema({"color": {"x": "#fff"}}), "estilo")
+        debeSerTipo(estiloGlobal(":root", tema({"color": {"x": "#fff"}})), "estilo")
+        debeSerTipo(enOscuro(estiloGlobal(":root", tema({"color": {"x": "#111"}}))), "estilo")
+    })
+})
+
+grupo("paleta y escalaTipo dan números, no estilos", fn() {
+    probar("la paleta deja el color base exacto en el medio", fn() {
+        fijo p: dic = paleta("#4f3fd4", 5)
+        debeSer(longitud(claves(p)), 5)
+        debeSer(obtener(p, "3", "falta"), "#4f3fd4")
+    })
+    probar("y va de claro a oscuro, sin llegar al blanco ni al negro", fn() {
+        fijo p: dic = paleta("#4f3fd4", 9)
+        debeSer(longitud(claves(p)), 9)
+        debeSer(obtener(p, "5", "falta"), "#4f3fd4")
+        # El primero es claro y el último oscuro: se compara la suma de los tres
+        # canales, que para eso basta.
+        debeSerCierto(brillo(obtener(p, "1", "")) > brillo(obtener(p, "5", "")))
+        debeSerCierto(brillo(obtener(p, "5", "")) > brillo(obtener(p, "9", "")))
+        debeSerCierto(brillo(obtener(p, "1", "")) < 765)
+        debeSerCierto(brillo(obtener(p, "9", "")) > 0)
+    })
+    probar("lee los tres formatos de color que dice leer", fn() {
+        para c en ["#4f3fd4", "#abc", "rgb(79, 63, 212)"] {
+            debeSer(longitud(claves(paleta(c, 3))), 3)
+        }
+    })
+    probar("y se queja de lo que no puede leer", fn() {
+        debeFallarCon(fn() { paleta("azul") }, "no es un color")
+        debeFallarCon(fn() { paleta("#4f3fd4", 2) }, "de 3 a 25")
+    })
+    probar("escalaTipo es una progresión geométrica", fn() {
+        fijo e: dic = escalaTipo(16, 2, 4)
+        debeSer([obtener(e, "0", 0), obtener(e, "1", 0), obtener(e, "2", 0), obtener(e, "3", 0)],
+                [16, 32, 64, 128])
+    })
+    probar("con la razón por defecto y redondeo a dos decimales", fn() {
+        fijo e: dic = escalaTipo(16)
+        debeSer(longitud(claves(e)), 6)
+        debeSerCerca(obtener(e, "1", 0), 20, 0.01)
+        debeSerCerca(obtener(e, "3", 0), 31.25, 0.01)
+    })
+    probar("y se queja de una razón que no crece", fn() {
+        debeFallarCon(fn() { escalaTipo(16, 1) }, "mayor que 1")
+        debeFallarCon(fn() { escalaTipo(16, 1.5, 1) }, "de 2 a 20")
+    })
+})
+
+fn brillo(hex: texto): entero {
+    # La suma de los seis dígitos de un «#rrggbb», con su peso. Ñ no lee
+    # hexadecimal —entero("0x4f") da 0—, así que el dígito se busca en la tabla.
+    # Sirve para ordenar tonos, que es lo único que hace falta aquí.
+    var s: entero = 0
+    para i en rango(6) {
+        fijo d: entero = indiceDe("0123456789abcdef", subtexto(hex, i + 1, i + 2))
+        si d < 0 { devolver -1 }
+        si i % 2 == 0 { s = s + d * 16 } sino { s = s + d }
+    }
+    devolver s
+}
+
+grupo("lo que valida cada función", fn() {
+    probar("hijoN acepta un número, una fórmula y las palabras", fn() {
+        para q en [3, "3n+1", "impares", "pares", "2n", "-n+3"] {
+            debeSerTipo(hijoN(q, {"margen": 0}), "estilo")
+        }
+    })
+    probar("y no acepta un selector colado", fn() {
+        debeFallarCon(fn() { hijoN("; color: red", {"margen": 0}) }, "no es una posición válida")
+        debeFallarCon(fn() { hijoN("tercero", {"margen": 0}) }, "no es una posición válida")
+    })
+    probar("rejillaDe acepta un número o una plantilla", fn() {
+        debeSerTipo(rejillaDe(3), "estilo")
+        debeSerTipo(rejillaDe("200px 1fr"), "estilo")
+        debeFallarCon(fn() { rejillaDe(0) }, "de 1 a 64")
+        debeFallarCon(fn() { rejillaDe(100) }, "de 1 a 64")
+    })
+    probar("transicion nombra propiedades y rechaza «todo»", fn() {
+        debeSerTipo(transicion("color"), "estilo")
+        debeSerTipo(transicion(["color", "fondo"], 150), "estilo")
+        debeSerTipo(transicion("opacidad", 80, "linear"), "estilo")
+        debeFallarCon(fn() { transicion("all") }, "lo que no se ve")
+        debeFallarCon(fn() { transicion("a b") }, "no es un nombre")
+    })
+    probar("deslizar solo sabe cuatro direcciones", fn() {
+        para d en ["arriba", "abajo", "izquierda", "derecha"] {
+            debeSerTipo(deslizar(d), "estilo")
+        }
+        debeSerTipo(deslizar(), "estilo")
+        debeSerTipo(deslizar("abajo", 500), "estilo")
+        debeFallarCon(fn() { deslizar("diagonal") }, "no sé deslizar desde")
+    })
+    probar("fotogramas devuelve el nombre, y animar lo toma", fn() {
+        fijo n: texto = fotogramas({"0%": estilo({"opacidad": 0}), "100%": estilo({"opacidad": 1})})
+        debeSerTipo(n, "texto")
+        debeSerCierto(longitud(n) > 1)
+        debeSerTipo(animar(n), "estilo")
+        debeSerTipo(animar(n, 500), "estilo")
+    })
+    probar("los mismos fotogramas dan el mismo nombre", fn() {
+        fijo a: texto = fotogramas({"0%": estilo({"opacidad": 0}), "100%": estilo({"opacidad": 1})})
+        fijo b: texto = fotogramas({"0%": estilo({"opacidad": 0}), "100%": estilo({"opacidad": 1})})
+        debeSer(a, b)
+    })
+    probar("y unos distintos, nombres distintos", fn() {
+        fijo a: texto = fotogramas({"0%": estilo({"opacidad": 0})})
+        fijo b: texto = fotogramas({"0%": estilo({"opacidad": 0.5})})
+        debeSerCierto(a != b)
+    })
+    probar("fotogramas exige un estilo en cada paso", fn() {
+        debeFallarCon(fn() { fotogramas({"0%": "opacidad: 0"}) }, "tiene que ser un estilo")
+        debeFallarCon(fn() { fotogramas("0% \{ \}") }, "diccionario de paso")
+    })
+    probar("un selector con llaves no pasa", fn() {
+        debeFallarCon(fn() { dentro("p \{ color: red \}", {"margen": 0}) }, "no es válido")
+        debeFallarCon(fn() { estiloGlobal("body \{ \}", {"margen": 0}) }, "no es válido")
+    })
+})
+
+grupo("lo que necesita una página, sin página, se queja", fn() {
+    probar("cssCrudo lo dice claro", fn() {
+        debeFallarCon(fn() { cssCrudoAqui() }, "anfitrión con página")
+    })
+})
+
+
+fn cssCrudoAqui() { cssCrudo("p \{ color: red \}") }
+
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(resumenPruebas())

@@ -89,9 +89,16 @@
 
   // Aquí no hay marco aislado, y es a propósito: el marco existe para proteger
   // al editor del programa que se está editando. En una aplicación exportada no
-  // hay editor que proteger —el programa ES la aplicación— así que corre
-  // directo y, de paso, tiene un origen de verdad y localStorage propio.
-  const PREFIJO = 'n:app:';
+  // hay editor que proteger —el programa ES la aplicación— así que corre directo.
+  //
+  // Lo que NO tiene es un localStorage propio, aunque lo pareciera: abierta con
+  // doble clic su dirección es file://, y el navegador da UN SOLO almacén a todos
+  // los archivos locales. Dos apps que guardaban «mejor» se pisaban (Galaga le
+  // regaló 6090 puntos a Flappy, 15-oct-2026). Así que cada app guarda bajo su
+  // propio nombre —el título con el que se exportó—: reconstruirla con el mismo
+  // título conserva lo guardado; otra app con otro título no lo ve.
+  const APP = encodeURIComponent(document.title || 'app');
+  const PREFIJO = 'n:app:' + APP + ':';
   const almacen = {
     leer(k) { try { return localStorage.getItem(PREFIJO + k); } catch (_) { return null; } },
     escribir(k, v) { try { localStorage.setItem(PREFIJO + k, v); } catch (_) {} },
@@ -108,9 +115,10 @@
     },
   };
 
-  // Aquí sí hay origen propio, así que los permisos de red se recuerdan entre
-  // visitas. Van bajo otro prefijo: el programa solo alcanza «n:app:».
-  const PERM = 'n:perm:';
+  // Los permisos de red se recuerdan entre visitas, y también por app: si no,
+  // decir «sí» a un sitio en una app se lo concedía a todas las demás abiertas
+  // desde el disco. Van bajo otro prefijo: el programa solo alcanza el suyo.
+  const PERM = 'n:perm:' + APP + ':';
   const permisos = {
     leer(k) { try { return localStorage.getItem(PERM + k); } catch (_) { return null; } },
     escribir(k, v) { try { localStorage.setItem(PERM + k, v); } catch (_) {} },

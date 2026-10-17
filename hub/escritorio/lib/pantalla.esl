@@ -1,0 +1,372 @@
+# pantalla.esl — la ventana del ARCADE Ñ, sobre raylib.
+#
+# Por fuera habla como el lienzo de la web: color("#hex"), rect, circulo, linea,
+# punto, grosor, letra y escribirEn. Así un juego de la web se pasa a escritorio
+# cambiando el teclado y la página, no el dibujo.
+#
+# Por dentro:
+#   · el mundo mide 540×960 (9:16, el mismo de la web) y se ESCALA a la ventana
+#     con una cámara 2D de raylib; lo que sobra a los lados queda negro.
+#   · la letra es una fuente TTF del sistema cargada con Latin-1 (ahí están
+#     Ñ, á, é, í, ó, ú, ü, ¡ y ¿) más flechas y algunos signos.
+#   · un color viaja a C como UN número de 32 bits (r + g·256 + b·65536 + a·2²⁴).
+#     Color es una estructura de 4 bytes, y en x64 —Windows y Linux— una
+#     estructura de 4 bytes se pasa igual que un entero de 32 bits. Así no se
+#     arma un diccionario por cada rect: Galaga dibuja ~900 por cuadro.
+#
+# Modo guion (para las pruebas): con N_GUION=archivo.txt, el teclado no se lee
+# de raylib sino del archivo, cuadro a cuadro. Ver LEEME.md.
+#
+# Ninguna línea de esto toca el motor: es una biblioteca de Ñ que llama a raylib.
+usar dividir, lineas, recortar, minusculas, deCodigo de "texto"
+
+fn porDefecto(): texto {
+    si entorno("OS", "") == "Windows_NT" { devolver "./raylib.dll" }
+    devolver "./libraylib.so"
+}
+fijo RL = entorno("N_RAYLIB", porDefecto())
+
+publico fijo ANCHO = 540
+publico fijo ALTO = 960
+
+# ─────────────────────────────────────────────── teclas (códigos de raylib)
+publico fijo ESPACIO = 32
+publico fijo ESC = 256
+publico fijo ENTER = 257
+publico fijo DERECHA = 262
+publico fijo IZQUIERDA = 263
+publico fijo ABAJO = 264
+publico fijo ARRIBA = 265
+publico fijo F11 = 300
+publico fijo A = 65
+publico fijo D = 68
+publico fijo N = 78
+publico fijo P = 80
+publico fijo S = 83
+publico fijo W = 87
+publico fijo X = 88
+
+# ─────────────────────────────────────────────── las estructuras de C
+estructuraNativa("Vector2", {"x": "real32", "y": "real32"})
+estructuraNativa("Textura", {"id": "natural", "ancho": "entero", "alto": "entero", "mipmaps": "entero", "formato": "entero"})
+estructuraNativa("Fuente", {"base": "entero", "glifos": "entero", "relleno": "entero", "textura": "Textura", "recs": "puntero", "info": "puntero"})
+estructuraNativa("Camara2D", {"desfase": "Vector2", "objetivo": "Vector2", "rotacion": "real32", "zoom": "real32"})
+
+fijo _banderas  = nativa(RL, "SetConfigFlags", "nulo", ["natural"])
+fijo _registro  = nativa(RL, "SetTraceLogLevel", "nulo", ["entero"])
+fijo _abrir     = nativa(RL, "InitWindow", "nulo", ["entero", "entero", "texto"])
+fijo _cerrar    = nativa(RL, "CloseWindow", "nulo", [])
+fijo _debeCerrar = nativa(RL, "WindowShouldClose", "log", [])
+fijo _fps       = nativa(RL, "SetTargetFPS", "nulo", ["entero"])
+fijo _teclaSalir = nativa(RL, "SetExitKey", "nulo", ["entero"])
+fijo _anchoV    = nativa(RL, "GetScreenWidth", "entero", [])
+fijo _altoV     = nativa(RL, "GetScreenHeight", "entero", [])
+fijo _monitor   = nativa(RL, "GetCurrentMonitor", "entero", [])
+fijo _anchoM    = nativa(RL, "GetMonitorWidth", "entero", ["entero"])
+fijo _altoM     = nativa(RL, "GetMonitorHeight", "entero", ["entero"])
+fijo _tamano    = nativa(RL, "SetWindowSize", "nulo", ["entero", "entero"])
+fijo _posicion  = nativa(RL, "SetWindowPosition", "nulo", ["entero", "entero"])
+fijo _completa  = nativa(RL, "ToggleBorderlessWindowed", "nulo", [])
+fijo _empezar   = nativa(RL, "BeginDrawing", "nulo", [])
+fijo _terminar  = nativa(RL, "EndDrawing", "nulo", [])
+fijo _fondo     = nativa(RL, "ClearBackground", "nulo", ["natural"])
+fijo _modo2d    = nativa(RL, "BeginMode2D", "nulo", ["Camara2D"])
+fijo _fin2d     = nativa(RL, "EndMode2D", "nulo", [])
+fijo _recorte   = nativa(RL, "BeginScissorMode", "nulo", ["entero", "entero", "entero", "entero"])
+fijo _finRecorte = nativa(RL, "EndScissorMode", "nulo", [])
+fijo _caja      = nativa(RL, "DrawRectangle", "nulo", ["entero", "entero", "entero", "entero", "natural"])
+fijo _borde     = nativa(RL, "DrawRectangleLines", "nulo", ["entero", "entero", "entero", "entero", "natural"])
+fijo _circulo   = nativa(RL, "DrawCircle", "nulo", ["entero", "entero", "real32", "natural"])
+fijo _aro       = nativa(RL, "DrawCircleLines", "nulo", ["entero", "entero", "real32", "natural"])
+fijo _lineaEx   = nativa(RL, "DrawLineEx", "nulo", ["Vector2", "Vector2", "real32", "natural"])
+fijo _cargarFuente = nativa(RL, "LoadFontEx", "Fuente", ["texto", "entero", "puntero", "entero"])
+fijo _fuenteBase = nativa(RL, "GetFontDefault", "Fuente", [])
+fijo _filtro    = nativa(RL, "SetTextureFilter", "nulo", ["Textura", "entero"])
+fijo _textoEx   = nativa(RL, "DrawTextEx", "nulo", ["Fuente", "texto", "Vector2", "real32", "real32", "natural"])
+fijo _medirEx   = nativa(RL, "MeasureTextEx", "Vector2", ["Fuente", "texto", "real32", "real32"])
+fijo _captura   = nativa(RL, "TakeScreenshot", "nulo", ["texto"])
+fijo _pulsada   = nativa(RL, "IsKeyPressed", "log", ["entero"])
+fijo _abajo     = nativa(RL, "IsKeyDown", "log", ["entero"])
+fijo _ratonX    = nativa(RL, "GetMouseX", "entero", [])
+fijo _ratonY    = nativa(RL, "GetMouseY", "entero", [])
+fijo _clic      = nativa(RL, "IsMouseButtonPressed", "log", ["entero"])
+fijo _memoria   = nativa(RL, "MemAlloc", "puntero", ["natural"])
+fijo _liberar   = nativa(RL, "MemFree", "nulo", ["puntero"])
+fijo _codigos   = nativa(RL, "LoadCodepoints", "puntero", ["texto", "puntero"])
+fijo _soltarCodigos = nativa(RL, "UnloadCodepoints", "nulo", ["puntero"])
+
+# ─────────────────────────────────────────────── colores
+# «#RRGGBB» → el número de 32 bits que entiende raylib. Se calcula una vez por
+# color distinto y se guarda: un juego usa una docena de colores, no miles.
+fijo HEX = {"0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9,
+            "a": 10, "b": 11, "c": 12, "d": 13, "e": 14, "f": 15}
+var colores = {}
+
+publico fn rgb(r: entero, g: entero, b: entero): entero {
+    devolver r + g * 256 + b * 65536 + 255 * 16777216
+}
+
+fn deHex(c: texto): entero {
+    fijo h = minusculas(c)
+    si longitud(h) != 7 { error("color «" + c + "»: se escribe #RRGGBB") }
+    var v = []
+    para i en rango(1, 7) {
+        si no contiene(HEX, h[i]) { error("color «" + c + "»: «" + h[i] + "» no es un dígito hexadecimal") }
+        agregar(v, HEX[h[i]])
+    }
+    devolver rgb(v[0] * 16 + v[1], v[2] * 16 + v[3], v[4] * 16 + v[5])
+}
+
+var tinta = rgb(79, 63, 212)
+var trazo = 2.0
+
+# color("#RRGGBB") — con qué se pinta lo que sigue (como en la web)
+publico fn color(c: texto) {
+    si no contiene(colores, c) { colores[c] = deHex(c) }
+    tinta = colores[c]
+}
+publico fn grosor(g) { trazo = real(g) }
+
+# ─────────────────────────────────────────────── figuras (coordenadas del mundo)
+publico fn limpiar(c: texto) {
+    color(c)
+    _caja(0, 0, ANCHO, ALTO, tinta)
+}
+publico fn rect(x, y, w, h) { _caja(x, y, w, h, tinta) }
+publico fn borde(x, y, w, h) { _borde(x, y, w, h, tinta) }
+publico fn circulo(x, y, r) { _circulo(x, y, r, tinta) }
+publico fn aro(x, y, r) { _aro(x, y, r, tinta) }
+publico fn punto(x, y) { _caja(x, y, 2, 2, tinta) }
+publico fn linea(x1, y1, x2, y2) {
+    _lineaEx({"x": x1, "y": y1}, {"x": x2, "y": y2}, trazo, tinta)
+}
+
+# ─────────────────────────────────────────────── letra
+# Una fuente por familia (sans o mono), peso (normal o negrita) y tamaño de
+# atlas (32, 64 o 128 px). Se cargan la primera vez que se piden.
+fn carpetaFuentes(): texto {
+    si entorno("OS", "") == "Windows_NT" { devolver entorno("WINDIR", "C:\\Windows") + "\\Fonts\\" }
+    devolver "/usr/share/fonts/truetype/dejavu/"
+}
+# los candidatos, en orden: Windows primero, luego Linux
+fijo ARCHIVOS = {
+    "sans":         ["segoeui.ttf", "arial.ttf", "DejaVuSans.ttf"],
+    "sansnegrita":  ["segoeuib.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf"],
+    "mono":         ["consola.ttf", "cour.ttf", "DejaVuSansMono.ttf"],
+    "mononegrita":  ["consolab.ttf", "courbd.ttf", "DejaVuSansMono-Bold.ttf"]
+}
+var fuentes = {}
+var archivosFuente = {}       # familia → ruta encontrada ("" si ninguna)
+
+fn buscarArchivo(fam: texto): texto {
+    si contiene(archivosFuente, fam) { devolver archivosFuente[fam] }
+    var hallado = ""
+    # N_FUENTES deja probar con otra carpeta; luego la del sistema
+    para dir en [entorno("N_FUENTES", ""), carpetaFuentes()] {
+        si dir != "" y hallado == "" {
+            para nombre en ARCHIVOS[fam] {
+                si hallado == "" y existeArchivo(dir + nombre) { hallado = dir + nombre }
+            }
+        }
+    }
+    si hallado == "" { imprimir("pantalla: no encontré letra «" + fam + "»; uso la de raylib") }
+    archivosFuente[fam] = hallado
+    devolver hallado
+}
+
+# Los caracteres que lleva cada fuente: Latin-1 entero (del espacio a la ÿ, con
+# Ñ, tildes, ¡ y ¿) más unos pocos de fuera que usan los juegos: flechas,
+# triángulo, viñeta, raya y puntos suspensivos. raylib quiere una lista de
+# enteros en memoria de C; Ñ no tiene punteros a listas, así que se le pide a la
+# propia raylib: LoadCodepoints convierte un texto UTF-8 en esa lista.
+fn juntarCaracteres(): texto {
+    var t = ""
+    para c en rango(32, 127) { t = t + deCodigo(c) }
+    para c en rango(161, 256) { t = t + deCodigo(c) }
+    devolver t + "←↑→↓▸▴▾•–—…"
+}
+fijo CARACTERES = juntarCaracteres()
+fijo N_CARACTERES = longitud(CARACTERES)
+
+fn fuente(fam: texto, atlas: entero) {
+    fijo clave = fam + texto(atlas)
+    si contiene(fuentes, clave) { devolver fuentes[clave] }
+    fijo ruta = buscarArchivo(fam)
+    si ruta != "" {
+        fijo cuenta = _memoria(4)                  # LoadCodepoints escribe aquí cuántos
+        fijo lista = _codigos(CARACTERES, cuenta)
+        fijo f = _cargarFuente(ruta, atlas, lista, N_CARACTERES)
+        _soltarCodigos(lista)
+        _liberar(cuenta)
+        si f["textura"]["id"] != 0 {
+            _filtro(f["textura"], 1)      # 1 = bilineal: suave al escalar
+            fuentes[clave] = f
+            devolver f
+        }
+    }
+    # sin archivo, o no se pudo leer: la letra de raylib (pequeña, pero con Ñ)
+    fijo base = _fuenteBase()
+    fuentes[clave] = base
+    devolver base
+}
+
+var letraTam = 12.0
+var letraAlin = "izquierda"
+var letraFam = "sans"
+
+# letra(tamaño, alineación, estilo) — como en la web: px · «izquierda» «centro» «derecha» · «negrita» «mono»
+publico fn letra(tam, alin: texto, estilo: texto) {
+    si alin != "izquierda" y alin != "centro" y alin != "derecha" {
+        error("la alineación es «izquierda», «centro» o «derecha», no «" + alin + "»")
+    }
+    letraTam = real(tam)
+    letraAlin = alin
+    var fam = "sans"
+    si contiene(estilo, "mono") { fam = "mono" }
+    si contiene(estilo, "negrita") { fam = fam + "negrita" }
+    letraFam = fam
+}
+
+fn atlasPara(tam: real): entero {
+    si tam <= 28.0 { devolver 32 }
+    si tam <= 56.0 { devolver 64 }
+    devolver 128
+}
+
+# escribirEn(x, y, texto) — «y» es la LÍNEA BASE, como en el lienzo de la web
+publico fn escribirEn(x, y, t: texto) {
+    fijo f = fuente(letraFam, atlasPara(letraTam))
+    var x0 = real(x)
+    si letraAlin != "izquierda" {
+        fijo m = _medirEx(f, t, letraTam, 0.0)
+        si letraAlin == "centro" { x0 = x0 - m["x"] / 2.0 } sino { x0 = x0 - m["x"] }
+    }
+    _textoEx(f, t, {"x": x0, "y": real(y) - letraTam * 0.76}, letraTam, 0.0, tinta)
+}
+
+publico fn medir(t: texto): real {
+    fijo f = fuente(letraFam, atlasPara(letraTam))
+    fijo m = _medirEx(f, t, letraTam, 0.0)
+    devolver m["x"]
+}
+
+# ─────────────────────────────────────────────── guion de pruebas
+fijo GUION = entorno("N_GUION", "")
+var guion = {}                 # cuadro → lista de órdenes
+var guionAbajo = []            # teclas sostenidas por el guion
+var guionPulsadas = []         # teclas pulsadas en ESTE cuadro
+var guionFin = -1
+fijo NOMBRES = {"espacio": ESPACIO, "esc": ESC, "enter": ENTER, "derecha": DERECHA, "izquierda": IZQUIERDA,
+                "abajo": ABAJO, "arriba": ARRIBA, "a": A, "d": D, "n": N, "p": P, "s": S, "w": W, "x": X}
+
+fn cargarGuion() {
+    para l en lineas(leerTexto(GUION)) {
+        fijo t = recortar(l)
+        si t != "" y t[0] != "#" {
+            fijo partes = dividir(t, " ")
+            fijo c = entero(partes[0])
+            si no contiene(guion, c) { guion[c] = [] }
+            agregar(guion[c], partes)
+        }
+    }
+}
+
+fn codigoDe(nombre: texto): entero {
+    si no contiene(NOMBRES, nombre) { error("guion: no conozco la tecla «" + nombre + "»") }
+    devolver NOMBRES[nombre]
+}
+
+publico fn hayGuion(): bool { devolver GUION != "" }
+
+# ─────────────────────────────────────────────── la ventana
+var cuadros = 0
+var zoom = 1.0
+var offX = 0.0
+var offY = 0.0
+var cerrar_ = falso
+
+# abrir(titulo) — ventana 9:16 al 86 % del alto del monitor, centrada
+publico fn abrir(titulo: texto) {
+    _registro(4)                    # 4 = solo avisos y errores en el registro
+    _banderas(4 + 32)               # 4 = redimensionable · 32 = antialias 4×
+    _abrir(450, 800, titulo)
+    _teclaSalir(0)                  # Esc NO cierra: el juego decide qué hace
+    _fps(60)
+    fijo m = _monitor()
+    fijo mh = _altoM(m)
+    fijo mw = _anchoM(m)
+    si mh > 0 {
+        fijo h = entero(mh * 0.86)
+        fijo w = entero(h * ANCHO / ALTO)
+        _tamano(w, h)
+        _posicion((mw - w) // 2, (mh - h) // 2)
+    }
+    si hayGuion() {
+        cargarGuion()
+        _fps(0)        # con guion no hay nadie mirando: a toda velocidad
+    }
+}
+
+publico fn cerrar() { _cerrar() }
+publico fn salir() { cerrar_ = cierto }
+# verdadero cuando se cerró la ventana (la X), cuando alguien llamó a salir(), o el guion terminó
+publico fn debeCerrar(): bool {
+    si cerrar_ { devolver cierto }
+    devolver _debeCerrar()
+}
+publico fn cuadro(): entero { devolver cuadros }
+
+# Un cuadro empieza: se calcula la escala, se limpia el borde negro y todo lo que
+# se dibuje después va en coordenadas del mundo (540×960).
+publico fn empezar() {
+    fijo w = _anchoV()
+    fijo h = _altoV()
+    zoom = minimo(w / real(ANCHO), h / real(ALTO))
+    offX = (w - ANCHO * zoom) / 2.0
+    offY = (h - ALTO * zoom) / 2.0
+    # el guion de este cuadro
+    guionPulsadas = []
+    si hayGuion() y contiene(guion, cuadros) {
+        para o en guion[cuadros] {
+            fijo orden = o[1]
+            si orden == "pulsa" { agregar(guionPulsadas, codigoDe(o[2])) }
+            si orden == "baja" { agregar(guionAbajo, codigoDe(o[2])) }
+            si orden == "suelta" y contiene(guionAbajo, codigoDe(o[2])) { quitar(guionAbajo, codigoDe(o[2])) }
+            si orden == "fin" { cerrar_ = cierto }
+        }
+    }
+    si pulsada(F11) { _completa() }
+    _empezar()
+    _fondo(rgb(0, 0, 0))
+    _recorte(entero(offX), entero(offY), entero(ANCHO * zoom + 0.5), entero(ALTO * zoom + 0.5))
+    _modo2d({"desfase": {"x": offX, "y": offY}, "objetivo": {"x": 0.0, "y": 0.0}, "rotacion": 0.0, "zoom": zoom})
+}
+
+publico fn terminar() {
+    _fin2d()
+    _finRecorte()
+    _terminar()
+    # las capturas del guion se toman con el cuadro ya en pantalla
+    si hayGuion() y contiene(guion, cuadros) {
+        para o en guion[cuadros] {
+            si o[1] == "captura" { _captura(o[2]) }
+        }
+    }
+    cuadros = cuadros + 1
+}
+
+# ─────────────────────────────────────────────── teclado y ratón
+# pulsada: se acaba de apretar en este cuadro · sostenida: está apretada
+publico fn pulsada(k: entero): bool {
+    si hayGuion() { devolver contiene(guionPulsadas, k) }
+    devolver _pulsada(k)
+}
+publico fn sostenida(k: entero): bool {
+    si hayGuion() { devolver contiene(guionAbajo, k) o contiene(guionPulsadas, k) }
+    devolver _abajo(k)
+}
+# el ratón en coordenadas del mundo, y si se hizo clic en este cuadro
+publico fn raton(): dic {
+    si hayGuion() { devolver {"x": -1.0, "y": -1.0, "clic": falso} }
+    devolver {"x": (_ratonX() - offX) / zoom, "y": (_ratonY() - offY) / zoom, "clic": _clic(0)}
+}

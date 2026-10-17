@@ -7,6 +7,10 @@ node_modules/
 /n.exe
 motor/n-completo.js
 
+# Las apps empaquetadas con «node motor/util/empaquetar.js»: cada una lleva una
+# copia de Node dentro (~120 MB). Salida, no fuente.
+dist/
+
 # Bibliotecas nativas que baja el usuario para los ejemplos (raylib).
 *.dll
 *.so
@@ -71,3 +75,11 @@ ejemplos/*.html
 # raíz son las copias viejas, sin fecha.
 /auditoria-motor.html
 /auditoria-web.html
+
+# Herramientas y resultados locales de la prueba de velocidad (w64devkit pesa ~70 MB)
+velocidad/bin/
+velocidad/resultados/
+velocidad/herramientas/
+# Salidas de pruebas y registros de apps de ventana
+bateria-*.txt
+*.log

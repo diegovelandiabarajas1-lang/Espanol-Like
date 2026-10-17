@@ -109,6 +109,7 @@ eco("<h2>hola</h2>")`);
   comprobar('el lienzo dibujó', await zona().$eval('canvas', c => c.width) === 400);
   comprobar('la página recibió HTML', r5.pagina.includes('<h2>hola</h2>'), r5.pagina.slice(0, 80));
 
+
   console.log('\n── 6. los paneles se pintan desde el retrato ──');
   await pag.click('.tab[data-v="bytecode"]');
   const bc = await pag.textContent('#bytecode');
@@ -120,6 +121,23 @@ eco("<h2>hola</h2>")`);
   await pag.click('.tab[data-v="memoria"]');
   const mem = await pag.textContent('#memoria');
   comprobar('panel de memoria', mem.includes('objetos vivos ahora'), mem.slice(0, 120));
+
+  console.log('\n── 6b. letra() en el lienzo ──');
+  // letra(): el tamaño, la alineación y el estilo de escribirEn (15-oct-2026).
+  // Sin letra() todo tiene que quedar igual que antes: 12 px, sans, a la izquierda.
+  await correr('lienzo(300, 100)\nescribirEn(10, 30, "antes")');
+  const fuenteAntes = await zona().$eval('canvas', c => { const g = c.getContext('2d'); return g.font + ' · ' + g.textAlign; });
+  comprobar('sin letra(), escribirEn sigue a 12 px sans y a la izquierda', fuenteAntes === '12px sans-serif · left', fuenteAntes);
+  await correr('lienzo(300, 100)\nletra(40, "centro", "negrita mono")\nescribirEn(150, 60, "1200")');
+  const fuenteDespues = await zona().$eval('canvas', c => { const g = c.getContext('2d'); return g.font + ' · ' + g.textAlign; });
+  comprobar('letra(40, "centro", "negrita mono") llega al lienzo', /^bold 40px .*monospace · center$/.test(fuenteDespues), fuenteDespues);
+  const pintado = await zona().$eval('canvas', c => { const d = c.getContext('2d').getImageData(0, 0, 300, 100).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; });
+  comprobar('y escribe de verdad (hay píxeles pintados)', pintado > 200, pintado);
+  const malo = await correr('lienzo(100, 50)\nletra(20, "arriba")');
+  comprobar('una alineación que no existe se dice en español', malo.salida.includes('«izquierda», «centro» o «derecha»'), malo.salida.slice(0, 160));
+  const otraVez = await correr('lienzo(100, 50)\nescribirEn(5, 20, "x")');
+  const fuenteReinicio = await zona().$eval('canvas', c => c.getContext('2d').font);
+  comprobar('al volver a ejecutar, la letra vuelve a la de siempre', fuenteReinicio === '12px sans-serif', fuenteReinicio + ' ' + otraVez.salida.slice(0, 60));
 
   console.log('\n── 7. verificación en vivo y errores ──');
   await pag.fill('#editor', 'var x: entero = "hola"');
@@ -254,6 +272,61 @@ imprimir(texto(trabajo(300000)))`);
   const r11 = await correr('imprimir("sigo viva")');
   comprobar('la zona sigue funcionando después', r11.salida.includes('sigo viva'), r11.salida.slice(0, 80));
   fsx.unlinkSync(ruta); fsx.unlinkSync(rutaRota); fsx.unlinkSync(rutaTxt);
+
+  console.log('\n── 11a. un .elb de varios archivos (paquete) en el IDE ──');
+  {
+    // En el navegador no hay módulos (no hay disco). Pero un paquete trae los
+    // módulos YA compilados: se arma en la consola con util/elb.js y aquí solo
+    // se carga. Tiene que correr igual, y cada módulo una sola vez.
+    const { execFileSync } = require('child_process');
+    const dir = fsx.mkdtempSync(pth.join(os.tmpdir(), 'paquete-ide-'));
+    fsx.mkdirSync(pth.join(dir, 'lib'));
+    fsx.writeFileSync(pth.join(dir, 'lib', 'mates.esl'),
+      'publico fn cuadrado(x: entero): entero { devolver x * x }\nimprimir("mates cargado")\n');
+    fsx.writeFileSync(pth.join(dir, 'lib', 'saludo.esl'),
+      'usar "mates.esl" como m\npublico fn saludar(n: texto): texto { devolver "hola " + n + " " + texto(m.cuadrado(7)) }\n');
+    fsx.writeFileSync(pth.join(dir, 'principal.esl'),
+      'usar "lib/saludo.esl" como s\nusar "lib/mates.esl" como m\nimprimir(s.saludar("Diego"))\nimprimir("cubo " + texto(m.cuadrado(3) * 3))\n');
+    const rutaP = pth.join(dir, 'principal.elb');
+    execFileSync(process.execPath, [require('../rutas.js').util('elb.js'), pth.join(dir, 'principal.esl'), rutaP]);
+    const bytesP = fsx.readFileSync(rutaP);
+    comprobar('util/elb.js arma un paquete (ESLP)', bytesP.subarray(0, 4).toString('latin1') === 'ESLP', bytesP.subarray(0, 4).toString('latin1'));
+    await pag.fill('#editor', 'imprimir("esto NO debería salir")');
+    await pag.waitForTimeout(400);
+    await pag.click('#bLimpiar');
+    await pag.setInputFiles('#fBytecode', rutaP);
+    await pag.waitForFunction(() => /terminó|falló/.test(document.querySelector('#estado').textContent), null, { timeout: 15000 });
+    const salP = await zona().$eval('#consola', n2 => n2.innerText);
+    comprobar('el paquete corre en el IDE, con sus módulos', salP.includes('hola Diego 49') && salP.includes('cubo 27'), salP.slice(0, 160));
+    comprobar('cada módulo una sola vez, aunque lo importen dos', (salP.match(/mates cargado/g) || []).length === 1, salP.slice(0, 160));
+    comprobar('corrió el paquete, no el editor', !salP.includes('NO debería'), salP.slice(0, 160));
+
+    // El mismo paquete en base64 (.elb.txt) se carga igual.
+    const rutaPt = rutaP + '.txt';
+    fsx.writeFileSync(rutaPt, bytesP.toString('base64').replace(/(.{76})/g, '$1\n'));
+    await pag.click('#bLimpiar');
+    await pag.setInputFiles('#fBytecode', rutaPt);
+    await pag.waitForFunction(() => /terminó|falló/.test(document.querySelector('#estado').textContent), null, { timeout: 15000 });
+    const salPt = await zona().$eval('#consola', n2 => n2.innerText);
+    comprobar('el paquete en base64 se carga igual', salPt.includes('hola Diego 49'), salPt.slice(0, 160));
+
+    // Un módulo estropeado: se rechaza el paquete entero y no corre NADA,
+    // ni el principal ni los módulos sanos.
+    const rotoP = Buffer.from(bytesP);
+    const iMod = rotoP.indexOf(Buffer.from('ESLB', 'latin1'));
+    rotoP[iMod + 3] = 0x41;                      // la marca del primer módulo deja de ser ESLB
+    const rutaPr = pth.join(dir, 'roto.elb');
+    fsx.writeFileSync(rutaPr, rotoP);
+    await pag.click('#bLimpiar');
+    await pag.setInputFiles('#fBytecode', rutaPr);
+    await pag.waitForFunction(() => /terminó|falló/.test(document.querySelector('#estado').textContent), null, { timeout: 15000 });
+    const salPr = await zona().$eval('#consola', n2 => n2.innerText);
+    comprobar('un módulo roto rechaza el paquete entero, con mensaje', /falló/.test(await pag.textContent('#estado')) &&
+      /módulo/.test(salPr) && !salPr.includes('mates cargado') && !salPr.includes('hola'), salPr.slice(0, 200));
+    const r11a = await correr('imprimir("sigo viva")');
+    comprobar('la zona sigue funcionando después', r11a.salida.includes('sigo viva'), r11a.salida.slice(0, 80));
+    fsx.rmSync(dir, { recursive: true, force: true });
+  }
 
   console.log('\n── 11b. una aplicación no pierde lo que el usuario hace ──');
   {
@@ -461,8 +534,8 @@ imprimir("no debería llegar")`);
       await app.waitForTimeout(300);
       comprobar('y se puede usar', (await app.$eval('#pagina', n => n.innerText)).includes('desde la app'),
         await app.$eval('#pagina', n => n.innerText));
-      const guardado = await app.evaluate(() => localStorage.getItem('n:app:tareas'));
-      comprobar('guarda en su propio localStorage, sin puente', typeof guardado === 'string' && guardado.includes('desde la app'), guardado);
+      const guardado = await app.evaluate(() => { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (/^n:app:[^:]+:tareas$/.test(k)) return localStorage.getItem(k); } return null; });
+      comprobar('guarda en localStorage, bajo el nombre de la app, sin puente', typeof guardado === 'string' && guardado.includes('desde la app'), guardado);
       await app.reload();
       await app.waitForTimeout(600);
       comprobar('y lo guardado sobrevive a recargar',
@@ -473,6 +546,33 @@ imprimir("no debería llegar")`);
       require('fs').unlinkSync(destino);
     }
     await correr('imprimir("sigo aquí")');
+  }
+
+  console.log('\n── 11d2. dos apps abiertas desde el disco no se pisan lo guardado ──');
+  {
+    // Abiertas con doble clic, todas las apps son file:// y el navegador les da
+    // un solo localStorage. Antes del 15-oct-2026 dos apps que guardaban la
+    // misma clave se la pisaban (Galaga le pasó su marca a Flappy).
+    const fs = require('fs'), path = require('path'), os = require('os');
+    const { execFileSync } = require('child_process');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'n-dos-apps-'));
+    const hacer = (titulo, valor) => {
+      const esl = path.join(dir, valor + '.esl');
+      fs.writeFileSync(esl, `var v = recuperar("mejor", 0)\npintar(etiqueta("p", "leí " + texto(v)))\nguardar("mejor", ${valor})`);
+      const html = path.join(dir, valor + '.html');
+      execFileSync(process.execPath, [path.join(__dirname, '..', 'util', 'construir-app.js'), esl, titulo, html], { stdio: 'ignore' });
+      return 'file://' + html;
+    };
+    const uno = hacer('Juego Uno', 111), dos = hacer('Juego Dos', 222);
+    const p = await pag.context().newPage();
+    const leer = async u => { await p.goto(u); await p.waitForTimeout(400); return (await p.$eval('#pagina', n => n.innerText)).trim(); };
+    comprobar('la primera app empieza en blanco', await leer(uno) === 'leí 0');
+    comprobar('la segunda NO ve lo que guardó la primera', await leer(dos) === 'leí 0');
+    comprobar('y cada una encuentra lo suyo al volver', await leer(uno) === 'leí 111' && await leer(dos) === 'leí 222');
+    const claves = await p.evaluate(() => Object.keys(localStorage).filter(k => /^n:app:Juego/.test(k)).sort());
+    comprobar('en el almacén hay una clave por app', JSON.stringify(claves) === JSON.stringify(['n:app:Juego%20Dos:mejor', 'n:app:Juego%20Uno:mejor']), claves);
+    await p.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 
   {

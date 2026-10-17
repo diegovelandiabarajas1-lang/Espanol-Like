@@ -53,7 +53,7 @@ function anfitrion(apuntes) {
       circulo: () => { apuntes.figuras++; }, linea: () => { apuntes.figuras++; },
       punto: () => { apuntes.figuras++; }, texto: () => { apuntes.figuras++; },
       escribirEn: () => { apuntes.figuras++; },
-      color: () => {}, grosor: () => {},
+      color: () => {}, grosor: () => {}, letra: () => {},
       barras: () => { apuntes.graficas++; }, dispersion: () => { apuntes.graficas++; },
       graficar: () => { apuntes.graficas++; }, histograma: () => { apuntes.graficas++; },
     },

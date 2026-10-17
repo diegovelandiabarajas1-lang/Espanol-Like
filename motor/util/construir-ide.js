@@ -13,6 +13,9 @@ const PERFIL = process.argv.includes('--c1en') ? 'c1en' : 'n';
 const esC1en = PERFIL === 'c1en';
 const bundle = fs.readFileSync(esC1en ? R.bundleC1en : R.bundle, 'utf8');
 const anfitrion = fs.readFileSync(R.ide('anfitrion.js'), 'utf8');
+// El lector de paquetes .elb (programa + módulos en un archivo): para que el
+// botón «Importar y ejecutar» también los acepte.
+const paquete = fs.readFileSync(R.util('paquete-elb.js'), 'utf8');
 // La plantilla de las aplicaciones exportadas viaja dentro del hijo, en base64.
 // No lleva el motor: el hijo ya lo tiene y lo lee de su propio <script> al
 // exportar, así que no hay una segunda copia de 170 KB dando vueltas.
@@ -27,12 +30,13 @@ const plantilla = fs.readFileSync(R.ide('app.html'), 'utf8');
 }
 
 let hijo = fs.readFileSync(R.ide('hijo.html'), 'utf8');
-for (const m of ['/*__MOTOR__*/', '/*__ANFITRION__*/', '/*__PLANTILLA_APP__*/'])
+for (const m of ['/*__MOTOR__*/', '/*__ANFITRION__*/', '/*__PAQUETE_ELB__*/', '/*__PLANTILLA_APP__*/'])
   if (!hijo.includes(m)) throw new Error('falta el marcador ' + m + ' en hijo.html');
-for (const [n, t] of [['bundle', bundle], ['anfitrion', anfitrion]])
+for (const [n, t] of [['bundle', bundle], ['anfitrion', anfitrion], ['paquete-elb', paquete]])
   if (t.includes('</script')) throw new Error('el ' + n + ' contiene </script — rompería el hijo');
 hijo = hijo.replace('/*__MOTOR__*/', () => bundle);
 hijo = hijo.replace('/*__ANFITRION__*/', () => anfitrion);
+hijo = hijo.replace('/*__PAQUETE_ELB__*/', () => paquete);
 hijo = hijo.replace('/*__PLANTILLA_APP__*/', () => Buffer.from(plantilla, 'utf8').toString('base64'));
 
 const b64 = Buffer.from(hijo, 'utf8').toString('base64');

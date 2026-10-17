@@ -22,6 +22,8 @@ const SUITES = [
   ['C1EÑ',        'c1en.js',         'núcleos de Ñ en jit, C nativo y GPU (simulada), comparados al bit'],
   ['núcleos NEÑ', 'nen-nucleos.js',  'los núcleos de tensores y Fourier compilados en C contra su respaldo'],
   ['perfil C1EÑ', 'perfil-c1en.js',  'el bundle con numerico y nen abiertos: sin «usar», y el mismo código que Ñ'],
+  ['empaquetar',  'empaquetar.js',   'un programa de varios archivos cosido en un ejecutable, de consola y de ventana'],
+  ['.elb varios', 'elb-varios.js',   'un programa con sus módulos en un solo .elb: portable, verificado entero'],
 ];
 
 let fallan = 0, saltadas = 0;

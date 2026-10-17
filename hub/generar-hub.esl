@@ -1,0 +1,94 @@
+# Genera el hub de juegos: recorre la carpeta de juegos, saca el título de cada
+# HTML y escribe hub.esl a partir de hub-plantilla.esl con el catálogo dentro.
+#
+#   node motor\util\n-node.js hub\generar-hub.esl D:\Documents\Juegos hub
+#
+# El catálogo va DENTRO del programa a propósito: una app exportada corre desde
+# file:// y no puede leer la carpeta; quien la lee es este script, en consola.
+usar entre, recortar, terminaCon, reemplazar, indiceDe, dividir, unir de "texto"
+
+fijo args = argumentos()
+var raiz = "D:/Documents/Juegos"
+var carpetaHub = "hub"
+si longitud(args) > 0 { raiz = args[0] }
+si longitud(args) > 1 { carpetaHub = args[1] }
+raiz = reemplazar(raiz, "\\", "/")
+si terminaCon(raiz, "/") { raiz = subtextoSinBarra(raiz) }
+
+fn subtextoSinBarra(s: texto): texto { devolver reemplazar(s + "|", "/|", "") }
+
+# Los HTML de la raíz son páginas del hub viejo (home, main, índices): no son
+# juegos. Un juego es un .html dentro de una subcarpeta.
+fijo CATEGORIAS = {
+    "Game One Player": "Un jugador",
+    "Games Combat": "Combate",
+    "Pasiv": "Simuladores",
+    "Support": "Guías",
+    "N": "Hechos en Ñ",
+}
+
+fn categoriaDe(rel: texto): texto {
+    fijo partes = dividir(rel, "/")
+    # Retro/Game One Player/game1.html → "Game One Player"; Support/x.html → "Support"
+    var carpeta = partes[0]
+    si longitud(partes) > 2 { carpeta = partes[longitud(partes) - 2] }
+    devolver obtener(CATEGORIAS, carpeta, carpeta)
+}
+
+fn tituloDe(ruta: texto, archivo: texto): texto {
+    fijo html = leerTexto(ruta)
+    var t = recortar(entre(html, "<title>", "</title>"))
+    si t == "" { t = archivo }
+    devolver t
+}
+
+# Un texto cualquiera, escrito como literal de Ñ entre comillas dobles.
+fn literal(s: texto): texto {
+    var r = reemplazar(s, "\\", "\\\\")
+    r = reemplazar(r, "\"", "\\\"")
+    r = reemplazar(r, '{', '\\{')
+    r = reemplazar(r, '}', '\\}')
+    devolver "\"" + r + "\""
+}
+
+var juegos = []
+
+fn recorrer(dir: texto, rel: texto) {
+    para nombre en ordenar(listar(dir)) {
+        fijo ruta = dir + "/" + nombre
+        var relNombre = nombre
+        si rel != "" { relNombre = rel + "/" + nombre }
+        si esCarpeta(ruta) {
+            recorrer(ruta, relNombre)
+        } sino si terminaCon(nombre, ".html") y rel != "" {
+            agregar(juegos, {
+                "titulo": tituloDe(ruta, nombre),
+                "ruta": relNombre,
+                "archivo": nombre,
+                "categoria": categoriaDe(relNombre),
+            })
+        }
+    }
+}
+
+recorrer(raiz, "")
+
+var lineas = []
+para j en juegos {
+    agregar(lineas, "    \{\"titulo\": " + literal(j["titulo"]) +
+        ", \"ruta\": " + literal(j["ruta"]) +
+        ", \"archivo\": " + literal(j["archivo"]) +
+        ", \"categoria\": " + literal(j["categoria"]) + "\},")
+}
+fijo catalogo = "fijo JUEGOS = [\n" + unir(lineas, "\n") + "\n]"
+
+fijo plantilla = leerTexto(carpetaHub + "/hub-plantilla.esl")
+fijo marca = "fijo JUEGOS = []  # <<CATALOGO>>"
+si indiceDe(plantilla, marca) < 0 { lanzar error("la plantilla no tiene la línea «" + marca + "»") }
+escribirTexto(carpetaHub + "/hub.esl", reemplazar(plantilla, marca, catalogo))
+
+imprimir(longitud(juegos), "juegos en", raiz, "→", carpetaHub + "/hub.esl")
+para c en claves(CATEGORIAS) {
+    fijo n = longitud(filtrar(juegos, fn(j) { devolver j["categoria"] == CATEGORIAS[c] }))
+    si n > 0 { imprimir("  ", CATEGORIAS[c] + ":", n) }
+}

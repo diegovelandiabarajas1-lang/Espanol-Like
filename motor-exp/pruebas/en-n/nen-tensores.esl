@@ -1,0 +1,590 @@
+# Las pruebas de NEÑ — tensores, álgebra lineal avanzada y Fourier — en Ñ.
+#
+# Casi todo se comprueba por IDENTIDADES: lo que se puede verificar por otro
+# camino sin saber el resultado de antemano (la transformada y vuelta da el
+# original, exp(A)·exp(−A) es la identidad, A·v = λ·v…). Donde hay un valor
+# conocido, viene de NumPy/SciPy y se dice en el comentario.
+
+usar probar, grupo, correrPruebas, resumenPruebas, debeSer, debeSerCerca, debeSerCierto,
+     debeSerFalso, debeFallarCon, debeSerMenor, debeSerMayor de "probar"
+usar arreglo, aListaA, forma, elemento, por, transpuesta, traza, diagonal, identidadA, ceros, unos,
+     secuencia, reparto, azarArreglo, semilla, esVista, trozo, trozoVarios, fila, externo, kronecker,
+     resolverA, autovalores, rangoMatriz, normaMatriz, determinanteA, complejo, parteReal,
+     parteImaginaria, fourier, fourierInversa, suma, seno, coseno, varianza, igualA, todos,
+     mayorQue, redimensionar, expandir, productoPunto, normaVector, absoluto de "numerico"
+usar senoA, cosenoA, tangenteA, arcotangenteA, anguloA, senoHiperbolicoA, cosenoHiperbolicoA,
+     tangenteHiperbolicaA, expA, logA, raizA, absolutoA, signoA, pisoA, techoA, redondearA,
+     potenciaA, sigmoideA, reluA, softmax, mapearA de "nen"
+usar sumaEje, productoEje, mediaEje, varianzaEje, desviacionEje, maximoEje, minimoEje, normaEje,
+     todosEje, algunoEje de "nen"
+usar contraer, einstein, permutarEjes, voltear, rodar, rejilla, repetirA, mosaico, diagonalDe,
+     productoCruz, normaTensor, multLotes de "nen"
+usar formaHessenberg, factorSchur, autovaloresGeneral, autovectoresGeneral, radioEspectral,
+     exponencialMatriz, raizMatriz, logaritmoMatriz, nucleoMatriz, imagenMatriz, gramSchmidt,
+     factorLDL, resolverGradienteConjugado, resolverGaussSeidel, resolverJacobi, vandermonde,
+     toeplitz, hilbert, matrizRotacion de "nen"
+usar fourier2D, fourierInversa2D, fourierReal, fourierRealInversa, frecuenciasReal,
+     centrarFrecuencias, descentrarFrecuencias, ventana, espectrograma, potenciaEspectral,
+     correlacionCruzada, autocorrelacion, transformadaCoseno, transformadaCosenoInversa,
+     filtrarFrecuencias, convolucion2D, senalAnalitica, envolvente de "nen"
+
+# El error máximo entre dos arreglos (reales o complejos): absolutoA de un
+# complejo es su módulo, así que vale para los dos.
+fn cerca(X, Y) {
+    debeSerMenor(maximoEje(absolutoA(X - Y)), 0.000000001)
+}
+fn cercaTol(X, Y, tol: real) {
+    debeSerMenor(maximoEje(absolutoA(X - Y)), tol)
+}
+fn columna(M: arreglo, k: entero) -> arreglo {
+    devolver trozoVarios(M, [[], [k, k + 1]])
+}
+
+semilla(7)
+
+grupo("elemento a elemento", fn() {
+    probar("sen² + cos² = 1 en todo el arreglo", fn() {
+        fijo x = azarArreglo([3, 50]) * 20.0 - 10.0
+        cerca(senoA(x) * senoA(x) + cosenoA(x) * cosenoA(x), unos([3, 50]))
+    })
+    probar("tangente es seno entre coseno, y arcotangente la deshace", fn() {
+        fijo x = azarArreglo([40]) * 2.0 - 1.0
+        cerca(tangenteA(x), senoA(x) / cosenoA(x))
+        cerca(arcotangenteA(tangenteA(x)), x)
+    })
+    probar("exp y log son inversas", fn() {
+        fijo x = azarArreglo([100]) * 50.0 + 0.001
+        cercaTol(expA(logA(x)), x, 0.00000000001)
+        cerca(logA(expA(x / 10.0)), x / 10.0)
+    })
+    probar("aceptan listas y números sueltos", fn() {
+        cerca(raizA([4, 9, 16]), arreglo([2.0, 3.0, 4.0]))
+        debeSerCerca(senoA(0.5), seno(0.5), 0.0000000000000002)
+    })
+    probar("un arreglo grande (el que iría a la GPU) da lo mismo que seno de numerico", fn() {
+        fijo x = reparto(-50.0, 50.0, 100000)
+        debeSerMenor(maximoEje(absolutoA(senoA(x) - seno(x))), 0.000000000000001)
+    })
+    probar("Euler: e^(iπ) = −1", fn() {
+        fijo z = expA(complejo(0.0, |PI))
+        cerca(parteReal(z), arreglo([-1.0]))
+        cerca(parteImaginaria(z), arreglo([0.0]))
+    })
+    probar("raíz y logaritmo de un negativo: error en reales, número en complejos", fn() {
+        debeFallarCon(fn() { logA(arreglo([1.0, -1.0])) }, "no es un número real")
+        debeFallarCon(fn() { raizA(arreglo([-4.0])) }, "no es un número real")
+        cerca(parteImaginaria(raizA(complejo(arreglo([-4.0])))), arreglo([2.0]))
+        cerca(parteImaginaria(logA(complejo(arreglo([-1.0])))), arreglo([|PI]))
+    })
+    probar("seno y coseno complejos cumplen sen² + cos² = 1", fn() {
+        fijo z = complejo(arreglo([0.3, -1.2, 2.0]), arreglo([0.5, 0.1, -1.5]))
+        cerca(senoA(z) * senoA(z) + cosenoA(z) * cosenoA(z), complejo(unos([3])))
+        cerca(tangenteA(z), senoA(z) / cosenoA(z))
+    })
+    probar("cosh² − senh² = 1, y senh no pierde cifras cerca de 0", fn() {
+        fijo x = azarArreglo([50]) * 10.0 - 5.0
+        cercaTol(cosenoHiperbolicoA(x) * cosenoHiperbolicoA(x) - senoHiperbolicoA(x) * senoHiperbolicoA(x), unos([50]), 0.0000001)
+        debeSerCerca(senoHiperbolicoA(0.00000001) / 0.00000001, 1.0, 0.000000000000001)
+        cerca(tangenteHiperbolicaA(x), senoHiperbolicoA(x) / cosenoHiperbolicoA(x))
+    })
+    probar("tanh y la sigmoide no se desbordan con números enormes", fn() {
+        debeSer(tangenteHiperbolicaA(800.0), 1)
+        debeSer(tangenteHiperbolicaA(-800.0), -1)
+        debeSer(sigmoideA(-800.0), 0)
+        debeSer(sigmoideA(0.0), 0.5)
+        cerca(sigmoideA(arreglo([2.0])) + sigmoideA(arreglo([-2.0])), arreglo([1.0]))
+    })
+    probar("signo, piso, techo, absoluto y relu", fn() {
+        debeSer(aListaA(signoA(arreglo([-3.0, 0.0, 2.5]))), [-1, 0, 1])
+        debeSer(aListaA(pisoA(arreglo([-1.5, 1.5]))), [-2, 1])
+        debeSer(aListaA(techoA(arreglo([-1.5, 1.5]))), [-1, 2])
+        debeSer(aListaA(reluA(arreglo([-2.0, 0.0, 3.0]))), [0, 0, 3])
+        cerca(absolutoA(complejo(arreglo([3.0]), arreglo([4.0]))), arreglo([5.0]))
+        cerca(signoA(complejo(arreglo([3.0]), arreglo([4.0]))), complejo(arreglo([0.6]), arreglo([0.8])))
+    })
+    probar("redondearA: la mitad hacia arriba, y el 0.49999999999999994 a 0", fn() {
+        debeSer(aListaA(redondearA(arreglo([2.5, -2.5, 0.49999999999999994, 1.234]))), [3, -2, 0, 1])
+        cerca(redondearA(arreglo([1.2345, -3.14159]), 2), arreglo([1.23, -3.14]))
+    })
+    probar("potenciaA difunde, y una base negativa pide exponente entero", fn() {
+        debeSer(aListaA(potenciaA(arreglo([[1.0, 2.0], [3.0, 4.0]]), arreglo([2.0, 3.0]))), [[1, 8], [9, 64]])
+        cerca(potenciaA(arreglo([-2.0]), 3.0), arreglo([-8.0]))
+        debeFallarCon(fn() { potenciaA(arreglo([-2.0]), 0.5) }, "no es un número real")
+        cerca(parteImaginaria(potenciaA(complejo(arreglo([-4.0])), 0.5)), arreglo([2.0]))
+    })
+    probar("anguloA sabe el cuadrante", fn() {
+        cerca(anguloA(arreglo([1.0, 1.0, -1.0]), arreglo([1.0, -1.0, -1.0])), arreglo([|PI / 4.0, 3.0 * |PI / 4.0, -3.0 * |PI / 4.0]))
+    })
+    probar("softmax: cada fila suma 1, no cambia al sumar una constante y no se desborda", fn() {
+        fijo x = azarArreglo([4, 6]) * 10.0
+        cerca(sumaEje(softmax(x), 1), unos([4]))
+        cerca(softmax(x), softmax(x + 1000.0))
+        cerca(sumaEje(softmax(x, 0), 0), unos([6]))
+        cerca(softmax(arreglo([0.0, 0.0])), arreglo([0.5, 0.5]))
+    })
+    probar("mapearA aplica una función de Ñ", fn() {
+        debeSer(aListaA(mapearA(arreglo([[1, 2], [3, 4]]), fn(x) { devolver x * x + 1 })), [[2, 5], [10, 17]])
+        debeFallarCon(fn() { mapearA(arreglo([1, 2]), fn(x) { devolver "no" }) }, "tiene que devolver un número")
+    })
+})
+
+grupo("reducciones por eje", fn() {
+    fijo m = arreglo([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    probar("suma por eje, por varios ejes y entera", fn() {
+        debeSer(aListaA(sumaEje(m, 0)), [5, 7, 9])
+        debeSer(aListaA(sumaEje(m, 1)), [6, 15])
+        debeSer(sumaEje(m), 21)
+        debeSer(aListaA(sumaEje(m, -1)), [6, 15])
+        fijo t = redimensionar(secuencia(24), [2, 3, 4])
+        debeSer(aListaA(sumaEje(t, [0, 2])), aListaA(sumaEje(sumaEje(t, 2), 0)))
+    })
+    probar("coincide con suma(a, eje) de numerico", fn() {
+        fijo x = azarArreglo([7, 9])
+        cerca(sumaEje(x, 0), suma(x, 0))
+    })
+    probar("mantener deja los ejes con tamaño 1, y así se centra cada columna", fn() {
+        debeSer(forma(sumaEje(m, 0, verdadero)), [1, 3])
+        debeSer(forma(sumaEje(m, nulo, verdadero)), [1, 1])
+        fijo x = azarArreglo([5, 4])
+        cerca(mediaEje(x - mediaEje(x, 0, verdadero), 0), ceros([4]))
+    })
+    probar("la suma larga va por trozos y no pierde la cuenta", fn() {
+        debeSer(sumaEje(unos([100000])), 100000)
+        debeSerCerca(sumaEje(unos([100000]) * 0.1), 10000.0, 0.0000001)
+    })
+    probar("producto, también de complejos (i·i = −1)", fn() {
+        debeSer(aListaA(productoEje(m, 1)), [6, 120])
+        fijo i2 = productoEje(complejo(arreglo([0.0, 0.0]), arreglo([1.0, 1.0])))
+        cerca(parteReal(i2), arreglo([-1.0]))
+    })
+    probar("varianza y desviación muestrales, como «varianza»", fn() {
+        fijo x = azarArreglo([20, 3])
+        debeSerCerca(elemento(varianzaEje(x, 0), 1), varianza(fila(transpuesta(x), 1)), 0.000000000001)
+        cerca(desviacionEje(x, 0), raizA(varianzaEje(x, 0)))
+        debeFallarCon(fn() { varianzaEje(arreglo([1.0])) }, "al menos 2 datos")
+    })
+    probar("la varianza en dos pasadas aguanta datos grandes", fn() {
+        # Con Σx²/n − media² esto da 0 o negativo: 10⁹ al cuadrado se come las cifras.
+        debeSerCerca(varianzaEje(arreglo([1000000001.0, 1000000002.0, 1000000003.0, 1000000004.0])), 1.6666666666666667, 0.000001)
+    })
+    probar("máximo y mínimo por eje, y el NaN se arrastra", fn() {
+        debeSer(aListaA(maximoEje(m, 0)), [4, 5, 6])
+        debeSer(aListaA(minimoEje(m, 1)), [1, 4])
+        fijo hueco = arreglo([1.0, 2.0, 3.0]) * |INFINITO - |INFINITO
+        fijo mx = maximoEje(hueco)
+        debeSerCierto(mx != mx)
+    })
+    probar("normas por eje, sin desbordarse con números de 10²⁰⁰", fn() {
+        cerca(normaEje(arreglo([[3.0, 4.0], [6.0, 8.0]]), 1), arreglo([5.0, 10.0]))
+        cerca(normaEje(arreglo([[3.0, -4.0]]), 1, 1), arreglo([7.0]))
+        cerca(normaEje(arreglo([[3.0, -4.0]]), 1, |INFINITO), arreglo([4.0]))
+        debeSerCerca(normaEje(arreglo([3e200, 4e200], "real")) / 1e200, 5.0, 0.000000000001)
+    })
+    probar("todos y alguno por eje", fn() {
+        fijo b = mayorQue(m, 2.5)
+        debeSer(aListaA(todosEje(b, 1)), [0, 1])
+        debeSer(aListaA(algunoEje(b, 0)), [1, 1, 1])
+        debeSerFalso(todosEje(b))
+        debeSerCierto(algunoEje(b))
+    })
+})
+
+grupo("tensores", fn() {
+    fijo A = arreglo([[1.0, 2.0], [3.0, 4.0]])
+    fijo B = arreglo([[5.0, 6.0], [7.0, 8.0]])
+    probar("einstein hace el producto de matrices, la traza, la diagonal y la transpuesta", fn() {
+        debeSer(aListaA(einstein("ij,jk->ik", A, B)), aListaA(por(A, B)))
+        debeSer(einstein("ii->", A), traza(A))
+        debeSer(aListaA(einstein("ii->i", A)), aListaA(diagonal(A)))
+        debeSer(aListaA(einstein("ij->ji", A)), aListaA(transpuesta(A)))
+        debeSer(aListaA(einstein("ij,jk", A, B)), aListaA(por(A, B)))
+        debeSer(aListaA(einstein("i,j->ij", arreglo([1.0, 2.0]), arreglo([3.0, 4.0, 5.0]))), aListaA(externo(arreglo([1.0, 2.0]), arreglo([3.0, 4.0, 5.0]))))
+        debeSer(einstein("i,i", arreglo([1.0, 2.0, 3.0]), arreglo([4.0, 5.0, 6.0])), 32)
+    })
+    probar("einstein con tres entradas, con lotes y con matrices rectangulares", fn() {
+        fijo C = azarArreglo([2, 5])
+        fijo R = azarArreglo([3, 2])
+        cerca(einstein("ij,jk,kl->il", R, A, C), por(por(R, A), C))
+        fijo P = azarArreglo([4, 3, 2])
+        fijo Q = azarArreglo([4, 2, 5])
+        cerca(einstein("bij,bjk->bik", P, Q), multLotes(P, Q))
+        cerca(einstein("ij,ij->", R, R), normaTensor(R) * normaTensor(R) + ceros([1]))
+    })
+    probar("einstein explica sus errores", fn() {
+        debeFallarCon(fn() { einstein("ij,jk->ik", A) }, "describe 2 entradas")
+        debeFallarCon(fn() { einstein("ijk->i", A) }, "tiene 2 dimensiones")
+        debeFallarCon(fn() { einstein("ij,jk->ik", A, azarArreglo([3, 2])) }, "mide 2 en un sitio y 3 en otro")
+        debeFallarCon(fn() { einstein("ij->iz", A) }, "no está en ninguna entrada")
+        debeFallarCon(fn() { einstein("...ij->ij", A) }, "puntos suspensivos")
+    })
+    probar("contraer es tensordot (valores de NumPy)", fn() {
+        fijo t = redimensionar(secuencia(24), [2, 3, 4]) * 1.0
+        fijo u = redimensionar(secuencia(12), [3, 4]) * 1.0
+        debeSer(aListaA(contraer(t, u, 2)), [506, 1298])
+        debeSer(aListaA(contraer(t, u, [1, 2], [0, 1])), [506, 1298])
+        debeSer(aListaA(contraer(A, B, 1)), aListaA(por(A, B)))
+        debeFallarCon(fn() { contraer(A, u, [1], [1]) }, "mide 2 y el 1 del segundo mide 4")
+    })
+    probar("multLotes multiplica cada matriz de la pila y difunde", fn() {
+        fijo P = azarArreglo([3, 4, 2])
+        fijo M = azarArreglo([2, 5])
+        fijo r = multLotes(P, M)
+        debeSer(forma(r), [3, 4, 5])
+        para k en rango(3) {
+            cerca(trozoVarios(r, [[k, k + 1]]), expandir(por(fila(P, k), M), 0))
+        }
+        cerca(multLotes(arreglo([1.0, 2.0]), A), arreglo([7.0, 10.0]))
+    })
+    probar("permutarEjes es una vista, y la permutación inversa la deshace", fn() {
+        fijo t = azarArreglo([2, 3, 4])
+        fijo p = permutarEjes(t, [2, 0, 1])
+        debeSer(forma(p), [4, 2, 3])
+        debeSerCierto(esVista(p))
+        debeSer(aListaA(permutarEjes(p, [1, 2, 0])), aListaA(t))
+        debeSer(aListaA(permutarEjes(A)), aListaA(transpuesta(A)))
+    })
+    probar("voltear dos veces deja todo como estaba", fn() {
+        debeSer(aListaA(voltear(secuencia(5))), [4, 3, 2, 1, 0])
+        debeSer(aListaA(voltear(A, 1)), [[2, 1], [4, 3]])
+        debeSer(aListaA(voltear(voltear(A))), aListaA(A))
+    })
+    probar("rodar en círculo", fn() {
+        debeSer(aListaA(rodar(secuencia(5), 2)), [3, 4, 0, 1, 2])
+        debeSer(aListaA(rodar(secuencia(5), -1)), [1, 2, 3, 4, 0])
+        debeSer(aListaA(rodar(A, 1, 0)), [[3, 4], [1, 2]])
+        debeSer(aListaA(rodar(A, 1)), [[4, 1], [2, 3]])
+    })
+    probar("rejilla da X e Y del plano", fn() {
+        fijo g = rejilla(arreglo([1.0, 2.0, 3.0]), arreglo([10.0, 20.0]))
+        debeSer(aListaA(g[0]), [[1, 2, 3], [1, 2, 3]])
+        debeSer(aListaA(g[1]), [[10, 10, 10], [20, 20, 20]])
+    })
+    probar("repetirA repite cada elemento, mosaico el arreglo entero", fn() {
+        debeSer(aListaA(repetirA(arreglo([1, 2]), 2)), [1, 1, 2, 2])
+        debeSer(aListaA(repetirA(A, 2, 0)), [[1, 2], [1, 2], [3, 4], [3, 4]])
+        debeSer(aListaA(mosaico(arreglo([1, 2]), [2, 2])), [[1, 2, 1, 2], [1, 2, 1, 2]])
+        debeSer(aListaA(mosaico(A, 2)), [[1, 2, 1, 2], [3, 4, 3, 4]])
+    })
+    probar("diagonalDe saca y pone diagonales desplazadas", fn() {
+        fijo M3 = redimensionar(secuencia(9), [3, 3]) * 1.0
+        debeSer(aListaA(diagonalDe(M3, 1)), [1, 5])
+        debeSer(aListaA(diagonalDe(M3, -1)), [3, 7])
+        debeSer(aListaA(diagonalDe(arreglo([1.0, 2.0]), 1)), [[0, 1, 0], [0, 0, 2], [0, 0, 0]])
+        debeSer(aListaA(diagonalDe(M3)), aListaA(diagonal(M3)))
+    })
+    probar("productoCruz: x × y = z, y el resultado es perpendicular", fn() {
+        debeSer(aListaA(productoCruz(arreglo([1.0, 0.0, 0.0]), arreglo([0.0, 1.0, 0.0]))), [0, 0, 1])
+        fijo a = azarArreglo([3])
+        fijo b = azarArreglo([3])
+        fijo c = productoCruz(a, b)
+        debeSerCerca(productoPunto(a, c), 0.0, 0.000000000001)
+        debeSerCerca(productoPunto(b, c), 0.0, 0.000000000001)
+        debeFallarCon(fn() { productoCruz(arreglo([1.0, 2.0]), arreglo([3.0, 4.0])) }, "vectores de 3")
+    })
+    probar("normaTensor es la de Frobenius, también de complejos", fn() {
+        fijo M = azarArreglo([4, 5])
+        debeSerCerca(normaTensor(M), normaMatriz(M), 0.000000000001)
+        debeSerCerca(normaTensor(complejo(arreglo([3.0]), arreglo([4.0]))), 5.0, 0.000000000001)
+        debeSerCerca(normaTensor(arreglo([-7.0, 2.0]), |INFINITO), 7.0, 0.0)
+    })
+})
+
+grupo("álgebra lineal avanzada", fn() {
+    fijo A = arreglo([[4.0, 1.0, 2.0], [0.5, 3.0, 1.0], [1.0, 1.0, 5.0]])
+    fijo I3 = identidadA(3)
+    probar("Hessenberg: A = Q·H·Qᵀ, Q ortogonal y ceros debajo de la subdiagonal", fn() {
+        fijo M = azarArreglo([5, 5])
+        fijo h = formaHessenberg(M)
+        cerca(por(por(h["Q"], h["H"]), transpuesta(h["Q"])), M)
+        cerca(por(transpuesta(h["Q"]), h["Q"]), identidadA(5))
+        debeSer(elemento(h["H"], 3, 0) + elemento(h["H"], 4, 1) + elemento(h["H"], 4, 2), 0)
+    })
+    probar("Schur: A = Q·T·Qᵀ con T casi triangular", fn() {
+        fijo M = azarArreglo([6, 6])
+        fijo s = factorSchur(M)
+        cerca(por(por(s["Q"], s["T"]), transpuesta(s["Q"])), M)
+        cerca(por(transpuesta(s["Q"]), s["Q"]), identidadA(6))
+    })
+    probar("autovaloresGeneral de una no simétrica (valores de NumPy)", fn() {
+        cercaTol(autovaloresGeneral(A), arreglo([6.43649167, 3.0, 2.56350833]), 0.00000001)
+    })
+    probar("una rotación de 90° tiene los valores propios ±i", fn() {
+        fijo l = autovaloresGeneral(matrizRotacion(|PI / 2.0))
+        cerca(parteReal(l), ceros([2]))
+        cerca(parteImaginaria(l), arreglo([1.0, -1.0]))
+        debeSerCerca(radioEspectral(matrizRotacion(0.7)), 1.0, 0.000000000001)
+    })
+    probar("en una simétrica coinciden con autovalores de numerico", fn() {
+        fijo S = arreglo([[2.0, 1.0, 0.0], [1.0, 3.0, 1.0], [0.0, 1.0, 4.0]])
+        cerca(autovaloresGeneral(S), autovalores(S))
+    })
+    probar("A·v = λ·v para cada vector propio de una no simétrica", fn() {
+        fijo f = autovectoresGeneral(A)
+        para k en rango(3) {
+            fijo v = columna(f["vectores"], k)
+            cerca(por(A, v), v * elemento(f["valores"], k))
+            debeSerCerca(normaTensor(v), 1.0, 0.000000000001)
+        }
+    })
+    probar("A·v = λ·v también con valores propios complejos", fn() {
+        fijo B = arreglo([[1.0, 2.0, 0.0], [-2.0, 1.0, 0.0], [0.0, 0.0, 3.0]])
+        fijo f = autovectoresGeneral(B)
+        # NumPy: 3, 1+2i, 1−2i (aquí de mayor a menor parte real)
+        cerca(f["valores"], complejo(arreglo([3.0, 1.0, 1.0]), arreglo([0.0, 2.0, -2.0])))
+        para k en rango(3) {
+            fijo v = columna(f["vectores"], k)
+            fijo Av = complejo(por(B, parteReal(v)), por(B, parteImaginaria(v)))
+            cerca(Av, v * trozo(f["valores"], 0, k, k + 1))
+        }
+    })
+    probar("una matriz al azar de 8×8: A·V = V·Λ", fn() {
+        fijo M = azarArreglo([8, 8])
+        fijo f = autovectoresGeneral(M)
+        para k en rango(8) {
+            fijo v = columna(f["vectores"], k)
+            fijo Av = complejo(por(M, parteReal(v)), por(M, parteImaginaria(v)))
+            cercaTol(Av, v * trozo(f["valores"] + complejo(0.0), 0, k, k + 1), 0.0000001)
+        }
+    })
+    probar("exp(A)·exp(−A) = I, y exp de una diagonal es la diagonal de exp", fn() {
+        cerca(por(exponencialMatriz(A), exponencialMatriz(A * -1.0)), I3)
+        cerca(exponencialMatriz(diagonal(arreglo([1.0, 2.0, -1.0]))), diagonal(expA(arreglo([1.0, 2.0, -1.0]))))
+        cerca(exponencialMatriz(ceros([3, 3])), I3)
+    })
+    probar("exp de una matriz de norma grande (escalado y cuadratura) y valores de SciPy", fn() {
+        cercaTol(exponencialMatriz(arreglo([[0.5, 1.0], [1.5, 2.0]])),
+              arreglo([[4.1374451441872715, 4.820131663315759], [7.230197494973639, 11.367642639160911]]), 0.000000000001)
+        fijo G = arreglo([[0.0, -10.0], [10.0, 0.0]])
+        cerca(exponencialMatriz(G), matrizRotacion(10.0))
+    })
+    probar("raizMatriz: X·X = A (y el valor de SciPy)", fn() {
+        fijo S = arreglo([[4.0, 1.0], [1.0, 3.0]])
+        fijo X = raizMatriz(S)
+        cerca(por(X, X), S)
+        cerca(X, arreglo([[1.9815776331353154, 0.2708322060941793], [0.2708322060941793, 1.7107454270411362]]))
+        cerca(por(raizMatriz(A), raizMatriz(A)), A)
+        debeFallarCon(fn() { raizMatriz(arreglo([[-1.0, 0.0], [0.0, 2.0]])) }, "negativo")
+    })
+    probar("logaritmoMatriz: exp(log(A)) = A (y el valor de SciPy)", fn() {
+        fijo S = arreglo([[4.0, 1.0], [1.0, 3.0]])
+        cerca(logaritmoMatriz(S), arreglo([[1.346984922338319, 0.29607457187826797], [0.29607457187826786, 1.0509103504600512]]))
+        cerca(exponencialMatriz(logaritmoMatriz(A)), A)
+        cerca(logaritmoMatriz(I3), ceros([3, 3]))
+        debeFallarCon(fn() { logaritmoMatriz(arreglo([[1.0, 2.0], [2.0, 4.0]])) }, "singular")
+    })
+    probar("núcleo: A·N ≈ 0, con tantas columnas como le falten al rango", fn() {
+        fijo M = arreglo([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+        fijo N = nucleoMatriz(M)
+        debeSer(forma(N), [3, 1])
+        cerca(por(M, N), ceros([3, 1]))
+        debeSer(forma(nucleoMatriz(I3)), [3, 0])
+        fijo R = arreglo([[1.0, 1.0, 1.0, 1.0], [1.0, 2.0, 3.0, 4.0]])
+        debeSer(forma(nucleoMatriz(R)), [4, 2])
+        cerca(por(R, nucleoMatriz(R)), ceros([2, 2]))
+    })
+    probar("imagen: tantas columnas como el rango, y ortonormales", fn() {
+        fijo M = arreglo([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+        fijo Im = imagenMatriz(M)
+        debeSer(forma(Im), [3, rangoMatriz(M)])
+        cerca(por(transpuesta(Im), Im), identidadA(2))
+    })
+    probar("gramSchmidt: QᵀQ = I y Q·R = A", fn() {
+        fijo M = azarArreglo([6, 4])
+        fijo g = gramSchmidt(M)
+        cerca(por(transpuesta(g["Q"]), g["Q"]), identidadA(4))
+        cerca(por(g["Q"], g["R"]), M)
+        debeFallarCon(fn() { gramSchmidt(arreglo([[1.0, 2.0], [2.0, 4.0], [3.0, 6.0]])) }, "depende de las anteriores")
+    })
+    probar("factorLDL, también de una simétrica indefinida", fn() {
+        fijo S = arreglo([[4.0, 2.0, -2.0], [2.0, -1.0, 3.0], [-2.0, 3.0, 1.0]])
+        fijo f = factorLDL(S)
+        cerca(por(por(f["L"], diagonal(f["D"])), transpuesta(f["L"])), S)
+        debeSerMenor(elemento(f["D"], 1), 0.0)
+        debeFallarCon(fn() { factorLDL(arreglo([[1.0, 2.0], [3.0, 4.0]])) }, "simétrica")
+    })
+    probar("gradiente conjugado contra resolverA", fn() {
+        fijo M = azarArreglo([20, 20])
+        fijo S = por(transpuesta(M), M) + identidadA(20)
+        fijo b = azarArreglo([20])
+        cercaTol(resolverGradienteConjugado(S, b), resolverA(S, b), 0.0000001)
+        debeFallarCon(fn() { resolverGradienteConjugado(arreglo([[1.0, 0.0], [0.0, -1.0]]), arreglo([1.0, 1.0])) }, "no es definida positiva")
+        debeFallarCon(fn() { resolverGradienteConjugado(S, b, 0.0000000001, 2) }, "no converge en 2 iteraciones")
+    })
+    probar("Gauss-Seidel y Jacobi con una diagonal dominante, y el aviso si no convergen", fn() {
+        fijo D = arreglo([[10.0, 1.0, 2.0], [1.0, 8.0, 1.0], [2.0, 1.0, 9.0]])
+        fijo b = arreglo([1.0, 2.0, 3.0])
+        cercaTol(resolverGaussSeidel(D, b), resolverA(D, b), 0.00000001)
+        cercaTol(resolverJacobi(D, b), resolverA(D, b), 0.00000001)
+        debeFallarCon(fn() { resolverJacobi(arreglo([[1.0, 3.0], [3.0, 1.0]]), arreglo([1.0, 1.0]), 0.0000000001, 50) }, "no converge")
+        debeFallarCon(fn() { resolverGaussSeidel(arreglo([[0.0, 1.0], [1.0, 0.0]]), arreglo([1.0, 1.0])) }, "un 0 en la diagonal")
+    })
+    probar("vandermonde da el polinomio que pasa por los puntos", fn() {
+        # y = 1 + 2x + 3x²
+        fijo x = arreglo([0.0, 1.0, 2.0])
+        fijo y = arreglo([1.0, 6.0, 17.0])
+        cerca(resolverA(vandermonde(x), y), arreglo([1.0, 2.0, 3.0]))
+        debeSer(forma(vandermonde(x, 5)), [3, 5])
+    })
+    probar("toeplitz y hilbert", fn() {
+        debeSer(aListaA(toeplitz(arreglo([1, 2, 3]))), [[1, 2, 3], [2, 1, 2], [3, 2, 1]])
+        debeSer(aListaA(toeplitz(arreglo([1, 2, 3]), arreglo([1, 4]))), [[1, 4], [2, 1], [3, 2]])
+        debeSerCerca(elemento(hilbert(3), 1, 2), 0.25, 0.0)
+        debeSerMayor(determinanteA(hilbert(4)), 0.0)
+    })
+    probar("matrizRotacion es ortogonal con determinante 1, en 2D y en 3D", fn() {
+        fijo R = matrizRotacion(0.3, arreglo([1.0, 2.0, 2.0]))
+        cerca(por(transpuesta(R), R), I3)
+        debeSerCerca(determinanteA(R), 1.0, 0.000000000001)
+        # Alrededor de (1, 1, 1) un tercio de vuelta cambia x → y → z.
+        cerca(multLotes(matrizRotacion(2.0 * |PI / 3.0, arreglo([1.0, 1.0, 1.0])), arreglo([1.0, 0.0, 0.0])), arreglo([0.0, 1.0, 0.0]))
+        cerca(trozoVarios(matrizRotacion(0.4, "z"), [[0, 2], [0, 2]]), matrizRotacion(0.4))
+    })
+})
+
+grupo("Fourier y señales", fn() {
+    probar("fourier2D y su inversa devuelven el original, de cualquier tamaño", fn() {
+        para dims en [[8, 8], [6, 10], [1, 7], [5, 1]] {
+            fijo m = azarArreglo(dims)
+            cerca(parteReal(fourierInversa2D(fourier2D(m))), m)
+            cerca(parteImaginaria(fourierInversa2D(fourier2D(m))), ceros(dims))
+        }
+    })
+    probar("una fila: fourier2D da EXACTAMENTE fourier (las mismas etapas)", fn() {
+        fijo x = azarArreglo([64])
+        debeSerCierto(todos(igualA(fourier2D(expandir(x, 0)), fourier(x))))
+    })
+    probar("Parseval en 1D y en 2D: la energía es la misma", fn() {
+        fijo m = azarArreglo([6, 9])
+        fijo F = fourier2D(m)
+        debeSerCerca(sumaEje(m * m), sumaEje(absolutoA(F) * absolutoA(F)) / 54.0, 0.000000001)
+        fijo x = azarArreglo([33])
+        fijo X = fourierReal(x)
+        debeSerCerca(sumaEje(absolutoA(fourier(x)) * absolutoA(fourier(x))) / 33.0, sumaEje(x * x), 0.000000001)
+    })
+    probar("fourier2D de una constante es solo la frecuencia 0", fn() {
+        fijo F = fourier2D(unos([4, 4]) * 2.0)
+        debeSerCerca(maximoEje(absolutoA(F)), 32.0, 0.000000001)
+        debeSerCerca(sumaEje(absolutoA(F)), 32.0, 0.000000001)
+    })
+    probar("fourierReal es la mitad de fourier, y su inversa vuelve (largos par e impar)", fn() {
+        fijo x = azarArreglo([10])
+        cerca(fourierReal(x), trozo(fourier(x), 0, 0, 6))
+        cerca(fourierRealInversa(fourierReal(x)), x)
+        fijo y = azarArreglo([11])
+        cerca(fourierRealInversa(fourierReal(y), 11), y)
+        debeSer(aListaA(frecuenciasReal(8, 0.5)), [0, 0.25, 0.5, 0.75, 1])
+    })
+    probar("centrarFrecuencias y su inversa (valores de NumPy)", fn() {
+        debeSer(aListaA(centrarFrecuencias(secuencia(5))), [3, 4, 0, 1, 2])
+        debeSer(aListaA(descentrarFrecuencias(secuencia(5))), [2, 3, 4, 0, 1])
+        fijo m = azarArreglo([4, 5])
+        cerca(descentrarFrecuencias(centrarFrecuencias(m)), m)
+        fijo F = fourier(azarArreglo([7]))
+        cerca(descentrarFrecuencias(centrarFrecuencias(F)), F)
+    })
+    probar("ventanas (valores de SciPy y NumPy)", fn() {
+        cerca(ventana("hann", 4), arreglo([0.0, 0.5, 1.0, 0.5]))
+        cerca(ventana("hamming", 5, verdadero), arreglo([0.08, 0.54, 1.0, 0.54, 0.08]))
+        debeSer(aListaA(ventana("rectangular", 3)), [1, 1, 1])
+        debeFallarCon(fn() { ventana("kaiser", 4) }, "no existe")
+    })
+    probar("la DCT (valores de SciPy, norm=ortho) y su inversa", fn() {
+        cerca(transformadaCoseno(arreglo([1.0, 2.0, 3.0, 4.0, 5.0])),
+              arreglo([6.708203932499369, -3.149499888950552, 0.0, -0.28399022782564654, 0.0]))
+        para n en [1, 2, 7, 16] {
+            fijo x = azarArreglo([n])
+            cerca(transformadaCosenoInversa(transformadaCoseno(x)), x)
+            debeSerCerca(sumaEje(transformadaCoseno(x) * transformadaCoseno(x)), sumaEje(x * x), 0.000000001)
+        }
+    })
+    probar("correlación cruzada (valores de NumPy) y autocorrelación", fn() {
+        cerca(correlacionCruzada(arreglo([1.0, 2.0, 3.0]), arreglo([0.0, 1.0, 0.5])), arreglo([0.5, 2.0, 3.5, 3.0, 0.0]))
+        cerca(autocorrelacion(arreglo([1.0, 3.0, 2.0, 5.0, 4.0])), arreglo([1.0, 0.0, 0.1, -0.4, -0.2]))
+        # Una señal de periodo 8 se parece a sí misma desplazada 8.
+        fijo t = secuencia(64) * 1.0
+        fijo r = autocorrelacion(senoA(t * (2.0 * |PI / 8.0)))
+        debeSerMayor(elemento(r, 8), 0.8)
+        debeSerMenor(elemento(r, 4), -0.8)
+    })
+    probar("filtrarFrecuencias separa dos senos", fn() {
+        fijo t = secuencia(200) * 1.0
+        fijo lento = senoA(t * (2.0 * |PI * 0.05))
+        fijo rapido = senoA(t * (2.0 * |PI * 0.4))
+        cerca(filtrarFrecuencias(lento + rapido, "bajos", 0.1), lento)
+        cerca(filtrarFrecuencias(lento + rapido, "altos", 0.1), rapido)
+        cerca(filtrarFrecuencias(lento + rapido, "banda", 0.3, 0.45), rapido)
+        cerca(filtrarFrecuencias(lento + rapido, "rechazaBanda", 0.3, 0.45), lento)
+        debeFallarCon(fn() { filtrarFrecuencias(lento, "bajos", 3.0) }, "se sale de 0 a 0.5")
+    })
+    probar("convolucion2D (valores de SciPy) y el delta deja la imagen igual", fn() {
+        fijo m = arreglo([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+        fijo k = arreglo([[1.0, 0.0], [0.0, -1.0]])
+        debeSer(aListaA(convolucion2D(m, k, "misma")), [[1, 2, 3], [4, 4, 4], [7, 4, 4]])
+        debeSer(aListaA(convolucion2D(m, k, "valida")), [[4, 4], [4, 4]])
+        debeSer(forma(convolucion2D(m, k)), [4, 4])
+        cerca(convolucion2D(m, arreglo([[1.0]])), m)
+        fijo g = azarArreglo([40, 50])
+        fijo n = azarArreglo([5, 5])
+        debeSerCerca(sumaEje(convolucion2D(g, n)), sumaEje(g) * sumaEje(n), 0.000000001)
+    })
+    probar("señal analítica: de un coseno sale el seno, y la envolvente (valores de SciPy)", fn() {
+        fijo t = secuencia(64) * (2.0 * |PI * 4.0 / 64.0)
+        fijo z = senalAnalitica(cosenoA(t))
+        cerca(parteReal(z), cosenoA(t))
+        cerca(parteImaginaria(z), senoA(t))
+        cerca(envolvente(arreglo([1.0, 2.0, 0.0, -1.0, 3.0, 1.0])),
+              arreglo([1.1547005383792515, 2.0816659994661326, 1.732050807568877, 2.0, 3.214550253664318, 1.5275252316519468]))
+    })
+    probar("espectrograma: el pico está en la frecuencia de la señal", fn() {
+        fijo t = secuencia(256) * 1.0
+        fijo S = espectrograma(senoA(t * (2.0 * |PI * 0.125)), 32, 16)
+        debeSer(forma(S), [15, 17])
+        para c en rango(15) {
+            debeSer(elemento(S, c, 4), maximoEje(fila(S, c)))
+        }
+    })
+    probar("potenciaEspectral es la de Welch (valores de scipy.signal.welch)", fn() {
+        fijo n = secuencia(64) * 1.0
+        fijo x = senoA(n * (2.0 * |PI * 0.1)) + cosenoA(n * (2.0 * |PI * 0.3)) * 0.5
+        fijo p = potenciaEspectral(x, 32, 2.0)
+        fijo P = p["potencia"]
+        cercaTol(arreglo([elemento(P, 0), elemento(P, 3), elemento(P, 6), elemento(P, 10), elemento(P, 16)]),
+                 arreglo([0.023864692870605816, 5.062496059974067, 0.0006818168308885624, 1.0833492724692986, 0.0000016922272021612252]), 0.000000001)
+        debeSerCerca(elemento(p["frecuencias"], 3), 0.1875, 0.0)
+    })
+    probar("los errores se dicen en palabras", fn() {
+        debeFallarCon(fn() { fourier2D(arreglo([1.0, 2.0])) }, "trabaja sobre matrices")
+        debeFallarCon(fn() { convolucion2D(unos([2, 2]), unos([3, 3]), "valida") }, "no cabe")
+        debeFallarCon(fn() { espectrograma(unos([10]), 32, 4) }, "más largo que la señal")
+    })
+})
+
+# Por encima de 2¹⁵ números las funciones pasan por los núcleos de C1EÑ (si
+# está instalado). El resultado tiene que ser el mismo que por el camino corto.
+grupo("tamaños grandes: el camino de los núcleos", fn() {
+    probar("producto de matrices de 64×64 contra «por»", fn() {
+        fijo P = azarArreglo([64, 64])
+        fijo Q = azarArreglo([64, 64])
+        cercaTol(multLotes(P, Q), por(P, Q), 0.000000000001)
+        cercaTol(einstein("ij,jk->ik", P, Q), por(P, Q), 0.000000000001)
+    })
+    probar("fourier2D de 256×128 y vuelta", fn() {
+        fijo m = azarArreglo([256, 128])
+        cerca(parteReal(fourierInversa2D(fourier2D(m))), m)
+    })
+    probar("reducciones de un millón por trozos", fn() {
+        fijo x = unos([1000, 1000])
+        debeSer(sumaEje(x), 1000000)
+        debeSer(aListaA(trozo(sumaEje(x, 0), 0, 0, 3)), [1000, 1000, 1000])
+        debeSerCerca(normaTensor(x), 1000.0, 0.000000001)
+    })
+    probar("convolución 2D grande: la suma es el producto de las sumas", fn() {
+        fijo g = azarArreglo([200, 200])
+        fijo n = azarArreglo([3, 3])
+        debeSerCerca(sumaEje(convolucion2D(g, n)), sumaEje(g) * sumaEje(n), 0.0000001)
+    })
+})
+
+var r: dic = correrPruebas()
+imprimir("")
+imprimir(resumenPruebas())

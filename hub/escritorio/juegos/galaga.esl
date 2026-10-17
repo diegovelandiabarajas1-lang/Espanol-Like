@@ -1,0 +1,564 @@
+# GALAGA Ñ — versión de escritorio (ventana con raylib, dentro del ARCADE Ñ).
+# Hermano de hub/juegos/galaga/galaga.esl (la web): mundo, sprites, enemigos,
+# balas y dibujo son los mismos, línea por línea. Lo que cambia:
+#   · el teclado: en vez de eventos de la página (alPulsarTecla/alSoltarTecla y
+#     la lista «sostenidas») se pregunta a la ventana qué está apretado ahora
+#   · el récord va a records.esl («galaga.mejor»), no al localStorage
+#   · no hay página: ver() desaparece; el panel de rendimiento ya iba en el lienzo
+# Teclas: ← → (o A D) mover · espacio / ↑ / W disparar · P panel de rendimiento
+#         X (con el panel) +300 partículas · N (con el panel) saltar de ola · Esc menú
+usar "../lib/pantalla.esl" como p
+usar "../lib/records.esl" como records
+usar azar, seno, coseno, raiz, absoluto de "numerico"
+
+# ─────────────────────────────────────────────── el mundo
+# 540×960 por dentro, estirado con CSS para llenar la pestaña (como el Flappy).
+fijo ANCHO = 540
+fijo ALTO = 960
+fijo JY = 880.0                  # altura de la nave
+fijo ESC = 3                     # cada píxel de un sprite mide 3×3
+fijo VEL_NAVE = 7.0
+fijo VEL_BALA = 14.0
+fijo MAX_BALAS = 3
+
+var estado = "inicio"            # inicio · jugando · fin
+var cuadro = 0
+var puntos = 0
+var mejor = entero(records.recuperar("galaga.mejor", 0))
+var vidas = 3
+var ola = 0
+var anuncio = 0                  # cuadros que queda el cartel «OLA n»
+var jx = ANCHO / 2.0
+var enfriar = 0
+var invulnerable = 0
+var finCuadros = 0
+
+var balas = []                   # {"x", "y"}
+var balasEnemigas = []           # {"x", "y", "vx", "vy"}
+var enemigos = []
+var particulas = []              # {"x", "y", "vx", "vy", "vida", "color"}
+var estrellas = []
+
+# teclas: se rellenan cada cuadro en teclado(), preguntando a la ventana
+var izq = falso
+var der = falso
+var disparo = falso
+
+# panel de rendimiento
+var panel = falso
+var tiempos = []
+var fps = 0.0
+var marcaFps = 0.0
+var msMedio = 0.0
+var msMax = 0.0
+var dibujos = 0                  # llamadas de dibujo en el último cuadro
+
+# ─────────────────────────────────────────────── sprites
+# Cada sprite es una lista de filas; cada letra es un color. Al empezar se
+# convierten en TRAMOS horizontales del mismo color, agrupados por color: así un
+# sprite de 11×8 se dibuja con ~15 rect y ~3 color en vez de 60 y 60.
+fn construirSprite(filas, paleta) {
+    var grupos = {}
+    var orden = []
+    para dy en rango(longitud(filas)) {
+        fijo f = filas[dy]
+        var dx = 0
+        mientras dx < longitud(f) {
+            fijo ch = f[dx]
+            si ch == "." {
+                dx = dx + 1
+                continuar
+            }
+            var n = 1
+            mientras dx + n < longitud(f) y f[dx + n] == ch { n = n + 1 }
+            si no contiene(orden, ch) {
+                agregar(orden, ch)
+                grupos[ch] = []
+            }
+            agregar(grupos[ch], [dx, dy, n])
+            dx = dx + n
+        }
+    }
+    var salida = []
+    para ch en orden { agregar(salida, {"color": paleta[ch], "tramos": grupos[ch]}) }
+    devolver {"ancho": longitud(filas[0]), "alto": longitud(filas), "grupos": salida}
+}
+
+fijo NAVE = construirSprite([
+    "......w......",
+    "......w......",
+    ".....www.....",
+    ".....www.....",
+    "..r..www..r..",
+    "..r.wwwww.r..",
+    "w.wwwrwrwww.w",
+    "wwwwwrrrwwwww",
+    "www.wwwww.www",
+    "ww...www...ww",
+    "w.....r.....w",
+], {"w": "#EDEFFF", "r": "#FF3E5A"})
+
+fijo ABEJA = construirSprite([
+    "..a.....a..",
+    "...a...a...",
+    "..bbbbbbb..",
+    ".bbyybyybb.",
+    "bbbbbbbbbbb",
+    "b.bbbbbbb.b",
+    "b.b.....b.b",
+    "...bb.bb...",
+], {"a": "#FFD23F", "b": "#3D7BFF", "y": "#FFD23F"})
+
+fijo MARIPOSA = construirSprite([
+    "r.........r",
+    "rr...w...rr",
+    "rrr.www.rrr",
+    "rrrrwwwrrrr",
+    "rrrrwwwrrrr",
+    "rrr.www.rrr",
+    "rr...w...rr",
+    "r.........r",
+], {"r": "#FF3E5A", "w": "#EDEFFF"})
+
+fijo FILAS_JEFE = [
+    "...g.....g...",
+    "....g...g....",
+    "..ggggggggg..",
+    ".ggkkgggkkgg.",
+    "ggggggggggggg",
+    "gg.ggggggg.gg",
+    "g..g.....g..g",
+    "...gg...gg...",
+]
+fijo JEFE = construirSprite(FILAS_JEFE, {"g": "#19F28A", "k": "#07070E"})
+fijo JEFE_HERIDO = construirSprite(FILAS_JEFE, {"g": "#C77DFF", "k": "#07070E"})
+
+fn dibujarSprite(sp, cx, cy, esc) {
+    fijo x0 = cx - sp["ancho"] * esc / 2.0
+    fijo y0 = cy - sp["alto"] * esc / 2.0
+    para g en sp["grupos"] {
+        p.color(g["color"])
+        dibujos = dibujos + 1
+        para t en g["tramos"] {
+            p.rect(x0 + t[0] * esc, y0 + t[1] * esc, t[2] * esc, esc)
+            dibujos = dibujos + 1
+        }
+    }
+}
+
+# ─────────────────────────────────────────────── estrellas y partículas
+fn crearEstrellas() {
+    estrellas = []
+    para i en rango(120) {
+        fijo capa = i % 3
+        agregar(estrellas, {"x": azar() * ANCHO, "y": azar() * ALTO, "v": 0.6 + capa * 0.9,
+                            "c": ["#2A2D5A", "#5A5F9A", "#C8CCFF"][capa]})
+    }
+}
+
+fn explotar(x, y, c, n) {
+    para i en rango(n) {
+        fijo ang = azar() * 6.2832
+        fijo v = 1.0 + azar() * 5.0
+        agregar(particulas, {"x": x, "y": y, "vx": coseno(ang) * v, "vy": seno(ang) * v,
+                             "vida": 24 + entero(azar() * 20), "color": c})
+    }
+}
+
+# ─────────────────────────────────────────────── la formación
+fn slotX(e): real { devolver ANCHO / 2.0 + (e["col"] - 4.5) * 46.0 + seno(cuadro * 0.015) * 26.0 }
+fn slotY(e): real { devolver 150.0 + e["fila"] * 54.0 + seno(cuadro * 0.03 + e["col"] * 0.4) * 3.0 }
+
+fn ponerFila(tipo, fila, cols, hp, base) {
+    var k = 0
+    para c en cols {
+        var lado = -1
+        si c >= 5 { lado = 1 }
+        agregar(enemigos, {"tipo": tipo, "fila": fila, "col": c, "hp": hp, "estado": "entrando",
+                           "x": -100.0, "y": -100.0, "t": 0.0, "retraso": base + k * 5, "lado": lado,
+                           "x0": 0.0, "y0": 0.0})
+        k = k + 1
+    }
+}
+
+fn nuevaOla() {
+    ola = ola + 1
+    anuncio = 100
+    enemigos = []
+    balasEnemigas = []
+    ponerFila("jefe", 0, [3, 4, 5, 6], 2, 0)
+    ponerFila("mariposa", 1, rango(1, 9), 1, 22)
+    ponerFila("mariposa", 2, rango(1, 9), 1, 60)
+    ponerFila("abeja", 3, rango(10), 1, 98)
+    ponerFila("abeja", 4, rango(10), 1, 146)
+}
+
+fn empezar() {
+    puntos = 0
+    vidas = 3
+    ola = 0
+    jx = ANCHO / 2.0
+    balas = []
+    particulas = []
+    invulnerable = 0
+    estado = "jugando"
+    nuevaOla()
+}
+
+fn spriteDe(e) {
+    si e["tipo"] == "abeja" { devolver ABEJA }
+    si e["tipo"] == "mariposa" { devolver MARIPOSA }
+    si e["hp"] < 2 { devolver JEFE_HERIDO }
+    devolver JEFE
+}
+
+fn valorDe(e): entero {
+    var base = 50
+    si e["tipo"] == "mariposa" { base = 80 }
+    si e["tipo"] == "jefe" { base = 150 }
+    si e["estado"] == "picada" { devolver base * 2 }
+    devolver base
+}
+
+# ─────────────────────────────────────────────── moverse
+fn moverEnemigo(e) {
+    si e["retraso"] > 0 {
+        e["retraso"] = e["retraso"] - 1
+        si e["retraso"] == 0 {
+            # sale del costado, baja haciendo una curva y sube hasta su sitio
+            e["x0"] = ANCHO / 2.0 + e["lado"] * (ANCHO / 2.0 + 40.0)
+            e["y0"] = 430.0
+        }
+        devolver
+    }
+    fijo est = e["estado"]
+    si est == "entrando" {
+        e["t"] = e["t"] + 1.0 / 75.0
+        fijo t = minimo(e["t"], 1.0)
+        fijo u = 1.0 - t
+        fijo cx = ANCHO / 2.0 - e["lado"] * 60.0
+        e["x"] = u * u * e["x0"] + 2.0 * u * t * cx + t * t * slotX(e)
+        e["y"] = u * u * e["y0"] + 2.0 * u * t * 860.0 + t * t * slotY(e)
+        si e["t"] >= 1.0 { e["estado"] = "formacion" }
+    } sino si est == "formacion" {
+        e["x"] = slotX(e)
+        e["y"] = slotY(e)
+    } sino si est == "picada" {
+        e["t"] = e["t"] + 1.0
+        e["y"] = e["y"] + 4.2 + ola * 0.35
+        e["x"] = e["x"] + (jx - e["x"]) * 0.014 + seno(e["t"] * 0.09) * 3.4
+        si e["t"] == 22.0 o e["t"] == 52.0 { dispararA(e["x"], e["y"]) }
+        si e["y"] > ALTO + 40 {
+            e["y"] = -40.0
+            e["estado"] = "volviendo"
+        }
+    } sino si est == "volviendo" {
+        fijo dx = slotX(e) - e["x"]
+        fijo dy = slotY(e) - e["y"]
+        e["x"] = e["x"] + dx * 0.06
+        e["y"] = e["y"] + dy * 0.06
+        si absoluto(dx) + absoluto(dy) < 3.0 { e["estado"] = "formacion" }
+    }
+}
+
+fn dispararA(x, y) {
+    var dx = jx - x
+    var dy = JY - y
+    fijo d = maximo(raiz(dx * dx + dy * dy), 1.0)
+    var vx = dx / d * 5.5
+    var vy = dy / d * 5.5
+    si vy < 3.5 { vy = 3.5 }
+    agregar(balasEnemigas, {"x": x, "y": y + 12.0, "vx": vx * 0.6, "vy": vy})
+}
+
+fn lanzarPicada() {
+    var candidatos = []
+    para e en enemigos { si e["estado"] == "formacion" { agregar(candidatos, e) } }
+    si longitud(candidatos) == 0 { devolver }
+    fijo e = candidatos[entero(azar() * longitud(candidatos))]
+    e["estado"] = "picada"
+    e["t"] = 0.0
+}
+
+fn tocarNave() {
+    si invulnerable > 0 { devolver }
+    vidas = vidas - 1
+    explotar(jx, JY, "#EDEFFF", 40)
+    explotar(jx, JY, "#FF3E5A", 30)
+    invulnerable = 120
+    balasEnemigas = []
+    si vidas <= 0 {
+        estado = "fin"
+        finCuadros = 0
+        si puntos > mejor {
+            mejor = puntos
+            records.guardar("galaga.mejor", mejor)
+        }
+    }
+}
+
+fn actualizar() {
+    # la nave
+    si izq { jx = jx - VEL_NAVE }
+    si der { jx = jx + VEL_NAVE }
+    jx = maximo(24.0, minimo(ANCHO - 24.0, jx))
+    si enfriar > 0 { enfriar = enfriar - 1 }
+    si disparo y enfriar == 0 y longitud(balas) < MAX_BALAS {
+        agregar(balas, {"x": jx, "y": JY - 22.0})
+        enfriar = 9
+    }
+    si invulnerable > 0 { invulnerable = invulnerable - 1 }
+
+    # balas propias contra enemigos
+    var siguen = []
+    para b en balas {
+        b["y"] = b["y"] - VEL_BALA
+        var choco = falso
+        para e en enemigos {
+            si e["retraso"] == 0 y e["hp"] > 0 y absoluto(b["x"] - e["x"]) < 19.0 y absoluto(b["y"] - e["y"]) < 16.0 {
+                e["hp"] = e["hp"] - 1
+                choco = cierto
+                si e["hp"] <= 0 {
+                    puntos = puntos + valorDe(e)
+                    var c = "#3D7BFF"
+                    si e["tipo"] == "mariposa" { c = "#FF3E5A" }
+                    si e["tipo"] == "jefe" { c = "#19F28A" }
+                    explotar(e["x"], e["y"], c, 18)
+                    explotar(e["x"], e["y"], "#FFD23F", 8)
+                } sino {
+                    explotar(e["x"], e["y"], "#C77DFF", 6)
+                }
+                romper
+            }
+        }
+        si no choco y b["y"] > -20 { agregar(siguen, b) }
+    }
+    balas = siguen
+
+    # enemigos
+    var vivos = []
+    para e en enemigos {
+        si e["hp"] > 0 {
+            moverEnemigo(e)
+            si e["estado"] == "picada" y absoluto(e["x"] - jx) < 26.0 y absoluto(e["y"] - JY) < 24.0 {
+                e["hp"] = 0
+                explotar(e["x"], e["y"], "#FFD23F", 14)
+                tocarNave()
+            }
+            si e["hp"] > 0 { agregar(vivos, e) }
+        }
+    }
+    enemigos = vivos
+
+    # picadas: más seguidas en cada ola
+    fijo cada_n = maximo(36, 110 - ola * 12)
+    si anuncio == 0 y cuadro % cada_n == 0 { lanzarPicada() }
+
+    # balas enemigas
+    var vuelan = []
+    para b en balasEnemigas {
+        b["x"] = b["x"] + b["vx"]
+        b["y"] = b["y"] + b["vy"]
+        si absoluto(b["x"] - jx) < 13.0 y absoluto(b["y"] - JY) < 16.0 {
+            tocarNave()
+        } sino si b["y"] < ALTO + 20 {
+            agregar(vuelan, b)
+        }
+    }
+    si invulnerable == 120 { vuelan = [] }
+    balasEnemigas = vuelan
+
+    # ola terminada: cartel y la siguiente
+    si longitud(enemigos) == 0 y anuncio == 0 { nuevaOla() }
+    si anuncio > 0 { anuncio = anuncio - 1 }
+}
+
+fn moverFondo() {
+    para s en estrellas {
+        s["y"] = s["y"] + s["v"]
+        si s["y"] > ALTO { s["y"] = 0.0  s["x"] = azar() * ANCHO }
+    }
+    var quedan = []
+    para pa en particulas {
+        pa["x"] = pa["x"] + pa["vx"]
+        pa["y"] = pa["y"] + pa["vy"]
+        pa["vx"] = pa["vx"] * 0.95
+        pa["vy"] = pa["vy"] * 0.95
+        pa["vida"] = pa["vida"] - 1
+        si pa["vida"] > 0 { agregar(quedan, pa) }
+    }
+    particulas = quedan
+}
+
+# ─────────────────────────────────────────────── dibujar
+fn dibujar() {
+    dibujos = 0
+    p.color("#05050C")
+    p.rect(0, 0, ANCHO, ALTO)
+    dibujos = dibujos + 2
+    var cAnterior = ""
+    para s en estrellas {
+        si s["c"] != cAnterior {
+            p.color(s["c"])
+            cAnterior = s["c"]
+            dibujos = dibujos + 1
+        }
+        p.rect(s["x"], s["y"], 2, 2 + s["v"] * 2)
+        dibujos = dibujos + 1
+    }
+    para e en enemigos {
+        si e["retraso"] == 0 {
+            dibujarSprite(spriteDe(e), e["x"], e["y"], ESC)
+        }
+    }
+    p.color("#FFD23F")
+    para b en balas { p.rect(b["x"] - 2, b["y"] - 10, 4, 18) }
+    p.color("#FF3EA5")
+    para b en balasEnemigas { p.rect(b["x"] - 3, b["y"] - 6, 6, 12) }
+    dibujos = dibujos + 2 + longitud(balas) + longitud(balasEnemigas)
+    para pa en particulas {
+        p.color(pa["color"])
+        p.rect(pa["x"] - 2, pa["y"] - 2, 4, 4)
+    }
+    dibujos = dibujos + longitud(particulas) * 2
+    si estado == "jugando" y (invulnerable == 0 o cuadro % 8 < 4) {
+        dibujarSprite(NAVE, jx, JY, ESC)
+    }
+    hud()
+}
+
+fn hud() {
+    p.color("#FF3E5A")
+    p.letra(20, "izquierda", "negrita mono")
+    p.escribirEn(18, 34, "1UP")
+    p.color("#EDEFFF")
+    p.letra(26, "izquierda", "negrita mono")
+    p.escribirEn(18, 64, texto(puntos))
+    p.color("#FF3E5A")
+    p.letra(20, "centro", "negrita mono")
+    p.escribirEn(ANCHO / 2, 34, "MÁXIMO")
+    p.color("#EDEFFF")
+    p.letra(26, "centro", "negrita mono")
+    p.escribirEn(ANCHO / 2, 64, texto(maximo(puntos, mejor)))
+    p.color("#8E92B4")
+    p.letra(18, "derecha", "mono")
+    p.escribirEn(ANCHO - 18, 34, "OLA " + texto(ola))
+    para i en rango(maximo(vidas - 1, 0)) { dibujarSprite(NAVE, 30 + i * 40, ALTO - 26, 2) }
+    dibujos = dibujos + 10
+
+    si estado == "inicio" {
+        p.color("#19F2FF")
+        p.letra(76, "centro", "negrita mono")
+        p.escribirEn(ANCHO / 2, 380, "GALAGA Ñ")
+        p.color("#EDEFFF")
+        p.letra(24, "centro", "mono")
+        p.escribirEn(ANCHO / 2, 450, "ESPACIO PARA JUGAR")
+        p.color("#8E92B4")
+        p.letra(18, "centro", "mono")
+        p.escribirEn(ANCHO / 2, 520, "← →  mover   ·   espacio  disparar")
+        p.escribirEn(ANCHO / 2, 552, "P  panel de rendimiento")
+        p.escribirEn(ANCHO / 2, 584, "Esc  volver al menú")
+        dibujarSprite(JEFE, ANCHO / 2 - 90, 640, 4)
+        dibujarSprite(MARIPOSA, ANCHO / 2, 640, 4)
+        dibujarSprite(ABEJA, ANCHO / 2 + 90, 640, 4)
+    } sino si estado == "fin" {
+        p.color("#FF3E5A")
+        p.letra(64, "centro", "negrita mono")
+        p.escribirEn(ANCHO / 2, 420, "FIN DEL JUEGO")
+        p.color("#EDEFFF")
+        p.letra(26, "centro", "mono")
+        p.escribirEn(ANCHO / 2, 480, texto(puntos) + " PUNTOS · OLA " + texto(ola))
+        si finCuadros > 60 { p.escribirEn(ANCHO / 2, 540, "ESPACIO PARA OTRA") }
+    } sino si anuncio > 0 {
+        p.color("#19F2FF")
+        p.letra(48, "centro", "negrita mono")
+        p.escribirEn(ANCHO / 2, 520, "¡OLA " + texto(ola) + "!")
+    }
+
+    si panel {
+        p.color("#000000")
+        p.rect(ANCHO - 250, 84, 236, 118)
+        p.color("#19F28A")
+        p.letra(16, "izquierda", "mono")
+        p.escribirEn(ANCHO - 238, 110, "cuadro " + texto(redondear2(msMedio)) + " ms · máx " + texto(redondear2(msMax)))
+        p.escribirEn(ANCHO - 238, 134, texto(entero(fps + 0.5)) + " fps")
+        p.escribirEn(ANCHO - 238, 158, "dibujos " + texto(dibujos))
+        p.escribirEn(ANCHO - 238, 182, "enem " + texto(longitud(enemigos)) + " · part " + texto(longitud(particulas)))
+    }
+}
+
+fn redondear2(x): real { devolver entero(x * 10.0 + 0.5) / 10.0 }
+
+# ─────────────────────────────────────────────── un cuadro
+publico fn paso() {
+    teclado()
+    fijo t0 = reloj()
+    cuadro = cuadro + 1
+    fijo antes = estado
+    si estado == "jugando" { actualizar() }
+    si antes == "jugando" y estado == "fin" { imprimir("galaga: fin · " + resumen()) }
+    si estado == "fin" { finCuadros = finCuadros + 1 }
+    moverFondo()
+    dibujar()
+    # cuánto tardó ESTE cuadro, en Ñ, incluido dibujar en el lienzo
+    fijo ms = reloj() - t0
+    agregar(tiempos, ms)
+    si longitud(tiempos) > 60 { quitarEn(tiempos, 0) }
+    si cuadro % 30 == 0 {
+        var suma = 0.0
+        var mx = 0.0
+        para v en tiempos {
+            suma = suma + v
+            si v > mx { mx = v }
+        }
+        msMedio = suma / longitud(tiempos)
+        msMax = mx
+        fijo ahoraMs = reloj()
+        si marcaFps > 0 { fps = 30000.0 / (ahoraMs - marcaFps) }
+        marcaFps = ahoraMs
+    }
+}
+
+# ─────────────────────────────────────────────── teclado
+# En la web llegaban eventos (pulsar/soltar) y había que llevar la cuenta de qué
+# estaba apretado. La ventana lo sabe: se le pregunta cada cuadro.
+fn teclado() {
+    izq = p.sostenida(p.IZQUIERDA) o p.sostenida(p.A)
+    der = p.sostenida(p.DERECHA) o p.sostenida(p.D)
+    disparo = p.sostenida(p.ESPACIO) o p.sostenida(p.ARRIBA) o p.sostenida(p.W)
+    fijo empieza = p.pulsada(p.ESPACIO) o p.pulsada(p.ARRIBA) o p.pulsada(p.W) o p.raton()["clic"]
+    si empieza y estado == "inicio" { empezar() }
+    sino si empieza y estado == "fin" y finCuadros > 60 { empezar() }
+    si p.pulsada(p.P) { panel = no panel }
+    si panel y p.pulsada(p.X) { explotar(ANCHO / 2.0, ALTO / 2.0, "#19F2FF", 300) }
+    si panel y p.pulsada(p.N) y estado == "jugando" {
+        enemigos = []
+        anuncio = 0
+    }
+}
+
+# ─────────────────────────────────────────────── lo que ve el arcade
+publico fn entrar() {
+    estado = "inicio"
+    enemigos = []
+    balas = []
+    balasEnemigas = []
+    particulas = []
+    si longitud(estrellas) == 0 { crearEstrellas() }
+}
+publico fn mejorPuntaje(): entero { devolver mejor }
+publico fn estadoActual(): texto { devolver estado }
+# el dibujito de la tarjeta del menú, en una caja de 130×170
+publico fn miniatura(x, y) {
+    dibujarSprite(JEFE, x + 65, y + 30, 4)
+    dibujarSprite(MARIPOSA, x + 38, y + 72, 3)
+    dibujarSprite(ABEJA, x + 92, y + 72, 3)
+    p.color("#FFD23F")
+    p.rect(x + 63, y + 100, 4, 14)
+    dibujarSprite(NAVE, x + 65, y + 145, 3)
+}
+publico fn resumen(): texto {
+    devolver "estado " + estado + " · ola " + texto(ola) + " · puntos " + texto(puntos) + " · vidas " + texto(vidas) +
+        " · enem " + texto(longitud(enemigos)) + " · part " + texto(longitud(particulas)) + " · dibujos " + texto(dibujos) +
+        " · ms " + texto(redondear2(msMedio))
+}

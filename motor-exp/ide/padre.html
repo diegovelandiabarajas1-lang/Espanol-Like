@@ -1,0 +1,1703 @@
+<title>Español-Like</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+  :root{
+    --bg:#F4F4F7; --panel:#FFFFFF; --panel-2:#ECECF2; --panel-3:#E0E0EA;
+    --ink:#16161D; --ink-2:#3A3A48; --muted:#6D6D80;
+    --line:#DDDDE7; --line-2:#C7C7D6;
+    --acc:#4F3FD4; --acc-2:#6A59EE; --acc-soft:#EAE7FB;
+    --ok:#177A48; --ok-soft:#E2F1E9;
+    --warn:#8A5800; --warn-soft:#F8EFDB;
+    --bad:#B62E24; --bad-soft:#FAE6E4;
+    --code-bg:#1B1B26; --code-ink:#E6E6F0;
+    --ui:"Public Sans",system-ui,sans-serif;
+    --disp:"Archivo",system-ui,sans-serif;
+    --mono:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0F0F15; --panel:#17171F; --panel-2:#1E1E28; --panel-3:#262633;
+    --ink:#ECECF4; --ink-2:#C4C4D4; --muted:#8C8CA0;
+    --line:#272733; --line-2:#363646;
+    --acc:#9B8CFF; --acc-2:#B5AAFF; --acc-soft:#22203A;
+    --ok:#5CC98B; --ok-soft:#12291E;
+    --warn:#DCA744; --warn-soft:#2B2313;
+    --bad:#EC7C6E; --bad-soft:#2E1917;
+    --code-bg:#12121A; --code-ink:#E6E6F0;
+  }}
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --bg:#0F0F15; --panel:#17171F; --panel-2:#1E1E28; --panel-3:#262633;
+    --ink:#ECECF4; --ink-2:#C4C4D4; --muted:#8C8CA0;
+    --line:#272733; --line-2:#363646;
+    --acc:#9B8CFF; --acc-2:#B5AAFF; --acc-soft:#22203A;
+    --ok:#5CC98B; --ok-soft:#12291E;
+    --warn:#DCA744; --warn-soft:#2B2313;
+    --bad:#EC7C6E; --bad-soft:#2E1917;
+    --code-bg:#12121A; --code-ink:#E6E6F0;
+  }
+
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  html,body{height:100%}
+  body{
+    background:var(--bg); color:var(--ink); font-family:var(--ui); font-size:14px;
+    margin:0; display:flex; flex-direction:column; overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ───────── barra superior ───────── */
+  header{
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:10px 16px; padding-top:calc(10px + env(safe-area-inset-top,0px));
+    background:var(--panel); border-bottom:1px solid var(--line); flex:0 0 auto;
+  }
+  .marca{display:flex; align-items:baseline; gap:8px; margin-right:4px}
+  .marca h1{font-family:var(--disp); font-weight:700; font-size:17px; margin:0; letter-spacing:-.015em}
+  .marca .v{font-family:var(--mono); font-size:10px; color:var(--muted); background:var(--panel-2); padding:2px 6px; border-radius:20px; border:1px solid var(--line)}
+  .barra-sep{width:1px; height:24px; background:var(--line); margin:0 2px}
+  .btn{
+    font-family:var(--ui); font-size:12.5px; font-weight:600; padding:7px 13px;
+    border:1px solid var(--line-2); background:var(--panel-2); color:var(--ink);
+    border-radius:7px; cursor:pointer; display:inline-flex; align-items:center; gap:6px;
+  }
+  .btn:hover{background:var(--panel-3)}
+  .btn:active{transform:translateY(1px)}
+  .btn.pri{background:var(--acc); border-color:var(--acc); color:#fff}
+  :root[data-theme="dark"] .btn.pri,
+  :root:not([data-theme="light"]) .btn.pri{color:#14121F}
+  @media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .btn.pri{color:#fff}}
+  .btn.pri:hover{background:var(--acc-2); border-color:var(--acc-2)}
+  .btn:disabled{opacity:.45; cursor:not-allowed}
+  select.btn{padding-right:8px}
+  .crece{flex:1}
+  .estado{
+    font-family:var(--mono); font-size:11.5px; color:var(--muted);
+    display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+  }
+  .estado b{font-weight:700; color:var(--ink)}
+  .chip{padding:2px 8px; border-radius:20px; border:1px solid var(--line-2); background:var(--panel-2); white-space:nowrap}
+  .chip.ok{color:var(--ok); border-color:var(--ok); background:var(--ok-soft)}
+  .chip.bad{color:var(--bad); border-color:var(--bad); background:var(--bad-soft)}
+  .chip.warn{color:var(--warn); border-color:var(--warn); background:var(--warn-soft)}
+
+  /* ───────── cuerpo ───────── */
+  main{flex:1; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:1px; background:var(--line); min-height:0}
+  .col{display:flex; flex-direction:column; background:var(--bg); min-height:0; min-width:0}
+
+  .cab{
+    display:flex; align-items:center; gap:8px; padding:0 10px; height:34px;
+    background:var(--panel); border-bottom:1px solid var(--line); flex:0 0 auto; overflow-x:auto;
+  }
+  .cab .tit{font-size:11px; font-family:var(--mono); letter-spacing:.09em; text-transform:uppercase; color:var(--muted); font-weight:700; white-space:nowrap}
+  .tabs{display:flex; gap:2px}
+  .tab{
+    font-family:var(--ui); font-size:12px; font-weight:600; padding:5px 10px; border:none;
+    background:transparent; color:var(--muted); cursor:pointer; border-radius:6px; white-space:nowrap;
+  }
+  .tab:hover{background:var(--panel-2); color:var(--ink)}
+  .tab[aria-selected="true"]{background:var(--acc-soft); color:var(--acc)}
+  .tab .pt{font-family:var(--mono); font-size:10px; opacity:.8; margin-left:3px}
+
+  /* editor */
+  .ed-envoltura{flex:1; display:flex; min-height:0; background:var(--code-bg); position:relative; overflow:hidden}
+  .gutter{
+    flex:0 0 auto; padding:12px 8px 12px 12px; text-align:right; font-family:var(--mono);
+    font-size:13px; line-height:1.65; color:#5A5A72; user-select:none; overflow:hidden; background:var(--code-bg);
+  }
+  .gutter div{height:21.45px}
+  .gutter div.err{color:#EC7C6E; font-weight:700}
+  #editor{
+    flex:1; border:none; outline:none; resize:none; padding:12px 14px 12px 4px;
+    font-family:var(--mono); font-size:13px; line-height:1.65; background:var(--code-bg);
+    color:var(--code-ink); tab-size:2; white-space:pre; overflow:auto; min-width:0;
+  }
+  #editor::placeholder{color:#5A5A72}
+
+  .problemas{
+    flex:0 0 auto; max-height:150px; overflow:auto; border-top:1px solid var(--line);
+    background:var(--panel); font-size:12.5px;
+  }
+  .problemas:empty{display:none}
+  .prob{display:flex; gap:9px; padding:7px 12px; border-bottom:1px solid var(--line); cursor:pointer; align-items:baseline}
+  .prob:hover{background:var(--panel-2)}
+  .prob:last-child{border-bottom:none}
+  .prob .ic{flex:0 0 auto; font-family:var(--mono); font-size:10px; font-weight:700; padding:1px 6px; border-radius:4px}
+  .prob.e .ic{background:var(--bad-soft); color:var(--bad)}
+  .prob.a .ic{background:var(--warn-soft); color:var(--warn)}
+  .prob .loc{font-family:var(--mono); font-size:11px; color:var(--muted); flex:0 0 auto}
+  .prob .msg{flex:1; min-width:0}
+  .prob .pista{display:block; color:var(--muted); font-size:11.5px; margin-top:2px}
+
+  /* panel derecho */
+  .vista{flex:1; overflow:auto; min-height:0; display:none}
+  .vista.on{display:block}
+
+  /* El panel derecho es una pila: el marco aislado se queda siempre montado
+     y solo se oculta, porque quitarlo del flujo obligaría a recargarlo y se
+     perdería lo que el programa hubiera dibujado. */
+  .cuerpo{flex:1; min-height:0; position:relative}
+  .cuerpo > .vista{position:absolute; inset:0; flex:none; overflow:auto}
+  .cuerpo > #v-zona{display:block; visibility:hidden; z-index:0}
+  .cuerpo > #v-zona.on{visibility:visible; z-index:1}
+  #zona{display:block; width:100%; height:100%; border:0; background:var(--bg)}
+  .cuerpo > #v-bytecode{display:none; flex-direction:column; overflow:hidden}
+  .cuerpo > #v-bytecode.on{display:flex}
+  .barra-bc{display:flex; align-items:center; gap:8px; padding:7px 10px; border-bottom:1px solid var(--line); flex:none; flex-wrap:wrap}
+  .btn.peq{font-size:12px; padding:4px 10px}
+  #v-bytecode #bytecode{flex:1; overflow:auto; min-height:0}
+  .sello-disco{font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; font-weight:700;
+    color:var(--warn); border:1px solid currentColor; border-radius:999px; padding:2px 8px; opacity:.85}
+  .sello-aislado{font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; font-weight:700;
+    color:var(--ok); border:1px solid currentColor; border-radius:999px; padding:2px 8px;
+    opacity:.8; margin-right:10px; cursor:help; white-space:nowrap}
+
+  #consola{font-family:var(--mono); font-size:12.5px; line-height:1.6; padding:12px; white-space:pre-wrap; word-break:break-word}
+  #consola .l{padding:1px 0}
+  #consola .err{color:var(--bad); white-space:pre-wrap}
+  #consola .meta{color:var(--muted)}
+  #consola .ok{color:var(--ok)}
+
+  #lienzoCaja{padding:12px; display:flex; flex-direction:column; align-items:flex-start; gap:8px}
+  #lienzo{border:1px solid var(--line-2); border-radius:6px; background:#fff; max-width:100%; height:auto}
+  .vacio{padding:26px 16px; color:var(--muted); font-size:13px; line-height:1.6; max-width:52ch}
+  .vacio code{font-family:var(--mono); font-size:12px; background:var(--panel-2); padding:1px 5px; border-radius:4px}
+
+  #pagina{padding:14px; font-family:var(--ui); line-height:1.6; color:var(--ink)}
+  #pagina h1,#pagina h2,#pagina h3{font-family:var(--disp); margin:.5em 0 .3em}
+  #pagina button{font:inherit; font-weight:600; padding:6px 12px; border-radius:6px; border:1px solid var(--acc); background:var(--acc); color:#fff; cursor:pointer; margin:3px 6px 3px 0}
+  #pagina input{font:inherit; padding:6px 9px; border-radius:6px; border:1px solid var(--line-2); background:var(--panel); color:var(--ink); margin:3px 6px 3px 0}
+  .el-tabla{border-collapse:collapse; margin:8px 0; font-size:13px}
+  .el-tabla th,.el-tabla td{border:1px solid var(--line-2); padding:5px 10px; text-align:left}
+  .el-tabla th{background:var(--panel-2); font-weight:600}
+
+  .codigo{font-family:var(--mono); font-size:12px; line-height:1.62; padding:12px; white-space:pre; overflow-x:auto}
+  .codigo .fnhead{color:var(--acc); font-weight:700; display:block; margin:14px 0 4px}
+  .codigo .fnhead:first-child{margin-top:0}
+  .codigo .ln{color:var(--muted)}
+
+  .tarjetas{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:1px; background:var(--line); border-bottom:1px solid var(--line)}
+  .tj{background:var(--panel); padding:11px 13px}
+  .tj .n{font-family:var(--mono); font-size:19px; font-weight:700; color:var(--acc); line-height:1.1; font-variant-numeric:tabular-nums}
+  .tj .e{font-size:11.5px; color:var(--muted); margin-top:3px; line-height:1.3}
+  .lista-fn{font-size:12.5px}
+  .fila-fn{display:flex; align-items:center; gap:10px; padding:8px 13px; border-bottom:1px solid var(--line)}
+  .fila-fn .nm{font-family:var(--mono); font-weight:600; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis}
+  .fila-fn .est{font-family:var(--mono); font-size:10.5px; padding:2px 7px; border-radius:20px; border:1px solid}
+  .est.compilada{color:var(--ok); border-color:var(--ok); background:var(--ok-soft)}
+  .est.rechazada{color:var(--warn); border-color:var(--warn); background:var(--warn-soft)}
+  .est.frio{color:var(--muted); border-color:var(--line-2); background:var(--panel-2)}
+
+  .aviso-jit{background:var(--warn-soft); border-bottom:1px solid var(--warn); padding:14px 16px}
+  .aviso-jit b{display:block; color:var(--warn); font-size:13.5px; margin-bottom:5px}
+  .aviso-jit p{margin:0 0 7px; font-size:12.5px; line-height:1.55; color:var(--ink-2); max-width:62ch}
+  .aviso-jit p:last-child{margin-bottom:0}
+
+  .barra-mem{height:10px; background:var(--panel-3); border-radius:5px; overflow:hidden; margin-top:6px}
+  .barra-mem i{display:block; height:100%; background:var(--acc); border-radius:5px}
+
+  table.bench{width:100%; border-collapse:collapse; font-size:12.5px}
+  table.bench th,table.bench td{padding:7px 12px; border-bottom:1px solid var(--line); text-align:left}
+  table.bench th{font-family:var(--mono); font-size:10px; letter-spacing:.07em; text-transform:uppercase; color:var(--muted)}
+  table.bench td.n{font-family:var(--mono); font-variant-numeric:tabular-nums; text-align:right}
+  table.bench td.g{color:var(--ok); font-weight:700}
+
+  @media (max-width:900px){
+    main{grid-template-columns:1fr; grid-template-rows:minmax(180px,45%) minmax(0,55%)}
+    header{padding:8px 12px}
+    .marca h1{font-size:15px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+<header>
+  <div class="marca"><h1>Español-Like</h1><span class="v">v4.0</span></div>
+  <button class="btn pri" id="bRun">▶ Ejecutar<span style="opacity:.7;font-weight:400">⌃↵</span></button>
+  <button class="btn" id="bBench">⚡ Medir velocidad</button>
+  <div class="barra-sep"></div>
+  <select class="btn" id="selEj" aria-label="Ejemplos"></select>
+  <button class="btn" id="bLimpiar">Limpiar</button>
+  <button class="btn" id="bApp" title="Guardar el programa como una página que se abre sola">⤓ Exportar app</button>
+  <div class="crece"></div>
+  <div class="estado" id="estado"></div>
+  <button class="btn" id="bTema" aria-label="Cambiar tema">◐</button>
+</header>
+<main>
+  <section class="col">
+    <div class="cab">
+      <span class="tit">Código</span>
+      <div class="crece"></div>
+      <span class="estado" id="estadoTipos"></span>
+    </div>
+    <div class="ed-envoltura">
+      <div class="gutter" id="gutter" aria-hidden="true"></div>
+      <textarea id="editor" spellcheck="false" autocomplete="off" autocapitalize="off"
+        aria-label="Editor de código"></textarea>
+    </div>
+    <div class="problemas" id="problemas"></div>
+  </section>
+
+  <section class="col">
+    <div class="cab">
+      <div class="tabs" role="tablist" id="tabs">
+        <button class="tab" role="tab" data-v="consola" aria-selected="true">Consola</button>
+        <button class="tab" role="tab" data-v="lienzo" aria-selected="false">Lienzo</button>
+        <button class="tab" role="tab" data-v="pagina" aria-selected="false">Página</button>
+        <button class="tab" role="tab" data-v="bytecode" aria-selected="false">Bytecode<span class="pt" id="ptBc"></span></button>
+        <button class="tab" role="tab" data-v="jit" aria-selected="false">JIT<span class="pt" id="ptJit"></span></button>
+        <button class="tab" role="tab" data-v="memoria" aria-selected="false">Memoria</button>
+      </div>
+      <div class="crece"></div>
+      <span class="sello-aislado" id="selloAislado" title="El motor y el programa se ejecutan dentro de un marco aislado, en un origen distinto del de esta página.">zona aislada</span>
+    </div>
+    <div class="cuerpo">
+      <div class="vista zona on" id="v-zona">
+        <iframe id="zona" title="Zona de ejecución aislada" sandbox="allow-scripts"></iframe>
+      </div>
+      <div class="vista propia" id="v-bytecode">
+        <div class="barra-bc">
+          <button class="btn peq" id="bExportar">⤓ Exportar .elb</button>
+          <button class="btn peq" id="bImportar">⤒ Importar y ejecutar…</button>
+          <input type="file" id="fBytecode" accept=".elb,.txt,application/octet-stream,text/plain" hidden>
+          <span class="estado" id="estadoBc"></span>
+        </div>
+        <div class="codigo" id="bytecode"></div>
+      </div>
+      <div class="vista propia" id="v-jit"><div id="jit"></div></div>
+      <div class="vista propia" id="v-memoria"><div id="memoria"></div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+// ============================================================================
+//  Documento anfitrión. No contiene el motor: solo el editor, los paneles de
+//  inspección y el puente de mensajes. Todo el código del usuario —análisis,
+//  bytecode, VM, JIT, consola, lienzo y página— vive dentro del marco aislado
+//  que se monta más abajo, en un origen opaco y sin acceso a esta página.
+// ============================================================================
+(function () {
+  'use strict';
+  const $ = s => document.querySelector(s);
+  const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x !== undefined) n.textContent = x; return n; };
+  const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+  const editor = $('#editor'), gutter = $('#gutter');
+  const problemas = $('#problemas'), estado = $('#estado'), estadoTipos = $('#estadoTipos');
+
+  // ───────────────────────────────────────────── ejemplos
+  const EJEMPLOS = {
+'Bienvenida': `# ── Español-Like v4 ──────────────────────────────────
+# Lenguaje en español, compilado a bytecode y acelerado
+# con un JIT que traduce las funciones calientes a
+# JavaScript nativo. Pulsa ▶ Ejecutar.
+
+usar media, suma de "numerico"
+
+fn saludar(nombre: texto): texto {
+    devolver "Hola, {nombre}!"
+}
+
+imprimir(saludar("mundo"))
+
+# Los tipos se comprueban ANTES de ejecutar.
+# Quita el # de la línea siguiente y mira el panel de abajo:
+# var edad: entero = "veinte"
+
+var numeros = [4, 8, 15, 16, 23, 42]
+imprimir("suma:", suma(numeros), "· media:", media(numeros))
+
+para i en rango(1, 6) {
+    imprimir("{i} al cuadrado es {i * i}")
+}`,
+
+'Cálculo científico': `# Estadística y álgebra lineal, al estilo de Python
+
+usar correlacion, desviacion, determinante, media, mediana, percentil, redondear, regresion, resolver de "numerico"
+
+fijo horas   = [1, 2, 3, 4, 5, 6, 7, 8]
+fijo notas   = [52, 55, 61, 64, 70, 72, 79, 83]
+
+imprimir("── Descriptivos ──")
+imprimir("media     ", media(notas))
+imprimir("mediana   ", mediana(notas))
+imprimir("desviación", redondear(desviacion(notas), 3))
+imprimir("p25 / p75 ", percentil(notas, 25), "/", percentil(notas, 75))
+
+imprimir("")
+imprimir("── Relación entre horas y notas ──")
+imprimir("correlación", redondear(correlacion(horas, notas), 4))
+
+var r = regresion(horas, notas)
+imprimir("nota ≈ {redondear(r.pendiente, 3)} · horas + {redondear(r.intercepto, 2)}")
+imprimir("r² = {redondear(r.r2, 4)}")
+
+imprimir("")
+imprimir("── Sistema de ecuaciones ──")
+# 2x +  y +  z = 10
+#  x + 3y + 2z = 18
+#  x +  y + 4z = 21
+fijo A = [[2,1,1], [1,3,2], [1,1,4]]
+var sol = resolver(A, [10, 18, 21])
+para i en rango(longitud(sol)) {
+    imprimir("  x{i + 1} = {redondear(sol[i], 6)}")
+}
+imprimir("determinante:", determinante(A))`,
+
+'Informe con el eDSL formato': `# Un eDSL: funciones que no existen hasta que un «usar» las trae.
+# «numero», «moneda» o «centrar» siguen libres para cualquier otro
+# programa, y aquí dentro son las del eDSL. No hay sintaxis nueva.
+usar moneda, plural, tablaTexto, minigrafico, porcientoCambio, regla, enLetras, alinearDer de "formato"
+
+var meses: lista = ["junio", "julio", "agosto"]
+var ventas: lista = [18400000, 21750000, 19980000]
+
+var filas: lista = []
+para i en rango(longitud(meses)) {
+    agregar(filas, {"mes": meses[i], "ventas": ventas[i]})
+}
+
+imprimir("VENTAS DEL TRIMESTRE")
+imprimir(regla(34))
+imprimir(tablaTexto(filas))
+imprimir(regla(34))
+
+var total: entero = 0
+para v en ventas { total = total + v }
+
+# Coma decimal y punto de miles sin pedirlo: es la convención del español.
+imprimir("Total       " + alinearDer(moneda(total), 14))
+imprimir("Promedio    " + alinearDer(moneda(total // longitud(ventas)), 14))
+imprimir("Tendencia   " + minigrafico([18400000.0, 21750000.0, 19980000.0]))
+imprimir("Cambio      " + porcientoCambio(18400000.0, 19980000.0))
+imprimir("")
+imprimir("Cerramos con " + plural(longitud(meses), "mes") + " facturados.")
+# Para la factura que hay que imprimir en palabras:
+imprimir("En letras: " + enLetras(total) + " pesos.")`,
+
+'Fechas sin zonas horarias': `# El tipo «fecha» existe para quitar un fallo concreto: guardar una
+# fecha como texto parece funcionar hasta que hay que ordenarla.
+usar fecha, aFecha, hoy, sumarMeses, sumarDias, diasEntre, deFecha,
+     nombreDia, finMes, esFinDeSemana, aniosEntre de "fecha"
+usar moneda, plural, alinearDer de "formato"
+
+# Como texto, "10/02" es menor que "9/01". Como fecha, no.
+imprimir("como texto: ", "10/02/2026" < "9/01/2026")
+imprimir("como fecha: ", aFecha("10/02/2026") < aFecha("9/01/2026"))
+imprimir("")
+
+# Aritmética de calendario, con la regla correcta:
+imprimir("31 ene + 1 mes:  ", sumarMeses(fecha(2026, 1, 31), 1), "  (no el 3 de marzo)")
+imprimir("29 feb 24 + 1 año:", sumarMeses(fecha(2024, 2, 29), 12))
+imprimir("fin de feb 2026: ", finMes(fecha(2026, 2, 10)))
+imprimir("")
+
+# Un vencimiento de factura a 30 días:
+var emitida: fecha = fecha(2026, 9, 29)
+var vence: fecha = sumarDias(emitida, 30)
+imprimir("emitida el ", deFecha(emitida, "larga"))
+imprimir("vence el   ", deFecha(vence, "larga"), "(" + nombreDia(vence) + ")")
+imprimir("plazo:      " + plural(diasEntre(emitida, vence), "día"))
+si esFinDeSemana(vence) { imprimir("ojo: cae en fin de semana") }`,
+
+'Pruebas escritas en Ñ': `# Ñ probándose con Ñ. Antes las pruebas del lenguaje solo se podían
+# escribir en JavaScript; con el eDSL «probar» se escriben aquí.
+usar probar, grupo, correrPruebas, resumenPruebas,
+     debeSer, debeSerCerca, debeContener, debeFallarCon, espia, vecesLlamada de "probar"
+
+grupo("aritmética", fn() {
+    probar("la división entera redondea hacia abajo", fn() {
+        debeSer(7 // 2, 3)
+        debeSer(-7 // 2, -4)
+    })
+    probar("el resto siempre sale positivo", fn() { debeSer(-7 % 3, 2) })
+    probar("los decimales, con tolerancia", fn() { debeSerCerca(0.1 + 0.2, 0.3) })
+})
+
+grupo("los fallos se recogen, no tumban el programa", fn() {
+    probar("división entre cero", fn() {
+        debeFallarCon(fn() { imprimir(1 // 0) }, "división entre cero")
+    })
+    probar("y el programa sigue vivo", fn() { debeSer(1, 1) })
+    probar("esta falla a propósito, para que se vea", fn() { debeSer(2 + 2, 5) })
+})
+
+grupo("espías", fn() {
+    probar("apuntan las llamadas", fn() {
+        var f: funcion = espia(fn(x: entero): entero { devolver x * 2 })
+        debeSer(mapear([1, 2, 3], f), [2, 4, 6])
+        debeSer(vecesLlamada(f), 3)
+    })
+})
+
+correrPruebas()
+imprimir("")
+imprimir(resumenPruebas())`,
+
+'Gráficos al instante': `# Resultados visuales inmediatos, como en JavaScript
+
+usar exp, redondear, seno de "numerico"
+
+lienzo(560, 320)
+
+# Una función matemática
+var xs = []
+var ys = []
+para i en rango(0, 561, 4) {
+    var x = i / 40.0
+    agregar(xs, x)
+    agregar(ys, seno(x) * exp(0 - x / 8.0))
+}
+graficar(xs, ys, "Oscilación amortiguada  sen(x)·e^(-x/8)")
+
+imprimir("Gráfico dibujado en la pestaña «Lienzo».")
+imprimir("Máximo alcanzado:", redondear(maximo(ys), 4))`,
+
+'Nube de puntos y ajuste': `usar azar, redondear, regresion de "numerico"
+
+lienzo(560, 340)
+
+# Datos con ruido alrededor de una recta conocida
+var xs = []
+var ys = []
+repetir 80 veces {
+    var x = azar() * 10.0
+    agregar(xs, x)
+    agregar(ys, 2.4 * x + 5.0 + (azar() - 0.5) * 6.0)
+}
+
+dispersion(xs, ys, "Dispersión con recta de ajuste")
+
+var r = regresion(xs, ys)
+imprimir("recta real   : y = 2.4x + 5")
+imprimir("recta ajustada: y = {redondear(r.pendiente,3)}x + {redondear(r.intercepto,3)}")
+imprimir("r² =", redondear(r.r2, 4))`,
+
+'Página web dinámica': `# El estilo también es un valor. Se compone, se guarda en variables y se anida
+# como en SCSS; de cada estilo distinto sale una clase con el nombre derivado de
+# su contenido, emitida una sola vez.
+
+usar media, redondear, suma de "numerico"
+usar alPasar, dentro, enPantalla, estilo de "estilo"
+
+limpiarPagina()
+
+# Lo que en SCSS serían variables, aquí son variables de Ñ.
+fijo azul   = "#4F3FD4"
+fijo tinta  = "#17161F"
+fijo suave  = "#6C6B80"
+
+# Y lo que serían mixins, son funciones que devuelven estilo.
+fn caja(ancho: entero) -> estilo {
+    devolver estilo({
+        "fondo": "#fff", "borde": "1px solid #E1E0EB", "redondeo": 10,
+        "relleno": 16, "margen": [10, 0], "anchoMax": ancho,
+    })
+}
+
+fijo tarjeta = estilo(caja(640),
+    dentro("h3", {"margen": [0, 0, 8, 0], "color": azul, "tamano": 17}),
+    alPasar({"borde": "1px solid " + azul}),
+    enPantalla(600, {"relleno": 24}))
+
+fijo cifra = estilo({"grosor": 700, "tamano": 15, "color": tinta})
+fijo nota  = estilo({"color": suave, "tamano": 13})
+
+fijo meses  = ["Enero", "Febrero", "Marzo", "Abril", "Mayo"]
+fijo ventas = [1200, 1850, 1640, 2310, 2780]
+
+var filas = []
+var acumulado = 0
+para i en rango(longitud(meses)) {
+    acumulado = acumulado + ventas[i]
+    var crecimiento = "—"
+    si i > 0 {
+        var pct = (ventas[i] - ventas[i-1]) / ventas[i-1] * 100.0
+        crecimiento = "{redondear(pct, 1)} %"
+    }
+    agregar(filas, [meses[i], ventas[i], crecimiento, acumulado])
+}
+
+fn ficha(titulo: texto, dentro_: nodo) -> nodo {
+    devolver etiqueta("div", tarjeta, etiqueta("h3", titulo), dentro_)
+}
+
+pintar(etiqueta("section", estilo({"fuente": "system-ui, sans-serif", "color": tinta}),
+    etiqueta("h2", estilo({"margen": [0, 0, 4, 0]}), "Informe de ventas"),
+    etiqueta("p", nota, "Generado por el programa, no escrito a mano."),
+    ficha("Detalle por mes", tabla(filas, ["Mes", "Ventas", "Variación", "Acumulado"])),
+    ficha("Resumen", etiqueta("ul", estilo({"margen": 0, "rellenoIzquierda": 18}),
+        etiqueta("li", "Total del periodo: ", etiqueta("span", cifra, texto(suma(ventas)))),
+        etiqueta("li", "Media mensual: ", etiqueta("span", cifra, texto(redondear(media(ventas), 1)))),
+        etiqueta("li", "Mejor mes: ", etiqueta("span", cifra, meses[indice(ventas, maximo(ventas))]))))))
+
+lienzo(520, 260)
+barras(ventas, meses, "Ventas por mes")`,
+
+'Interactividad': `# Botones que llaman de vuelta al programa. Los controles son nodos como los
+# demás, así que viven dentro del árbol y no sueltos al final de la página.
+
+var cuenta = 0
+var historial: lista<entero> = []
+
+fn fila(etq: texto, valor: texto) -> nodo {
+    devolver etiqueta("li", etiqueta("b", etq + ": "), valor)
+}
+
+fn pintarTodo() {
+    limpiarPagina()
+    pintar(etiqueta("div", {"class": "panel"},
+        etiqueta("h2", "Contador"),
+        etiqueta("p", "Valor actual: {cuenta}"),
+        etiqueta("div",
+            boton("Sumar 1", fn() { cuenta = cuenta + 1  anotar() }),
+            boton("Restar 1", fn() { cuenta = cuenta - 1  anotar() }),
+            boton("Reiniciar", fn() { cuenta = 0  anotar() })),
+        etiqueta("ul",
+            fila("pulsaciones", texto(longitud(historial))),
+            fila("máximo visto", mayorVisto()))))
+
+    si cuenta >= 5 {
+        pintar(etiqueta("p", "🎉 ¡Llegaste a cinco!"))
+    }
+}
+
+# No hay «si» como expresión: cuando hace falta elegir un valor, se saca a una
+# función y el árbol se queda limpio.
+fn mayorVisto() -> texto {
+    si longitud(historial) == 0 { devolver "—" }
+    devolver texto(maximo(historial))
+}
+
+fn anotar() {
+    agregar(historial, cuenta)
+    pintarTodo()
+}
+
+pintarTodo()
+imprimir("Pulsa los botones en la pestaña «Página».")`,
+
+'Estilos con tokens: lo mínimo': `# Lo mínimo para usar «estilo» y la web juntos.
+#
+#   la web   (etiqueta, pintar, boton, entrada…) es GLOBAL: no lleva «usar»
+#   estilo   es un eDSL: hay que pedirlo
+#
+# Y los dos necesitan una PÁGINA donde pintar: el IDE o una app exportada. En la
+# consola los estilos y los nodos se pueden construir igual —son valores— pero
+# «pintar» se queja, porque ahí no hay dónde.
+
+usar tema, color, espacio, radio, estilo, estiloGlobal, enOscuro, reiniciar,
+     enColumna, separado, alPasar, transicion, aparecer de "estilo"
+
+fijo claro = tema({
+    "color": {"fondo": "#F7F7FB", "tarjeta": "blanco", "tinta": "#1B1A26",
+              "suave": "#6C6B80", "acento": "#4F3FD4", "borde": "#E1E0EB"},
+    "espacio": {"m": 16, "g": 24},
+    "radio": {"suave": 12}
+})
+fijo oscuro = tema({
+    "color": {"fondo": "#15131F", "tarjeta": "#201D2E", "tinta": "#EDECF5",
+              "suave": "#9A99AD", "borde": "#322E45"}
+})
+
+fijo pagina = estilo({"fuente": "system-ui, sans-serif", "fondo": color("fondo"),
+                      "color": color("tinta"), "relleno": espacio("g"), "altoMin": "100vh"})
+fijo tarjeta = estilo({"fondo": color("tarjeta"), "relleno": espacio("m"),
+                       "redondeo": radio("suave"), "borde": "1px solid " + color("borde")})
+fijo boton1 = estilo({"fondo": color("acento"), "color": "blanco", "borde": "ninguno",
+                      "relleno": [10, 18], "redondeo": 8, "cursor": "mano"},
+                     transicion("opacidad", 150), alPasar({"opacidad": 0.85}))
+
+var pulsos: entero = 0
+
+fn pulsar() { pulsos = pulsos + 1  ver() }
+
+fn ver() {
+    limpiarPagina()
+    pintar(etiqueta("main", pagina,
+        estiloGlobal(":root", claro),
+        enOscuro(estiloGlobal(":root", oscuro)),
+        reiniciar(),
+        etiqueta("div", tarjeta, aparecer(300), enColumna(12),
+            etiqueta("h1", estilo({"margen": 0, "tamano": 22}), "Hola desde Ñ"),
+            etiqueta("p", estilo({"margen": 0, "color": color("suave")}),
+                "Cambia el tema de tu sistema a oscuro y mira: el modo oscuro son dos líneas."),
+            etiqueta("div", separado(),
+                etiqueta("span", estilo({"color": color("suave")}),
+                    "pulsado " + texto(pulsos) + " veces"),
+                boton("Púlsame", fn(ev) { pulsar() }, boton1)))))
+}
+
+ver()`,
+
+'Panel de ventas (datos + estilo)': `# ─────────────────────────────────────────────────────────────────────────────
+#  Panel de ventas — una aplicación pequeña pero completa.
+#
+#  Pegas un CSV como sale de un sistema —punto y coma, comas dentro de comillas,
+#  fechas dd/mm/aaaa, huecos— y sale el total por ciudad, ordenado, con su
+#  porcentaje y su barra. Lo que se guarda sobrevive a cerrar la página.
+#
+#  Y corre en los DOS sitios, con el mismo cálculo:
+#
+#    en el navegador   pegas el CSV en la caja y sale la página
+#    en la consola     node motor/util/n-node.js ejemplos/ventas.esl ventas.csv
+#                      y sale la misma cuenta en texto, con «tablaTexto»
+#
+#  No es un adorno: es lo que separa «el cálculo» de «cómo se enseña». El
+#  cálculo son doce líneas y no sabe si hay página; lo demás es presentación.
+#
+#  Está escrita para enseñar los eDSL trabajando juntos:
+#    datos    leer el CSV, agrupar y sumar
+#    formato  los pesos con coma decimal, el rango de fechas, y la tabla de texto
+#    estilo   el tema con tokens, y el modo oscuro en dos líneas
+# ─────────────────────────────────────────────────────────────────────────────
+
+usar deCsv, columnas, columna, agrupar, ordenarPor, sumaCol, contarCol,
+     celda, minCol, maxCol, resumir, aRegistros, unicas de "datos"
+usar moneda, porciento, plural, numero, decimales, rangoFechas,
+     tablaTexto, barraTexto, regla de "formato"
+usar tema, color, espacio, radio, estilo, estiloGlobal, enOscuro, reiniciar,
+     enFila, enColumna, separado, rejillaDe, transicion, alPasar, aparecer,
+     dentro, escalaTipo, tipografia de "estilo"
+usar recortar, unir de "texto"
+
+# ── el tema, arriba y una sola vez ───────────────────────────────────────────
+fijo claro = tema({
+    "color": {"fondo": "#F7F7FB", "tarjeta": "blanco", "tinta": "#1B1A26",
+              "suave": "#6C6B80", "acento": "#4F3FD4", "borde": "#E1E0EB"},
+    "espacio": {"s": 8, "m": 16, "g": 24},
+    "radio": {"suave": 12},
+    "tipografia": escalaTipo(15, 1.3, 5)
+})
+fijo oscuro = tema({
+    "color": {"fondo": "#15131F", "tarjeta": "#201D2E", "tinta": "#EDECF5",
+              "suave": "#9A99AD", "borde": "#322E45"}
+})
+
+fijo base = estilo({"fuente": "system-ui, sans-serif", "fondo": color("fondo"),
+                    "color": color("tinta"), "relleno": espacio("g"),
+                    "altoMin": "100vh", "tamano": tipografia("0")})
+fijo tarjeta = estilo({"fondo": color("tarjeta"), "relleno": espacio("m"),
+                       "redondeo": radio("suave"), "borde": "1px solid " + color("borde")})
+fijo suave = estilo({"color": color("suave"), "tamano": tipografia("0")})
+
+fn barra(parte: real): nodo {
+    # Una barra de proporción, con el ancho como porcentaje y nada más.
+    devolver etiqueta("div", estilo({"alto": 6, "redondeo": 3, "fondo": color("borde")}),
+        etiqueta("div", estilo({"alto": 6, "redondeo": 3, "fondo": color("acento"),
+                                "ancho": decimales(parte * 100, 1) + "%"})))
+}
+
+# ── el estado ────────────────────────────────────────────────────────────────
+fijo EJEMPLO = "ciudad;dia;cliente;ventas
+Girón;01/09/2026;\\"Pérez, Ana\\";1200000
+Bogotá;01/09/2026;Gómez;450000
+Girón;02/09/2026;Ruiz;300000
+Cali;02/09/2026;\\"Díaz, Luis\\";780000
+Bogotá;03/09/2026;Ortiz;320000
+Girón;03/09/2026;Salas;
+Medellín;04/09/2026;Nieto;1450000
+Cali;05/09/2026;Rojas;95000"
+
+# Ni el almacén ni la página existen en todos los anfitriones, y preguntar es
+# intentarlo: no hay una función que lo diga. Envolverlo aquí, una vez, deja el
+# resto del programa sin un solo «intentar» de más.
+fn hayAlmacen(): bool {
+    intentar { guardados()  devolver cierto } capturar (e) { devolver falso }
+}
+fn hayPagina(): bool {
+    intentar { limpiarPagina()  devolver cierto } capturar (e) { devolver falso }
+}
+fn argumentosSiHay(): lista {
+    # En el navegador no hay línea de órdenes, así que «argumentos» se queja. Sin
+    # este envoltorio el programa reventaba al ABRIRLO en el IDE, que es donde
+    # más se va a abrir.
+    intentar { devolver argumentos() } capturar (e) { devolver [] }
+}
+
+fijo ALMACEN: bool = hayAlmacen()
+fijo PAGINA: bool = hayPagina()
+
+# En la consola el CSV sale del archivo que se pase; en el navegador, de lo
+# último que se guardó. Y si no hay ninguno de los dos, del ejemplo.
+fn fuenteInicial(): texto {
+    fijo args: lista = argumentosSiHay()
+    si longitud(args) > 0 {
+        intentar { devolver leerTexto(args[0]) }
+        capturar (e) { imprimir("no pude leer " + args[0] + ": " + e.mensaje) }
+    }
+    si ALMACEN { devolver recuperar("csv", EJEMPLO) }
+    devolver EJEMPLO
+}
+
+var fuente: texto = fuenteInicial()
+var aviso: texto = ""
+
+fn escribiendo(ev: dic) { fuente = obtener(ev, "valor", "") }
+
+fn calcular() {
+    si recortar(fuente) == "" {
+        aviso = "Pega un CSV con una columna «ciudad» y otra «ventas»."
+        ver()
+        devolver
+    }
+    intentar {
+        fijo t: tabla = deCsv(fuente)
+        si no contiene(columnas(t), "ciudad") o no contiene(columnas(t), "ventas") {
+            aviso = "Faltan columnas. El archivo trae: " + unir(columnas(t), ", ")
+        } sino {
+            aviso = ""
+            si ALMACEN { guardar("csv", fuente) }
+        }
+    } capturar (e) {
+        aviso = "No pude leer el CSV: " + e.mensaje
+    }
+    ver()
+}
+
+fn restaurar() { fuente = EJEMPLO  aviso = ""  si ALMACEN { guardar("csv", fuente) }  ver() }
+
+fn resumenCorto(): texto {
+    # La frase de debajo del título. Se calcula aparte porque «ver» ya hace
+    # bastante, y porque así se ve para qué sirve «plural»: nadie quiere leer
+    # «1 ventas en 1 ciudades».
+    si aviso != "" o recortar(fuente) == "" {
+        devolver "Pega el CSV como salga del sistema. Se guarda solo."
+    }
+    intentar {
+        fijo t: tabla = deCsv(fuente)
+        fijo c: lista = unicas(t, "ciudad")
+        devolver plural(longitud(t), "venta") + " en " + plural(longitud(c), "ciudad") +
+                 " · se guarda solo"
+    } capturar (e) {
+        devolver "Pega el CSV como salga del sistema. Se guarda solo."
+    }
+}
+
+# ── el cálculo, que no sabe si hay página ────────────────────────────────────
+fn cuentas(): dic {
+    # Lo único que calcula este programa. Devuelve la tabla por ciudad y el
+    # total. Doce líneas, y las mismas para la página y para la consola.
+    fijo t: tabla = deCsv(fuente)
+    fijo gen: tabla = resumir(t, {"total": sumaCol("ventas"), "n": contarCol()})
+    # La columna de fechas es opcional: un archivo puede traer solo ciudad y
+    # ventas, y entonces no hay periodo que enseñar. Pedirla igual reventaba con
+    # «la tabla no tiene una columna dia», que es un buen mensaje para un fallo
+    # y una tontería para un archivo que está bien.
+    var periodo: texto = ""
+    si contiene(columnas(t), "dia") {
+        fijo d: tabla = resumir(t, {"desde": minCol("dia"), "hasta": maxCol("dia")})
+        periodo = rangoFechas(celda(d, 0, "desde"), celda(d, 0, "hasta"))
+    }
+    devolver {
+        "total": real(celda(gen, 0, "total")),
+        "cuantas": entero(celda(gen, 0, "n")),
+        "periodo": periodo,
+        "ciudades": ordenarPor(
+            agrupar(t, ["ciudad"], {"total": sumaCol("ventas"), "ventas": contarCol()}),
+            "total", cierto)
+    }
+}
+
+# ── en la consola ────────────────────────────────────────────────────────────
+fn verEnConsola() {
+    si aviso != "" { imprimir(aviso)  devolver }
+    fijo c: dic = cuentas()
+    fijo total: real = real(obtener(c, "total", 0))
+    fijo porCiudad: tabla = obtener(c, "ciudades", nulo)
+
+    imprimir("PANEL DE VENTAS")
+    imprimir(regla(52))
+    imprimir("Total     " + moneda(total))
+    imprimir("Ventas    " + numero(entero(obtener(c, "cuantas", 0))))
+    si obtener(c, "periodo", "") != "" { imprimir("Periodo   " + obtener(c, "periodo", "")) }
+    imprimir("")
+    # tablaTexto recibe una lista de DICCIONARIOS —las claves son los títulos— y
+    # alinea los números a la derecha y el texto a la izquierda. De una tabla los
+    # diccionarios salen con aRegistros, así que esto es casi un paso directo.
+    var filas: lista = []
+    para f en aRegistros(porCiudad) {
+        fijo suma: real = real(obtener(f, "total", 0))
+        agregar(filas, {"ciudad": obtener(f, "ciudad", ""),
+                        "total": moneda(suma),
+                        "parte": porciento(suma / total, 1),
+                        "": barraTexto(suma, total)})
+    }
+    imprimir(tablaTexto(filas))
+}
+
+# ── la vista ─────────────────────────────────────────────────────────────────
+fn ver() {
+    si no PAGINA { verEnConsola()  devolver }
+    limpiarPagina()
+    var partes: lista = [
+        etiqueta("h1", estilo({"margen": [0, 0, 4, 0], "tamano": tipografia("3")}), "Panel de ventas"),
+        etiqueta("p", suave, estilo({"margen": [0, 0, 24, 0]}), resumenCorto()),
+        etiqueta("div", tarjeta, estilo({"margenAbajo": 24}),
+            etiqueta("div", enColumna(8),
+                areaTexto("El CSV", nulo, {"valor": fuente, "alEscribir": escribiendo,
+                                           "rows": "7", "spellcheck": "false"}),
+                etiqueta("div", enFila(8),
+                    boton("Calcular", fn(ev) { calcular() },
+                        estilo({"fondo": color("acento"), "color": "blanco", "borde": "ninguno",
+                                "relleno": [10, 18], "redondeo": 8, "cursor": "mano"},
+                               transicion("opacidad", 150), alPasar({"opacidad": 0.85}))),
+                    boton("Volver al ejemplo", fn(ev) { restaurar() },
+                        estilo({"fondo": "transparente", "color": color("suave"),
+                                "borde": "1px solid " + color("borde"),
+                                "relleno": [10, 18], "redondeo": 8, "cursor": "mano"})))))
+    ]
+
+    si aviso != "" {
+        agregar(partes, etiqueta("p", tarjeta, aparecer(200),
+            estilo({"color": "#B62E24", "borde": "1px solid #B62E24"}), aviso))
+        pintar(etiqueta("main", base, estiloGlobal(":root", claro),
+            enOscuro(estiloGlobal(":root", oscuro)), reiniciar(), partes))
+        devolver
+    }
+
+    var c: dic = {}
+    intentar { c = cuentas() } capturar (e) {
+        # «ya se sabe que se puede leer» es lo que se dice justo antes de que la
+        # página salga en blanco.
+        aviso = "No pude leer el CSV: " + e.mensaje
+        ver()
+        devolver
+    }
+    fijo total: real = real(obtener(c, "total", 0))
+    fijo porCiudad: tabla = obtener(c, "ciudades", nulo)
+
+    agregar(partes, etiqueta("div", rejillaDe(3, 16), estilo({"margenAbajo": 24}),
+        ficha("Total", moneda(total)),
+        ficha("Ventas", numero(entero(obtener(c, "cuantas", 0)))),
+        ficha("Periodo", si2(obtener(c, "periodo", "") != "", obtener(c, "periodo", ""), "sin fechas"))))
+
+    agregar(partes, etiqueta("div", tarjeta,
+        etiqueta("h2", estilo({"margen": [0, 0, 12, 0], "tamano": tipografia("1")}), "Por ciudad"),
+        etiqueta("div", enColumna(14),
+            mapear(aRegistros(porCiudad), fn(f: dic): nodo {
+                fijo suma: real = real(obtener(f, "total", 0))
+                devolver etiqueta("div", enColumna(6),
+                    etiqueta("div", separado(),
+                        etiqueta("strong", obtener(f, "ciudad", "")),
+                        etiqueta("span", suave,
+                            moneda(suma) + "  ·  " + porciento(suma / total, 1))),
+                    barra(suma / total))
+            }))))
+
+    pintar(etiqueta("main", base, estiloGlobal(":root", claro),
+        enOscuro(estiloGlobal(":root", oscuro)), reiniciar(), partes))
+}
+
+fn si2(cond: bool, a: texto, b: texto): texto {
+    # Un «si» que es una expresión. El lenguaje no tiene operador ternario, y
+    # meter un «si» de cuatro líneas dentro de una lista de nodos se lee peor.
+    si cond { devolver a }
+    devolver b
+}
+
+fn ficha(rotulo: texto, valor: texto): nodo {
+    devolver etiqueta("div", tarjeta,
+        etiqueta("p", suave, estilo({"margen": 0}), rotulo),
+        etiqueta("p", estilo({"margen": [4, 0, 0, 0], "grosor": 700, "tamano": tipografia("2")}), valor))
+}
+
+ver()`,
+
+'Una aplicación de verdad': `# Una aplicación de verdad: lo que escribes no se pierde al repintar, lo que
+# guardas sobrevive a cerrar la página, y el reloj se actualiza solo.
+
+usar minusculas, recortar de "texto"
+usar enMovimientoReducido, enOscuro, estilo de "estilo"
+
+var tareas = recuperar("tareas", [])
+var borrador = ""
+var filtro = ""
+var pulso = 0
+var latido = 0
+
+fijo tarjeta = estilo({"fondo": "#FFFFFF", "relleno": 18, "redondeo": 12, "anchoMax": 460,
+                       "sombra": "0 1px 3px rgba(0,0,0,.14)"},
+  enOscuro({"fondo": "#232030", "sombra": "ninguna"}))
+
+fijo hechaYa = estilo({"decoracion": "line-through", "opacidad": 0.5})
+fijo barra = estilo({"mostrar": "flex", "hueco": 8, "alinearItems": "center",
+                     "envolver": "wrap", "margen": [10, 0]})
+fijo progreso = estilo({"alto": 6, "redondeo": 3, "fondo": "#4F3FD4", "ancho": "var(--p)",
+                        "transicion": "width .3s"},
+  enMovimientoReducido({"transicion": "ninguna"}))
+
+fn visibles(): lista<cualquiera> {
+    si filtro == "" { devolver tareas }
+    devolver filtrar(tareas, fn(t) { devolver contiene(minusculas(t["que"]), minusculas(filtro)) })
+}
+
+fn hechas(): entero {
+    devolver longitud(filtrar(tareas, fn(t) { devolver t["hecha"] }))
+}
+
+fn porcentaje(): texto {
+    si longitud(tareas) == 0 { devolver "0%" }
+    devolver texto(entero(hechas() * 100 / longitud(tareas))) + "%"
+}
+
+# La caja de «Nueva tarea» la gobierna el programa: declara su valor, así que
+# al añadir se vacía sola. La de «Filtrar» no lo declara, y por eso lo que
+# escribes sigue ahí aunque el reloj repinte la página cada segundo.
+fn escribiendo(ev) {
+    borrador = obtener(ev, "valor", "")
+}
+
+fn anotar() {
+    fijo que = recortar(borrador)
+    si que == "" { devolver }
+    agregar(tareas, {"que": que, "hecha": falso})
+    borrador = ""
+    guardar("tareas", tareas)
+    ver()
+}
+
+fn alternar(t) {
+    devolver fn(m: bool) {
+        t["hecha"] = m
+        guardar("tareas", tareas)
+        ver()
+    }
+}
+
+fn buscar(ev) {
+    filtro = obtener(ev, "valor", "")
+    ver()
+}
+
+fn borrarTodo() {
+    tareas = []
+    guardar("tareas", tareas)
+    ver()
+}
+
+fn fila(t): nodo {
+    fijo texto2 = t["que"]
+    si t["hecha"] {
+        devolver etiqueta("li", casilla(texto2, cierto, alternar(t), hechaYa))
+    }
+    devolver etiqueta("li", casilla(texto2, falso, alternar(t)))
+}
+
+fn ver() {
+    limpiarPagina()
+    pintar(etiqueta("div", tarjeta,
+        etiqueta("h2", "Tareas"),
+        etiqueta("div", estilo({"fondo": "#E1E0EB", "redondeo": 3}),
+            etiqueta("div", progreso, {"--p": porcentaje()})),
+        etiqueta("p", estilo({"tamano": 13, "color": "#6C6B80"}),
+            texto(hechas()) + " de " + texto(longitud(tareas)) + " hechas · " + desdeCuando()),
+        etiqueta("div", barra,
+            entrada("Nueva tarea", nulo, {"clave": "nueva", "valor": borrador,
+                "alEscribir": escribiendo, "alCambiar": fn(ev) { anotar() }}),
+            boton("Añadir", anotar),
+            entrada("Filtrar", nulo, {"clave": "filtro", "alEscribir": buscar})),
+        etiqueta("ul", estilo({"relleno": 0, "mostrar": "flex", "direccion": "column", "hueco": 4}),
+            mapear(visibles(), fila)),
+        boton("Borrar todo", borrarTodo, estilo({"fondo": "#A8201A", "bordeColor": "#A8201A"}))))
+}
+
+fn desdeCuando(): texto {
+    si pulso == 0 { devolver "recién abierto" }
+    devolver "abierto hace " + texto(pulso) + " s"
+}
+
+latido = cada(1000, fn() {
+    pulso = pulso + 1
+    ver()
+})
+
+ver()
+imprimir("Escribe una tarea y pulsa Intro. Lo que anotes sigue ahí la próxima vez.")
+imprimir("Con «⤓ Exportar app» esto se convierte en una página que se abre sola.")`,
+
+'Velocidad: el JIT': `# El JIT traduce las funciones calientes a JavaScript nativo.
+# Pulsa «⚡ Medir velocidad» para comparar con y sin JIT.
+
+usar redondear de "numerico"
+
+fn primos(n: entero): entero {
+    var cuenta = 0
+    var i = 2
+    mientras i < n {
+        var esPrimo = cierto
+        var d = 2
+        mientras d * d <= i {
+            si i % d == 0 { esPrimo = falso  romper }
+            d = d + 1
+        }
+        si esPrimo { cuenta = cuenta + 1 }
+        i = i + 1
+    }
+    devolver cuenta
+}
+
+var t = reloj()
+var c = primos(200000)
+imprimir("primos por debajo de 200.000:", c)
+imprimir("tiempo: {redondear(reloj() - t, 1)} ms")
+imprimir("instrucciones de bytecode:", instrucciones())`,
+
+'Fractal de Mandelbrot': `# Cálculo pesado + dibujo. El trabajo va dentro de una
+# función: así el JIT la compila y el fractal sale al instante.
+
+usar redondear de "numerico"
+
+fijo W = 420
+fijo H = 280
+fijo ITER = 60
+
+fn escape(x0: real, y0: real): entero {
+    var x = 0.0
+    var y = 0.0
+    var i = 0
+    mientras x*x + y*y <= 4.0 {
+        si i >= ITER { romper }
+        var xt = x*x - y*y + x0
+        y = 2.0*x*y + y0
+        x = xt
+        i = i + 1
+    }
+    devolver i
+}
+
+lienzo(W, H)
+var t = reloj()
+para py en rango(H) {
+    var y0 = (py / H) * 2.4 - 1.2
+    para px en rango(W) {
+        var i = escape((px / W) * 3.2 - 2.1, y0)
+        si i >= ITER { color(18, 18, 34) }
+        sino { color(30 + i * 3, 10 + i * 2, 90 + i * 2) }
+        punto(px, py)
+    }
+}
+imprimir("{W}×{H} píxeles en {redondear(reloj() - t, 0)} ms")
+imprimir("Pulsa «⚡ Medir velocidad» para ver el efecto del JIT.")`,
+
+'Funciones y cierres': `# Funciones de primera clase, cierres y orden superior
+
+fn hacerAcumulador(inicio) {
+    var total = inicio
+    devolver fn(x) {
+        total = total + x
+        devolver total
+    }
+}
+
+var caja = hacerAcumulador(100)
+imprimir(caja(10), caja(10), caja(5))
+
+fijo datos = rango(1, 11)
+imprimir("cuadrados :", mapear(datos, fn(x) { devolver x * x }))
+imprimir("pares     :", filtrar(datos, fn(x) { devolver x % 2 == 0 }))
+imprimir("producto  :", reducir(datos, fn(a, b) { devolver a * b }, 1))
+
+fn componer(f, g) { devolver fn(x) { devolver f(g(x)) } }
+var masUnoYDoble = componer(fn(x) { devolver x * 2 }, fn(x) { devolver x + 1 })
+imprimir("compuesta :", masUnoYDoble(5))
+
+# Ordenar por una clave
+fijo gente = [{n: "Ana", e: 31}, {n: "Luis", e: 24}, {n: "Sara", e: 45}]
+para p en ordenar(gente, fn(p) { devolver p.e }) {
+    imprimir("  {p.n} — {p.e} años")
+}`,
+
+'Fallos que no tumban el programa': `# Fallos que no tumban el programa. «intentar» protege un trozo, «capturar»
+# recoge lo que salga mal y «finalmente» corre siempre, incluso si te vas por
+# «devolver». Lo que lanzas puede ser cualquier valor.
+
+fn leerCantidad(texto_entrada: texto) -> entero {
+    intentar {
+        var n = entero(texto_entrada)
+        si n < 0 { lanzar error("no puede ser negativa", "validacion") }
+        devolver n
+    } capturar (e) {
+        imprimir("  rechazado «" + texto_entrada + "» → " + e.mensaje)
+        devolver 0
+    } finalmente {
+        imprimir("  (revisado: " + texto_entrada + ")")
+    }
+}
+
+imprimir("Leyendo cantidades:")
+var total = 0
+para t en ["12", "siete", "30", "-4"] {
+    total = total + leerCantidad(t)
+}
+imprimir("total válido: {total}")
+imprimir("")
+
+# Los errores del propio motor también se capturan, con su tipo, su mensaje y
+# la línea donde saltaron.
+imprimir("Divisiones:")
+para d en [4, 0, 2] {
+    intentar {
+        imprimir("  100/{d} = {100 / d}")
+    } capturar (e) {
+        imprimir("  100/{d} → {e.tipo}: {e.mensaje} (línea {e.linea})")
+    }
+}
+imprimir("")
+
+# Y se pueden encadenar: el de dentro relanza y el de fuera decide.
+fn cargar(cual: texto) {
+    intentar {
+        si cual == "roto" { lanzar "el archivo está corrupto" }
+        imprimir("  cargado: " + cual)
+    } capturar (e) {
+        lanzar "al cargar «" + cual + "»: " + texto(e)
+    }
+}
+
+imprimir("Cargas:")
+para c en ["datos", "roto"] {
+    intentar { cargar(c) } capturar (e) { imprimir("  fallo → " + texto(e)) }
+}`,
+
+  'Errores antes de ejecutar': `# Los tipos se verifican ANTES de ejecutar nada.
+# Cada línea marcada abajo es un error que Python o
+# JavaScript solo te darían a mitad de la ejecución.
+
+fn area(base: real, altura: real): real {
+    devolver base * altura / 2.0
+}
+
+var x: entero = "no soy un número"
+
+imprimir(area(3))
+
+imprimir(area("hola", 2))
+
+fn promete(): texto {
+    var n = 5
+}
+
+imprimir(variableQueNoExiste)
+
+var lista: lista<entero> = [1, 2, 3]
+imprimir(lista + 5)`,
+  };
+  // ───────────────────────────────────────────── el puente con la zona aislada
+  const HIJO_B64 = '/*__HIJO__*/';
+  const marco = $('#zona');
+  let listo = false, cola = [], sig = 1, corriendo = false;
+  const esperando = new Map();
+  let datos = null;                      // último retrato de bytecode / JIT / memoria
+
+  let relojArranque = null;
+  function montarZona() {
+    const bin = atob(HIJO_B64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    marco.srcdoc = new TextDecoder('utf-8').decode(bytes);
+    // Si el marco no saluda, algo lo está prohibiendo —casi siempre una política
+    // de seguridad del sitio que sirve esta página— y conviene decirlo en vez de
+    // dejar una pantalla muerta.
+    clearTimeout(relojArranque);
+    relojArranque = setTimeout(() => {
+      if (listo) return;
+      $('#selloAislado').textContent = 'zona no disponible';
+      $('#selloAislado').style.color = 'var(--bad)';
+      estado.innerHTML = '<span class="chip bad">la zona aislada no arrancó</span>';
+      estadoTipos.innerHTML = '';
+      marco.removeAttribute('srcdoc');
+      marco.insertAdjacentHTML('afterend',
+        '<div class="vacio" style="padding:28px 20px;max-width:56ch">' +
+        '<b>No se pudo abrir la zona de ejecución.</b><p>El motor corre dentro de un marco aislado, ' +
+        'y este entorno no permite crearlo. Suele ser una política de seguridad de contenidos que ' +
+        'prohíbe marcos con contenido propio. Abre el archivo directamente en el navegador y ' +
+        'funcionará.</p></div>');
+    }, 5000);
+  }
+
+  function enviar(m) {
+    if (!listo) { cola.push(m); return; }
+    marco.contentWindow.postMessage(m, '*');
+  }
+  function pedir(m) {
+    return new Promise(res => { const id = sig++; esperando.set(id, res); enviar(Object.assign({ id }, m)); });
+  }
+
+  // Descartar el documento entero y volver a montarlo. No hay botón que lo
+  // llame: mientras el programa corre, esta página está bloqueada y no podría
+  // atender el clic. Queda como la vía de reposición si hace falta.
+  function reiniciarZona() {
+    listo = false; cola = [];
+    for (const res of esperando.values()) res({ ok: false, abortado: true, errores: [] });
+    esperando.clear();
+    datos = null;
+    montarZona();
+  }
+
+  addEventListener('message', ev => {
+    if (ev.source !== marco.contentWindow) return;   // solo escuchamos a la zona
+    const m = ev.data;
+    if (!m || typeof m !== 'object') return;
+    if (m.t === 'listo') {
+      listo = true;
+      clearTimeout(relojArranque);
+      temaAZona();
+      marco.contentWindow.postMessage({ t: 'almacen', datos: almTodo() }, '*');
+      const pend = cola; cola = [];
+      for (const x of pend) marco.contentWindow.postMessage(x, '*');
+      return;
+    }
+    if (m.t === 'guardar') { almGuardar(m.k, m.v); return; }
+    if (m.t === 'olvidar') { almOlvidar(m.k); return; }
+    if (m.t === 'vista') { irA(m.cual, true); return; }
+    if (m.t === 'paneles') { if (m.datos) { datos = m.datos; pintarPaneles(); } return; }
+    if (m.t === 'interno') { estado.innerHTML = `<span class="chip bad">error interno en la zona</span>`; return; }
+    const res = esperando.get(m.id);
+    if (res) { esperando.delete(m.id); res(m); }
+  });
+
+  // ───────────────────────────────────────────── almacén de los programas
+  // La zona aislada no tiene almacenamiento propio —ese es el precio del origen
+  // opaco— así que lo guarda aquí el padre, bajo un prefijo propio para no
+  // pisar los ajustes del IDE.
+  const ALM = 'n:alm:';
+  function almTodo() {
+    const d = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(ALM)) d[k.slice(ALM.length)] = localStorage.getItem(k);
+      }
+    } catch (_) {}
+    return d;
+  }
+  function almGuardar(k, v) { try { localStorage.setItem(ALM + k, v); } catch (_) {} }
+  function almOlvidar(k) { try { localStorage.removeItem(ALM + k); } catch (_) {} }
+
+  // ───────────────────────────────────────────── editor
+  function pintarGutter(errLineas) {
+    const n = editor.value.split('\n').length;
+    const marcadas = errLineas || new Set();
+    let h = '';
+    for (let i = 1; i <= n; i++) h += `<div class="${marcadas.has(i) ? 'err' : ''}">${i}</div>`;
+    gutter.innerHTML = h;
+    gutter.scrollTop = editor.scrollTop;
+  }
+  editor.addEventListener('scroll', () => { gutter.scrollTop = editor.scrollTop; });
+  editor.addEventListener('input', () => { pintarGutter(); programarChequeo(); });
+  editor.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); ejecutar(); return; }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const s = editor.selectionStart, t = editor.selectionEnd, v = editor.value;
+      if (s === t) { editor.value = v.slice(0, s) + '    ' + v.slice(t); editor.selectionStart = editor.selectionEnd = s + 4; }
+      else {
+        const ini = v.lastIndexOf('\n', s - 1) + 1;
+        const bloque = v.slice(ini, t).split('\n').map(l => e.shiftKey ? l.replace(/^ {1,4}/, '') : '    ' + l).join('\n');
+        editor.value = v.slice(0, ini) + bloque + v.slice(t);
+        editor.selectionStart = ini; editor.selectionEnd = ini + bloque.length;
+      }
+      pintarGutter(); programarChequeo();
+    }
+  });
+
+  function irALinea(l, c) {
+    const lineas = editor.value.split('\n');
+    let pos = 0;
+    for (let i = 0; i < l - 1 && i < lineas.length; i++) pos += lineas[i].length + 1;
+    pos += Math.max(0, (c || 1) - 1);
+    editor.focus();
+    editor.setSelectionRange(pos, pos);
+    const alto = editor.scrollHeight / Math.max(1, lineas.length);
+    editor.scrollTop = Math.max(0, (l - 6) * alto);
+  }
+
+  // ───────────────────────────────────────────── verificación en vivo
+  // El análisis también ocurre dentro de la zona: aquí no hay ni una línea del
+  // motor. Como la respuesta llega por mensaje, se descartan las tardías.
+  let temporizador = null, gen = 0;
+  function programarChequeo() { clearTimeout(temporizador); temporizador = setTimeout(chequear, 220); }
+
+  function chequear() {
+    const mio = ++gen;
+    return pedir({ t: 'analizar', src: editor.value }).then(a => {
+      if (mio !== gen || a.abortado) return;
+      problemas.innerHTML = '';
+      const malas = new Set();
+      const fila = (d, clase, etiq) => {
+        const f = el('div', 'prob ' + clase);
+        f.appendChild(el('span', 'ic', etiq));
+        f.appendChild(el('span', 'loc', `${d.linea}:${d.col}`));
+        const msg = el('span', 'msg', d.msg);
+        if (d.pista) msg.appendChild(el('span', 'pista', '↳ ' + d.pista));
+        f.appendChild(msg);
+        f.addEventListener('click', () => irALinea(d.linea, d.col));
+        problemas.appendChild(f);
+      };
+      for (const e of a.errores) { malas.add(e.linea); fila(e, 'e', e.fase ? e.fase.slice(0, 4).toUpperCase() : 'ERR'); }
+      for (const w of a.avisos) fila(w, 'a', 'AVISO');
+      pintarGutter(malas);
+      estadoTipos.innerHTML = a.errores.length
+        ? `<span class="chip bad">${a.errores.length} error${a.errores.length > 1 ? 'es' : ''}</span>`
+        : `<span class="chip ok">✓ tipos correctos</span>` +
+          (a.avisos.length ? ` <span class="chip warn">${a.avisos.length} aviso(s)</span>` : '');
+    });
+  }
+
+  // ───────────────────────────────────────────── ejecución
+  // Nota medida: el marco aislado comparte hilo con esta página, así que
+  // mientras el programa corre la interfaz no responde. Deshabilitar los
+  // botones es honesto —no van a poder pulsarse igualmente— y evita encolar
+  // dos ejecuciones. Lo que corta un programa desbocado es el presupuesto de
+  // instrucciones del motor, no un botón.
+  function ocupado(si) {
+    corriendo = si;
+    $('#bRun').disabled = si;
+    $('#bBench').disabled = si;
+  }
+
+  function ejecutar() {
+    if (corriendo) return;
+    ocupado(true);
+    irA('consola');
+    estado.innerHTML = '<span class="chip">ejecutando…</span>';
+    pedir({ t: 'ejecutar', src: editor.value }).then(r => {
+      ocupado(false);
+      if (r.abortado) { estado.innerHTML = '<span class="chip warn">detenido</span>'; return; }
+      if (r.datos) { datos = r.datos; pintarPaneles(); }
+      const s = (r.datos && r.datos.stats) || {};
+      const trozos = [`<span class="chip ${r.ok ? 'ok' : 'bad'}">${r.ok ? '✓ terminó' : '✗ falló'}</span>`];
+      if (r.ms !== undefined) trozos.push(`<b>${r.ms.toFixed(1)}</b> ms`);
+      trozos.push(`<b>${(r.instrucciones || 0).toLocaleString('es')}</b> instr.`);
+      if (r.datos && r.datos.jitBloqueado) trozos.push(`<span class="chip warn" title="${esc(r.datos.motivoJIT || '')}">JIT no disponible aquí</span>`);
+      else if (s.jitCompiladas) trozos.push(`<span class="chip ok">JIT ${s.jitCompiladas}</span>`);
+      if (s.gc) trozos.push(`GC <b>${s.gc}</b>`);
+      estado.innerHTML = trozos.join(' ');
+      if (!r.ok && r.errores && r.errores.length) pintarGutter(new Set(r.errores.map(e => e.linea)));
+      chequear();
+    });
+  }
+
+  function medir() {
+    if (corriendo) return;
+    ocupado(true);
+    irA('consola');
+    estado.innerHTML = '<span class="chip">midiendo…</span>';
+    pedir({ t: 'medir', src: editor.value }).then(r => {
+      ocupado(false);
+      if (r.abortado) { estado.innerHTML = '<span class="chip warn">detenido</span>'; return; }
+      if (!r.ok) { estado.innerHTML = '<span class="chip bad">✗ falló</span>'; return; }
+      if (r.datos) { datos = r.datos; pintarPaneles(); }
+      estado.innerHTML = `<span class="chip ok">×${r.mejora.toFixed(1)} más rápido</span> <b>${r.ms.toFixed(1)}</b> ms`;
+    });
+  }
+
+  // ───────────────────────────────────────────── bytecode portable
+  // El anfitrión solo mueve el archivo. La compilación y la carga ocurren
+  // dentro de la zona, y lo que cruza es texto en base64 que aquí nadie
+  // interpreta: se guarda tal cual, o se manda tal cual de vuelta.
+  const estadoBc = $('#estadoBc');
+
+  // ───────────────────────────────────────────── exportar como aplicación
+  // Sale un solo archivo que se abre en cualquier navegador: el motor, el
+  // anfitrión y el programa, sin editor y sin marco aislado. La zona lo arma
+  // con sus propias piezas; aquí solo se le pone nombre y se guarda.
+  function nombreDeArchivo(t) {
+    return (t || 'app').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'app';
+  }
+
+  // El nombre sale del programa, no del ejemplo que esté elegido en el
+  // desplegable: en cuanto uno pega su propio código, ese nombre es mentira.
+  // La primera línea de comentario es lo más parecido a un título que tiene un
+  // programa, y si no hay, se pregunta.
+  function tituloDelPrograma() {
+    for (const l of editor.value.split('\n').slice(0, 12)) {
+      const m = l.match(/^\s*#\s*(.+?)\s*$/);
+      if (!m) continue;
+      const t = m[1].replace(/[—–-]\s.*$/, '').replace(/[.:,;]+$/, '').trim();
+      if (t.length >= 3 && t.length <= 60) return t;
+    }
+    return '';
+  }
+
+  function exportarApp() {
+    const titulo = tituloDelPrograma() || (sel.value || 'Aplicación en Ñ');
+    estado.innerHTML = '<span class="chip">preparando la aplicación…</span>';
+    pedir({ t: 'exportarApp', src: editor.value, titulo }).then(r => {
+      if (r.abortado) return;
+      if (!r.ok) {
+        const e = (r.errores || [])[0];
+        estado.innerHTML = `<span class="chip bad">no compila${e ? ': ' + esc(e.msg) : ''}</span>`;
+        return;
+      }
+      guardarApp(nombreDeArchivo(titulo) + '.html', r.html, r.tam);
+    });
+  }
+
+  // Tres caminos para el mismo archivo, en orden de preferencia. Descargarlo es
+  // lo normal. Publicado en claude.ai el navegador no deja descargar por cuenta
+  // propia, así que se pide el permiso de guardado. Y si tampoco, se abre en
+  // una pestaña: al menos la aplicación existe y se puede guardar a mano.
+  function guardarApp(archivo, html, tam) {
+    const kb = (tam / 1024).toFixed(0);
+    const porBlob = () => {
+      const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+      const a = el('a');
+      a.href = url; a.download = archivo;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 8000);
+      estado.innerHTML = `<span class="chip ok">${esc(archivo)} · ${kb} KB</span>`;
+    };
+    const enPestana = () => {
+      const w = window.open('', '_blank');
+      if (!w) { estado.innerHTML = '<span class="chip bad">el navegador bloqueó la ventana</span>'; return; }
+      w.document.write(html); w.document.close();
+      estado.innerHTML = `<span class="chip ok">abierta en otra pestaña · guárdala con ⌘S</span>`;
+    };
+    const cap = (window.claude && typeof window.claude.use === 'function') ? window.claude.use('downloads') : null;
+    if (!cap || typeof cap.then !== 'function') { porBlob(); return; }
+    cap.then(d => {
+      if (!d) { porBlob(); return; }
+      return d.save({ filename: archivo, data: html }).then(
+        () => { estado.innerHTML = `<span class="chip ok">${esc(archivo)} · ${kb} KB</span>`; },
+        e => { if (e && e.code === 'declined') estado.innerHTML = '<span class="chip">guardado cancelado</span>'; else enPestana(); });
+    }).catch(porBlob);
+  }
+
+  function exportar() {
+    estadoBc.innerHTML = '<span class="chip">compilando…</span>';
+    pedir({ t: 'serializar', src: editor.value }).then(r => {
+      if (r.abortado) return;
+      if (!r.ok) {
+        const e = (r.errores || [])[0];
+        estadoBc.innerHTML = `<span class="chip bad">no compila${e ? ': ' + esc(e.msg) : ''}</span>`;
+        return;
+      }
+      const bin = atob(r.b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const nombre = (sel.value || 'programa').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      guardar(nombre, bytes, r.b64, r.tam);
+    });
+  }
+
+  // Dos caminos para el mismo archivo. Abierto como archivo local o servido de
+  // cualquier manera normal, se descarga el binario .elb. Publicado en
+  // claude.ai la página corre en un entorno donde el navegador no le deja
+  // descargar por su cuenta y solo se admiten ciertas extensiones, así que se
+  // pide el permiso de guardado y se entrega el mismo contenido en base64
+  // dentro de un .txt. Cargar acepta las dos formas.
+  function guardar(nombre, bytes, b64, tam) {
+    const porBlob = () => {
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+      const a = el('a');
+      a.href = url; a.download = nombre + '.elb';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      estadoBc.innerHTML = `<span class="chip ok">${nombre}.elb · ${tam.toLocaleString('es')} bytes</span>`;
+    };
+    const cap = (window.claude && typeof window.claude.use === 'function') ? window.claude.use('downloads') : null;
+    if (!cap || typeof cap.then !== 'function') { porBlob(); return; }
+    cap.then(d => {
+      if (!d) { porBlob(); return; }
+      const archivo = nombre + '.elb.txt';
+      return d.save({ filename: archivo, data: b64 }).then(() => {
+        estadoBc.innerHTML = `<span class="chip ok">${archivo} · ${tam.toLocaleString('es')} bytes en base64</span>`;
+      }, e => {
+        estadoBc.innerHTML = (e && e.code === 'declined')
+          ? '<span class="chip">guardado cancelado</span>'
+          : `<span class="chip bad">no se pudo guardar${e && e.code ? ' (' + esc(e.code) + ')' : ''}</span>`;
+      });
+    }).catch(porBlob);
+  }
+
+  function importar(archivo) {
+    if (!archivo) return;
+    if (archivo.size > 8 * 1024 * 1024) {
+      estadoBc.innerHTML = '<span class="chip bad">el archivo es demasiado grande</span>';
+      return;
+    }
+    estadoBc.innerHTML = '<span class="chip">leyendo…</span>';
+    const lec = new FileReader();
+    lec.onerror = () => { estadoBc.innerHTML = '<span class="chip bad">no se pudo leer el archivo</span>'; };
+    lec.onload = () => {
+      const bytes = new Uint8Array(lec.result);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 4096) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 4096));
+      ocupado(true);
+      irA('consola');
+      estado.innerHTML = '<span class="chip">ejecutando bytecode…</span>';
+      pedir({ t: 'correrBytecode', b64: btoa(bin) }).then(r => {
+        ocupado(false);
+        if (r.abortado) return;
+        if (r.datos) { datos = r.datos; pintarPaneles(); }
+        const s2 = (r.datos && r.datos.stats) || {};
+        const trozos = [`<span class="chip ${r.ok ? 'ok' : 'bad'}">${r.ok ? '✓ terminó' : '✗ falló'}</span>`,
+                        `<span class="chip warn">desde ${esc(archivo.name)}</span>`];
+        if (r.ms !== undefined) trozos.push(`<b>${r.ms.toFixed(1)}</b> ms`);
+        trozos.push(`<b>${(r.instrucciones || 0).toLocaleString('es')}</b> instr.`);
+        if (s2.gc) trozos.push(`GC <b>${s2.gc}</b>`);
+        estado.innerHTML = trozos.join(' ');
+        estadoBc.innerHTML = r.ok
+          ? `<span class="chip ok">cargado: ${bytes.length.toLocaleString('es')} bytes</span>`
+          : `<span class="chip bad">${esc(((r.errores || [])[0] || {}).msg || 'rechazado')}</span>`;
+      });
+    };
+    lec.readAsArrayBuffer(archivo);
+  }
+
+  $('#bExportar').addEventListener('click', exportar);
+  $('#bApp').addEventListener('click', exportarApp);
+  $('#bImportar').addEventListener('click', () => $('#fBytecode').click());
+  $('#fBytecode').addEventListener('change', e => { importar(e.target.files[0]); e.target.value = ''; });
+
+  // ───────────────────────────────────────────── paneles de inspección
+  // Se dibujan a partir del retrato que manda la zona: listas y números, nunca
+  // objetos vivos del motor. Nada del intérprete cruza la frontera.
+  function pintarPaneles() { pintarBytecode(); pintarJIT(); pintarMemoria(); }
+
+  function pintarBytecode() {
+    const cont = $('#bytecode');
+    if (!datos) { cont.innerHTML = '<div class="vacio">Ejecuta un programa para ver su bytecode. Cada función se compila a instrucciones de una máquina de pila — el mismo formato portable que se ejecuta igual en cualquier navegador.</div>'; $('#ptBc').textContent = ''; return; }
+    let total = 0, h = '';
+    if (datos.deDisco) {
+      h += `<div style="padding:10px 13px;color:var(--warn);font-size:12.5px;line-height:1.6;max-width:62ch">
+        <b>Esto se cargó desde un archivo .elb.</b> No hay código fuente detrás: el motor lo verificó
+        instrucción a instrucción antes de ejecutarlo y lo corre solo en el intérprete. El JIT no
+        puede tocarlo, porque compila desde el árbol sintáctico y un archivo de bytecode no lo trae.</div>`;
+    }
+    for (const f of datos.bytecode) {
+      total += f.instr.length;
+      h += `<span class="fnhead">▸ ${esc(f.nombre)}/${f.aridad}  —  ${f.instr.length} instrucciones, ${f.nConsts} constantes</span>`;
+      h += f.instr.map(x => `<span class="ln">L${String(x.linea).padStart(3)}</span>  ${esc(x.texto)}`).join('\n') + '\n';
+    }
+    cont.innerHTML = h;
+    $('#ptBc').textContent = total;
+  }
+
+  function pintarJIT() {
+    const cont = $('#jit');
+    if (!datos) { cont.innerHTML = '<div class="vacio">Ejecuta un programa. Cuando una función se llama muchas veces —o contiene un bucle largo— el motor la traduce a JavaScript nativo y la vuelve a ejecutar desde ahí.</div>'; $('#ptJit').textContent = ''; return; }
+    const s = datos.stats;
+    let h = '';
+    if (datos.jitBloqueado) {
+      h += `<div class="aviso-jit">
+        <b>El JIT está apagado en este entorno</b>
+        <p>${esc(datos.motivoJIT || 'el entorno no permite compilar código en caliente')}.
+        El motor comprobó al arrancar si podía compilar y no pudo, así que todo se ejecuta en el
+        intérprete. Los programas dan exactamente el mismo resultado; solo van más despacio.</p>
+        <p>Suele pasar cuando la página se sirve con una política de seguridad de contenidos
+        estricta. El marco aislado hereda la política de esta página, así que aislarlo no lo
+        devuelve: abierto como archivo local, el JIT funciona.</p>
+      </div>`;
+    }
+    h += `<div class="tarjetas">
+      <div class="tj"><div class="n">${s.jitCompiladas}</div><div class="e">funciones compiladas</div></div>
+      <div class="tj"><div class="n">${s.jitFallidas}</div><div class="e">no compilables</div></div>
+      <div class="tj"><div class="n">${s.tiempoJIT.toFixed(1)}</div><div class="e">ms compilando</div></div>
+    </div><div class="lista-fn">`;
+    if (!datos.jit.length) h += '<div class="vacio">El programa no define funciones propias.</div>';
+    for (const f of datos.jit) {
+      const cls = f.estado === 'compilada' ? 'compilada' : f.estado === 'rechazada' ? 'rechazada' : 'frio';
+      h += `<div class="fila-fn"><span class="nm">${esc(f.nombre)}/${f.aridad}</span>
+        <span style="color:var(--muted);font-family:var(--mono);font-size:11px">${f.llamadas} llamada(s)</span>
+        <span class="est ${cls}">${f.estado}</span></div>`;
+      if (f.src) h += `<div class="codigo" style="background:var(--code-bg);color:var(--code-ink);margin:0 0 6px;border-radius:0">${esc(f.src)}</div>`;
+      else if (f.estado === 'rechazada') h += `<div style="padding:4px 13px 10px;color:var(--muted);font-size:12px">No compilada: captura variables de fuera (es un cierre) o usa construcciones que el JIT no cubre. Sigue ejecutándose en el intérprete y da exactamente el mismo resultado.</div>`;
+    }
+    h += '</div>';
+    cont.innerHTML = h;
+    $('#ptJit').textContent = s.jitCompiladas || '';
+  }
+
+  function pintarMemoria() {
+    const cont = $('#memoria');
+    if (!datos) { cont.innerHTML = '<div class="vacio">Ejecuta un programa para ver el recolector de basura en acción.</div>'; return; }
+    const s = datos.stats, m = datos.memoria;
+    const pico = Math.max(1, s.picoMonton);
+    let h = `<div class="tarjetas">
+      <div class="tj"><div class="n">${m.vivos.toLocaleString('es')}</div><div class="e">objetos vivos ahora</div></div>
+      <div class="tj"><div class="n">${s.liberados.toLocaleString('es')}</div><div class="e">objetos liberados</div></div>
+      <div class="tj"><div class="n">${s.gc}</div><div class="e">recolecciones</div></div>
+      <div class="tj"><div class="n">${s.picoMonton.toLocaleString('es')}</div><div class="e">pico de ocupación</div></div>
+    </div>
+    <div style="padding:14px">
+      <div style="font-size:12.5px;color:var(--muted);margin-bottom:4px">Ocupación actual frente al pico</div>
+      <div class="barra-mem"><i style="width:${Math.min(100, (m.vivos / pico) * 100).toFixed(1)}%"></i></div>
+      <div style="font-size:11.5px;color:var(--muted);margin-top:5px;font-family:var(--mono)">
+        ${m.vivos.toLocaleString('es')} / ${s.picoMonton.toLocaleString('es')} · próxima recolección a los ${m.umbral.toLocaleString('es')}
+      </div>`;
+    const clases = Object.entries(m.porClase).sort((a, b) => b[1] - a[1]);
+    if (clases.length) {
+      h += `<div style="margin-top:18px;font-size:12.5px;color:var(--muted);margin-bottom:6px">Objetos vivos por tipo</div><table class="bench">`;
+      for (const [k, v] of clases) h += `<tr><td>${esc(k)}</td><td class="n">${v.toLocaleString('es')}</td></tr>`;
+      h += '</table>';
+    }
+    h += `<p style="font-size:12.5px;color:var(--muted);margin-top:18px;line-height:1.6;max-width:56ch">
+      El recolector es de marcado y barrido: parte de la pila, las variables globales, los marcos de
+      llamada y las variables capturadas, marca todo lo alcanzable y descarta el resto. Desde el
+      programa puedes consultarlo con <code style="font-family:var(--mono)">memoria()</code> y forzarlo con
+      <code style="font-family:var(--mono)">recolectar()</code>.</p></div>`;
+    cont.innerHTML = h;
+  }
+
+  // ───────────────────────────────────────────── pestañas y tema
+  const EN_ZONA = { consola: 1, lienzo: 1, pagina: 1 };
+  function irA(v, desdeZona) {
+    for (const t of document.querySelectorAll('.tab')) t.setAttribute('aria-selected', String(t.dataset.v === v));
+    const dentro = !!EN_ZONA[v];
+    $('#v-zona').classList.toggle('on', dentro);
+    for (const s of document.querySelectorAll('.vista.propia')) s.classList.toggle('on', s.id === 'v-' + v);
+    if (dentro && !desdeZona) enviar({ t: 'vista', cual: v });
+  }
+  $('#tabs').addEventListener('click', e => { const b = e.target.closest('.tab'); if (b) irA(b.dataset.v); });
+
+  function esOscuro() {
+    const r = document.documentElement, a = r.getAttribute('data-theme');
+    return a === 'dark' || (!a && matchMedia('(prefers-color-scheme: dark)').matches);
+  }
+  function temaAZona() { enviar({ t: 'tema', oscuro: esOscuro() }); }
+
+  $('#bTema').addEventListener('click', () => {
+    const r = document.documentElement;
+    r.setAttribute('data-theme', esOscuro() ? 'light' : 'dark');
+    try { localStorage.setItem('el-tema', r.getAttribute('data-theme')); } catch (_) {}
+    temaAZona();
+  });
+  try { const g = localStorage.getItem('el-tema'); if (g) document.documentElement.setAttribute('data-theme', g); } catch (_) {}
+  try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', temaAZona); } catch (_) {}
+
+  // ───────────────────────────────────────────── arranque
+  const sel = $('#selEj');
+  Object.keys(EJEMPLOS).forEach(k => { const o = el('option', null, k); o.value = k; sel.appendChild(o); });
+  sel.addEventListener('change', () => {
+    editor.value = EJEMPLOS[sel.value];
+    pintarGutter(); chequear();
+    enviar({ t: 'limpiar' });
+    datos = null; pintarPaneles();
+    estado.innerHTML = '';
+    try { localStorage.setItem('el-ejemplo', sel.value); } catch (_) {}
+  });
+
+  $('#bRun').addEventListener('click', ejecutar);
+  $('#bBench').addEventListener('click', medir);
+  $('#bLimpiar').addEventListener('click', () => {
+    enviar({ t: 'limpiar' });
+    datos = null; pintarPaneles();
+    estado.innerHTML = ''; irA('consola');
+  });
+
+  let inicial = 'Bienvenida';
+  try { const g = localStorage.getItem('el-ejemplo'); if (g && EJEMPLOS[g]) inicial = g; } catch (_) {}
+  sel.value = inicial;
+  editor.value = EJEMPLOS[inicial];
+  pintarGutter();
+  pintarPaneles();
+  montarZona();
+  chequear();
+  ejecutar();
+})();
+</script>
+</body>
+</html>

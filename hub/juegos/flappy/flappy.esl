@@ -1,0 +1,173 @@
+# NEON FLAPPY Ñ — el primer juego portado a Ñ, para saber qué le falta al lienzo.
+# Original: Retro/Game One Player/game12.html (JavaScript, 545 líneas).
+# Reglas: toca o pulsa espacio/↑ para aletear; pasa entre los tubos; cada tubo
+# superado suma un punto; chocar o tocar el suelo termina la partida.
+usar estilo, alPasar, estiloGlobal de "estilo"
+usar azar, absoluto de "numerico"
+
+# ─────────────────────────────────────────────── el mundo
+# El lienzo es de 540×960 por dentro (formato 9:16, como un teléfono de pie) y
+# se ESTIRA con CSS para llenar la pestaña: el juego no sabe cuánto mide la
+# ventana —el lienzo no lo dice— pero así se ve igual en cualquier tamaño.
+fijo ANCHO = 540
+fijo ALTO = 960
+fijo PAJARO_X = 110
+fijo GRAVEDAD = 0.6
+fijo SALTO = -10.5
+fijo RADIO = 18
+fijo TUBO_ANCHO = 78
+fijo HUECO_INICIAL = 260
+fijo VELOCIDAD_INICIAL = 4.0
+
+var estado = "inicio"          # inicio · jugando · muerto
+var y = ALTO / 2
+var vy = 0.0
+var tubos = []                 # cada uno: {"x", "arriba", "abajo", "contado"}
+var puntos = 0
+var mejor = recuperar("mejor", 0)
+var cuadro = 0
+var estrellas = []
+
+fn reiniciar() {
+    y = ALTO / 2
+    vy = 0.0
+    tubos = []
+    puntos = 0
+    cuadro = 0
+    estado = "jugando"
+    ver()
+}
+
+fn hueco(): real { devolver maximo(HUECO_INICIAL - puntos * 4, 165) }
+fn velocidad(): real { devolver VELOCIDAD_INICIAL + puntos * 0.1 }
+
+fn nuevoTubo() {
+    fijo h = hueco()
+    fijo arriba = 80 + azar() * (ALTO - h - 200)
+    agregar(tubos, {"x": ANCHO + 10.0, "arriba": arriba, "abajo": arriba + h, "contado": falso})
+}
+
+fn aletear() {
+    si estado == "jugando" { vy = SALTO }
+    sino { reiniciar() }
+}
+
+fn choca(t): bool {
+    fijo dentroX = PAJARO_X + RADIO > t["x"] y PAJARO_X - RADIO < t["x"] + TUBO_ANCHO
+    si no dentroX { devolver falso }
+    devolver y - RADIO < t["arriba"] o y + RADIO > t["abajo"]
+}
+
+fn morir() {
+    estado = "muerto"
+    si puntos > mejor { mejor = puntos  guardar("mejor", mejor) }
+    ver()
+}
+
+# ─────────────────────────────────────────────── un cuadro
+fn paso() {
+    cuadro = cuadro + 1
+    si estado == "jugando" {
+        vy = vy + GRAVEDAD
+        y = y + vy
+        si cuadro % 90 == 0 { nuevoTubo() }
+        fijo v = velocidad()
+        para t en tubos {
+            t["x"] = t["x"] - v
+            si no t["contado"] y t["x"] + TUBO_ANCHO < PAJARO_X {
+                t["contado"] = cierto
+                puntos = puntos + 1
+            }
+            si choca(t) { morir() }
+        }
+        tubos = filtrar(tubos, fn(t) { devolver t["x"] + TUBO_ANCHO > -5 })
+        si y + RADIO >= ALTO - 3 o y - RADIO <= 0 { morir() }
+    }
+    dibujar()
+}
+
+fn dibujar() {
+    color("#07070E")
+    rect(0, 0, ANCHO, ALTO)
+    # estrellas de fondo, fijas por índice para no gastar memoria
+    color("#2A2D5A")
+    para i en rango(70) {
+        fijo ex = (i * 97 + cuadro * 0.3) % ANCHO
+        fijo ey = (i * 57) % ALTO
+        punto(ex, ey)
+    }
+    # tubos
+    para t en tubos {
+        color("#19F2FF")
+        rect(t["x"], 0, TUBO_ANCHO, t["arriba"])
+        rect(t["x"], t["abajo"], TUBO_ANCHO, ALTO - t["abajo"])
+        color("#7FF8FF")
+        rect(t["x"] + 5, 0, 5, t["arriba"])
+        rect(t["x"] + 5, t["abajo"], 5, ALTO - t["abajo"])
+    }
+    # suelo
+    color("#FF3EA5")
+    rect(0, ALTO - 3, ANCHO, 3)
+    # el pájaro: cuerpo, ojo y una estela según la velocidad
+    color("#FFD23F")
+    circulo(PAJARO_X, y, RADIO)
+    color("#07070E")
+    circulo(PAJARO_X + 8, y - 5, 4)
+    color("#FF3EA5")
+    grosor(4)
+    linea(PAJARO_X - RADIO, y, PAJARO_X - RADIO - 12 - minimo(absoluto(vy) * 2, 26), y - vy * 1.5)
+    # marcador: con letra() ya no hace falta ponerlo en la página encima del lienzo
+    color("#EDEFFF")
+    letra(84, "centro", "negrita mono")
+    escribirEn(ANCHO / 2, 110, texto(puntos))
+    color("#8E92B4")
+    letra(22, "izquierda", "mono")
+    escribirEn(18, 36, "MEJOR " + texto(mejor))
+}
+
+# ─────────────────────────────────────────────── la página: controles y HUD
+# El lienzo no recibe teclas ni clics (no es un nodo). Un div que cubre toda la
+# ventana sí: es transparente, tiene foco, y pasa las teclas al juego.
+# Estas reglas se salen de la página y alcanzan al lienzo y al cuerpo del
+# documento: el lienzo queda centrado, tan alto como la pestaña (o tan ancho
+# como quepa), siempre 9:16, con el fondo del juego alrededor.
+fijo globales = estilo(
+    estiloGlobal("body", {"margen": 0, "fondo": "#07070E", "overflow": "hidden"}),
+    estiloGlobal("#cajaLienzo", {"position": "fixed", "inset": 0, "relleno": 0, "mostrar": "flex",
+                                 "alinearItems": "center", "justificar": "center"}),
+    estiloGlobal("#cajaLienzo canvas", {"ancho": "min(100vw, calc(100vh * 540 / 960))", "alto": "auto",
+                                        "aspectRatio": "540 / 960", "imageRendering": "auto"}),
+    estiloGlobal("#consola", {"mostrar": "ninguno"}))
+
+fijo capa = estilo({"position": "fixed", "inset": 0, "zIndex": 10, "outline": "ninguno",
+                    "cursor": "pointer", "fontFamily": "ui-monospace, Consolas, monospace",
+                    "color": "#EDEFFF", "userSelect": "none"})
+fijo cartel = estilo({"position": "absolute", "top": "40%", "left": 0, "right": 0, "textAlign": "center",
+                      "tamano": 22, "grosor": 700, "lineHeight": 1.6})
+fijo suave = estilo({"tamano": 14, "grosor": 400, "color": "#8E92B4"})
+fijo volver = estilo({"position": "absolute", "bottom": 14, "left": 14, "color": "#8E92B4",
+                      "tamano": 12, "textDecoration": "none", "zIndex": 11},
+    alPasar({"color": "#FF3EA5"}))
+
+fn teclas(ev) {
+    fijo k = obtener(ev, "tecla", "")
+    si k == " " o k == "ArrowUp" o k == "w" o k == "W" { aletear() }
+}
+
+fn ver() {
+    limpiarPagina()
+    var texto1 = ""
+    var texto2 = ""
+    si estado == "inicio" { texto1 = "NEON FLAPPY Ñ"  texto2 = "toca o pulsa espacio para empezar" }
+    si estado == "muerto" { texto1 = "GAME OVER · " + texto(puntos)  texto2 = "mejor " + texto(mejor) + " · toca para otra" }
+    var centro = etiqueta("span")
+    si texto1 != "" { centro = etiqueta("div", cartel, texto1, etiqueta("div", suave, texto2)) }
+    pintar(etiqueta("div", capa, globales, {"tabindex": "0", "autofoco": cierto, "clave": "capa",
+                                  "alHacerClic": fn(ev) { aletear() }, "alPulsarTecla": teclas},
+        centro,
+        etiqueta("a", volver, {"destino": "../hub.html"}, "← hub")))
+}
+
+lienzo(ANCHO, ALTO)
+ver()
+cada(16, paso)
