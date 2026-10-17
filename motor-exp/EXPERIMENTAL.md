@@ -630,17 +630,23 @@ tocó, por la regla.
 
 ### 3. Núcleos NEÑ y `errorC` (pedidos después, el mismo día)
 
-- **`potencia` a 10 ulp** (`pruebas/nen-nucleos.js`): la biblioteca matemática de mingw redondea peor que glibc. El
-  tope de los núcleos que usan la biblioteca matemática pasa a 16 ulp **solo en Windows** (en Linux sigue en 8). Es un
-  error relativo del orden de 2·10⁻¹⁵: lo que se vigila es que no se dispare, no que dos bibliotecas de C redondeen
-  igual. Los núcleos sin trascendentes siguen exigiéndose bit a bit.
+- **`potencia` fuera de tolerancia** (`pruebas/nen-nucleos.js`): la biblioteca matemática de mingw (la de `msvcrt`)
+  redondea peor que glibc. Primero dio 10 ulp; con el tope subido a 16 dio 19 en otro dato: subir el tope a ojo no
+  sirve. En Windows el tope pasa a ser **lo que C1EÑ promete** para las trascendentes, diferencia relativa < 1e-14
+  (45 ulp); si un núcleo pasa de ahí, ya es un fallo y no redondeo. En Linux sigue en 8. Los núcleos sin
+  trascendentes se siguen exigiendo bit a bit en todas partes.
 - **EPERM al terminar** (misma prueba): Windows no deja borrar una DLL cargada. Ahora se suelta (`lib.unload()`) antes
   de borrar la carpeta, y si aun así no se puede, se avisa en una línea en vez de tumbar la suite.
 - **`errorC` daba 0** (`pruebas/exp-sistema.js`): en Windows no hay un `errno`, hay uno por biblioteca de C
   (`msvcrt.dll`, `ucrtbase.dll`…), y `errorC` ve el que ve koffi. La prueba usaba `msvcrt.dll`; en Windows ahora usa
   `ucrtbase.dll` (la de Windows 10 y 11). Si tampoco se ve, la prueba se **salta diciendo por qué** (límite de la
-  plataforma), en vez de fallar. **Sin probar en Windows todavía**: la próxima batería en el PC de Diego dirá cuál de
-  las dos pasa. En Linux, la prueba de siempre, igual.
+  plataforma), en vez de fallar. **Resultado en el PC de Diego: saltada** — koffi tampoco ve el `errno` de
+  `ucrtbase.dll`. Así que en Windows `errorC` no es fiable con funciones de las DLL del sistema. En Linux, la prueba de
+  siempre, igual.
+
+**Batería en el PC de Diego después de W1: 23 de 25** (antes 19). C1EÑ nativo funciona en Windows por primera vez
+(`C1EÑ (jit, nativo, gpu simulada)`, 79 pasan; `en Ñ` 792). Quedaban `ecosim5` (la de siempre) y `potencia` a 19 ulp,
+que llevó al tope de 1e-14 de arriba.
 - Lo que hay que saber al usar `errorC` en Windows: solo sirve con funciones de la biblioteca de C que comparte koffi;
   una DLL compilada con otra (por ejemplo, con `msvcrt`) tiene su propio `errno` y `errorC` no lo ve.
 
