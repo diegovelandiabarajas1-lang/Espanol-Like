@@ -314,9 +314,21 @@ const errLimpio = new Map();
 // abajo). Es del proceso, no de cada motor: la memoria de la GPU es una sola.
 const residentes = new WeakMap();
 const vivos = new Set();                     // WeakRef de cada arreglo residente
-const porLiberar = [];                       // [d, gpu] pendientes de liberar
+const porLiberar = [];                       // [d, gpu, bytes] pendientes de liberar
 const finalizador = typeof FinalizationRegistry === 'function'
-  ? new FinalizationRegistry(({ d, gpu }) => porLiberar.push([d, gpu])) : null;
+  ? new FinalizationRegistry(({ d, gpu, bytes }) => porLiberar.push([d, gpu, bytes])) : null;
+// (motor-exp N2) Memoria de la GPU que se devuelve y se vuelve a pedir. Un
+// programa de NEÑ crea un arreglo nuevo en cada operación (y = senoA(x) * 2…),
+// y cuMemAlloc + cuMemFree por cada uno cuesta más que el núcleo. Lo que se
+// suelta se guarda por tamaño exacto y por GPU, hasta C1EN_POOL_MB (1024 si no
+// se dice); lo que pase de ahí se libera de verdad.
+const poolGpu = new Map();                   // gpu → Map(bytes → [d…])
+let poolBytes = 0;
+const POOL_MAX = (typeof process !== 'undefined' && process.env && Number(process.env.C1EN_POOL_MB) >= 0 && process.env.C1EN_POOL_MB !== undefined
+  && process.env.C1EN_POOL_MB !== '') ? Number(process.env.C1EN_POOL_MB) * 1048576 : 1024 * 1048576;
+// Los registros de residentes que usa el lanzamiento en curso: si falta memoria
+// a mitad de un lanzamiento, a esos no se les puede bajar ni soltar.
+const enUso = new Set();
 
 // ============================================================================
 //  El motor: compilar, elegir dispositivo y lanzar
@@ -415,13 +427,54 @@ function crearC1en(vm) {
   function liberarPendientes(cu) {
     for (let i = porLiberar.length - 1; i >= 0; i--) {
       if (porLiberar[i][1] !== indiceGpu) continue;
-      try { cu.liberar(porLiberar[i][0]); } catch (_) { /* nada */ }
+      soltarMem(cu, porLiberar[i][0], porLiberar[i][2]);
       porLiberar.splice(i, 1);
+    }
+  }
+  // ── (motor-exp N2) la memoria de la GPU, con reutilización ───────────────
+  function poolDe(g) { let m = poolGpu.get(g); if (!m) { m = new Map(); poolGpu.set(g, m); } return m; }
+  function vaciarPool(cu) {
+    const m = poolDe(indiceGpu);
+    for (const [bytes, l] of m) for (const d of l) { try { cu.liberar(d); } catch (_) { /* nada */ } poolBytes -= bytes; }
+    m.clear();
+  }
+  function soltarMem(cu, d, bytes, gpu) {
+    if (bytes !== undefined) bytes = Math.max(8, bytes);      // como en reservarMem
+    if (bytes && poolBytes + bytes <= POOL_MAX) {
+      const m = poolDe(gpu === undefined ? indiceGpu : gpu);
+      let l = m.get(bytes);
+      if (!l) { l = []; m.set(bytes, l); }
+      l.push(d); poolBytes += bytes;
+      return;
+    }
+    try { cu.liberar(d); } catch (_) { /* nada */ }
+  }
+  // Pedir memoria. Si la GPU dice que no hay: primero se vacía la reserva y lo
+  // pendiente de liberar; si aún no hay, se bajan a la CPU los arreglos
+  // residentes que no están en uso (sus datos no se pierden: vuelven a la CPU)
+  // y se intenta otra vez. Solo si así tampoco cabe, el error es de verdad.
+  function reservarMem(cu, bytes) {
+    bytes = Math.max(8, bytes);
+    const l = poolDe(indiceGpu).get(bytes);
+    if (l && l.length) { poolBytes -= bytes; return l.pop(); }
+    try { return cu.reservar(bytes); } catch (e1) {
+      vaciarPool(cu); liberarPendientes(cu); vaciarPool(cu);
+      try { return cu.reservar(bytes); } catch (e2) {
+        if (typeof globalThis.gc === 'function') { globalThis.gc(); liberarPendientes(cu); vaciarPool(cu); try { return cu.reservar(bytes); } catch (_) { /* sigue */ } }
+        for (const ref of [...vivos]) {
+          const x = ref.deref();
+          if (!x) { vivos.delete(ref); continue; }
+          const reg = residentes.get(x);
+          if (reg && !enUso.has(reg) && reg.gpu === indiceGpu) sincronizarHost(x, true, true);
+        }
+        vaciarPool(cu);
+        return cu.reservar(bytes);
+      }
     }
   }
   // Trae la copia de la GPU si está allí (y marca «tocado»); con soltar=true
   // además libera la memoria de la GPU y deja de ser residente.
-  function sincronizarHost(x, soltar) {
+  function sincronizarHost(x, soltar, deVerdad) {
     const reg = residentes.get(x);
     if (!reg) { x.residente = null; return; }
     const cu = c1enCuda();
@@ -433,7 +486,7 @@ function crearC1en(vm) {
         if (vista.byteLength === reg.bytes) cu.bajar(vista, reg.d);
         reg.enGpu = false;
       }
-      if (soltar) { cu.liberar(reg.d); reg.d = null; }
+      if (soltar) { if (deVerdad) cu.liberar(reg.d); else soltarMem(cu, reg.d, reg.bytes, reg.gpu); reg.d = null; }
     } finally {
       if (otraGpu) cu.usar(indiceGpu);
     }
@@ -449,23 +502,35 @@ function crearC1en(vm) {
       if (x) sincronizarHost(x, true); else vivos.delete(ref);
     }
     const cu = c1enCuda();
-    if (cu) liberarPendientes(cu);
+    if (cu) {
+      liberarPendientes(cu);
+      // (motor-exp N2) y la reserva de memoria reutilizable, en todas las GPU
+      const antes = indiceGpu;
+      for (const g of [...poolGpu.keys()]) {
+        if (!poolGpu.get(g).size) continue;
+        try { if (g !== antes) cu.usar(g); indiceGpu = g; vaciarPool(cu); }
+        finally { indiceGpu = antes; if (g !== antes) cu.usar(antes); }
+      }
+    }
   }
   // Deja el arreglo residente en la GPU actual con los datos al día y devuelve
   // el puntero de dispositivo.
-  function asegurarResidente(x, vista, cu) {
+  // (motor-exp N2) «sinSubir»: el núcleo va a escribir el arreglo entero sin
+  // leerlo, así que lo que hay en la CPU no hace falta subirlo.
+  function asegurarResidente(x, vista, cu, sinSubir) {
     let reg = residentes.get(x);
     if (reg && (reg.gpu !== indiceGpu || reg.bytes !== vista.byteLength)) { sincronizarHost(x, true); reg = null; }
     if (!reg) {
-      const d = cu.reservar(Math.max(8, vista.byteLength));
+      const d = reservarMem(cu, vista.byteLength);
       reg = { d, bytes: vista.byteLength, gpu: indiceGpu, enGpu: false, tocado: true };
       residentes.set(x, reg);
       reg.ref = new WeakRef(x);
       vivos.add(reg.ref);
       x.residente = soltar => sincronizarHost(x, soltar === true);
-      if (finalizador) finalizador.register(x, { d, gpu: indiceGpu }, x);
+      if (finalizador) finalizador.register(x, { d, gpu: indiceGpu, bytes: reg.bytes }, x);
     }
-    if (reg.tocado) { cu.subir(reg.d, vista); reg.tocado = false; }
+    enUso.add(reg);
+    if (reg.tocado) { if (!sinSubir) cu.subir(reg.d, vista); reg.tocado = false; }
     return reg;
   }
 
@@ -645,8 +710,8 @@ function crearC1en(vm) {
             residentesAqui.push(reg);
             lanz.push({ t: 'ptr', v: reg.d }, { t: 'i64', v: vista.length });
           } else {
-            const d = cu.reservar(Math.max(8, vista.byteLength));
-            memorias.push(d);
+            const d = reservarMem(cu, vista.byteLength);
+            memorias.push([d, Math.max(8, vista.byteLength)]);
             cu.subir(d, vista);
             bajadas.push([vista, d]);
             lanz.push({ t: 'ptr', v: d }, { t: 'i64', v: vista.length });
@@ -669,7 +734,8 @@ function crearC1en(vm) {
       if (e instanceof ErrorTiempoEjecucion) throw e;
       vm.error(`«${quien}»: la GPU falló: ${e.message}`);
     } finally {
-      for (const d of memorias) { try { cu.liberar(d); } catch (_) { /* ya no hay nada que hacer */ } }
+      for (const [d, bytes] of memorias) soltarMem(cu, d, bytes);
+      enUso.clear();
     }
     return c1enLeerClave(err[0]);
   }
@@ -726,7 +792,12 @@ function crearC1en(vm) {
     }
     if (typeof cuerpo !== 'string' || typeof js !== 'function')
       throw new Error(`vm.c1en.kernel «${nombre}»: hacen falta «cuerpo» (C) y «js» (respaldo)`);
-    const k = { nombre, params, cuerpo, js, c: null, cuda: null, fnNativa: null, gpu: new Map() };
+    // (motor-exp N2) spec.lee / spec.escribe: los parámetros arreglo que el
+    // núcleo solo lee, o que escribe enteros sin leerlos
+    const lee = new Set(spec.lee || []), escribe = new Set(spec.escribe || []);
+    for (const pn of [...lee, ...escribe])
+      if (!params.some(([q, pt]) => q === pn && pt.endsWith('*'))) throw new Error(`vm.c1en.kernel «${nombre}»: «${pn}» en lee/escribe no es un parámetro arreglo`);
+    const k = { nombre, params, cuerpo, js, c: null, cuda: null, fnNativa: null, gpu: new Map(), lee, escribe };
     nucleos.set(nombre, k);
     const lanzar = (...args) => lanzarKernel(k, args);
     lanzar.nucleo = k;
@@ -751,7 +822,14 @@ function crearC1en(vm) {
     const n = args[0];
     if (typeof n !== 'number' || !Number.isInteger(n) || n < 0)
       vm.error(`el núcleo «${quien}»: n tiene que ser un entero no negativo y es ${repr(n, 1)}`);
+    elegirInicial();
+    // (motor-exp N2) En la GPU, un arreglo de Ñ seguido y dueño de su memoria
+    // se queda RESIDENTE, como en «paralelo»: se sube una vez, el resultado se
+    // queda allí, y solo baja cuando alguien lo lee desde la CPU. Así una cadena
+    // de NEÑ (senoA, por, sumaEje…) no cruza el PCIe en cada paso.
+    const paraGpu = actual === 'gpu';
     const plano = [];
+    const preps = [];
     const devolver = [];
     const arrs = [];
     args.forEach((v, j) => {
@@ -762,18 +840,18 @@ function crearC1en(vm) {
           if ((pt === 'f64*' && v.tipo !== 'real') || (pt === 'i32*' && v.tipo !== 'entero'))
             vm.error(`el núcleo «${quien}»: «${k.params[j][0]}» es un arreglo ${pt === 'f64*' ? 'real' : 'entero'} y llegó uno ${v.tipo}`);
           arrs.push({ x: v, k: j + 1 });
-          const p = prepararArreglo(v, quien, j + 1);
+          const p = prepararArreglo(v, quien, j + 1, paraGpu);
           if (p.devolver) devolver.push(p.devolver);
+          preps.push(p.residible ? { x: v, vista: p.vista } : null);
           plano.push(p.vista);
-        } else if (v instanceof ctor) plano.push(v);
+        } else if (v instanceof ctor) { plano.push(v); preps.push(null); }
         else vm.error(`el núcleo «${quien}»: «${k.params[j][0]}» tiene que ser un arreglo y es ${tipoDe(v)}`);
       } else {
         if (typeof v !== 'number') vm.error(`el núcleo «${quien}»: «${k.params[j][0]}» tiene que ser un número y es ${tipoDe(v)}`);
-        plano.push(v);
+        plano.push(v); preps.push(null);
       }
     });
     exigirSinSolape(arrs, quien);
-    elegirInicial();
     vm.cobrar(n);
     try {
       if (n === 0) return null;
@@ -796,18 +874,30 @@ function crearC1en(vm) {
         catch (e) { vm.error(`el núcleo «${quien}» no compila para la GPU: ${e.message}`); }
         k.gpu.set(indiceGpu, fun);
       }
-      const memorias = [], bajadas = [], lanz = [];
+      // Lo que el núcleo solo LEE no hace falta bajarlo; lo que solo ESCRIBE
+      // (entero) no hace falta subirlo. Lo dice la especificación del núcleo
+      // (spec.lee, spec.escribe); lo que no diga nada va y vuelve.
+      const memorias = [], bajadas = [], lanz = [], escritos = [];
       try {
+        liberarPendientes(cu);
         plano.forEach((v, j) => {
-          const pt = k.params[j][1];
-          if (pt.endsWith('*')) {
-            const d = cu.reservar(Math.max(8, v.byteLength));
-            memorias.push(d);
-            cu.subir(d, v);
-            bajadas.push([v, d]);
-            lanz.push({ t: 'ptr', v: d });
-          } else lanz.push({ t: pt, v });
+          const [pn, pt] = k.params[j];
+          if (!pt.endsWith('*')) { lanz.push({ t: pt, v }); return; }
+          const soloLee = k.lee.has(pn), soloEscribe = k.escribe.has(pn);
+          if (preps[j]) {
+            const reg = asegurarResidente(preps[j].x, preps[j].vista, cu, soloEscribe);
+            if (!soloLee) escritos.push(reg);
+            lanz.push({ t: 'ptr', v: reg.d });
+            return;
+          }
+          const d = reservarMem(cu, v.byteLength);
+          memorias.push([d, Math.max(8, v.byteLength)]);
+          if (!soloEscribe) cu.subir(d, v);
+          if (!soloLee) bajadas.push([v, d]);
+          lanz.push({ t: 'ptr', v: d });
         });
+        // desde aquí la copia buena de lo que el núcleo escribe está en la GPU
+        for (const reg of escritos) reg.enGpu = true;
         cu.lanzar(fun, c1enBloques(n, cu), C1EN_HILOS_BLOQUE, lanz);
         cu.sincronizar();
         for (const [v, d] of bajadas) cu.bajar(v, d);
@@ -815,7 +905,8 @@ function crearC1en(vm) {
         if (e instanceof ErrorTiempoEjecucion) throw e;
         vm.error(`el núcleo «${quien}»: la GPU falló: ${e.message}`);
       } finally {
-        for (const d of memorias) { try { cu.liberar(d); } catch (_) { /* nada */ } }
+        for (const [d, bytes] of memorias) soltarMem(cu, d, bytes);
+        enUso.clear();
       }
       return null;
     } finally {

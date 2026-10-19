@@ -10,7 +10,10 @@ volumen, aritmética de la VM), ECOSIM-G v3.1 en ms por tick y por mundo, y NumP
 y CuPy con los mismos tamaños. Deja `c1en-velocidad.csv`, el resumen y las
 gráficas. Se sube igual que el de abajo; con `MOTORES = ['motor-exp', 'motor']`
 compara también el LTS. El programa solo, sin cuaderno:
-`node motor-exp/util/n-node.js c1en/velocidad-c1en.esl gpu normal`.
+`node motor-exp/util/n-node.js c1en/velocidad-c1en.esl gpu normal`. Desde la fase
+N2 empieza comprobando en la T4 que NEÑ da lo mismo que en la CPU
+(`motor-exp/pruebas/exp-nen-gpu.js --gpu`) y mide `senoA` con los datos ya en
+la GPU y `senoA+copia` subiéndolos y bajándolos, como CuPy con y sin copia.
 
 ## Subirlo y correrlo
 

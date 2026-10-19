@@ -41,6 +41,9 @@ function instalarNumerico(vm) {
     return nums(v, n, f);
   };
   const sumaDe = xs => { let s = 0; for (let i = 0; i < xs.length; i++) s += xs[i]; return s; };
+  // (motor-exp N2) un arreglo REAL se reduce con NEÑ (por trozos de 4096 en
+  // orden, igual en jit, nativo y GPU; con datos en la GPU solo baja el número)
+  const porNen = x => x instanceof ObjArreglo && x.tipo === 'real' && x.tamano > 0 && typeof vm.nenReducir === 'function';
   const sumaCuad = (xs, m) => { let s = 0; for (let i = 0; i < xs.length; i++) { const d = xs[i] - m; s += d * d; } return s; };
   const ent = (v, n, f) => vm.exigeEnt(v, n, f);
 
@@ -586,6 +589,7 @@ function instalarNumerico(vm) {
       if (x instanceof ObjArreglo && a.length > 1)
         return vm.arrReducir(x, ent(a[1], 2, 'suma'), 0, (acc, v) => acc + v, null,
           x.tipo === 'entero' ? 'entero' : 'real');
+      if (porNen(x)) return vm.nenReducir('suma', x);
       return sumaDe(numsPlanos(x, 1, 'suma'));
     }, 'suma(lista) · suma(arreglo) · suma(arreglo, eje) — con eje da un arreglo');
     const media = xs => sumaDe(xs) / xs.length;
@@ -593,6 +597,7 @@ function instalarNumerico(vm) {
       const x = a[0];
       if (x instanceof ObjArreglo && a.length > 1)
         return vm.arrReducir(x, ent(a[1], 2, 'media'), 0, (acc, v) => acc + v, (acc, n) => acc / n, 'real');
+      if (porNen(x)) return vm.nenReducir('media', x);
       const v = numsPlanos(x, 1, 'media');
       if (!v.length) vm.error('«media» de una lista vacía');
       return media(v);
@@ -609,8 +614,8 @@ function instalarNumerico(vm) {
       for (const v of x) { const k = (c.get(v) || 0) + 1; c.set(v, k); if (k > mc) { mc = k; mejor = v; } }
       return mejor;
     });
-    def('varianza', 'lista<real>|arreglo -> real', a => { const x = numsPlanos(a[0], 1, 'varianza'); if (x.length < 2) vm.error('«varianza» necesita al menos 2 datos'); const m = media(x); return sumaCuad(x, m) / (x.length - 1); }, 'varianza muestral');
-    def('desviacion', 'lista<real>|arreglo -> real', a => { const x = numsPlanos(a[0], 1, 'desviacion'); if (x.length < 2) vm.error('«desviacion» necesita al menos 2 datos'); const m = media(x); return Math.sqrt(sumaCuad(x, m) / (x.length - 1)); });
+    def('varianza', 'lista<real>|arreglo -> real', a => { if (porNen(a[0]) && a[0].tamano >= 2) return vm.nenReducir('varianza', a[0]); const x = numsPlanos(a[0], 1, 'varianza'); if (x.length < 2) vm.error('«varianza» necesita al menos 2 datos'); const m = media(x); return sumaCuad(x, m) / (x.length - 1); }, 'varianza muestral');
+    def('desviacion', 'lista<real>|arreglo -> real', a => { if (porNen(a[0]) && a[0].tamano >= 2) return vm.nenReducir('desviacion', a[0]); const x = numsPlanos(a[0], 1, 'desviacion'); if (x.length < 2) vm.error('«desviacion» necesita al menos 2 datos'); const m = media(x); return Math.sqrt(sumaCuad(x, m) / (x.length - 1)); });
     def('percentil', 'lista<real>|arreglo, real -> real', a => {
       const x = nums(a[0], 1, 'percentil').slice().sort((p, q) => p - q);
       const p = num(a[1], 2, 'percentil');
@@ -1764,14 +1769,11 @@ function instalarNumerico(vm) {
         vm.error(`«por»: no se puede multiplicar ${A.forma.join('×')} por ${B.forma.join('×')}`,
           `las columnas del primero (${A.forma[1]}) tienen que ser las filas del segundo (${B.forma[0]})`);
       const nf = A.forma[0], nm = A.forma[1], nc = B.forma[1];
+      // (motor-exp N2) con NEÑ instalado, el producto de NEÑ (GPU, C o JS, mismos
+      // bits), sin copiar los arreglos y con el resultado residente en la GPU
+      if (vm.nenPor && A.tipo !== 'complejo' && B.tipo !== 'complejo') return vm.nenPor(A, B);
       vm.cobrar(nf * nm * nc);
       const out = vm.arrNuevo([nf, nc], 'real');
-      // (motor-exp N1) con NEÑ instalado, el producto de NEÑ (C, GPU o JS, mismos bits)
-      if (vm.nenMatmul) {
-        const plano = x => (x.seguida && x.tipo === 'real') ? x.datos.subarray(0, x.tamano) : Float64Array.from(vm.arrValores(x));
-        out.datos.set(vm.nenMatmul(plano(A), plano(B), nf, nm, nc));
-        return out;
-      }
       const va = vm.arrValores(A), vb = vm.arrValores(B);
       const fila2 = new Float64Array(nc);
       for (let i = 0; i < nf; i++) {
@@ -2214,24 +2216,27 @@ function instalarNumerico(vm) {
       if (x.dimensiones !== 1) vm.error(`«fourier» trabaja sobre una dimensión y llegó un arreglo de ${x.dimensiones}`,
         'saca la fila o la columna con fila(a, i) o trozoVarios, y transfórmala');
       if (x.tamano < 1) vm.error('«fourier» de un arreglo vacío');
-      const d = aPlano(x);
-      transformar(d, x.tamano, -1);
+      let d = aPlano(x);
+      if (vm.nenFFT) d = vm.nenFFT(d, x.tamano, -1);        // (motor-exp N2) por los núcleos de NEÑ
+      else transformar(d, x.tamano, -1);
       return vm.arrDesdePlanosC(d, x.forma);
     }, 'fourier(a) — la transformada discreta · acepta reales o complejos y devuelve complejos · O(n log n) para cualquier n, no solo potencias de dos');
     def('fourierInversa', 'arreglo -> arreglo', a => {
       const x = arrC(a[0], 1, 'fourierInversa');
       if (x.dimensiones !== 1) vm.error(`«fourierInversa» trabaja sobre una dimensión y llegó un arreglo de ${x.dimensiones}`);
       if (x.tamano < 1) vm.error('«fourierInversa» de un arreglo vacío');
-      const n = x.tamano, d = aPlano(x);
-      transformar(d, n, 1);
-      for (let i = 0; i < 2 * n; i++) d[i] /= n;
+      const n = x.tamano;
+      let d = aPlano(x);
+      if (vm.nenFFT) d = vm.nenFFT(d, n, 1, n);             // (motor-exp N2) dividida allí mismo
+      else { transformar(d, n, 1); for (let i = 0; i < 2 * n; i++) d[i] /= n; }
       return vm.arrDesdePlanosC(d, x.forma);
     }, 'fourierInversa(a) — el camino de vuelta, ya dividida entre n · fourierInversa(fourier(x)) devuelve x');
     def('espectro', 'arreglo -> arreglo', a => {
       const x = arrC(a[0], 1, 'espectro');
       if (x.dimensiones !== 1) vm.error('«espectro» trabaja sobre una dimensión');
-      const n = x.tamano, d = aPlano(x);
-      transformar(d, n, -1);
+      const n = x.tamano;
+      let d = aPlano(x);
+      if (vm.nenFFT) d = vm.nenFFT(d, n, -1); else transformar(d, n, -1);
       const out = vm.arrNuevo([n], 'real');
       for (let i = 0; i < n; i++) out.datos[i] = Math.hypot(d[2 * i], d[2 * i + 1]);
       return out;
@@ -2261,16 +2266,18 @@ function instalarNumerico(vm) {
       // Por Fourier, no con el doble bucle: con 100.000 datos y un filtro de
       // 1000 el bucle son 10⁸ multiplicaciones y esto son 10⁶.
       const t = 1 << Math.ceil(Math.log2(largo));
-      const A = new Float64Array(2 * t), B = new Float64Array(2 * t);
+      let A = new Float64Array(2 * t);
+      const B = new Float64Array(2 * t);
       const vx = vm.arrValores(x), vy = vm.arrValores(y);
       for (let i = 0; i < n; i++) A[2 * i] = vx[i];
       for (let i = 0; i < m; i++) B[2 * i] = vy[i];
-      fft2(A, t, -1); fft2(B, t, -1);
+      let FA = A, FB = B;
+      if (vm.nenFFT) { FA = vm.nenFFT(A, t, -1); FB = vm.nenFFT(B, t, -1); } else { fft2(A, t, -1); fft2(B, t, -1); }
       for (let i = 0; i < t; i++) {
-        const ar = A[2 * i], ai = A[2 * i + 1], br = B[2 * i], bi = B[2 * i + 1];
-        A[2 * i] = ar * br - ai * bi; A[2 * i + 1] = ar * bi + ai * br;
+        const ar = FA[2 * i], ai = FA[2 * i + 1], br = FB[2 * i], bi = FB[2 * i + 1];
+        FA[2 * i] = ar * br - ai * bi; FA[2 * i + 1] = ar * bi + ai * br;
       }
-      fft2(A, t, 1);
+      if (vm.nenFFT) A = vm.nenFFT(FA, t, 1); else fft2(A, t, 1);
       const out = vm.arrNuevo([largo], 'real');
       for (let i = 0; i < largo; i++) out.datos[i] = A[2 * i] / t;
       return out;

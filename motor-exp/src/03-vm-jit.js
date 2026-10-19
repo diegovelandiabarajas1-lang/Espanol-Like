@@ -1355,6 +1355,8 @@ class VM {
     const tB = esB ? b.tipo : (Number.isInteger(b) ? 'entero' : 'real');
     const entero = tA === 'entero' && tB === 'entero' && op !== '/' && op !== '**';
     const tipo = entero ? 'entero' : 'real';
+    // (motor-exp N2) grande y con C1EÑ: por los núcleos de NEÑ (GPU si la hay)
+    if (!entero && this.nenArit) { const r = this.nenArit(a, b, op); if (r) return r; }
 
     const f = esA && esB ? difundir(a.forma, b.forma) : (esA ? a.forma.slice() : b.forma.slice());
     if (f === null)

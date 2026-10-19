@@ -228,12 +228,33 @@ falla('amplitud: fuera de dominio es un error, no un NaN callado', 'usar lambert
 // Antes, suma/media/varianza copiaban el arreglo a una lista y sumaban con
 // reduce; ahora leen los datos del arreglo. El orden de la suma es el mismo,
 // así que el resultado tiene que ser IDÉNTICO al de la lista.
-ok('volumen: suma, media, varianza y desviación de un arreglo = las de su lista, al bit',
-  'usar azarArreglo, semilla, suma, media, varianza, desviacion, aListaA, arreglo de "nen"\nsemilla(9)\n' +
-  'fijo x = azarArreglo([100000])\nfijo l = aListaA(x)\n' +
-  'imprimir(suma(x) == suma(l), media(x) == media(l), varianza(x) == varianza(l), desviacion(x) == desviacion(l))\n' +
-  'fijo v = arreglo([[1, 2, 3], [4, 5, 6]])\nimprimir(suma(v), media(v), tipo(suma(arreglo([1, 2, 3]))))',
-  'cierto cierto cierto cierto\n21 3.5 entero');
+// (motor-exp N2) suma, media, varianza y desviación de un arreglo REAL van por
+// la reducción de NEÑ: por trozos de 4096 en orden. Con 4096 números o menos es
+// la suma de izquierda a derecha de siempre (igual que la de la lista); con más,
+// los trozos se suman entre sí. Aquí se rehace en JavaScript y se exige el
+// mismo número, al bit.
+{
+  const porTrozos = v => {
+    const parciales = [];
+    for (let i = 0; i < v.length; i += 4096) { let s = 0; for (let k = i; k < Math.min(i + 4096, v.length); k++) s += v[k]; parciales.push(s); }
+    return parciales.length === 1 ? parciales[0] : porTrozos(parciales);
+  };
+  const m = crearMotor({ salida: () => {}, host: {} });
+  const vm = m.vm, G = n => vm.globals.get(EL.nombreGlobalModulo(EL.claveEdsl('nen'), n));
+  G('semilla').fn([9], vm);
+  const x = G('azarArreglo').fn([vm.nuevaLista([100000])], vm), v = Array.from(x.datos);
+  const s = porTrozos(v), mu = s / v.length;
+  const desv = porTrozos(v.map(q => (q - mu) * (q - mu))) / (v.length - 1);
+  const suma = G('suma').fn([x], vm), media = G('media').fn([x], vm), varianza = G('varianza').fn([x], vm), desviacion = G('desviacion').fn([x], vm);
+  comprobar('volumen: suma, media, varianza y desviación de 100 000 = por trozos de 4096, al bit',
+    suma === s && media === mu && varianza === desv && desviacion === Math.sqrt(desv), `${suma} ${s} · ${varianza} ${desv}`);
+  const y = G('azarArreglo').fn([vm.nuevaLista([4000])], vm), l = vm.nuevaLista(Array.from(y.datos));
+  comprobar('volumen: con 4096 o menos, igual que la suma de la lista (izquierda a derecha)',
+    G('suma').fn([y], vm) === G('suma').fn([l], vm) && G('varianza').fn([y], vm) === G('varianza').fn([l], vm));
+}
+ok('volumen: los enteros y las formas siguen igual',
+  'usar suma, media, arreglo de "nen"\nfijo v = arreglo([[1, 2, 3], [4, 5, 6]])\nimprimir(suma(v), media(v), tipo(suma(arreglo([1, 2, 3]))))',
+  '21 3.5 entero');
 ok('volumen: suma y media de una vista no seguida (transpuesta) siguen bien',
   'usar arreglo, transpuesta, suma, media, esVista, aListaA de "nen"\nfijo a = arreglo([[1.0, 2.0], [3.0, 4.0]])\nfijo t = transpuesta(a)\nimprimir(esVista(t), suma(t), media(t), suma(t) == suma(aListaA(t)[0]) + suma(aListaA(t)[1]))',
   'cierto 10 2.5 cierto');

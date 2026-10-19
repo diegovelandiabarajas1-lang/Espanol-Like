@@ -53,6 +53,7 @@ function nenUnario(nombre, cuerpo, f) {
   return {
     nombre,
     params: [['n', 'i64'], ['x', 'f64*'], ['y', 'f64*']],
+    lee: ['x'], escribe: ['y'],
     cuerpo,
     js: (n, x, y) => { for (let i = 0; i < n; i++) y[i] = f(x[i]); },
   };
@@ -120,7 +121,7 @@ function nenReduccion(nombre, inicio, paso, pasoJs, conMu) {
         y[i] = s;
       }
     };
-  return { nombre, params, cuerpo, js };
+  return { nombre, params, cuerpo, js, lee: conMu ? ['x', 'mu'] : ['x'], escribe: ['y'] };
 }
 
 const NEN_T_NUCLEOS = {};
@@ -157,18 +158,21 @@ for (const k of [
     // sumarle 0.5 ya redondea a 1. v − floor(v) es exacto, así que esto no.
     nombre: 'nen_redondear',
     params: [['n', 'i64'], ['f', 'f64'], ['x', 'f64*'], ['y', 'f64*']],
+    lee: ['x'], escribe: ['y'],
     cuerpo: 'double v = x[i] * f; double r = floor(v); if (v - r >= 0.5) r = r + 1.0; y[i] = r / f;',
     js: (n, f, x, y) => { for (let i = 0; i < n; i++) { const v = x[i] * f; let r = Math.floor(v); if (v - r >= 0.5) r = r + 1.0; y[i] = r / f; } },
   },
   {
     nombre: 'nen_potencia',
     params: [['n', 'i64'], ['x', 'f64*'], ['p', 'f64*'], ['y', 'f64*']],
+    lee: ['x', 'p'], escribe: ['y'],
     cuerpo: 'y[i] = pow(x[i], p[i]);',
     js: (n, x, p, y) => { for (let i = 0; i < n; i++) y[i] = Math.pow(x[i], p[i]); },
   },
   {
     nombre: 'nen_angulo',
     params: [['n', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['y', 'f64*']],
+    lee: ['a', 'b'], escribe: ['y'],
     cuerpo: 'y[i] = atan2(a[i], b[i]);',
     js: (n, a, b, y) => { for (let i = 0; i < n; i++) y[i] = Math.atan2(a[i], b[i]); },
   },
@@ -178,6 +182,7 @@ for (const k of [
     // orden fijo.
     nombre: 'nen_softmax',
     params: [['n', 'i64'], ['K', 'i64'], ['x', 'f64*'], ['y', 'f64*']],
+    lee: ['x'], escribe: ['y'],
     cuerpo: 'long long o = i * K; double m = x[o]; for (long long k = 1; k < K; k++) { if (x[o + k] > m) m = x[o + k]; } ' +
       'double s = 0.0; for (long long k = 0; k < K; k++) { double e = exp(x[o + k] - m); y[o + k] = e; s += e; } ' +
       'for (long long k = 0; k < K; k++) y[o + k] = y[o + k] / s;',
@@ -208,6 +213,7 @@ for (const k of [
     // lo que evita la cancelación de la fórmula Σx² − n·m².
     nombre: 'nen_red_desv2',
     params: [['n', 'i64'], ['K', 'i64'], ['B', 'i64'], ['nb', 'i64'], ['x', 'f64*'], ['mu', 'f64*'], ['y', 'f64*']],
+    lee: ['x', 'mu'], escribe: ['y'],
     cuerpo: 'long long f = i / nb; long long t = i % nb; long long ini = t * B; long long fin = ini + B; ' +
       'if (fin > K) fin = K; double m = mu[f]; double s = 0.0; ' +
       'for (long long k = ini; k < fin; k++) { double d = x[f * K + k] - m; s += d * d; } y[i] = s;',
@@ -228,8 +234,9 @@ for (const k of [
     // No es el algoritmo más rápido de GPU (sin memoria compartida), pero da
     // EXACTAMENTE lo mismo que la CPU, que aquí pesa más.
     nombre: 'nen_matmul',
-    // (motor-exp N1) ver «nen_matmul_filas» para la CPU
+    // (motor-exp N2) la referencia: la GPU usa «nen_matmul_4x4» y la CPU «nen_matmul_bloques»
     params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
+    lee: ['a', 'b'], escribe: ['c'],
     cuerpo: 'long long mp = m * p; long long l = i / mp; long long r = i % mp; long long f = r / p; long long col = r % p; ' +
       'long long oa = l * m * K + f * K; long long ob = l * K * p + col; double s = 0.0; ' +
       'for (long long k = 0; k < K; k++) s += a[oa + k] * b[ob + k * p]; c[i] = s;',
@@ -245,41 +252,48 @@ for (const k of [
     },
   },
   {
-    // (motor-exp N1) El mismo producto para la CPU, con un micronúcleo de 4×8:
-    // el hilo i hace un grupo de 4 filas de UN lote, y va por trozos de 256 en k
-    // y de 8 en j guardando las 32 sumas en variables (registros) en vez de leer
-    // y escribir c en cada paso. Cada casilla se sigue sumando en el mismo orden
-    // que en nen_matmul (k de 0 a K−1, empezando en 0): el resultado es idéntico
-    // al bit. n = lotes × ⌈m/4⌉.
-    nombre: 'nen_matmul_filas',
+    // (motor-exp N2) El producto para la CPU. El hilo i hace un BLOQUE de 4
+    // filas × 32 columnas de un lote, y los hilos vecinos (i, i+1…) comparten
+    // las mismas 32 columnas de b: así el trozo de b (K × 32 números) se queda
+    // en la caché del núcleo mientras ese hilo recorre grupos de filas, en vez
+    // de leer b entero de la memoria para cada grupo (lo que hundía 2048×2048 a
+    // 1,8 GFLOP/s en la medida de Kaggle). Dentro, el micronúcleo de 4×8 con las
+    // 32 sumas en variables, y k por trozos de 256. Cada casilla se suma en el
+    // orden de siempre (k de 0 a K−1, empezando en 0): mismos bits que
+    // nen_matmul. n = lotes × ⌈p/32⌉ × ⌈m/4⌉.
+    nombre: 'nen_matmul_bloques',
     params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
+    lee: ['a', 'b'], escribe: ['c'],
     cuerpo:
-      'long long gpl = (m + 3) / 4; long long l = i / gpl; long long r0 = l * m + (i % gpl) * 4; long long r1 = r0 + 4; ' +
-      'if (r1 > l * m + m) r1 = l * m + m; const double * bl = b + l * K * p; ' +
-      'for (long long r = r0; r < r1; r++) for (long long j = 0; j < p; j++) c[r * p + j] = 0.0; ' +
+      'long long gpl = (m + 3) / 4; long long nj = (p + 31) / 32; long long porLote = nj * gpl; ' +
+      'long long l = i / porLote; long long rr = i % porLote; long long jbk = rr / gpl; long long g = rr % gpl; ' +
+      'long long r0 = l * m + g * 4; long long r1 = r0 + 4; if (r1 > l * m + m) r1 = l * m + m; ' +
+      'long long j0 = jbk * 32; long long j1 = j0 + 32; if (j1 > p) j1 = p; const double * bl = b + l * K * p; ' +
+      'for (long long r = r0; r < r1; r++) for (long long j = j0; j < j1; j++) c[r * p + j] = 0.0; ' +
       'for (long long kb = 0; kb < K; kb += 256) { long long ke = kb + 256; if (ke > K) ke = K; ' +
-      '  long long jb = 0; ' +
+      '  long long jb = j0; ' +
       '  if (r1 - r0 == 4) { const double * A0 = a + r0 * K; const double * A1 = A0 + K; const double * A2 = A1 + K; const double * A3 = A2 + K; ' +
-      '    for (; jb + 8 <= p; jb += 8) { double s0[8], s1[8], s2[8], s3[8]; ' +
+      '    for (; jb + 8 <= j1; jb += 8) { double s0[8], s1[8], s2[8], s3[8]; ' +
       '      for (int q = 0; q < 8; q++) { s0[q] = c[r0 * p + jb + q]; s1[q] = c[(r0 + 1) * p + jb + q]; s2[q] = c[(r0 + 2) * p + jb + q]; s3[q] = c[(r0 + 3) * p + jb + q]; } ' +
       '      for (long long k = kb; k < ke; k++) { const double * bk = bl + k * p + jb; double x0 = A0[k], x1 = A1[k], x2 = A2[k], x3 = A3[k]; ' +
       '        for (int q = 0; q < 8; q++) { double bv = bk[q]; s0[q] = s0[q] + x0 * bv; s1[q] = s1[q] + x1 * bv; s2[q] = s2[q] + x2 * bv; s3[q] = s3[q] + x3 * bv; } } ' +
       '      for (int q = 0; q < 8; q++) { c[r0 * p + jb + q] = s0[q]; c[(r0 + 1) * p + jb + q] = s1[q]; c[(r0 + 2) * p + jb + q] = s2[q]; c[(r0 + 3) * p + jb + q] = s3[q]; } } } ' +
       '  for (long long r = r0; r < r1; r++) { const double * ar = a + r * K; for (long long k = kb; k < ke; k++) { double aik = ar[k]; const double * bk = bl + k * p; ' +
-      '    for (long long j = jb; j < p; j++) c[r * p + j] = c[r * p + j] + aik * bk[j]; } } ' +
+      '    for (long long j = jb; j < j1; j++) c[r * p + j] = c[r * p + j] + aik * bk[j]; } } ' +
       '}',
     js: (n, m, K, p, a, b, c) => {
       const s0 = new Float64Array(8), s1 = new Float64Array(8), s2 = new Float64Array(8), s3 = new Float64Array(8);
-      const gpl = Math.floor((m + 3) / 4);
+      const gpl = Math.floor((m + 3) / 4), nj = Math.floor((p + 31) / 32), porLote = nj * gpl;
       for (let i = 0; i < n; i++) {
-        const l = Math.floor(i / gpl), r0 = l * m + (i % gpl) * 4, r1 = Math.min(r0 + 4, l * m + m), bl = l * K * p;
-        for (let r = r0; r < r1; r++) for (let j = 0; j < p; j++) c[r * p + j] = 0.0;
+        const l = Math.floor(i / porLote), rr = i % porLote, jbk = Math.floor(rr / gpl), g = rr % gpl;
+        const r0 = l * m + g * 4, r1 = Math.min(r0 + 4, l * m + m), j0 = jbk * 32, j1 = Math.min(j0 + 32, p), bl = l * K * p;
+        for (let r = r0; r < r1; r++) for (let j = j0; j < j1; j++) c[r * p + j] = 0.0;
         for (let kb = 0; kb < K; kb += 256) {
           const ke = Math.min(kb + 256, K);
-          let jb = 0;
+          let jb = j0;
           if (r1 - r0 === 4) {
             const A0 = r0 * K, A1 = A0 + K, A2 = A1 + K, A3 = A2 + K;
-            for (; jb + 8 <= p; jb += 8) {
+            for (; jb + 8 <= j1; jb += 8) {
               for (let q = 0; q < 8; q++) { s0[q] = c[r0 * p + jb + q]; s1[q] = c[(r0 + 1) * p + jb + q]; s2[q] = c[(r0 + 2) * p + jb + q]; s3[q] = c[(r0 + 3) * p + jb + q]; }
               for (let k = kb; k < ke; k++) {
                 const bk = bl + k * p + jb, x0 = a[A0 + k], x1 = a[A1 + k], x2 = a[A2 + k], x3 = a[A3 + k];
@@ -292,9 +306,62 @@ for (const k of [
             const ar = r * K;
             for (let k = kb; k < ke; k++) {
               const aik = a[ar + k], bk = bl + k * p;
-              for (let j = jb; j < p; j++) c[r * p + j] = c[r * p + j] + aik * b[bk + j];
+              for (let j = jb; j < j1; j++) c[r * p + j] = c[r * p + j] + aik * b[bk + j];
             }
           }
+        }
+      }
+    },
+  },
+  {
+    // (motor-exp N2) El producto para la GPU: cada hilo hace 4 filas × 4
+    // columnas (16 sumas en registros) en vez de una casilla. Por cada k lee 4
+    // números de a y 4 de b para 16 productos, cuatro veces más cuenta por
+    // lectura que «nen_matmul»; los hilos vecinos van por columnas vecinas, así
+    // que las lecturas de b de un warp son seguidas. Sin memoria compartida ni
+    // __syncthreads, para que corra igual en C, en el simulador y en la T4. Las
+    // filas o columnas que se salen del borde se leen repetidas (la última
+    // válida) y no se escriben. Cada casilla: k de 0 a K−1 desde 0, los mismos
+    // bits. n = lotes × ⌈m/4⌉ × ⌈p/4⌉.
+    nombre: 'nen_matmul_4x4',
+    params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
+    lee: ['a', 'b'], escribe: ['c'],
+    cuerpo:
+      'long long gpl = (m + 3) / 4; long long hpl = (p + 3) / 4; long long porLote = gpl * hpl; ' +
+      'long long l = i / porLote; long long rr = i % porLote; long long g = rr / hpl; long long h = rr % hpl; ' +
+      'long long f0 = g * 4; long long j0 = h * 4; ' +
+      'long long fa = f0 < m ? f0 : m - 1; long long fb = f0 + 1 < m ? f0 + 1 : m - 1; long long fc = f0 + 2 < m ? f0 + 2 : m - 1; long long fd = f0 + 3 < m ? f0 + 3 : m - 1; ' +
+      'long long ja = j0 < p ? j0 : p - 1; long long jb = j0 + 1 < p ? j0 + 1 : p - 1; long long jc = j0 + 2 < p ? j0 + 2 : p - 1; long long jd = j0 + 3 < p ? j0 + 3 : p - 1; ' +
+      'const double * A0 = a + (l * m + fa) * K; const double * A1 = a + (l * m + fb) * K; const double * A2 = a + (l * m + fc) * K; const double * A3 = a + (l * m + fd) * K; ' +
+      'const double * bl = b + l * K * p; ' +
+      'double s00 = 0.0, s01 = 0.0, s02 = 0.0, s03 = 0.0, s10 = 0.0, s11 = 0.0, s12 = 0.0, s13 = 0.0, ' +
+      's20 = 0.0, s21 = 0.0, s22 = 0.0, s23 = 0.0, s30 = 0.0, s31 = 0.0, s32 = 0.0, s33 = 0.0; ' +
+      'for (long long k = 0; k < K; k++) { const double * bk = bl + k * p; double b0 = bk[ja], b1 = bk[jb], b2 = bk[jc], b3 = bk[jd]; ' +
+      '  double x0 = A0[k], x1 = A1[k], x2 = A2[k], x3 = A3[k]; ' +
+      '  s00 = s00 + x0 * b0; s01 = s01 + x0 * b1; s02 = s02 + x0 * b2; s03 = s03 + x0 * b3; ' +
+      '  s10 = s10 + x1 * b0; s11 = s11 + x1 * b1; s12 = s12 + x1 * b2; s13 = s13 + x1 * b3; ' +
+      '  s20 = s20 + x2 * b0; s21 = s21 + x2 * b1; s22 = s22 + x2 * b2; s23 = s23 + x2 * b3; ' +
+      '  s30 = s30 + x3 * b0; s31 = s31 + x3 * b1; s32 = s32 + x3 * b2; s33 = s33 + x3 * b3; } ' +
+      'double * cl = c + l * m * p; ' +
+      'if (f0 < m) { double * cr = cl + f0 * p; if (j0 < p) cr[j0] = s00; if (j0 + 1 < p) cr[j0 + 1] = s01; if (j0 + 2 < p) cr[j0 + 2] = s02; if (j0 + 3 < p) cr[j0 + 3] = s03; } ' +
+      'if (f0 + 1 < m) { double * cr = cl + (f0 + 1) * p; if (j0 < p) cr[j0] = s10; if (j0 + 1 < p) cr[j0 + 1] = s11; if (j0 + 2 < p) cr[j0 + 2] = s12; if (j0 + 3 < p) cr[j0 + 3] = s13; } ' +
+      'if (f0 + 2 < m) { double * cr = cl + (f0 + 2) * p; if (j0 < p) cr[j0] = s20; if (j0 + 1 < p) cr[j0 + 1] = s21; if (j0 + 2 < p) cr[j0 + 2] = s22; if (j0 + 3 < p) cr[j0 + 3] = s23; } ' +
+      'if (f0 + 3 < m) { double * cr = cl + (f0 + 3) * p; if (j0 < p) cr[j0] = s30; if (j0 + 1 < p) cr[j0 + 1] = s31; if (j0 + 2 < p) cr[j0 + 2] = s32; if (j0 + 3 < p) cr[j0 + 3] = s33; }',
+    js: (n, m, K, p, a, b, c) => {
+      const gpl = Math.floor((m + 3) / 4), hpl = Math.floor((p + 3) / 4), porLote = gpl * hpl;
+      const s = new Float64Array(16), fi = [0, 0, 0, 0], ji = [0, 0, 0, 0];
+      for (let i = 0; i < n; i++) {
+        const l = Math.floor(i / porLote), rr = i % porLote, g = Math.floor(rr / hpl), h = rr % hpl, f0 = g * 4, j0 = h * 4;
+        for (let q = 0; q < 4; q++) { fi[q] = (l * m + Math.min(f0 + q, m - 1)) * K; ji[q] = Math.min(j0 + q, p - 1); }
+        s.fill(0.0);
+        const bl = l * K * p;
+        for (let k = 0; k < K; k++) {
+          const bk = bl + k * p;
+          for (let r = 0; r < 4; r++) { const x = a[fi[r] + k]; for (let q = 0; q < 4; q++) s[r * 4 + q] = s[r * 4 + q] + x * b[bk + ji[q]]; }
+        }
+        for (let r = 0; r < 4; r++) {
+          if (f0 + r >= m) continue;
+          for (let q = 0; q < 4; q++) if (j0 + q < p) c[(l * m + f0 + r) * p + j0 + q] = s[r * 4 + q];
         }
       }
     },
@@ -304,10 +371,15 @@ for (const k of [
     // (en el sitio, dos hilos se pisarían al intercambiar). Por filas: la
     // misma pasada transforma todas las filas de una matriz a la vez.
     nombre: 'nen_fft_permutar',
-    params: [['n', 'i64'], ['N', 'i64'], ['rev', 'i32*'], ['x', 'f64*'], ['y', 'f64*']],
-    cuerpo: 'long long f = i / N; long long j = i % N; long long o = f * 2 * N; long long d = o + 2 * (long long)rev[j]; ' +
+    // (motor-exp N2) N es potencia de dos y llega también lgN = log₂ N: los
+    // índices salen con desplazamientos y máscaras. Antes eran divisiones de 64
+    // bits, que en la GPU se emulan (decenas de instrucciones) y en la CPU
+    // cuestan 40 ciclos: eran casi todo el tiempo de la FFT.
+    params: [['n', 'i64'], ['N', 'i64'], ['lgN', 'i64'], ['rev', 'i32*'], ['x', 'f64*'], ['y', 'f64*']],
+    lee: ['rev', 'x'], escribe: ['y'],
+    cuerpo: 'long long f = i >> lgN; long long j = i & (N - 1); long long o = f * 2 * N; long long d = o + 2 * (long long)rev[j]; ' +
       'y[d] = x[o + 2 * j]; y[d + 1] = x[o + 2 * j + 1];',
-    js: (n, N, rev, x, y) => {
+    js: (n, N, lgN, rev, x, y) => {
       for (let i = 0; i < n; i++) {
         const f = Math.floor(i / N), j = i % N, o = f * 2 * N, d = o + 2 * rev[j];
         y[d] = x[o + 2 * j]; y[d + 1] = x[o + 2 * j + 1];
@@ -322,14 +394,16 @@ for (const k of [
     // inversa): multiplicar por ±1 es exacto, así que no hay trascendentes en
     // la GPU y el resultado es el de la CPU bit a bit.
     nombre: 'nen_fft_etapa',
-    params: [['n', 'i64'], ['N', 'i64'], ['largo', 'i64'], ['conj', 'f64'], ['twr', 'f64*'], ['twi', 'f64*'], ['d', 'f64*']],
-    cuerpo: 'long long h = N / 2; long long f = i / h; long long j = i % h; long long mitad = largo / 2; ' +
-      'long long g = j / mitad; long long k = j % mitad; long long o = f * 2 * N; ' +
-      'long long p = g * largo + k; long long q = p + mitad; long long w = k * (N / largo); ' +
+    // (motor-exp N2) con lgN = log₂ N y lgL = log₂ largo: sin divisiones
+    params: [['n', 'i64'], ['N', 'i64'], ['lgN', 'i64'], ['largo', 'i64'], ['lgL', 'i64'], ['conj', 'f64'], ['twr', 'f64*'], ['twi', 'f64*'], ['d', 'f64*']],
+    lee: ['twr', 'twi'],
+    cuerpo: 'long long f = i >> (lgN - 1); long long j = i & ((N >> 1) - 1); long long mitad = largo >> 1; ' +
+      'long long g = j >> (lgL - 1); long long k = j & (mitad - 1); long long o = f * 2 * N; ' +
+      'long long p = g * largo + k; long long q = p + mitad; long long w = k << (lgN - lgL); ' +
       'double wr = twr[w]; double wi = conj * twi[w]; double qr = d[o + 2 * q]; double qi = d[o + 2 * q + 1]; ' +
       'double vr = qr * wr - qi * wi; double vi = qr * wi + qi * wr; double ur = d[o + 2 * p]; double ui = d[o + 2 * p + 1]; ' +
       'd[o + 2 * p] = ur + vr; d[o + 2 * p + 1] = ui + vi; d[o + 2 * q] = ur - vr; d[o + 2 * q + 1] = ui - vi;',
-    js: (n, N, largo, conj, twr, twi, d) => {
+    js: (n, N, lgN, largo, lgL, conj, twr, twi, d) => {
       const h = N / 2, mitad = largo / 2, salto = N / largo;
       for (let i = 0; i < n; i++) {
         const f = Math.floor(i / h), j = i % h, g = Math.floor(j / mitad), k = j % mitad, o = f * 2 * N;
@@ -347,6 +421,7 @@ for (const k of [
     // Multiplicar cada fila compleja por la misma fila «b» (Bluestein, filtros).
     nombre: 'nen_cmul_filas',
     params: [['n', 'i64'], ['N', 'i64'], ['a', 'f64*'], ['b', 'f64*']],
+    lee: ['b'],
     cuerpo: 'long long j = i % N; double ar = a[2 * i]; double ai = a[2 * i + 1]; double br = b[2 * j]; double bi = b[2 * j + 1]; ' +
       'a[2 * i] = ar * br - ai * bi; a[2 * i + 1] = ar * bi + ai * br;',
     js: (n, N, a, b) => {
@@ -362,6 +437,47 @@ for (const k of [
     cuerpo: 'd[i] = d[i] / s;',
     js: (n, s, d) => { for (let i = 0; i < n; i++) d[i] = d[i] / s; },
   },
+  // (motor-exp N2) La aritmética de arreglos de la VM («x * 2 + 1», «a + b»)
+  // cuando el arreglo es grande: + − * / son exactos en IEEE 754 (con
+  // -ffp-contract=off y sin FMA), así que dan el mismo número que el bucle de
+  // JavaScript en los tres dispositivos. «op»: 0 +, 1 −, 2 *, 3 /. Dividir entre
+  // cero es un error en Ñ: el núcleo levanta una bandera (z[0] = 1) y quien
+  // lanza lo dice después, con el mismo mensaje que el bucle de la VM.
+  {
+    nombre: 'nen_op_aa',
+    params: [['n', 'i64'], ['op', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['y', 'f64*'], ['z', 'i32*']],
+    lee: ['a', 'b'], escribe: ['y'],
+    cuerpo: 'double u = a[i]; double v = b[i]; double r; if (op == 0) r = u + v; else if (op == 1) r = u - v; ' +
+      'else if (op == 2) r = u * v; else { if (v == 0.0) z[0] = 1; r = u / v; } y[i] = r;',
+    js: (n, op, a, b, y, z) => {
+      if (op === 0) for (let i = 0; i < n; i++) y[i] = a[i] + b[i];
+      else if (op === 1) for (let i = 0; i < n; i++) y[i] = a[i] - b[i];
+      else if (op === 2) for (let i = 0; i < n; i++) y[i] = a[i] * b[i];
+      else for (let i = 0; i < n; i++) { if (b[i] === 0) z[0] = 1; y[i] = a[i] / b[i]; }
+    },
+  },
+  {
+    // arreglo con número; «rev» = 1 si el número va delante (2 − x, 2 / x)
+    nombre: 'nen_op_ae',
+    params: [['n', 'i64'], ['op', 'i64'], ['rev', 'i64'], ['s', 'f64'], ['a', 'f64*'], ['y', 'f64*'], ['z', 'i32*']],
+    lee: ['a'], escribe: ['y'],
+    cuerpo: 'double u = a[i]; double r; ' +
+      'if (rev == 0) { if (op == 0) r = u + s; else if (op == 1) r = u - s; else if (op == 2) r = u * s; else r = u / s; } ' +
+      'else { if (op == 0) r = s + u; else if (op == 1) r = s - u; else if (op == 2) r = s * u; else { if (u == 0.0) z[0] = 1; r = s / u; } } y[i] = r;',
+    js: (n, op, rev, s, a, y, z) => {
+      if (!rev) {
+        if (op === 0) for (let i = 0; i < n; i++) y[i] = a[i] + s;
+        else if (op === 1) for (let i = 0; i < n; i++) y[i] = a[i] - s;
+        else if (op === 2) for (let i = 0; i < n; i++) y[i] = a[i] * s;
+        else for (let i = 0; i < n; i++) y[i] = a[i] / s;
+      } else {
+        if (op === 0) for (let i = 0; i < n; i++) y[i] = s + a[i];
+        else if (op === 1) for (let i = 0; i < n; i++) y[i] = s - a[i];
+        else if (op === 2) for (let i = 0; i < n; i++) y[i] = s * a[i];
+        else for (let i = 0; i < n; i++) { if (a[i] === 0) z[0] = 1; y[i] = s / a[i]; }
+      }
+    },
+  },
   {
     // Convolución 2D directa, un hilo por número de la salida. «oM, oN» es
     // dónde empieza la salida pedida dentro de la convolución completa: así
@@ -369,6 +485,7 @@ for (const k of [
     nombre: 'nen_conv2d',
     params: [['n', 'i64'], ['Ma', 'i64'], ['Na', 'i64'], ['Mb', 'i64'], ['Nb', 'i64'], ['No', 'i64'], ['oM', 'i64'], ['oN', 'i64'],
       ['a', 'f64*'], ['b', 'f64*'], ['y', 'f64*']],
+    lee: ['a', 'b'], escribe: ['y'],
     cuerpo: 'long long fi = i / No + oM; long long fj = i % No + oN; double s = 0.0; ' +
       'for (long long p = 0; p < Mb; p++) { long long ai = fi - p; if (ai < 0 || ai >= Ma) continue; ' +
       'for (long long q = 0; q < Nb; q++) { long long aj = fj - q; if (aj < 0 || aj >= Na) continue; ' +
@@ -401,22 +518,29 @@ function instalarNenTensores(vm, def) {
   const EPS = 2.220446049250313e-16;
 
   // ── lanzar un núcleo ──────────────────────────────────────────────────────
-  // Grande y con C1EÑ: por el motor (que decide jit, nativo o GPU). Si no, el
-  // respaldo directamente. Los Float64Array internos se envuelven en un
-  // ObjArreglo sin registrar: son temporales y nadie más los ve.
+  // Grande y con C1EÑ: por el motor, que usa la GPU si la hay y si no C con
+  // OpenMP (o jit si no hay compilador). Si no, el respaldo directamente.
+  // (motor-exp N2) Los arreglos van como llegan: un ObjArreglo de Ñ seguido se
+  // pasa TAL CUAL (en la GPU se queda residente y el resultado no baja hasta
+  // que alguien lo lea), y un Float64Array interno va y vuelve como antes.
   const cacheNucleos = new Map();
-  const envolver = a => (a instanceof Float64Array ? new ObjArreglo(a, [a.length], 'real')
-    : a instanceof Int32Array ? new ObjArreglo(a, [a.length], 'entero') : a);
+  const crudo = a => (a instanceof ObjArreglo ? a.datos.subarray(a.desp, a.desp + a.tamano) : a);
   function correr(nombre, trabajo, ...args) {
     const spec = NEN_T_NUCLEOS[nombre];
     vm.cobrar(trabajo);
     if (trabajo >= NEN_T_UMBRAL && vm.c1en && typeof vm.c1en.kernel === 'function') {
       let k = cacheNucleos.get(nombre);
       if (!k) { k = vm.c1en.kernel(spec); cacheNucleos.set(nombre, k); }
-      return k(...args.map(envolver));
+      return k(...args);
     }
-    return spec.js(...args);
+    return spec.js(...args.map(crudo));
   }
+  // ¿Se le puede pasar al núcleo tal cual? Real y seguido (sin zancadas raras).
+  const directo = x => x instanceof ObjArreglo && x.tipo === 'real' && x.seguida;
+  // Un arreglo temporal de NEÑ (no lo ve el programa): también puede quedarse
+  // en la GPU entre dos núcleos, y se lee con «.datos» al final.
+  const temporal = n => new ObjArreglo(new Float64Array(n), [n], 'real');
+  const enGpuAhora = () => !!(vm.c1en && typeof vm.c1en.describir === 'function' && /^gpu/.test(vm.c1en.describir()));
 
   // ── llamar a lo que ya existe en «numerico» ───────────────────────────────
   function deNumerico(nombre, args) {
@@ -489,22 +613,33 @@ function instalarNenTensores(vm, def) {
 
   // ── el producto de matrices, por el núcleo ────────────────────────────────
   // (lotes × m × K) · (lotes × K × p) → (lotes × m × p), todo plano.
-  // (motor-exp N1) En la GPU, un hilo por casilla (nen_matmul: las lecturas de
-  // b van seguidas entre hilos vecinos). En la CPU, un hilo por FILA con el
-  // orden i-k-j (nen_matmul_filas), que recorre b y c de seguido y no a saltos
-  // de p: 300×300 bajó de 51 a unos pocos ms. Las dos suman cada casilla en el
-  // mismo orden (k de 0 a K−1, empezando en 0), así que dan los mismos bits.
-  function mm(a, b, m, K, p, lotes) {
+  // (motor-exp N2) En la GPU, 4×4 casillas por hilo (nen_matmul_4x4); en la
+  // CPU, bloques de 4 filas × 32 columnas que reusan b en la caché
+  // (nen_matmul_bloques). Las dos suman cada casilla en el mismo orden (k de 0
+  // a K−1, empezando en 0), así que dan los mismos bits que nen_matmul.
+  // «a» y «b» pueden ser Float64Array o arreglos de Ñ seguidos; «c», si llega,
+  // es el arreglo de Ñ donde va el resultado (y en la GPU se queda allí).
+  function mm(a, b, m, K, p, lotes, c) {
     lotes = lotes || 1;
-    const c = new Float64Array(lotes * m * p);
+    const salida = c || new Float64Array(lotes * m * p);
     const trabajo = lotes * m * K * p;
-    const enGpu = trabajo >= NEN_T_UMBRAL && vm.c1en && typeof vm.c1en.describir === 'function' && /^gpu/.test(vm.c1en.describir());
-    if (enGpu) correr('nen_matmul', trabajo, lotes * m * p, m, K, p, a, b, c);
-    else correr('nen_matmul_filas', trabajo, lotes * Math.ceil(m / 4), m, K, p, a, b, c);
-    return c;
+    if (m === 0 || p === 0) return salida;
+    if (K === 0) { crudo(salida).fill(0); return salida; }
+    if (trabajo >= NEN_T_UMBRAL && enGpuAhora())
+      correr('nen_matmul_4x4', trabajo, lotes * Math.ceil(m / 4) * Math.ceil(p / 4), m, K, p, a, b, salida);
+    else correr('nen_matmul_bloques', trabajo, lotes * Math.ceil(p / 32) * Math.ceil(m / 4), m, K, p, a, b, salida);
+    return salida;
   }
   // numerico (por, multMatriz) multiplica con esto mismo
   vm.nenMatmul = (a, b, m, K, p) => mm(a, b, m, K, p, 1);
+  // (motor-exp N2) «por» de arreglos sin copiarlos: entran tal cual y el
+  // resultado es un arreglo de Ñ nuevo (residente en la GPU si la hay)
+  vm.nenPor = (A, B) => {
+    const m = A.forma[0], K = A.forma[1], p = B.forma[1];
+    const o = vm.arrNuevo([m, p], 'real');
+    mm(directo(A) ? A : planoDe(A), directo(B) ? B : planoDe(B), m, K, p, 1, o);
+    return o;
+  };
   const identidadP = n => { const I = new Float64Array(n * n); for (let i = 0; i < n; i++) I[i * n + i] = 1; return I; };
   const norma1 = (A, n) => { let mx = 0; for (let j = 0; j < n; j++) { let s = 0; for (let i = 0; i < n; i++) s += Math.abs(A[i * n + j]); if (s > mx) mx = s; } return mx; };
   const normaF = A => { let s = 0; for (let i = 0; i < A.length; i++) s += A[i] * A[i]; return Math.sqrt(s); };
@@ -536,7 +671,9 @@ function instalarNenTensores(vm, def) {
     const rev = new Int32Array(n);
     const bits = Math.round(Math.log2(n));
     for (let i = 0; i < n; i++) { let r = 0; for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b); rev[i] = r; }
-    t = { re, im, rev };
+    // (motor-exp N2) y como arreglos de Ñ: en la GPU suben una vez y se quedan
+    t = { re, im, rev, reA: new ObjArreglo(re, [re.length], 'real'), imA: new ObjArreglo(im, [im.length], 'real'),
+      revA: new ObjArreglo(rev, [rev.length], 'entero') };
     if (tablas.size > 16) tablas.clear();
     tablas.set(n, t);
     return t;
@@ -545,15 +682,22 @@ function instalarNenTensores(vm, def) {
   // Transforma «filas» filas de largo n, guardadas seguidas y entrelazadas
   // (re, im). Devuelve un arreglo NUEVO. signo −1 directa, +1 inversa (sin
   // dividir entre n: lo hace quien llama).
-  function fftFilas(d, filas, n, signo) {
-    if (n === 1) return Float64Array.from(d);
+  function fftFilas(d, filas, n, signo, dividirEntre) {
+    if (n === 1) { const r = Float64Array.from(d); if (dividirEntre) for (let i = 0; i < r.length; i++) r[i] = r[i] / dividirEntre; return r; }
     if (potenciaDeDos(n)) {
-      const t = tablaDe(n), y = new Float64Array(filas * 2 * n);
+      // (motor-exp N2) La salida es un arreglo temporal que, en la GPU, se
+      // queda allí entre la permutación y las log₂ n etapas: los datos suben una
+      // vez y bajan una vez (antes subían y bajaban en cada etapa). Las tablas
+      // también se quedan. «dividirEntre» hace la división de la inversa allí
+      // mismo, antes de bajar.
+      const t = tablaDe(n), y = temporal(filas * 2 * n);
       const trabajo = filas * n;
-      correr('nen_fft_permutar', trabajo, filas * n, n, t.rev, d, y);
-      for (let largo = 2; largo <= n; largo <<= 1)
-        correr('nen_fft_etapa', trabajo, filas * (n >> 1), n, largo, -signo, t.re, t.im, y);
-      return y;
+      const lgN = Math.round(Math.log2(n));
+      correr('nen_fft_permutar', trabajo, filas * n, n, lgN, t.revA, d, y);
+      for (let largo = 2, lgL = 1; largo <= n; largo <<= 1, lgL++)
+        correr('nen_fft_etapa', trabajo, filas * (n >> 1), n, lgN, largo, lgL, -signo, t.reA, t.imA, y);
+      if (dividirEntre) correr('nen_dividir', 2 * filas * n, 2 * filas * n, dividirEntre, y);
+      return y.datos;
     }
     // Bluestein: las longitudes que no son potencia de dos se convierten en una
     // convolución de largo potencia de dos y se resuelven con las etapas de
@@ -580,17 +724,66 @@ function instalarNenTensores(vm, def) {
     correr('nen_cmul_filas', filas * T, filas * T, T, FA, FB);
     const R = fftFilas(FA, filas, T, 1);
     const out = new Float64Array(filas * 2 * n);
+    const dv = dividirEntre || 1;
     for (let f = 0; f < filas; f++) {
       const o = f * 2 * n, oR = f * 2 * T;
       for (let k = 0; k < n; k++) {
         const vr = R[oR + 2 * k] / T, vi = R[oR + 2 * k + 1] / T;
-        out[o + 2 * k] = vr * cr[k] - vi * ci[k];
-        out[o + 2 * k + 1] = vr * ci[k] + vi * cr[k];
+        out[o + 2 * k] = (vr * cr[k] - vi * ci[k]) / dv;
+        out[o + 2 * k + 1] = (vr * ci[k] + vi * cr[k]) / dv;
       }
     }
     vm.cobrar(filas * n);
     return out;
   }
+  // (motor-exp N2) «fourier», «fourierInversa», «espectro» y «convolucion» de
+  // numerico transforman con esto: los mismos pasos que su FFT (mismas tablas,
+  // mismas mariposas, mismo Bluestein), así que dan los mismos números, pero
+  // por los núcleos de C1EÑ (GPU, o C con OpenMP).
+  vm.nenFFT = (d, n, signo, dividirEntre) => fftFilas(d, 1, n, signo, dividirEntre);
+  // (motor-exp N2) La aritmética de arreglos de la VM («x * 2 + 1», «a / b»)
+  // por C1EÑ cuando el arreglo es grande y el dispositivo no es jit: así una
+  // expresión con arreglos que ya están en la GPU se calcula allí y no baja.
+  // Solo + − * / con reales (exactos en IEEE: el mismo número en todas
+  // partes), dos arreglos seguidos de la misma forma o uno con un número. Lo
+  // demás (difusión, vistas, enteros, %, //, **) devuelve null y lo hace la VM.
+  const OPS_ARIT = { '+': 0, '-': 1, '*': 2, '/': 3 };
+  vm.nenArit = (a, b, op) => {
+    const codigo = OPS_ARIT[op];
+    if (codigo === undefined || !vm.c1en || typeof vm.c1en.describir !== 'function') return null;
+    const esA = a instanceof ObjArreglo, esB = b instanceof ObjArreglo;
+    const n = esA ? a.tamano : b.tamano;
+    if (n < NEN_T_UMBRAL || vm.c1en.describir() === 'jit') return null;
+    const z = new Int32Array(1);
+    if (esA && esB) {
+      if (!directo(a) || !directo(b) || a.forma.length !== b.forma.length || !a.forma.every((v, i) => v === b.forma[i])) return null;
+      const o = vm.arrNuevo(a.forma.slice(), 'real');
+      correr('nen_op_aa', n, n, codigo, a, b, o, z);
+      if (z[0]) vm.error('división entre cero');
+      return o;
+    }
+    const x = esA ? a : b, s = esA ? b : a;
+    if (!directo(x) || typeof s !== 'number') return null;
+    if (esA && codigo === 3 && s === 0) vm.error('división entre cero');
+    const o = vm.arrNuevo(x.forma.slice(), 'real');
+    correr('nen_op_ae', n, n, codigo, esA ? 0 : 1, s, x, o, z);
+    if (z[0]) vm.error('división entre cero');
+    return o;
+  };
+  // (motor-exp N2) suma, media, varianza y desviación de numerico para
+  // arreglos reales: por la reducción de NEÑ, POR TROZOS DE 4096 en orden. Con
+  // 4096 números o menos es exactamente la suma de izquierda a derecha de
+  // siempre; con más, los trozos se suman entre sí (menos error, y el mismo
+  // número en jit, nativo y GPU). Con datos en la GPU, solo baja el resultado.
+  vm.nenReducir = (op, x) => {
+    const d = directo(x) ? x : planoDe(x), n = x.tamano;
+    const s = reducirFilas('nen_red_suma', d, 1, n)[0];
+    if (op === 'suma') return s;
+    const mu = s / n;
+    if (op === 'media') return mu;
+    const v = reducirFilas('nen_red_desv2', d, 1, n, Float64Array.of(mu))[0] / (n - 1);
+    return op === 'varianza' ? v : Math.sqrt(v);
+  };
   // Complejo entrelazado desde reales.
   const aComplejo = re => { const d = new Float64Array(2 * re.length); for (let i = 0; i < re.length; i++) d[2 * i] = re[i]; return d; };
   const planoC = x => (esC(x) ? planoDe(x) : aComplejo(planoDe(x)));
@@ -668,14 +861,18 @@ function instalarNenTensores(vm, def) {
         if (!fc) vm.error(`«${nombre}» no está definida para complejos`, 'usa parteReal, parteImaginaria o absoluto primero');
         return vm.arrComplejoA(x, fc);
       }
-      // (motor-exp N1) un arreglo real seguido entra tal cual y la salida se
-      // escribe directamente en el arreglo nuevo: dos copias de menos
-      const d = (x.seguida && x.tipo === 'real') ? x.datos.subarray(0, x.tamano) : planoDe(x), n = d.length;
-      if (DOMINIO[nombre]) for (let i = 0; i < n; i++) if (DOMINIO[nombre](d[i]))
-        vm.error(`«${nombre}»: hay un valor negativo (${d[i]}, en la posición ${i}) y su resultado no es un número real`,
-          'pásalo a complejo con complejo(a) si quieres los resultados complejos');
+      // (motor-exp N2) un arreglo real seguido entra tal cual (en la GPU, sin
+      // copiarlo si ya está allí) y la salida es el arreglo nuevo, que en la
+      // GPU se queda allí hasta que alguien lo lea
+      const d = directo(x) ? x : planoDe(x), n = x.tamano;
+      if (DOMINIO[nombre]) {
+        const v = crudo(d);
+        for (let i = 0; i < n; i++) if (DOMINIO[nombre](v[i]))
+          vm.error(`«${nombre}»: hay un valor negativo (${v[i]}, en la posición ${i}) y su resultado no es un número real`,
+            'pásalo a complejo con complejo(a) si quieres los resultados complejos');
+      }
       const o = vm.arrNuevo(x.forma.slice(), 'real');
-      correr(nucleo, n, n, d, o.datos);
+      correr(nucleo, n, n, d, o);
       return o;
     }, doc);
   }
@@ -701,9 +898,9 @@ function instalarNenTensores(vm, def) {
     const dec = a.length > 1 ? ent(a[1], 2, 'redondearA') : 0;
     const f = Math.pow(10, dec);
     if (typeof a[0] === 'number') { const y = new Float64Array(1); NEN_T_NUCLEOS.nen_redondear.js(1, f, Float64Array.of(a[0]), y); return y[0]; }
-    const x = real(a[0], 1, 'redondearA'), d = planoDe(x), y = new Float64Array(d.length);
-    correr('nen_redondear', d.length, d.length, f, d, y);
-    return deReales(x.forma, y);
+    const x = real(a[0], 1, 'redondearA'), d = directo(x) ? x : planoDe(x), o = vm.arrNuevo(x.forma.slice(), 'real');
+    correr('nen_redondear', x.tamano, x.tamano, f, d, o);
+    return o;
   }, 'redondearA(a, decimales?) — redondea cada número, la mitad hacia arriba como «redondear»');
 
   // Dos arreglos (o arreglo y número) a la misma forma por difusión, en planos.
@@ -744,17 +941,17 @@ function instalarNenTensores(vm, def) {
       if (t.x[i] < 0 && !Number.isInteger(t.y[i]))
         vm.error(`«potenciaA»: ${t.x[i]} elevado a ${t.y[i]} no es un número real (posición ${i})`,
           'una base negativa solo admite exponentes enteros; pásala a complejo con complejo(a) para el resultado complejo');
-    const y = new Float64Array(n);
-    correr('nen_potencia', n, n, t.x, t.y, y);
-    return deReales(t.forma, y);
+    const o = vm.arrNuevo(t.forma.slice(), 'real');
+    correr('nen_potencia', n, n, t.x, t.y, o);
+    return o;
   }, 'potenciaA(a, b) — a elevado a b elemento a elemento, con difusión · bases negativas solo con exponente entero, salvo en complejos');
   def('anguloA', 'real|arreglo|lista, real|arreglo|lista -> cualquiera', a => {
     if (typeof a[0] === 'number' && typeof a[1] === 'number') return Math.atan2(a[0], a[1]);
     const t = dosPlanos(a[0], a[1], 'anguloA');
     if (t.complejo) vm.error('«anguloA» es para reales: el ángulo de un complejo es fase(z)');
-    const n = tamanoDe(t.forma), y = new Float64Array(n);
-    correr('nen_angulo', n, n, t.x, t.y, y);
-    return deReales(t.forma, y);
+    const n = tamanoDe(t.forma), o = vm.arrNuevo(t.forma.slice(), 'real');
+    correr('nen_angulo', n, n, t.x, t.y, o);
+    return o;
   }, 'anguloA(y, x) — el ángulo de cada punto (x, y) entre −π y π, sabiendo el cuadrante · la «angulo» de numerico, por arreglos');
 
   // Mover un eje al final y volver: lo usan softmax y las reducciones.
@@ -766,6 +963,12 @@ function instalarNenTensores(vm, def) {
     const e = vm.arrEje(x, a.length > 1 ? ent(a[1], 2, 'softmax') : -1, 'softmax');
     const perm = ejeAlFinal(x, e), K = x.forma[e], M = x.tamano / (K || 1);
     if (K === 0) return deReales(x.forma, new Float64Array(0));
+    if (e === x.dimensiones - 1 && directo(x)) {
+      // (motor-exp N2) el eje es el último y el arreglo está seguido: sin copias
+      const o = vm.arrNuevo(x.forma.slice(), 'real');
+      correr('nen_softmax', x.tamano, M, K, x, o);
+      return o;
+    }
     const d = planoDe(permutadaT(x, perm)), y = new Float64Array(d.length);
     correr('nen_softmax', d.length, M, K, d, y);
     const pf = perm.map(i => x.forma[i]);
@@ -807,7 +1010,10 @@ function instalarNenTensores(vm, def) {
     const perm = libres.concat(ejes);
     const M = libres.reduce((p, i) => p * x.forma[i], 1), K = ejes.reduce((p, i) => p * x.forma[i], 1);
     const formaOut = mantener ? x.forma.map((v, i) => (ejes.includes(i) ? 1 : v)) : libres.map(i => x.forma[i]);
-    return { d: planoDe(permutadaT(x, perm)), M, K, formaOut };
+    // (motor-exp N2) si los ejes reducidos ya son los últimos y el arreglo está
+    // seguido, el plano ES el arreglo: se le pasa al núcleo sin copiarlo
+    const identidad = perm.every((v, i) => v === i);
+    return { d: identidad && directo(x) ? x : planoDe(permutadaT(x, perm)), M, K, formaOut };
   }
   // Reducir M filas de K por trozos; si quedan varios trozos por fila, se
   // reducen otra vez (con la operación que los combina).
@@ -911,8 +1117,8 @@ function instalarNenTensores(vm, def) {
       // infinito al elevar al cuadrado. Se divide entre el mayor, se suma y se
       // vuelve a multiplicar.
       const mx = reducirFilas('nen_red_maxabs', r.d, r.M, r.K);
-      const esc = new Float64Array(r.d.length);
-      for (let i = 0; i < r.M; i++) { const s = mx[i] || 1; for (let k = 0; k < r.K; k++) esc[i * r.K + k] = r.d[i * r.K + k] / s; }
+      const dv = crudo(r.d), esc = new Float64Array(dv.length);
+      for (let i = 0; i < r.M; i++) { const s = mx[i] || 1; for (let k = 0; k < r.K; k++) esc[i * r.K + k] = dv[i * r.K + k] / s; }
       y = reducirFilas('nen_red_suma2', esc, r.M, r.K);
       for (let i = 0; i < y.length; i++) y[i] = mx[i] === 0 || !Number.isFinite(mx[i]) ? mx[i] : mx[i] * Math.sqrt(y[i]);
     } else y = reducirFilas(orden === 1 ? 'nen_red_sumaabs' : 'nen_red_maxabs', r.d, r.M, r.K);
@@ -922,6 +1128,7 @@ function instalarNenTensores(vm, def) {
     const { x, eje, mantener } = argsRed(a, nombre);
     vm.nadaDeComplejos(x, nombre);
     const r = prepararReduccion(x, eje, mantener, nombre);
+    r.d = Float64Array.from(crudo(r.d));              // una copia: aquí se pisa
     for (let i = 0; i < r.d.length; i++) r.d[i] = r.d[i] ? 1 : 0;
     if (r.K === 0) { const y = new Float64Array(r.M).fill(op === 'nen_red_minimo' ? 1 : 0); return r.formaOut.length ? aBool(r.formaOut, y) : !!y[0]; }
     const y = reducirFilas(op, r.d, r.M, r.K);
@@ -1230,13 +1437,16 @@ function instalarNenTensores(vm, def) {
     const la = x.forma.slice(0, -2), lb = y.forma.slice(0, -2), fl = difundir(la, lb);
     if (fl === null) vm.error(`«multLotes»: los lotes ${la.join('×')} y ${lb.join('×')} no se pueden difundir`);
     const lotes = tamanoDe(fl);
-    const A = planoDe(difundidaT(x, fl.concat([m, K]))), B = planoDe(difundidaT(y, fl.concat([K, p])));
-    const C = mm(A, B, m, K, p, lotes);
+    const iguales2 = (u, w) => u.length === w.length && u.every((q, k) => q === w[k]);
+    const A = (!v1 && iguales2(x.forma, fl.concat([m, K])) && directo(x)) ? x : planoDe(difundidaT(x, fl.concat([m, K])));
+    const B = (!v2 && iguales2(y.forma, fl.concat([K, p])) && directo(y)) ? y : planoDe(difundidaT(y, fl.concat([K, p])));
     let forma = fl.concat([m, p]);
     if (v1) forma.splice(forma.length - 2, 1);
     if (v2) forma.splice(forma.length - 1, 1);
-    if (!forma.length) return C[0];
-    return deReales(forma, C);
+    if (!forma.length) return mm(A, B, m, K, p, lotes)[0];
+    const o = vm.arrNuevo(forma, 'real');
+    mm(A, B, m, K, p, lotes, o);
+    return o;
   }, 'multLotes(A, B) — producto de matrices por lotes: los dos últimos ejes son la matriz y los de delante se difunden · como «por» pero para pilas de matrices, en la GPU si es grande');
 
   // ════════════════════════════════════════════ álgebra lineal avanzada

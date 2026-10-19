@@ -771,6 +771,109 @@ Medido en la nube (2 vCPU), mejor de 7, LTS → motor-exp:
 - Volumen 2: `x * 2 + 1` sin temporales (fusionar las operaciones de una expresión en un solo bucle o núcleo de
   C1EÑ), FFT de radix 4 en la CPU, y lo que diga el cuaderno de la T4.
 
+## Fase N2 · NEÑ en la GPU de verdad: residencia, FFT, matrices y aritmética (19-oct-2026)
+
+La medida de la T4 en Kaggle (cuaderno `c1en/kaggle-c1en-velocidad.ipynb`, commit `e7d13a7`) dejó tres problemas
+claros, y Diego pidió arreglarlos y que **todo NEÑ corra en la GPU si la hay, o en la CPU (C con OpenMP) si no**:
+
+| en la T4 (N1) | qué pasaba | causa, en el código |
+|---|---|---|
+| `senoA` 16 M: GPU 352 ms, nativo 166, CuPy con copia 89 | la GPU era más lenta que la CPU | `vm.c1en.kernel()` (el camino de NEÑ) reservaba, subía **todos** los arreglos, bajaba **todos** y liberaba en cada llamada; no usaba la residencia que sí tenía `paralelo` |
+| `fourier` 4 M: 1,4 s en jit, nativo y GPU | el dispositivo no cambiaba nada | `fourier` de numerico era JavaScript puro; y los núcleos de FFT de NEÑ hacían divisiones de 64 bits por mariposa (en la GPU se emulan) |
+| `por` 2048: GPU 45 GFLOP/s, nativo 1,8 | lejos de CuPy (250) y de NumPy | GPU: una casilla por hilo; CPU: cada grupo de filas leía b entero de la memoria |
+
+### 1. Residencia para los núcleos de NEÑ (src/14-c1en.js)
+
+- `lanzarKernel` (lo que usa `vm.c1en.kernel`) trata un arreglo de Ñ seguido y dueño de su memoria igual que
+  `paralelo`: **residente**. Se sube una vez; el resultado se queda en la GPU; baja solo cuando alguien lo lee desde la
+  CPU (el `get datos()` de siempre). Una cadena como `suma(expA(senoA(x)) * 2 + 1)` sube `x` y baja un número.
+- Cada núcleo dice qué arreglos **solo lee** (`spec.lee`: no se bajan) y cuáles **escribe enteros** (`spec.escribe`: no
+  se suben). Todos los núcleos de NEÑ lo declaran.
+- **Memoria reutilizable**: lo que se suelta se guarda por tamaño y GPU (hasta `C1EN_POOL_MB`, 1024 por defecto) y se
+  vuelve a dar sin `cuMemAlloc`/`cuMemFree`. Si la GPU dice que no hay memoria: se vacía la reserva, se libera lo
+  pendiente, y si aún no cabe se bajan a la CPU los residentes que no están en uso (sus datos vuelven, no se pierden).
+  `liberarResidentes()` deja la GPU limpia del todo, reserva incluida.
+- Medido en la GPU simulada con `C1EN_ESTADISTICAS=1`: la cadena de arriba con 2^20 números, **8 MB subidos y 0 bajados**;
+  `por(por(A, A), A)` sube A una vez; `fourier` de 2^20, una subida de datos y una bajada (antes, 2 por etapa).
+
+### 2. Todo el volumen de NEÑ por el dispositivo (src/17, 11, 03)
+
+- Las unarias (`senoA`…), `redondearA`, `potenciaA`, `anguloA`, `softmax` (eje último), las reducciones por eje y
+  `multLotes` pasan el arreglo **tal cual** al núcleo y devuelven el arreglo nuevo residente. Antes copiaban a un
+  Float64Array (y eso obligaba a bajar de la GPU).
+- **La aritmética de arreglos de la VM** (`x * 2 + 1`, `a / b`): con más de 32.768 números y dispositivo nativo o GPU va
+  por dos núcleos nuevos (`nen_op_aa`, `nen_op_ae`). Solo `+ − * /` con reales (exactos en IEEE: el mismo número en todas
+  partes), dos arreglos seguidos de la misma forma o arreglo con número; dividir entre cero sigue siendo el error de
+  siempre (el núcleo levanta una bandera). Difusión, vistas, enteros, `%`, `//`, `**` siguen en la VM.
+- **`suma`, `media`, `varianza`, `desviacion` de numerico** para arreglos reales: por la reducción de NEÑ, **por trozos
+  de 4096 en orden**, igual en jit, nativo y GPU. Con 4096 números o menos es exactamente la suma de izquierda a derecha
+  de antes; con más, los trozos se suman entre sí: el resultado cambia en las últimas cifras respecto a N1 (y suma con
+  menos error). **Es el único cambio de resultados de la fase.** Las listas y los arreglos enteros, como antes.
+- `por` de numerico usa `vm.nenPor`: sin copiar los arreglos y con el resultado residente.
+- Por debajo de 32.768 números todo sigue en JavaScript (lanzar un núcleo cuesta más que hacerlo).
+
+### 3. Fourier por los núcleos (src/17, 11)
+
+- `fourier`, `fourierInversa`, `espectro` y `convolucion` de numerico transforman con `vm.nenFFT` (los núcleos de FFT de
+  NEÑ), con los datos residentes entre la permutación y las log₂ n etapas, y la división de la inversa hecha allí.
+  **Dan los mismos números que antes, al bit** (mismas tablas, mismas mariposas, mismo Bluestein): comprobado contra el
+  LTS.
+- `nen_fft_permutar` y `nen_fft_etapa` reciben log₂ N y log₂ largo y calculan los índices con desplazamientos y
+  máscaras: sin divisiones de 64 bits (en la GPU se emulan; en la CPU, 40 ciclos cada una).
+
+### 4. Multiplicar matrices (src/17)
+
+- **CPU, `nen_matmul_bloques`** (sustituye a `nen_matmul_filas` de N1): cada hilo hace 4 filas × 32 columnas, y los
+  hilos vecinos comparten las mismas 32 columnas de b, que se quedan en la caché del núcleo. Micronúcleo 4×8 en
+  registros, k por trozos de 256.
+- **GPU, `nen_matmul_4x4`**: 16 casillas por hilo en registros (4 lecturas de a y 4 de b por 16 productos, cuatro veces
+  más cuenta por lectura), lecturas de b seguidas dentro de un warp. Sin memoria compartida ni `__syncthreads`, para
+  que corra igual en C, en el simulador y en la T4.
+- Los tres productos (`nen_matmul`, bloques y 4×4) suman cada casilla en el mismo orden: **mismos bits**
+  (pruebas/nen-nucleos.js los compara entre sí). Nota honesta: C1EÑ no usa FMA (para dar los mismos bits que la CPU), así
+  que su techo en la T4 es la mitad del de cuBLAS (≈ 125 frente a 250 GFLOP/s en doble).
+
+### Medido aquí (nube, 2 vCPU, nativo; LTS → N2)
+
+| prueba | LTS | N2 |
+|---|---|---|
+| `x * 2 + 1` (1 M) | 10,4 ms | 5,3 ms |
+| `senoA` (1 M) | 11,4 ms | 4,8 ms |
+| `suma` / `varianza` (1 M) | 45 / 60 ms | 1,3 / 2,6 ms |
+| `suma(expA(senoA(x)) * 2 + 1)` (1 M) | 74 ms | 22 ms |
+| `fourier` 2^20 | 162 ms | 92 ms |
+| `por` 300 / 1000 / 2048 | 40 ms / 1,49 s / 14,3 s | 7,4 ms / 173 ms / **2,2 s** |
+
+Los tiempos de la T4 los da el cuaderno de Kaggle (ahora con `senoA+copia` y `cadena` para comparar con CuPy con y sin
+copia, calentamiento antes de medir ECOSIM-G y la huella calculada fuera del tiempo medido).
+
+### Qué se probó
+
+- **Suite nueva `pruebas/exp-nen-gpu.js` (12):** `pruebas/datos-nen/dispositivos.esl` calcula 29 operaciones de NEÑ
+  en jit y en el dispositivo (aritmética, reducciones, `por`, `multLotes`, Fourier de potencia de dos y no, convolución,
+  unarias, softmax, una cadena) y las compara: exactas al bit, seno/exp a 1e-14. En **nativo** y en la **GPU
+  simulada**: 29 de 29. Leer y escribir desde la CPU un resultado residente, y dividir entre cero, también. La
+  residencia se comprueba contando el tráfico (tres casos). Y `fourier`, `fourierInversa`, `espectro`, `convolucion`,
+  `por` y `x * 2 + 1` dan **los mismos números que el LTS** en jit, nativo y GPU simulada. Con `--gpu` usa la GPU de
+  verdad.
+- `pruebas/exp-nen.js` (37): la reducción por trozos rehecha en JavaScript, al bit; con ≤ 4096, igual que la lista.
+- `pruebas/nen-nucleos.js`: 38 núcleos, 70 casos; los nuevos (`nen_matmul_bloques`, `nen_matmul_4x4`, `nen_op_aa`,
+  `nen_op_ae`) bit a bit contra su JavaScript, y los tres productos entre sí.
+- `pruebas/c1en.js`: 95 de 95 (incluida la de que al soltar los residentes no queda memoria en la GPU).
+- ECOSIM-G v3.1 (4 mundos, 400 ticks): el CSV de mundos es idéntico byte a byte en el LTS y en N2, en jit, nativo y GPU
+  simulada.
+- **Batería: 23 de 24**; la roja es la de siempre (`apps` → `ecosim5.esl`).
+
+### Qué se rompió o cambió
+
+- `suma`/`media`/`varianza`/`desviacion` de arreglos reales de más de 4096 números: últimas cifras distintas que en N1
+  (por trozos). Ver arriba.
+- `nen_matmul_filas` (de N1, nunca llegó al LTS) ya no existe: lo sustituye `nen_matmul_bloques`.
+- Los núcleos `nen_fft_permutar` y `nen_fft_etapa` cambiaron de parámetros (log₂).
+- Por el camino apareció y se arregló un fallo propio de la fase: la reserva redondeaba el tamaño de los arreglos de
+  menos de 8 bytes y la residencia creía que habían cambiado de tamaño, y los soltaba sin bajarlos (dos pruebas de
+  `pruebas/c1en.js` lo vieron).
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -788,5 +891,6 @@ Medido en la nube (2 vCPU), mejor de 7, LTS → motor-exp:
 | P2–P5 | PWA, servidor desplegable, ventana web de escritorio, instalador | anfitrión | pendiente |
 | W1 | Windows: C1EÑ nativo enlaza (sin `-z nodelete`), sonda del compilador, rutas en `fuera`, tolerancia y limpieza de NEÑ, `errorC` con `ucrtbase.dll` | anfitrión de Node, pruebas | **hecha** (`errorC` por confirmar en Windows) |
 | N1 | NEÑ: numerico y datos dentro, tipo `grande` y enteros exactos, 43 funciones de amplitud, volumen (reducciones, `por` por bloques), cuaderno de velocidad en GPU | verificador, VM, JIT, NEÑ, C1EÑ | **hecha** (tiempos de la T4 por medir en Kaggle) |
+| N2 | NEÑ en la GPU de verdad: residencia y entrada/salida en `kernel()`, memoria reutilizable, aritmética de arreglos y suma/media/varianza por C1EÑ, `fourier` por los núcleos (sin divisiones), `por` 4×4 en GPU y por bloques en CPU | C1EÑ, NEÑ, numerico, VM | **hecha** (tiempos de la T4 por medir) |
 
 Cada fase deja su sección en este archivo: qué se tocó, qué se probó, qué se rompió.
