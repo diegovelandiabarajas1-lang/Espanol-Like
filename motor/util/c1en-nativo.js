@@ -27,6 +27,16 @@
 //                        sus hilos —que siguen vivos, esperando trabajo— saltan
 //                        a memoria que ya no existe. Pasaba siempre que un
 //                        programa usaba «nativo» con OpenMP y terminaba solo.
+//
+// En Windows (fase W1, 17-oct-2026) dos de esas banderas NO van:
+//   -Wl,-z,nodelete      es del enlazador de Linux (ELF). El de Windows (PE) no
+//                        la conoce y no enlaza NADA: «unrecognized option '-z'».
+//                        C1EÑ nativo nunca había funcionado en Windows por esto.
+//                        Tampoco hace falta: al salir, Windows termina los hilos
+//                        ANTES de descargar las DLL, así que el fallo de libgomp
+//                        que esta bandera evita en Linux allí no ocurre.
+//   -fPIC                en Windows toda DLL es reubicable; gcc la ignora con un
+//                        aviso. Se quita para que no ensucie los mensajes.
 'use strict';
 const fs = require('fs');
 const os = require('os');
@@ -34,7 +44,24 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
-const BANDERAS = ['-O2', '-shared', '-fPIC', '-ffp-contract=off', '-fno-fast-math', '-fwrapv', '-std=gnu11', '-Wl,-z,nodelete'];
+// Las banderas para una plataforma («win32», «linux», «darwin»…). Es una función
+// para que la prueba pueda mirar las de Windows desde Linux.
+function banderasPara(plataforma) {
+  const win = plataforma === 'win32';
+  return ['-O2', '-shared'].concat(win ? [] : ['-fPIC'],
+    ['-ffp-contract=off', '-fno-fast-math', '-fwrapv', '-std=gnu11'],
+    win ? [] : ['-Wl,-z,nodelete']);
+}
+const BANDERAS = banderasPara(process.platform);
+
+// Lo que dijo el compilador, sin perder la línea que importa. Antes se filtraban
+// las líneas con «error», y en Windows eso dejaba solo «ld returned 1 exit
+// status»: la causa («unrecognized option '-z'») no lleva esa palabra.
+function queDijo(r) {
+  const lineas = String(r.stderr || r.error || '').split('\n').map(l => l.trimEnd()).filter(Boolean);
+  const utiles = lineas.filter(l => /error|unrecognized|cannot find|undefined reference|no such file|not found/i.test(l));
+  return (utiles.length ? utiles : lineas.slice(-8)).slice(0, 8).join('\n');
+}
 
 let motivo = null;
 function porQueNo() { return motivo; }
@@ -75,10 +102,37 @@ function crear() {
   try { fs.mkdirSync(dir, { recursive: true }); }
   catch (e) { motivo = `no se pudo crear la caché ${dir}`; return null; }
 
+  // ¿Sirve el compilador para hacer una biblioteca con ESTAS banderas? Se prueba
+  // una vez. Si no sirve, «nativo» no se ofrece y C1EÑ usa el JIT diciendo por
+  // qué, en vez de que cada «paralelo» falle con un error de enlazado. Lo que se
+  // aprendió se guarda en la caché (solo si salió bien), para no pagar dos
+  // compilaciones de prueba en cada programa.
+  const huellaSonda = crypto.createHash('sha256').update(comp.version).update('\0').update(BANDERAS.join(' '))
+    .update('\0').update(process.platform).digest('hex').slice(0, 16);
+  const archSonda = path.join(dir, `sonda-${huellaSonda}.json`);
+  let sonda = null;
+  try { sonda = JSON.parse(fs.readFileSync(archSonda, 'utf8')); } catch (_) { sonda = null; }
+  if (!sonda || sonda.ok !== true) {
+    const prueba = path.join(dir, `sonda-${process.pid}.c`);
+    const so = prueba.replace(/\.c$/, '.so');
+    let r;
+    try {
+      fs.writeFileSync(prueba, 'double c1en_sonda(double x) { return x * 2.0; }\n');
+      r = spawnSync(comp.cc, BANDERAS.concat(['-o', so, prueba, '-lm']), { encoding: 'utf8' });
+    } catch (e) { r = { status: 1, stderr: String((e && e.message) || e) }; }
+    for (const f of [prueba, so]) { try { fs.unlinkSync(f); } catch (_) { /* nada */ } }
+    if (r.status !== 0) {
+      motivo = `${comp.corto} está, pero no compila una biblioteca con las banderas de C1EÑ: ${queDijo(r)}`;
+      return null;
+    }
+    sonda = { ok: true };
+  }
+
   // ¿Trae OpenMP? Se prueba compilando de verdad una vez, porque «gcc» en macOS
   // es clang y no lo trae, y en algunos contenedores falta libgomp.
   let openmp = false;
-  if (process.env.C1EN_OPENMP !== '0') {
+  if (process.env.C1EN_OPENMP !== '0' && typeof sonda.openmp === 'boolean') openmp = sonda.openmp;
+  else if (process.env.C1EN_OPENMP !== '0') {
     const prueba = path.join(dir, `omp-${process.pid}.c`);
     const so = prueba.replace(/\.c$/, '.so');
     try {
@@ -87,6 +141,8 @@ function crear() {
       openmp = r.status === 0;
     } catch (_) { openmp = false; }
     for (const f of [prueba, so]) { try { fs.unlinkSync(f); } catch (_) { /* nada */ } }
+    sonda.openmp = openmp;
+    try { fs.writeFileSync(archSonda, JSON.stringify(sonda)); } catch (_) { /* sin caché, se vuelve a probar */ }
   }
   const banderas = BANDERAS.concat(openmp ? ['-fopenmp'] : []);
   const hilos = openmp ? (os.availableParallelism ? os.availableParallelism() : os.cpus().length) : 1;
@@ -111,8 +167,7 @@ function crear() {
         const r = spawnSync(comp.cc, banderas.concat(['-o', tmp, c, '-lm']), { encoding: 'utf8' });
         if (r.status !== 0) {
           try { fs.unlinkSync(tmp); } catch (_) { /* nada */ }
-          const err = String(r.stderr || r.error || '').split('\n').filter(l => /error/.test(l)).slice(0, 6).join('\n');
-          throw new Error(`${comp.cc} no lo compiló (el código está en ${c}):\n${err || r.stderr}`);
+          throw new Error(`${comp.cc} no lo compiló (el código está en ${c}):\n${queDijo(r)}`);
         }
         fs.renameSync(tmp, so);
       }
@@ -134,4 +189,4 @@ function crear() {
   return { nombre, compilador: comp.cc, openmp, hilos, banderas, cache: dir, compilar };
 }
 
-module.exports = { crear, porQueNo, BANDERAS };
+module.exports = { crear, porQueNo, BANDERAS, banderasPara };

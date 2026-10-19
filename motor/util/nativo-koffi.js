@@ -28,6 +28,11 @@ const TIPOS = {
   texto: 'str',            // const char * — entra y sale como texto de Ñ
   puntero: 'uintptr_t',    // una dirección, y en Ñ es un entero: cuídala tú
   tamano: 'size_t',
+  // (4.1, S1) Un arreglo de Ñ pasa SIN COPIAR: C recibe la dirección de
+  // sus números y lo que escriba se ve en el arreglo. «memoria» es un bloque
+  // de bytes (memoria(n) en el eDSL «nativo»): char *, void *, uint8_t *.
+  'arreglo real': 'double *', 'arreglo entero': 'int32_t *', 'arreglo real32': 'float *',
+  memoria: 'void *',
 };
 const NOMBRES = Object.keys(TIPOS).join(', ');
 const MAX_BIBLIOTECAS = 32;
@@ -79,12 +84,43 @@ function cargarKoffi() {
   }
 }
 
+// (4.1, S1) Un tipo de koffi, contado en palabras que el motor entiende
+// sin saber nada de koffi. Es lo que le deja a la biblioteca estándar comprobar
+// que un arreglo de reales va a un «double *» y no a un «int *» —koffi lo
+// dejaría pasar y C leería basura (se vio: 6,9·10⁻³¹⁰)—, quitar de la llamada
+// los parámetros de salida, y envolver una función de Ñ como retrollamada.
+const NUMEROS = { Int8: 'entero', UInt8: 'entero', Int16: 'entero', UInt16: 'entero', Int32: 'entero',
+  UInt32: 'entero', Int64: 'entero', UInt64: 'entero', Float32: 'real32', Float64: 'real',
+  Int16S: 'entero', UInt16S: 'entero', Int32S: 'entero', UInt32S: 'entero', Int64S: 'entero', UInt64S: 'entero' };
+function describir(t) {
+  if (!t) return { clase: 'nulo', c: 'void' };
+  const p = t.primitive, c = t.name;
+  if (p === 'Void') return { clase: 'nulo', c };
+  if (p === 'Bool') return { clase: 'bool', c };
+  if (NUMEROS[p]) return { clase: 'numero', elem: NUMEROS[p], c, entero: NUMEROS[p] === 'entero' };
+  if (p === 'String' || p === 'String16' || p === 'String32') return { clase: 'texto', c };
+  if (p === 'Record' || p === 'Union') return { clase: 'estructura', c };
+  if (p === 'Array') return { clase: 'lista', c };
+  if (p === 'Callback') return { clase: 'retrollamada', c, proto: t.proto && t.proto.name,
+    resultado: describir(t.proto && t.proto.result) };
+  if (p === 'Pointer') {
+    const r = t.ref || null, rp = r ? r.primitive : 'Void';
+    // A qué apunta: un número (un arreglo de Ñ puede ir ahí), una estructura
+    // (un dic de salida), o nada en concreto (void *, FILE *: un puntero opaco).
+    return { clase: 'puntero', c, apunta: NUMEROS[rp] ? 'numero' : (rp === 'Record' || rp === 'Union') ? 'estructura' : 'opaco',
+      elem: NUMEROS[rp] || null, byte: rp === 'Int8' || rp === 'UInt8', ancho: r ? r.size : 0 };
+  }
+  return { clase: 'otro', c };
+}
+const DIRECCION = { Input: 'entra', Output: 'sale', 'Input/Output': 'entra y sale' };
+
 function crear() {
   const koffi = cargarKoffi();
   if (!koffi) return null;   // sin koffi no hay código nativo, y ya está
 
   const abiertas = new Map();      // nombre → { lib, firmas:Set }
   const estructuras = new Map();   // nombre → huella de sus campos
+  const tiposC = new Map();        // (S1) nombre → declaración, de tipoNativo()
 
   // Traduce un nombre de tipo de Ñ. Una estructura ya declarada vale como tipo,
   // y ahí está la razón de llevar la cuenta: para poder decir «no lo conozco»
@@ -96,6 +132,7 @@ function crear() {
     const t = TIPOS[n];
     if (t) return t;
     if (estructuras.has(n)) return n;
+    if (tiposC.has(n)) return n + ' *';       // (S1) de tipoNativo: se pasa por puntero
     throw new Error(`${donde}: no conozco el tipo «${n}» (los que hay: ${NOMBRES}` +
       (estructuras.size ? `, y las estructuras declaradas: ${[...estructuras.keys()].join(', ')}` : '') + ')');
   }
@@ -152,16 +189,93 @@ function crear() {
     catch (e) {
       throw new Error(`«${simbolo}» en «${biblioteca}»: ${enEspanol(e)}`);
     }
-    const firma = { viva: true };
-    entrada.firmas.add(firma);
-    return (crudos) => {
-      if (!firma.viva)
-        throw new Error(`la biblioteca «${biblioteca}» se descargó; esta función ya no se puede llamar`);
-      return fn(...crudos);
-    };
+    return envolver(fn, entrada, biblioteca);
   }
 
-  return { cargar, descargar, estructura, funcion, abiertas: () => [...abiertas.keys()] };
+  // Lo que comparten las dos formas de declarar: la llamada, la llamada en
+  // segundo plano, y la descripción de cada parámetro para el motor.
+  function envolver(fn, entrada, biblioteca) {
+    const firma = { viva: true };
+    entrada.firmas.add(firma);
+    const muerta = () => new Error(`la biblioteca «${biblioteca}» se descargó; esta función ya no se puede llamar`);
+    const llamar = (crudos) => {
+      if (!firma.viva) throw muerta();
+      return fn(...crudos);
+    };
+    llamar.enFondo = (crudos, listo) => {
+      if (!firma.viva) throw muerta();
+      fn.async(...crudos, listo);
+    };
+    const info = fn.info || { name: '?', arguments: [], result: null };
+    llamar.nombre = info.name;
+    llamar.parametros = info.arguments.map(a => Object.assign(describir(a.type), { dir: DIRECCION[a.direction] || 'entra' }));
+    llamar.resultado = describir(info.result);
+    return llamar;
+  }
+
+  // (4.1, S1) nativa(biblioteca, "double cos(double)"): la firma tal
+  // como está en el .h. Los nombres de C sirven tal cual, y también las
+  // estructuras de estructuraNativa y los tipos de tipoNativo. «_Out_ int *q»
+  // marca un parámetro de salida: no se pasa, se devuelve.
+  function funcionC(biblioteca, prototipo) {
+    if (/\.\.\./.test(prototipo))
+      throw new Error('las funciones con «...» (como printf) todavía no se pueden declarar: C no dice de qué tipo es cada argumento extra, y adivinarlo es leer basura');
+    cargar(biblioteca);
+    const entrada = abiertas.get(biblioteca);
+    let fn;
+    try { fn = entrada.lib.func(prototipo); }
+    catch (e) {
+      const t = enEspanol(e);
+      const desconocido = /Unknown or invalid type name '([^']+)'/.exec(t);
+      throw new Error(desconocido
+        ? `en «${prototipo}» no conozco el tipo «${desconocido[1]}»: si es una estructura, declárala con estructuraNativa; si es un puntero a función o un tipo opaco, con tipoNativo`
+        : `no entiendo la firma «${prototipo}» en «${biblioteca}»: ${t}`);
+    }
+    return envolver(fn, entrada, biblioteca);
+  }
+
+  // tipoNativo("int Comparar(const void *, const void *)") declara un tipo de
+  // función, para pasar retrollamadas; tipoNativo("FILE") un tipo opaco, del
+  // que solo se manejan punteros. Repetirlo igual no es un error.
+  function tipoC(decl) {
+    decl = String(decl).trim();
+    const esFuncion = decl.includes('(');
+    const nombre = esFuncion ? (/([A-Za-z_]\w*)\s*\(/.exec(decl) || [])[1] : decl;
+    if (!nombre || !/^[A-Za-z_]\w*$/.test(nombre))
+      throw new Error(`no entiendo «${decl}»: es «int Nombre(int, double)» para un tipo de función, o un nombre para un tipo opaco`);
+    const antes = tiposC.get(nombre);
+    if (antes !== undefined) {
+      if (antes === decl) return nombre;
+      throw new Error(`el tipo «${nombre}» ya se declaró de otra forma («${antes}»)`);
+    }
+    try { esFuncion ? koffi.proto(decl) : koffi.opaque(nombre); }
+    catch (e) { throw new Error(`no se pudo declarar «${decl}»: ${enEspanol(e)}`); }
+    tiposC.set(nombre, decl);
+    return nombre;
+  }
+
+  // Una retrollamada que vive más que una llamada (C la guarda y la llama
+  // luego). Hay que soltarla a mano: C no avisa de cuándo deja de usarla.
+  function registrar(f, nombre) {
+    if (!tiposC.has(nombre) || !tiposC.get(nombre).includes('('))
+      throw new Error(`«${nombre}» no es un tipo de función declarado con tipoNativo`);
+    return koffi.register(f, koffi.pointer(nombre));
+  }
+  const desregistrar = h => koffi.unregister(h);
+
+  // Memoria: tipo en palabras de Ñ (real, entero, texto…) o de C (double, int…).
+  const tipoMem = n => (n === 'texto' ? 'char' : TIPOS[n] && !TIPOS[n].includes('*') ? TIPOS[n] : n);
+  const leer = (p, t, n) => {
+    if (t === 'texto') return koffi.decode(p, 'char', n === undefined || n === null ? -1 : n);
+    return n === undefined || n === null ? koffi.decode(p, tipoMem(t)) : koffi.decode(p, tipoMem(t), n);
+  };
+  const escribir = (p, t, v, n) => (n === undefined || n === null ? koffi.encode(p, tipoMem(t), v) : koffi.encode(p, tipoMem(t), v, n));
+  const tamano = t => koffi.sizeof(tipoMem(t));
+  const direccion = b => koffi.address(b);
+
+  return { cargar, descargar, estructura, funcion, abiertas: () => [...abiertas.keys()],
+           funcionC, tipoC, registrar, desregistrar, leer, escribir, tamano, direccion,
+           memoria: n => Buffer.alloc(n), errno: () => koffi.errno() };
 }
 
 // Para que el intérprete pueda decir por qué no hay código nativo, en vez de

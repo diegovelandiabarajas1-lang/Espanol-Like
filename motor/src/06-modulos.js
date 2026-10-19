@@ -82,8 +82,19 @@ function exportacionesDe(ast) {
   const ex = new Map();
   for (const s of ast.cuerpo) {
     if (!s.publico) continue;
-    if (s.tipo === 'DeclFuncion')
-      ex.set(s.nombre, T.fn(s.params.map(p => p.anotacion || T.cualquiera), s.retorno || T.cualquiera));
+    if (s.tipo === 'DeclFuncion') {
+      const t = tipoDeFuncion(s);
+      // (4.1) El constructor de un «publico tipo» lleva la forma del
+      // registro —campos y métodos— para que el archivo que lo importa pueda
+      // comprobar «p.x» igual que el que lo declara.
+      if (s.esConstructor) {
+        const dt = ast.cuerpo.find(x => x.tipo === 'DeclTipo' && x.nombre === s.nombre);
+        const metodos = new Map();
+        for (const f of ast.cuerpo) if (f.tipo === 'DeclFuncion' && f.metodo && f.metodo.tipo === s.nombre) metodos.set(f.metodo.nombre, tipoDeFuncion(f, true));
+        t.ret = Object.assign(T.registro(s.nombre), { forma: { nombre: s.nombre, campos: dt.campos.map(c => ({ nombre: c.nombre, tipo: c.anotacion || T.cualquiera })), metodos } });
+      }
+      ex.set(s.nombre, t);
+    }
     else if (s.tipo === 'DeclVar')
       ex.set(s.nombre, s.anotacion || (s.valor && s.valor.tipoLit) || T.cualquiera);
   }
@@ -166,8 +177,11 @@ function enlazar(ast, clave, mods, errores, avisos, globalesTipos) {
   // principal resolviera contra el directorio de trabajo: funcionaba mientras se
   // lanzara desde la carpeta del programa y fallaba en cuanto no.
   const desde = clave || mods.claveRaiz || null;
-  for (const s of ast.cuerpo)
+  for (const s of ast.cuerpo) {
     if (s.tipo === 'DeclVar' || s.tipo === 'DeclFuncion') enl.propias.add(s.nombre);
+    // Un registro deja su fábrica interna como global del archivo.
+    if (s.tipo === 'DeclTipo') enl.propias.add(' hacer ' + s.nombre);
+  }
 
   const ocupado = n => enl.propias.has(n) || enl.nombres.has(n) || enl.alias.has(n);
   const avisarSiTapa = (nodo, n) => {

@@ -88,6 +88,46 @@ function nucleoDe(src) {
 }
 const msgDe = e => String((e && (e.msg || e.message)) || e);
 
+// ── las banderas de gcc, por plataforma (fase W1) ──────────────────────────
+// En Windows «-Wl,-z,nodelete» no existe y el enlazador no hacía NADA: C1EÑ
+// nativo nunca había funcionado allí. Se mira desde cualquier sistema, y si hay
+// un gcc para Windows (x86_64-w64-mingw32-gcc) se compila un núcleo de verdad.
+{
+  const N = require(require('../rutas.js').util('c1en-nativo.js'));
+  const win = N.banderasPara('win32'), lin = N.banderasPara('linux');
+  console.log('\n── banderas de gcc por plataforma');
+  comprobar('en Windows no va «-z nodelete» (el enlazador de Windows no la conoce)', !win.some(b => /-z/.test(b)), win.join(' '));
+  comprobar('en Windows tampoco «-fPIC» (toda DLL es reubicable)', !win.includes('-fPIC'), win.join(' '));
+  comprobar('en Linux siguen las dos, y las de redondeo en las dos', lin.includes('-Wl,-z,nodelete') && lin.includes('-fPIC') &&
+    ['-ffp-contract=off', '-fno-fast-math', '-fwrapv'].every(b => win.includes(b) && lin.includes(b)), lin.join(' '));
+  const mingw = spawnSync('x86_64-w64-mingw32-gcc', ['--version'], { encoding: 'utf8' });
+  if (mingw.status === 0) {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'c1en-mingw-'));
+    const c = path.join(d, 'k.c');
+    fs.writeFileSync(c, '#include <math.h>\n#include <stdint.h>\nvoid k(int64_t n, double *x) { for (int64_t i = 0; i < n; i++) x[i] = sqrt(x[i]) * 2.0; }\n');
+    const bien = spawnSync('x86_64-w64-mingw32-gcc', win.concat(['-o', path.join(d, 'k.dll'), c, '-lm']), { encoding: 'utf8' });
+    comprobar('un núcleo enlaza como DLL de Windows con las banderas nuevas', bien.status === 0, bien.stderr);
+    const mal = spawnSync('x86_64-w64-mingw32-gcc', win.concat(['-Wl,-z,nodelete', '-o', path.join(d, 'k2.dll'), c, '-lm']), { encoding: 'utf8' });
+    comprobar('… y con «-z nodelete» no enlaza (el fallo que había)', mal.status !== 0 && /-z/.test(mal.stderr), mal.stderr);
+    fs.rmSync(d, { recursive: true, force: true });
+  } else console.log('  – sin x86_64-w64-mingw32-gcc: no se compila el núcleo para Windows aquí');
+}
+// Un compilador que está pero no enlaza (lo que pasaba en Windows): «nativo» no
+// se ofrece, se dice por qué con la línea que importa, y C1EÑ sigue con el JIT.
+if (process.platform !== 'win32') {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'c1en-falso-'));
+  const cc = path.join(d, 'gcc-falso');
+  fs.writeFileSync(cc, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "gcc (falso) 1.0"; exit 0; fi\n' +
+    'echo "ld.exe: unrecognized option \'-z\'" >&2\necho "collect2.exe: error: ld returned 1 exit status" >&2\nexit 1\n');
+  fs.chmodSync(cc, 0o755);
+  const r = spawnSync(process.execPath, ['-e', `const m = require(${JSON.stringify(require('../rutas.js').util('c1en-nativo.js'))});
+    const n = m.crear(); console.log(n === null ? 'sin nativo' : 'CON nativo'); console.log(m.porQueNo());`],
+    { encoding: 'utf8', env: Object.assign({}, process.env, { C1EN_CC: cc, C1EN_CACHE: path.join(d, 'cache') }) });
+  comprobar('un gcc que no enlaza: «nativo» no se ofrece', /^sin nativo/.test(r.stdout), r.stdout + r.stderr);
+  comprobar('… y el motivo trae la causa, no solo «ld returned 1»', /unrecognized option '-z'/.test(r.stdout), r.stdout);
+  fs.rmSync(d, { recursive: true, force: true });
+}
+
 // ── los dispositivos que hay ───────────────────────────────────────────────
 const sonda = motor();
 const disp = sonda.vm.c1en.disponibles();
@@ -323,10 +363,15 @@ console.log('\n── reducciones deterministas (vm.c1en.reducir)');
   for (let i = 0; i < 100003; i++) { s = (s * 1103515245 + 12345) % 2147483648; vals.push((s / 2147483648 - 0.5) * 1e3); }
   const a = arr(vm, vals);
   const res = {};
+  // Si un dispositivo no puede reducir (pasó en Windows: gcc no enlazaba), es un
+  // fallo de la prueba con su mensaje, no un volcado de pila que corta la suite.
+  let fallo = null;
   for (const d of DEVS) {
     vm.c1en.usar(d, null);
-    res[d] = ['suma', 'maximo', 'minimo'].map(op => vm.c1en.reducir(op, a));
+    try { res[d] = ['suma', 'maximo', 'minimo'].map(op => vm.c1en.reducir(op, a)); }
+    catch (x) { fallo = `${d}: ${msgDe(x)}`; res[d] = [NaN, NaN, NaN]; }
   }
+  if (fallo) comprobar('las reducciones corren en todos los dispositivos', false, fallo);
   const pares = x => { const y = Float64Array.from(x); let len = y.length; while (len > 1) { const m = Math.ceil(len / 2); for (let j = 0; 2 * j + 1 < len; j++) y[j] = y[2 * j] + y[2 * j + 1]; if (len % 2) y[m - 1] = y[len - 1]; len = m; } return y[0]; };
   comprobar('suma por árbol fijo, igual al bit en ' + DEVS.join(', '), DEVS.every(d => Object.is(res[d][0], pares(vals))), JSON.stringify(res));
   comprobar('máximo y mínimo', DEVS.every(d => res[d][1] === Math.max(...vals) && res[d][2] === Math.min(...vals)), JSON.stringify(res));

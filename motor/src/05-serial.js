@@ -276,6 +276,14 @@ function leerFn(r, prof) {
     }
   }
 
+  // (4.1) La marca de los parámetros con valor por defecto.
+  for (const c of fn.chunk.consts) {
+    if (typeof c === 'string' && c.startsWith(' minimos:')) {
+      const m = +c.slice(9);
+      if (Number.isInteger(m) && m >= 0 && m < fn.aridad) fn.minimos = m;
+    }
+    if (c === ' corrutina:generador' || c === ' corrutina:asincrona') fn.corrutina = c.slice(11);
+  }
   const nCode = r.cuenta('código');
   for (let i = 0; i < nCode; i++) fn.chunk.code.push(r.varint());
   const nLineas = r.cuenta('tabla de líneas');

@@ -173,20 +173,20 @@ pre{margin:0; overflow-x:auto}
 
 <div class="envoltura">
   <header class="portada">
-    <p class="sello">Ñ · biblioteca base v1 · 2026-10-15</p>
+    <p class="sello">Ñ · biblioteca base v1 · 2026-10-17</p>
     <h1>Biblioteca estándar</h1>
-    <p class="bajada">Todo lo que el lenguaje trae puesto: 754 funciones y 3 constantes.
+    <p class="bajada">Todo lo que el lenguaje trae puesto: 790 funciones y 3 constantes.
       <strong>No están todas en el ámbito global</strong>, y eso es lo primero que hay que saber:
-      96 nombres se pueden usar sin más, y los otros 661 viven en
-      8 eDSL que hay que pedir con un <code>usar</code> —la línea exacta está en la
+      96 nombres se pueden usar sin más, y los otros 697 viven en
+      11 eDSL que hay que pedir con un <code>usar</code> —la línea exacta está en la
       cabecera de cada área—. Cada entrada lleva su firma tal y como la ve el verificador de tipos,
       un ejemplo, y <strong>la salida que ese ejemplo produjo de verdad</strong> al ejecutarlo contra
       el motor. Nada de esta página está escrito de memoria.</p>
     <div class="cifras">
-      <div><b>757</b>entradas</div>
+      <div><b>793</b>entradas</div>
       <div><b>96</b>globales</div>
-      <div><b>8</b>eDSL</div>
-      <div><b>757</b>ejemplos ejecutados</div>
+      <div><b>11</b>eDSL</div>
+      <div><b>793</b>ejemplos ejecutados</div>
       <div><b>0</b>dependencias</div>
     </div>
     <p class="base">Esta es la <b>versión base</b>: el inventario de hoy está sellado en
@@ -196,12 +196,12 @@ pre{margin:0; overflow-x:auto}
       firma.</p>
     
     <div class="mapa">
-      <h2>Los 8 eDSL, y por qué existen</h2>
+      <h2>Los 11 eDSL, y por qué existen</h2>
       <p>Si haces cuentas no tienes por qué saber el vocabulario de la web, ni al contrario. Un eDSL
         se gana el sitio cuando quita una clase de error, no cuando ahorra teclas. El
         <code>usar</code> es por archivo, así que dos programas del mismo proyecto pueden tener
         vocabularios distintos.</p>
-      <table><tr><td><code>usar "estilo"</code></td><td>57</td><td>Un estilo es un valor: se compone, se guarda en variables, se pasa a las funciones y se anida como en SCSS.</td></tr><tr><td><code>usar "numerico"</code></td><td>190</td><td>Cuentas de todo tipo: matemáticas, estadística y álgebra lineal en UN solo eDSL, no en tres.</td></tr><tr><td><code>usar "texto"</code></td><td>49</td><td>Trabajar con cadenas, y con el español en serio.</td></tr><tr><td><code>usar "datos"</code></td><td>51</td><td>Tablas con columnas, nombre y tipo.</td></tr><tr><td><code>usar "formato"</code></td><td>42</td><td>Números y texto para que los lea una persona.</td></tr><tr><td><code>usar "fecha"</code></td><td>52</td><td>El calendario, con una decisión que gobierna el resto: una fecha de Ñ NO tiene zona horaria.</td></tr><tr><td><code>usar "nen"</code></td><td>185</td><td>La matemática seria de Ñ, en un solo eDSL con cuatro partes que se usan juntas.</td></tr><tr><td><code>usar "probar"</code></td><td>35</td><td>Para que Ñ se pruebe a sí mismo.</td></tr></table>
+      <table><tr><td><code>usar "estilo"</code></td><td>57</td><td>Un estilo es un valor: se compone, se guarda en variables, se pasa a las funciones y se anida como en SCSS.</td></tr><tr><td><code>usar "numerico"</code></td><td>190</td><td>Cuentas de todo tipo: matemáticas, estadística y álgebra lineal en UN solo eDSL, no en tres.</td></tr><tr><td><code>usar "texto"</code></td><td>49</td><td>Trabajar con cadenas, y con el español en serio.</td></tr><tr><td><code>usar "datos"</code></td><td>51</td><td>Tablas con columnas, nombre y tipo.</td></tr><tr><td><code>usar "formato"</code></td><td>42</td><td>Números y texto para que los lea una persona.</td></tr><tr><td><code>usar "fecha"</code></td><td>52</td><td>El calendario, con una decisión que gobierna el resto: una fecha de Ñ NO tiene zona horaria.</td></tr><tr><td><code>usar "nen"</code></td><td>185</td><td>La matemática seria de Ñ, en un solo eDSL con cuatro partes que se usan juntas.</td></tr><tr><td><code>usar "corrutinas"</code></td><td>5</td><td>Funciones que se pausan (4.1).</td></tr><tr><td><code>usar "nativo"</code></td><td>11</td><td>Lo que hace falta para hablar con C de verdad (4.1), además de «nativa»: tipos de función para que C llame a Ñ (retrollamadas), tipos opacos, memoria para lo que C escribe, y llamadas en otro hilo.</td></tr><tr><td><code>usar "sistema"</code></td><td>20</td><td>Archivos grandes, carpetas, rutas, procesos en segundo plano y un servidor HTTP (4.1).</td></tr><tr><td><code>usar "probar"</code></td><td>35</td><td>Para que Ñ se pruebe a sí mismo.</td></tr></table>
       <p class="pie-mapa">Y tres constantes están siempre, sin ningún <code>usar</code>, con un
         sigilo delante para que ningún programa pueda declararlas ni taparlas:
         <code>|PI</code>, <code>|E</code>, <code>|INFINITO</code>. Para lo de antes,
@@ -209,21 +209,17 @@ pre{margin:0; overflow-x:auto}
         62 nombres que lo eran.</p>
     </div>
   </header>
-  <section class="cambios">
-    <h2>Qué cambió desde la base</h2>
-    <p>Comparado contra los 569 nombres sellados en
-      <code>motor/inventario.ñdatos</code>. Para fijar el estado de hoy como nueva base:
-      <code>node util/referencia.js --sellar</code>.</p>
-    <div class="grupo nuevo"><h3>Nombres nuevos · 188</h3><ul><li><code>letra</code></li><li><code>leerArregloBinario</code></li><li><code>escribirArregloBinario</code></li><li><code>nen.paralelo</code></li><li><code>nen.dispositivo</code></li><li><code>nen.dispositivos</code></li><li><code>nen.usarDispositivo</code></li><li><code>nen.codigoCuda</code></li><li><code>nen.codigoC</code></li><li><code>nen.azarHilo</code></li><li><code>nen.sumarAtomico</code></li><li><code>nen.derivar</code></li><li><code>nen.derivarN</code></li><li><code>nen.gradiente</code></li><li><code>nen.jacobiano</code></li><li><code>nen.hessiano</code></li><li><code>nen.integrar</code></li><li><code>nen.integrarDoble</code></li><li><code>nen.integrarMontecarlo</code></li><li><code>nen.integrarDatos</code></li><li><code>nen.integrarAcumulado</code></li><li><code>nen.derivarDatos</code></li><li><code>nen.sumaSerie</code></li><li><code>nen.limite</code></li><li><code>nen.longitudArco</code></li><li><code>nen.volumenRevolucion</code></li><li><code>nen.areaEntre</code></li><li><code>nen.polinomioTaylor</code></li><li><code>nen.resolverEcuacion</code></li><li><code>nen.raizNewton</code></li><li><code>nen.raices</code></li><li><code>nen.raicesReales</code></li><li><code>nen.resolverNoLineal</code></li><li><code>nen.puntoFijo</code></li><li><code>nen.minimizar1D</code></li><li><code>nen.minimizar</code></li><li><code>nen.minimizarBFGS</code></li><li><code>nen.maximizar</code></li><li><code>nen.ajustarCurva</code></li><li><code>nen.optimizarLineal</code></li><li><code>nen.resolverEDO</code></li><li><code>nen.rk4</code></li><li><code>nen.resolverEDORigida</code></li><li><code>nen.evaluarPolinomio</code></li><li><code>nen.derivarPolinomio</code></li><li><code>nen.integrarPolinomio</code></li><li><code>nen.sumarPolinomios</code></li><li><code>nen.restarPolinomios</code></li><li><code>nen.multiplicarPolinomios</code></li><li><code>nen.dividirPolinomios</code></li><li><code>nen.polinomioDesdeRaices</code></li><li><code>nen.ajustePolinomico</code></li><li><code>nen.textoPolinomio</code></li><li><code>nen.interpolarLineal</code></li><li><code>nen.interpolarLagrange</code></li><li><code>nen.polinomioInterpolante</code></li><li><code>nen.splineCubico</code></li><li><code>nen.interpolar</code></li><li><code>nen.gamma</code></li><li><code>nen.lnGamma</code></li><li><code>nen.beta</code></li><li><code>nen.digamma</code></li><li><code>nen.erf</code></li><li><code>nen.erfc</code></li><li><code>nen.erfInversa</code></li><li><code>nen.gammaIncompleta</code></li><li><code>nen.betaIncompleta</code></li><li><code>nen.besselJ</code></li><li><code>nen.zeta</code></li><li><code>nen.normalDensidad</code></li><li><code>nen.normalAcumulada</code></li><li><code>nen.normalInversa</code></li><li><code>nen.tStudentAcumulada</code></li><li><code>nen.tStudentInversa</code></li><li><code>nen.chiCuadradoAcumulada</code></li><li><code>nen.chiCuadradoInversa</code></li><li><code>nen.fisherAcumulada</code></li><li><code>nen.binomialProb</code></li><li><code>nen.binomialAcumulada</code></li><li><code>nen.poissonProb</code></li><li><code>nen.poissonAcumulada</code></li><li><code>nen.exponencialAcumulada</code></li><li><code>nen.potenciaModular</code></li><li><code>nen.inversoModular</code></li><li><code>nen.mcdExtendido</code></li><li><code>nen.restoChino</code></li><li><code>nen.fibonacci</code></li><li><code>nen.totiente</code></li><li><code>nen.factorizar</code></li><li><code>nen.esCuadradoPerfecto</code></li><li><code>nen.siguientePrimo</code></li><li><code>nen.simplificarFormula</code></li><li><code>nen.expandirFormula</code></li><li><code>nen.factorizarFormula</code></li><li><code>nen.derivarFormula</code></li><li><code>nen.gradienteFormula</code></li><li><code>nen.integrarFormula</code></li><li><code>nen.resolverFormula</code></li><li><code>nen.despejar</code></li><li><code>nen.resolverSistemaFormulas</code></li><li><code>nen.evaluarFormula</code></li><li><code>nen.sustituirEnFormula</code></li><li><code>nen.variablesDeFormula</code></li><li><code>nen.formulaAFuncion</code></li><li><code>nen.taylorFormula</code></li><li><code>nen.limiteFormula</code></li><li><code>nen.formulaALatex</code></li><li><code>nen.formulaATexto</code></li><li><code>nen.senoA</code></li><li><code>nen.cosenoA</code></li><li><code>nen.tangenteA</code></li><li><code>nen.arcotangenteA</code></li><li><code>nen.senoHiperbolicoA</code></li><li><code>nen.cosenoHiperbolicoA</code></li><li><code>nen.tangenteHiperbolicaA</code></li><li><code>nen.expA</code></li><li><code>nen.logA</code></li><li><code>nen.raizA</code></li><li><code>nen.absolutoA</code></li><li><code>nen.signoA</code></li><li><code>nen.pisoA</code></li><li><code>nen.techoA</code></li><li><code>nen.sigmoideA</code></li><li><code>nen.reluA</code></li><li><code>nen.redondearA</code></li><li><code>nen.potenciaA</code></li><li><code>nen.anguloA</code></li><li><code>nen.softmax</code></li><li><code>nen.mapearA</code></li><li><code>nen.sumaEje</code></li><li><code>nen.productoEje</code></li><li><code>nen.mediaEje</code></li><li><code>nen.varianzaEje</code></li><li><code>nen.desviacionEje</code></li><li><code>nen.maximoEje</code></li><li><code>nen.minimoEje</code></li><li><code>nen.normaEje</code></li><li><code>nen.todosEje</code></li><li><code>nen.algunoEje</code></li><li><code>nen.permutarEjes</code></li><li><code>nen.voltear</code></li><li><code>nen.rodar</code></li><li><code>nen.rejilla</code></li><li><code>nen.repetirA</code></li><li><code>nen.mosaico</code></li><li><code>nen.diagonalDe</code></li><li><code>nen.productoCruz</code></li><li><code>nen.normaTensor</code></li><li><code>nen.contraer</code></li><li><code>nen.einstein</code></li><li><code>nen.multLotes</code></li><li><code>nen.formaHessenberg</code></li><li><code>nen.factorSchur</code></li><li><code>nen.autovaloresGeneral</code></li><li><code>nen.autovectoresGeneral</code></li><li><code>nen.radioEspectral</code></li><li><code>nen.exponencialMatriz</code></li><li><code>nen.raizMatriz</code></li><li><code>nen.logaritmoMatriz</code></li><li><code>nen.nucleoMatriz</code></li><li><code>nen.imagenMatriz</code></li><li><code>nen.gramSchmidt</code></li><li><code>nen.factorLDL</code></li><li><code>nen.resolverGradienteConjugado</code></li><li><code>nen.resolverGaussSeidel</code></li><li><code>nen.resolverJacobi</code></li><li><code>nen.vandermonde</code></li><li><code>nen.toeplitz</code></li><li><code>nen.hilbert</code></li><li><code>nen.matrizRotacion</code></li><li><code>nen.fourier2D</code></li><li><code>nen.fourierInversa2D</code></li><li><code>nen.fourierReal</code></li><li><code>nen.fourierRealInversa</code></li><li><code>nen.frecuenciasReal</code></li><li><code>nen.centrarFrecuencias</code></li><li><code>nen.descentrarFrecuencias</code></li><li><code>nen.ventana</code></li><li><code>nen.espectrograma</code></li><li><code>nen.potenciaEspectral</code></li><li><code>nen.correlacionCruzada</code></li><li><code>nen.autocorrelacion</code></li><li><code>nen.transformadaCoseno</code></li><li><code>nen.transformadaCosenoInversa</code></li><li><code>nen.filtrarFrecuencias</code></li><li><code>nen.convolucion2D</code></li><li><code>nen.senalAnalitica</code></li><li><code>nen.envolvente</code></li></ul></div>
-    
-    
+  <section class="cambios igual">
+    <h2>Sin cambios desde la base</h2>
+    <p>Los 793 nombres de <code>inventario.ñdatos</code> son exactamente los de
+      hoy, con las mismas firmas.</p>
   </section>
 
   <div class="cuerpo">
     <nav class="rail" aria-label="Índice">
       <input class="buscar" id="buscar" type="search" placeholder="Filtrar…" aria-label="Filtrar funciones" autocomplete="off">
       <p class="hallados" id="hallados"></p>
-      <ul><li><a href="#s-núcleo">Núcleo<span>12</span></a></li><li><a href="#s-listas">Listas<span>14</span></a></li><li><a href="#s-diccionarios">Diccionarios<span>5</span></a></li><li><a href="#s-gráficos">Gráficos<span>13</span></a></li><li><a href="#s-web">Web<span>11</span></a></li><li><a href="#s-excepciones">Excepciones<span>1</span></a></li><li><a href="#s-estilo">estilo<span>57</span></a></li><li><a href="#s-red">Red<span>3</span></a></li><li><a href="#s-memoria y tiempo">Memoria y tiempo<span>7</span></a></li><li><a href="#s-archivos y sistema">Archivos y sistema<span>16</span></a></li><li><a href="#s-código nativo">Código nativo<span>6</span></a></li><li><a href="#s-introspección">Introspección<span>5</span></a></li><li><a href="#s-constantes">Constantes del lenguaje<span>3</span></a></li><li><a href="#s-numerico">numerico<span>190</span></a></li><li><a href="#s-texto">texto<span>49</span></a></li><li><a href="#s-datos">datos<span>51</span></a></li><li><a href="#s-formato">formato<span>42</span></a></li><li><a href="#s-fecha">fecha<span>52</span></a></li><li><a href="#s-nen">nen — Numeric Extension for Ñ<span>185</span></a></li><li><a href="#s-probar">probar<span>35</span></a></li></ul>
+      <ul><li><a href="#s-núcleo">Núcleo<span>12</span></a></li><li><a href="#s-listas">Listas<span>14</span></a></li><li><a href="#s-diccionarios">Diccionarios<span>5</span></a></li><li><a href="#s-gráficos">Gráficos<span>13</span></a></li><li><a href="#s-web">Web<span>11</span></a></li><li><a href="#s-excepciones">Excepciones<span>1</span></a></li><li><a href="#s-estilo">estilo<span>57</span></a></li><li><a href="#s-red">Red<span>3</span></a></li><li><a href="#s-memoria y tiempo">Memoria y tiempo<span>7</span></a></li><li><a href="#s-archivos y sistema">Archivos y sistema<span>16</span></a></li><li><a href="#s-código nativo">Código nativo<span>6</span></a></li><li><a href="#s-introspección">Introspección<span>5</span></a></li><li><a href="#s-constantes">Constantes del lenguaje<span>3</span></a></li><li><a href="#s-numerico">numerico<span>190</span></a></li><li><a href="#s-texto">texto<span>49</span></a></li><li><a href="#s-datos">datos<span>51</span></a></li><li><a href="#s-formato">formato<span>42</span></a></li><li><a href="#s-fecha">fecha<span>52</span></a></li><li><a href="#s-nen">nen — Numeric Extension for Ñ<span>185</span></a></li><li><a href="#s-corrutinas">corrutinas<span>5</span></a></li><li><a href="#s-nativo">nativo<span>11</span></a></li><li><a href="#s-sistema">sistema<span>20</span></a></li><li><a href="#s-probar">probar<span>35</span></a></li></ul>
     </nav>
     <main id="lista">
       
@@ -2018,7 +2014,7 @@ pintar(etiqueta("div", enColumna(8),
     </div>
     <p class="sec-intro">Una petición no puede bloquear: pedir() no devuelve la respuesta, la entrega. Llega a una función como llega un clic. El anfitrión pide permiso una vez por sitio antes de dejar salir nada.</p>
     
-    <article class="ent" id="fn-pedir" data-busca="pedir funcion pedir(url, opciones?, funcion) — trae datos de la red; la respuesta llega a la función, como un clic pedir("https://api.ejemplo.com/clima", fn(r) {
+    <article class="ent" id="fn-pedir" data-busca="pedir funcion pedir(url, opciones?, funcion?) — trae datos de la red; la respuesta llega a la función, o con «esperar pedir(url)» pedir("https://api.ejemplo.com/clima", fn(r) {
   si r["ok"] {
     fijo d = dejson(r["cuerpo"])
     imprimir("hacen " + texto(d["grados"]) + " grados")
@@ -2031,7 +2027,7 @@ imprimir("la petición salió; el programa no espera")">
         <h3>pedir</h3>
         <code class="firma"><span class="variadica" title="número variable de argumentos: el verificador de tipos no la comprueba">(…)</span></code>
       </div>
-      <p class="doc">pedir(url, opciones?, funcion) — trae datos de la red; la respuesta llega a la función, como un clic</p>
+      <p class="doc">pedir(url, opciones?, funcion?) — trae datos de la red; la respuesta llega a la función, o con «esperar pedir(url)»</p>
       <div class="caja">
         <pre class="cod"><code>pedir("https://api.ejemplo.com/clima", fn(r) {
   si r["ok"] {
@@ -2383,7 +2379,7 @@ si longitud(a) == 0 { imprimir("sin argumentos") } sino { imprimir("me dieron", 
         <div class="sal"><span class="et">imprime</span><pre><code>diego por defecto</code></pre></div>
       </div>
     </article>
-    <article class="ent" id="fn-ejecutar" data-busca="ejecutar funcion ejecutar(orden, argumentos?) — lanza un programa y espera; devuelve {codigo, salida, error} usar recortar de "texto"
+    <article class="ent" id="fn-ejecutar" data-busca="ejecutar funcion ejecutar(orden, argumentos?, opciones?) — lanza un programa y espera; devuelve {codigo, salida, error}. opciones: entrada, carpeta, entorno, espera (ms) usar recortar de "texto"
 
 fijo r = ejecutar("echo", ["hola", "mundo"])
 imprimir("código", r["codigo"], "dijo", recortar(r["salida"]))">
@@ -2391,7 +2387,7 @@ imprimir("código", r["codigo"], "dijo", recortar(r["salida"]))">
         <h3>ejecutar</h3>
         <code class="firma"><span class="variadica" title="número variable de argumentos: el verificador de tipos no la comprueba">(…)</span></code>
       </div>
-      <p class="doc">ejecutar(orden, argumentos?) — lanza un programa y espera; devuelve {codigo, salida, error}</p>
+      <p class="doc">ejecutar(orden, argumentos?, opciones?) — lanza un programa y espera; devuelve {codigo, salida, error}. Opciones: entrada, carpeta, entorno, espera (ms)</p>
       <div class="caja">
         <pre class="cod"><code>usar recortar de "texto"
 
@@ -2505,13 +2501,13 @@ imprimir(bibliotecasNativas())</code></pre>
         <div class="sal"><span class="et">imprime</span><pre><code>Color</code></pre></div>
       </div>
     </article>
-    <article class="ent" id="fn-nativa" data-busca="nativa funcion nativa(biblioteca, simbolo, devuelve, argumentos?) — declara una función compilada y la devuelve como función de ñ fijo cos = nativa("libm.so.6", "cos", "real", ["real"])
+    <article class="ent" id="fn-nativa" data-busca="nativa funcion nativa(biblioteca, "double cos(double)") o nativa(biblioteca, simbolo, devuelve, argumentos?) — declara una función compilada y la devuelve como función de ñ fijo cos = nativa("libm.so.6", "cos", "real", ["real"])
 imprimir(tipo(cos), cos(0.0))">
       <div class="ent-cab">
         <h3>nativa</h3>
         <code class="firma"><span class="variadica" title="número variable de argumentos: el verificador de tipos no la comprueba">(…)</span></code>
       </div>
-      <p class="doc">nativa(biblioteca, simbolo, devuelve, argumentos?) — declara una función compilada y la devuelve como función de Ñ</p>
+      <p class="doc">nativa(biblioteca, "double cos(double)") o nativa(biblioteca, simbolo, devuelve, argumentos?) — declara una función compilada y la devuelve como función de Ñ</p>
       <div class="caja">
         <pre class="cod"><code>fijo cos = nativa("libm.so.6", "cos", "real", ["real"])
 imprimir(tipo(cos), cos(0.0))</code></pre>
@@ -12305,6 +12301,675 @@ imprimir(envolvente(cosenoA(t * (2.0 * |PI / 4.0)) * 2.0))</code></pre>
       </div>
     </article>
   </section>
+  <section class="sec" id="s-corrutinas">
+    <div class="sec-cab">
+      <h2>corrutinas</h2>
+      <code class="usar-edsl">usar "corrutinas"</code>
+      <span class="cuenta">5</span>
+    </div>
+    <p class="sec-intro">Funciones que se pausan (4.1). Una función con «producir» es un GENERADOR: cada «producir v» entrega un valor y la función se queda en ese punto hasta que alguien pide el siguiente, así que puede producir una lista infinita sin que exista entera. «para x en contar(10)» la recorre con el bucle de siempre. Una función con «esperar» es ASÍNCRONA: empieza ya, y al llegar a «esperar» cede el turno; lo que devuelve es una promesa, y el resto llega más tarde como un turno más, igual que un clic. «producir» y «esperar» no son palabras reservadas, y estas ayudas viven aquí y no en el ámbito global para no quitarle nombres a ningún programa: la primera versión las puso globales y rompió dos ejemplos que ya usaban «todas» y «siguiente».</p>
+    
+    <article class="ent" id="fn-siguiente" data-busca="siguiente funcion siguiente(g, siseacaba?) — el próximo valor del generador; si ya no hay, siseacaba (o nulo) usar siguiente de "corrutinas"
+
+fn contar(hasta) {
+  var i = 1
+  mientras i &lt;= hasta { producir i
+    i = i + 1 }
+}
+fijo g = contar(2)
+imprimir(siguiente(g), siguiente(g), siguiente(g, "se acabó"))">
+      <div class="ent-cab">
+        <h3>siguiente</h3>
+        <code class="firma"><span class="variadica" title="número variable de argumentos: el verificador de tipos no la comprueba">(…)</span></code>
+      </div>
+      <p class="doc">siguiente(g, siSeAcaba?) — el próximo valor del generador; si ya no hay, siSeAcaba (o nulo)</p>
+      <div class="caja">
+        <pre class="cod"><code>usar siguiente de "corrutinas"
+
+fn contar(hasta) {
+  var i = 1
+  mientras i &lt;= hasta { producir i
+    i = i + 1 }
+}
+fijo g = contar(2)
+imprimir(siguiente(g), siguiente(g), siguiente(g, "se acabó"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>1 2 se acabó</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-terminado" data-busca="terminado funcion(cualquiera): bool terminado(g) — si el generador ya no da más, o si la promesa ya está lista usar siguiente, terminado de "corrutinas"
+
+fn contar(hasta) {
+  var i = 1
+  mientras i &lt;= hasta { producir i
+    i = i + 1 }
+}
+fijo g = contar(1)
+imprimir(terminado(g))
+siguiente(g)
+siguiente(g, nulo)
+imprimir(terminado(g))">
+      <div class="ent-cab">
+        <h3>terminado</h3>
+        <code class="firma">(cualquiera): bool</code>
+      </div>
+      <p class="doc">terminado(g) — si el generador ya no da más, o si la promesa ya está lista</p>
+      <div class="caja">
+        <pre class="cod"><code>usar siguiente, terminado de "corrutinas"
+
+fn contar(hasta) {
+  var i = 1
+  mientras i &lt;= hasta { producir i
+    i = i + 1 }
+}
+fijo g = contar(1)
+imprimir(terminado(g))
+siguiente(g)
+siguiente(g, nulo)
+imprimir(terminado(g))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>falso
+cierto</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-recoger" data-busca="recoger funcion(cualquiera): lista recoger(g) — todos los valores que queden en el generador, en una lista usar recoger de "corrutinas"
+
+fn contar(hasta) {
+  var i = 1
+  mientras i &lt;= hasta { producir i
+    i = i + 1 }
+}
+imprimir(recoger(contar(4)))">
+      <div class="ent-cab">
+        <h3>recoger</h3>
+        <code class="firma">(cualquiera): lista</code>
+      </div>
+      <p class="doc">recoger(g) — todos los valores que queden en el generador, en una lista</p>
+      <div class="caja">
+        <pre class="cod"><code>usar recoger de "corrutinas"
+
+fn contar(hasta) {
+  var i = 1
+  mientras i &lt;= hasta { producir i
+    i = i + 1 }
+}
+imprimir(recoger(contar(4)))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>[1, 2, 3, 4]</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-dormir" data-busca="dormir funcion(real): cualquiera dormir(ms) — una promesa que se cumple pasado ese tiempo: «esperar dormir(500)» usar dormir de "corrutinas"
+
+fn tarea() {
+  esperar dormir(50)
+  imprimir("desperté")      # sale 50 ms después
+}
+imprimir(tipo(tarea()))">
+      <div class="ent-cab">
+        <h3>dormir</h3>
+        <code class="firma">(real): cualquiera</code>
+      </div>
+      <p class="doc">dormir(ms) — una promesa que se cumple pasado ese tiempo: «esperar dormir(500)»</p>
+      <div class="caja">
+        <pre class="cod"><code>usar dormir de "corrutinas"
+
+fn tarea() {
+  esperar dormir(50)
+  imprimir("desperté")      # sale 50 ms después
+}
+imprimir(tipo(tarea()))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>promesa</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-todas" data-busca="todas funcion(lista): cualquiera todas(promesas) — una promesa con la lista de resultados, cuando estén todas usar dormir, todas de "corrutinas"
+
+fijo p = todas([dormir(10), dormir(20)])   # se cumple cuando se cumplan las dos
+imprimir(tipo(p))">
+      <div class="ent-cab">
+        <h3>todas</h3>
+        <code class="firma">(lista): cualquiera</code>
+      </div>
+      <p class="doc">todas(promesas) — una promesa con la lista de resultados, cuando estén todas</p>
+      <div class="caja">
+        <pre class="cod"><code>usar dormir, todas de "corrutinas"
+
+fijo p = todas([dormir(10), dormir(20)])   # se cumple cuando se cumplan las dos
+imprimir(tipo(p))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>promesa</code></pre></div>
+      </div>
+    </article>
+  </section>
+  <section class="sec" id="s-nativo">
+    <div class="sec-cab">
+      <h2>nativo</h2>
+      <code class="usar-edsl">usar "nativo"</code>
+      <span class="cuenta">11</span>
+    </div>
+    <p class="sec-intro">Lo que hace falta para hablar con C de verdad (4.1), además de «nativa»: tipos de función para que C llame a Ñ (retrollamadas), tipos opacos, memoria para lo que C escribe, y llamadas en otro hilo. Un puntero es un valor «puntero» y no un entero: se guarda, se compara y se devuelve a C, pero no se le suman números. Un error dentro de una retrollamada no se lanza a través de C —eso tumba el proceso—: se guarda y sale como error de Ñ al volver de la llamada nativa. En Windows, «errorC» solo ve el errno de la biblioteca de C que comparte koffi. Los ejemplos de esta sección corren con un anfitrión de mentira (enseñan la forma de la API); lo que llama a C de verdad lo prueba pruebas/sistema.js.</p>
+    
+    <article class="ent" id="fn-tipoNativo" data-busca="tiponativo funcion(texto): texto tiponativo("int comparar(const void *, const void *)") — un tipo de función para retrollamadas; tiponativo("file") — un tipo opaco usar tiponativo de "nativo"
+
+imprimir(tiponativo("int comparar(int a, int b)"), tiponativo("file"))">
+      <div class="ent-cab">
+        <h3>tipoNativo</h3>
+        <code class="firma">(texto): texto</code>
+      </div>
+      <p class="doc">tipoNativo("int Comparar(const void *, const void *)") — un tipo de función para retrollamadas; tipoNativo("FILE") — un tipo opaco</p>
+      <div class="caja">
+        <pre class="cod"><code>usar tipoNativo de "nativo"
+
+imprimir(tipoNativo("int Comparar(int a, int b)"), tipoNativo("FILE"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>Comparar FILE</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-retrollamada" data-busca="retrollamada funcion(cualquiera, texto): cualquiera retrollamada(funcion, "tipo") — una retrollamada que c puede guardar y llamar más tarde; suéltala con soltarretrollamada usar tiponativo, retrollamada de "nativo"
+
+tiponativo("void aviso(int)")
+fijo r = retrollamada(fn(n) { imprimir("c me llamó con", n) }, "aviso")
+imprimir(tipo(r))">
+      <div class="ent-cab">
+        <h3>retrollamada</h3>
+        <code class="firma">(cualquiera, texto): cualquiera</code>
+      </div>
+      <p class="doc">retrollamada(funcion, "Tipo") — una retrollamada que C puede guardar y llamar más tarde; suéltala con soltarRetrollamada</p>
+      <div class="caja">
+        <pre class="cod"><code>usar tipoNativo, retrollamada de "nativo"
+
+tipoNativo("void Aviso(int)")
+fijo r = retrollamada(fn(n) { imprimir("C me llamó con", n) }, "Aviso")
+imprimir(tipo(r))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>retrollamada</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-soltarRetrollamada" data-busca="soltarretrollamada funcion(cualquiera): nulo soltarretrollamada(r) — c ya no la va a llamar; llamarla después sería un fallo usar tiponativo, retrollamada, soltarretrollamada de "nativo"
+
+tiponativo("void aviso(int)")
+fijo r = retrollamada(fn(n) { imprimir(n) }, "aviso")
+soltarretrollamada(r)
+imprimir("c ya no la va a llamar")">
+      <div class="ent-cab">
+        <h3>soltarRetrollamada</h3>
+        <code class="firma">(cualquiera): nulo</code>
+      </div>
+      <p class="doc">soltarRetrollamada(r) — C ya no la va a llamar; llamarla después sería un fallo</p>
+      <div class="caja">
+        <pre class="cod"><code>usar tipoNativo, retrollamada, soltarRetrollamada de "nativo"
+
+tipoNativo("void Aviso(int)")
+fijo r = retrollamada(fn(n) { imprimir(n) }, "Aviso")
+soltarRetrollamada(r)
+imprimir("C ya no la va a llamar")</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>C ya no la va a llamar</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-reservarMemoria" data-busca="reservarmemoria funcion(entero): cualquiera reservarmemoria(bytes) — un bloque de bytes a cero, para pasarlo donde c pide char * o void *; se libera solo usar reservarmemoria, tamanonativo de "nativo"
+
+fijo m = reservarmemoria(4 * tamanonativo("real"))   # sitio para 4 reales, a cero
+imprimir(tipo(m))">
+      <div class="ent-cab">
+        <h3>reservarMemoria</h3>
+        <code class="firma">(entero): cualquiera</code>
+      </div>
+      <p class="doc">reservarMemoria(bytes) — un bloque de bytes a cero, para pasarlo donde C pide char * o void *; se libera solo</p>
+      <div class="caja">
+        <pre class="cod"><code>usar reservarMemoria, tamanoNativo de "nativo"
+
+fijo m = reservarMemoria(4 * tamanoNativo("real"))   # sitio para 4 reales, a cero
+imprimir(tipo(m))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>memoria</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-leerMemoria" data-busca="leermemoria funcion leermemoria(p, tipo, cuantos?) — lee de un puntero: un número, una lista de cuantos, o "texto" hasta el cero usar reservarmemoria, escribirmemoria, leermemoria de "nativo"
+
+fijo m = reservarmemoria(12)
+escribirmemoria(m, "entero", [7, 8, 9])
+imprimir(leermemoria(m, "entero"), leermemoria(m, "entero", 3))">
+      <div class="ent-cab">
+        <h3>leerMemoria</h3>
+        <code class="firma"><span class="variadica" title="número variable de argumentos: el verificador de tipos no la comprueba">(…)</span></code>
+      </div>
+      <p class="doc">leerMemoria(p, tipo, cuantos?) — lee de un puntero: un número, una lista de cuantos, o "texto" hasta el cero</p>
+      <div class="caja">
+        <pre class="cod"><code>usar reservarMemoria, escribirMemoria, leerMemoria de "nativo"
+
+fijo m = reservarMemoria(12)
+escribirMemoria(m, "entero", [7, 8, 9])
+imprimir(leerMemoria(m, "entero"), leerMemoria(m, "entero", 3))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>7 [7, 8, 9]</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-escribirMemoria" data-busca="escribirmemoria funcion(cualquiera, texto, cualquiera): nulo escribirmemoria(p, tipo, valor) — escribe un número (o una lista) en esa dirección usar reservarmemoria, escribirmemoria, leermemoria de "nativo"
+
+fijo m = reservarmemoria(16)
+escribirmemoria(m, "real", [1.5, -2.25])
+imprimir(leermemoria(m, "real", 2))">
+      <div class="ent-cab">
+        <h3>escribirMemoria</h3>
+        <code class="firma">(cualquiera, texto, cualquiera): nulo</code>
+      </div>
+      <p class="doc">escribirMemoria(p, tipo, valor) — escribe un número (o una lista) en esa dirección</p>
+      <div class="caja">
+        <pre class="cod"><code>usar reservarMemoria, escribirMemoria, leerMemoria de "nativo"
+
+fijo m = reservarMemoria(16)
+escribirMemoria(m, "real", [1.5, -2.25])
+imprimir(leerMemoria(m, "real", 2))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>[1.5, -2.25]</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-textoDeMemoria" data-busca="textodememoria funcion(cualquiera): texto textodememoria(m) — el texto que c dejó en una memoria, hasta el primer cero usar reservarmemoria, escribirmemoria, textodememoria de "nativo"
+
+fijo m = reservarmemoria(8)
+escribirmemoria(m, "entero8", [72, 111, 108, 97, 0])   # lo que c dejaría: «hola» y un cero
+imprimir(textodememoria(m))">
+      <div class="ent-cab">
+        <h3>textoDeMemoria</h3>
+        <code class="firma">(cualquiera): texto</code>
+      </div>
+      <p class="doc">textoDeMemoria(m) — el texto que C dejó en una memoria, hasta el primer cero</p>
+      <div class="caja">
+        <pre class="cod"><code>usar reservarMemoria, escribirMemoria, textoDeMemoria de "nativo"
+
+fijo m = reservarMemoria(8)
+escribirMemoria(m, "entero8", [72, 111, 108, 97, 0])   # lo que C dejaría: «Hola» y un cero
+imprimir(textoDeMemoria(m))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>Hola</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-tamanoNativo" data-busca="tamanonativo funcion(texto): entero tamanonativo(tipo) — cuántos bytes ocupa: "real", "int", o una estructura declarada usar tamanonativo de "nativo"
+
+imprimir(tamanonativo("real"), tamanonativo("entero"), tamanonativo("entero8"))">
+      <div class="ent-cab">
+        <h3>tamanoNativo</h3>
+        <code class="firma">(texto): entero</code>
+      </div>
+      <p class="doc">tamanoNativo(tipo) — cuántos bytes ocupa: "real", "int", o una estructura declarada</p>
+      <div class="caja">
+        <pre class="cod"><code>usar tamanoNativo de "nativo"
+
+imprimir(tamanoNativo("real"), tamanoNativo("entero"), tamanoNativo("entero8"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>8 4 1</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-direccion" data-busca="direccion funcion(cualquiera): entero direccion(p) — la dirección como entero, para imprimirla o compararla usar reservarmemoria, direccion de "nativo"
+
+fijo m = reservarmemoria(8)
+imprimir(direccion(m) &gt; 0)">
+      <div class="ent-cab">
+        <h3>direccion</h3>
+        <code class="firma">(cualquiera): entero</code>
+      </div>
+      <p class="doc">direccion(p) — la dirección como entero, para imprimirla o compararla</p>
+      <div class="caja">
+        <pre class="cod"><code>usar reservarMemoria, direccion de "nativo"
+
+fijo m = reservarMemoria(8)
+imprimir(direccion(m) &gt; 0)</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>cierto</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-errorC" data-busca="errorc funcion(): entero errorc() — el errno de la última llamada a c (0 si no hubo error) usar errorc de "nativo"
+
+imprimir(errorc())   # 0: la última llamada a c no dejó error">
+      <div class="ent-cab">
+        <h3>errorC</h3>
+        <code class="firma">(): entero</code>
+      </div>
+      <p class="doc">errorC() — el errno de la última llamada a C (0 si no hubo error)</p>
+      <div class="caja">
+        <pre class="cod"><code>usar errorC de "nativo"
+
+imprimir(errorC())   # 0: la última llamada a C no dejó error</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>0</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-enFondo" data-busca="enfondo funcion enfondo(f, args…) — llama a una función nativa en otro hilo y devuelve una promesa: «esperar enfondo(f, x)» usar enfondo de "nativo"
+
+fijo cos = nativa("libm.so.6", "cos", "real", ["real"])
+fijo p = enfondo(cos, 0.0)   # en otro hilo: «esperar enfondo(cos, 0.0)»
+imprimir(tipo(p))">
+      <div class="ent-cab">
+        <h3>enFondo</h3>
+        <code class="firma"><span class="variadica" title="número variable de argumentos: el verificador de tipos no la comprueba">(…)</span></code>
+      </div>
+      <p class="doc">enFondo(f, args…) — llama a una función nativa en otro hilo y devuelve una promesa: «esperar enFondo(f, x)»</p>
+      <div class="caja">
+        <pre class="cod"><code>usar enFondo de "nativo"
+
+fijo cos = nativa("libm.so.6", "cos", "real", ["real"])
+fijo p = enFondo(cos, 0.0)   # en otro hilo: «esperar enFondo(cos, 0.0)»
+imprimir(tipo(p))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>promesa</code></pre></div>
+      </div>
+    </article>
+  </section>
+  <section class="sec" id="s-sistema">
+    <div class="sec-cab">
+      <h2>sistema</h2>
+      <code class="usar-edsl">usar "sistema"</code>
+      <span class="cuenta">20</span>
+    </div>
+    <p class="sec-intro">Archivos grandes, carpetas, rutas, procesos en segundo plano y un servidor HTTP (4.1). Solo existe en la consola, como «leerTexto»: una página no abre puertos ni lee el disco. «servir» escucha por defecto SOLO en este equipo (127.0.0.1); abrirlo a la red se escribe. Un error en el manejador es un 500 que no le cuenta a quien pidió qué falló, y en la consola sale entero. Las rutas usan el separador del sistema; sin anfitrión (en el IDE) funcionan igual con «/». Los ejemplos de esta sección corren con un disco y un sistema de mentira: lo que tocan de verdad lo prueba pruebas/sistema.js.</p>
+    
+    <article class="ent" id="fn-leerLineas" data-busca="leerlineas funcion(texto): cualquiera leerlineas(ruta) — un generador con las líneas del archivo, sin cargarlo entero: «para l en leerlineas("enorme.csv")» usar leerlineas de "sistema"
+
+para l en leerlineas("datos/notas.txt") { imprimir("·", l) }">
+      <div class="ent-cab">
+        <h3>leerLineas</h3>
+        <code class="firma">(texto): cualquiera</code>
+      </div>
+      <p class="doc">leerLineas(ruta) — un generador con las líneas del archivo, sin cargarlo entero: «para l en leerLineas("enorme.csv")»</p>
+      <div class="caja">
+        <pre class="cod"><code>usar leerLineas de "sistema"
+
+para l en leerLineas("datos/notas.txt") { imprimir("·", l) }</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>· primera
+· segunda</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-copiarArchivo" data-busca="copiararchivo funcion(texto, texto): nulo copiararchivo(de, a) — copia un archivo (o una carpeta entera) usar copiararchivo de "sistema"
+
+copiararchivo("datos/notas.txt", "copia.txt")
+imprimir(leertexto("copia.txt"))">
+      <div class="ent-cab">
+        <h3>copiarArchivo</h3>
+        <code class="firma">(texto, texto): nulo</code>
+      </div>
+      <p class="doc">copiarArchivo(de, a) — copia un archivo (o una carpeta entera)</p>
+      <div class="caja">
+        <pre class="cod"><code>usar copiarArchivo de "sistema"
+
+copiarArchivo("datos/notas.txt", "copia.txt")
+imprimir(leerTexto("copia.txt"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>primera
+segunda
+</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-moverArchivo" data-busca="moverarchivo funcion(texto, texto): nulo moverarchivo(de, a) — lo mueve o le cambia el nombre usar moverarchivo de "sistema"
+
+escribirtexto("borrador.txt", "hola")
+moverarchivo("borrador.txt", "final.txt")
+imprimir(existearchivo("borrador.txt"), existearchivo("final.txt"))">
+      <div class="ent-cab">
+        <h3>moverArchivo</h3>
+        <code class="firma">(texto, texto): nulo</code>
+      </div>
+      <p class="doc">moverArchivo(de, a) — lo mueve o le cambia el nombre</p>
+      <div class="caja">
+        <pre class="cod"><code>usar moverArchivo de "sistema"
+
+escribirTexto("borrador.txt", "hola")
+moverArchivo("borrador.txt", "final.txt")
+imprimir(existeArchivo("borrador.txt"), existeArchivo("final.txt"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>falso cierto</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-infoArchivo" data-busca="infoarchivo funcion(texto): dic&lt;texto,cualquiera&gt; infoarchivo(ruta) — {tamano, modificado, creado, escarpeta, esarchivo}; las fechas son fechas de ñ usar infoarchivo de "sistema"
+
+fijo i = infoarchivo("datos/notas.txt")
+imprimir(i["tamano"], "bytes ·", i["esarchivo"], i["escarpeta"])">
+      <div class="ent-cab">
+        <h3>infoArchivo</h3>
+        <code class="firma">(texto): dic&lt;texto,cualquiera&gt;</code>
+      </div>
+      <p class="doc">infoArchivo(ruta) — {tamano, modificado, creado, esCarpeta, esArchivo}; las fechas son fechas de Ñ</p>
+      <div class="caja">
+        <pre class="cod"><code>usar infoArchivo de "sistema"
+
+fijo i = infoArchivo("datos/notas.txt")
+imprimir(i["tamano"], "bytes ·", i["esArchivo"], i["esCarpeta"])</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>16 bytes · cierto falso</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-carpetaActual" data-busca="carpetaactual funcion(): texto carpetaactual() — la carpeta desde la que corre el programa usar carpetaactual de "sistema"
+
+imprimir(carpetaactual())">
+      <div class="ent-cab">
+        <h3>carpetaActual</h3>
+        <code class="firma">(): texto</code>
+      </div>
+      <p class="doc">carpetaActual() — la carpeta desde la que corre el programa</p>
+      <div class="caja">
+        <pre class="cod"><code>usar carpetaActual de "sistema"
+
+imprimir(carpetaActual())</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>/home/diego/proyecto</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-cambiarCarpeta" data-busca="cambiarcarpeta funcion(texto): nulo cambiarcarpeta(ruta) — las rutas relativas pasan a contar desde ahí usar carpetaactual, cambiarcarpeta de "sistema"
+
+cambiarcarpeta("datos")
+imprimir(carpetaactual())">
+      <div class="ent-cab">
+        <h3>cambiarCarpeta</h3>
+        <code class="firma">(texto): nulo</code>
+      </div>
+      <p class="doc">cambiarCarpeta(ruta) — las rutas relativas pasan a contar desde ahí</p>
+      <div class="caja">
+        <pre class="cod"><code>usar carpetaActual, cambiarCarpeta de "sistema"
+
+cambiarCarpeta("datos")
+imprimir(carpetaActual())</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>/home/diego/proyecto/datos</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-infoSistema" data-busca="infosistema funcion(): dic&lt;texto,cualquiera&gt; infosistema() — so, arquitectura, procesadores, memoria, libre, usuario, personal, temporal, equipo, motor usar infosistema de "sistema"
+
+fijo s = infosistema()
+imprimir(s["so"], s["arquitectura"], s["procesadores"], "procesadores")">
+      <div class="ent-cab">
+        <h3>infoSistema</h3>
+        <code class="firma">(): dic&lt;texto,cualquiera&gt;</code>
+      </div>
+      <p class="doc">infoSistema() — so, arquitectura, procesadores, memoria, libre, usuario, personal, temporal, equipo, motor</p>
+      <div class="caja">
+        <pre class="cod"><code>usar infoSistema de "sistema"
+
+fijo s = infoSistema()
+imprimir(s["so"], s["arquitectura"], s["procesadores"], "procesadores")</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>windows x64 8 procesadores</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-ejecutarEnFondo" data-busca="ejecutarenfondo funcion ejecutarenfondo(orden, argumentos?, opciones?) — como ejecutar, sin parar el programa: «fijo r = esperar ejecutarenfondo("git", ["status"])» usar ejecutarenfondo de "sistema"
+
+fijo p = ejecutarenfondo("git", ["status"])   # «fijo r = esperar ejecutarenfondo(…)»
+imprimir(tipo(p))">
+      <div class="ent-cab">
+        <h3>ejecutarEnFondo</h3>
+        <code class="firma"><span class="variadica" title="número variable de argumentos: el verificador de tipos no la comprueba">(…)</span></code>
+      </div>
+      <p class="doc">ejecutarEnFondo(orden, argumentos?, opciones?) — como ejecutar, sin parar el programa: «fijo r = esperar ejecutarEnFondo("git", ["status"])»</p>
+      <div class="caja">
+        <pre class="cod"><code>usar ejecutarEnFondo de "sistema"
+
+fijo p = ejecutarEnFondo("git", ["status"])   # «fijo r = esperar ejecutarEnFondo(…)»
+imprimir(tipo(p))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>promesa</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-respuesta" data-busca="respuesta funcion respuesta(estado, cuerpo, opciones?) — para «servir»: respuesta(404, "no está"), respuesta(201, datos, {"cabeceras": {"x-algo": "sí"}}) usar respuesta de "sistema"
+
+imprimir(respuesta(404, "no está"))">
+      <div class="ent-cab">
+        <h3>respuesta</h3>
+        <code class="firma"><span class="variadica" title="número variable de argumentos: el verificador de tipos no la comprueba">(…)</span></code>
+      </div>
+      <p class="doc">respuesta(estado, cuerpo, opciones?) — para «servir»: respuesta(404, "no está"), respuesta(201, datos, {"cabeceras": {"X-Algo": "sí"}})</p>
+      <div class="caja">
+        <pre class="cod"><code>usar respuesta de "sistema"
+
+imprimir(respuesta(404, "no está"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>{estado: 404, cuerpo: "no está"}</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-servir" data-busca="servir funcion servir(puerto, funcion) — un servidor http: la función recibe {metodo, ruta, consulta, cabeceras, cuerpo, ip} y devuelve texto, un dic (json) o {estado, cuerpo, tipo, cabeceras}; puede ser asíncrona usar servir de "sistema"
+
+fijo s = servir(8080, fn(p) { devolver "hola, " + obtener(p["consulta"], "nombre", "mundo") })
+imprimir("escuchando en", s["puerto"])">
+      <div class="ent-cab">
+        <h3>servir</h3>
+        <code class="firma"><span class="variadica" title="número variable de argumentos: el verificador de tipos no la comprueba">(…)</span></code>
+      </div>
+      <p class="doc">servir(puerto, funcion) — un servidor HTTP: la función recibe {metodo, ruta, consulta, cabeceras, cuerpo, ip} y devuelve texto, un dic (JSON) o {estado, cuerpo, tipo, cabeceras}; puede ser asíncrona</p>
+      <div class="caja">
+        <pre class="cod"><code>usar servir de "sistema"
+
+fijo s = servir(8080, fn(p) { devolver "hola, " + obtener(p["consulta"], "nombre", "mundo") })
+imprimir("escuchando en", s["puerto"])</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>escuchando en 8080</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-detenerServidor" data-busca="detenerservidor funcion(cualquiera): bool detenerservidor(s) — deja de escuchar; el programa puede acabar usar servir, detenerservidor de "sistema"
+
+fijo s = servir(8080, fn(p) { devolver "hola" })
+imprimir(detenerservidor(s), detenerservidor(s))">
+      <div class="ent-cab">
+        <h3>detenerServidor</h3>
+        <code class="firma">(cualquiera): bool</code>
+      </div>
+      <p class="doc">detenerServidor(s) — deja de escuchar; el programa puede acabar</p>
+      <div class="caja">
+        <pre class="cod"><code>usar servir, detenerServidor de "sistema"
+
+fijo s = servir(8080, fn(p) { devolver "hola" })
+imprimir(detenerServidor(s), detenerServidor(s))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>cierto falso</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-unirRuta" data-busca="unirruta funcion unirruta("datos", "2026", "ventas.csv") — con el separador de este sistema, y sin barras dobles usar unirruta de "sistema"
+
+imprimir(unirruta("datos", "2026", "ventas.csv"))">
+      <div class="ent-cab">
+        <h3>unirRuta</h3>
+        <code class="firma"><span class="variadica" title="número variable de argumentos: el verificador de tipos no la comprueba">(…)</span></code>
+      </div>
+      <p class="doc">unirRuta("datos", "2026", "ventas.csv") — con el separador de este sistema, y sin barras dobles</p>
+      <div class="caja">
+        <pre class="cod"><code>usar unirRuta de "sistema"
+
+imprimir(unirRuta("datos", "2026", "ventas.csv"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>datos/2026/ventas.csv</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-nombreArchivo" data-busca="nombrearchivo funcion(texto): texto nombrearchivo("a/b/ventas.csv") — "ventas.csv" usar nombrearchivo de "sistema"
+
+imprimir(nombrearchivo("datos/2026/ventas.csv"))">
+      <div class="ent-cab">
+        <h3>nombreArchivo</h3>
+        <code class="firma">(texto): texto</code>
+      </div>
+      <p class="doc">nombreArchivo("a/b/ventas.csv") — "ventas.csv"</p>
+      <div class="caja">
+        <pre class="cod"><code>usar nombreArchivo de "sistema"
+
+imprimir(nombreArchivo("datos/2026/ventas.csv"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>ventas.csv</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-extension" data-busca="extension funcion(texto): texto extension("ventas.csv") — ".csv" (vacío si no tiene) usar extension de "sistema"
+
+imprimir(extension("ventas.csv"), "[" + extension("leeme") + "]")">
+      <div class="ent-cab">
+        <h3>extension</h3>
+        <code class="firma">(texto): texto</code>
+      </div>
+      <p class="doc">extension("ventas.csv") — ".csv" (vacío si no tiene)</p>
+      <div class="caja">
+        <pre class="cod"><code>usar extension de "sistema"
+
+imprimir(extension("ventas.csv"), "[" + extension("LEEME") + "]")</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>.csv []</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-sinExtension" data-busca="sinextension funcion(texto): texto sinextension("a/ventas.csv") — "a/ventas" usar sinextension de "sistema"
+
+imprimir(sinextension("datos/ventas.csv"))">
+      <div class="ent-cab">
+        <h3>sinExtension</h3>
+        <code class="firma">(texto): texto</code>
+      </div>
+      <p class="doc">sinExtension("a/ventas.csv") — "a/ventas"</p>
+      <div class="caja">
+        <pre class="cod"><code>usar sinExtension de "sistema"
+
+imprimir(sinExtension("datos/ventas.csv"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>datos/ventas</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-carpetaDe" data-busca="carpetade funcion(texto): texto carpetade("a/b/ventas.csv") — "a/b" usar carpetade de "sistema"
+
+imprimir(carpetade("datos/2026/ventas.csv"))">
+      <div class="ent-cab">
+        <h3>carpetaDe</h3>
+        <code class="firma">(texto): texto</code>
+      </div>
+      <p class="doc">carpetaDe("a/b/ventas.csv") — "a/b"</p>
+      <div class="caja">
+        <pre class="cod"><code>usar carpetaDe de "sistema"
+
+imprimir(carpetaDe("datos/2026/ventas.csv"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>datos/2026</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-esRutaAbsoluta" data-busca="esrutaabsoluta funcion(texto): bool esrutaabsoluta(ruta) — si empieza desde la raíz (o desde una unidad, en windows) usar esrutaabsoluta de "sistema"
+
+imprimir(esrutaabsoluta("/home/diego"), esrutaabsoluta("datos/ventas.csv"))">
+      <div class="ent-cab">
+        <h3>esRutaAbsoluta</h3>
+        <code class="firma">(texto): bool</code>
+      </div>
+      <p class="doc">esRutaAbsoluta(ruta) — si empieza desde la raíz (o desde una unidad, en Windows)</p>
+      <div class="caja">
+        <pre class="cod"><code>usar esRutaAbsoluta de "sistema"
+
+imprimir(esRutaAbsoluta("/home/diego"), esRutaAbsoluta("datos/ventas.csv"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>cierto falso</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-normalizarRuta" data-busca="normalizarruta funcion(texto): texto normalizarruta("a/./b/../c") — "a/c" usar normalizarruta de "sistema"
+
+imprimir(normalizarruta("datos/./2026/../ventas.csv"))">
+      <div class="ent-cab">
+        <h3>normalizarRuta</h3>
+        <code class="firma">(texto): texto</code>
+      </div>
+      <p class="doc">normalizarRuta("a/./b/../c") — "a/c"</p>
+      <div class="caja">
+        <pre class="cod"><code>usar normalizarRuta de "sistema"
+
+imprimir(normalizarRuta("datos/./2026/../ventas.csv"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>datos/ventas.csv</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-rutaAbsoluta" data-busca="rutaabsoluta funcion(texto): texto rutaabsoluta(ruta) — la ruta completa, contando desde la carpeta actual usar rutaabsoluta de "sistema"
+
+imprimir(rutaabsoluta("datos/notas.txt"))">
+      <div class="ent-cab">
+        <h3>rutaAbsoluta</h3>
+        <code class="firma">(texto): texto</code>
+      </div>
+      <p class="doc">rutaAbsoluta(ruta) — la ruta completa, contando desde la carpeta actual</p>
+      <div class="caja">
+        <pre class="cod"><code>usar rutaAbsoluta de "sistema"
+
+imprimir(rutaAbsoluta("datos/notas.txt"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>/home/diego/proyecto/datos/notas.txt</code></pre></div>
+      </div>
+    </article>
+    <article class="ent" id="fn-rutaRelativa" data-busca="rutarelativa funcion(texto, texto): texto rutarelativa(desde, hasta) — cómo llegar de una carpeta a otra ruta usar rutarelativa de "sistema"
+
+imprimir(rutarelativa("/home/diego/proyecto", "/home/diego/fotos/viaje.png"))">
+      <div class="ent-cab">
+        <h3>rutaRelativa</h3>
+        <code class="firma">(texto, texto): texto</code>
+      </div>
+      <p class="doc">rutaRelativa(desde, hasta) — cómo llegar de una carpeta a otra ruta</p>
+      <div class="caja">
+        <pre class="cod"><code>usar rutaRelativa de "sistema"
+
+imprimir(rutaRelativa("/home/diego/proyecto", "/home/diego/fotos/viaje.png"))</code></pre>
+        <div class="sal"><span class="et">imprime</span><pre><code>../fotos/viaje.png</code></pre></div>
+      </div>
+    </article>
+  </section>
   <section class="sec" id="s-probar">
     <div class="sec-cab">
       <h2>probar</h2>
@@ -12914,7 +13579,7 @@ imprimir(resumenPruebas())</code></pre>
       <p class="pie">Generada con <code>util/referencia.js</code> a partir del registro de globales
         del motor, los textos de ayuda que viajan con cada función y la salida de
         <code>util/ejemplos-biblioteca.js</code>. Si falta un ejemplo, o si uno deja de correr, la
-        generación <b>falla</b> y no sale página: por eso los 757 ejemplos son también una
+        generación <b>falla</b> y no sale página: por eso los 793 ejemplos son también una
         segunda batería de pruebas.</p>
     </main>
   </div>

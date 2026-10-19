@@ -254,18 +254,22 @@ console.log('\n── 5c. arreglos en binario: el puente con NumPy ──');
 {
   // Solo Node: QuickJS no tiene los dos métodos de bytes del anfitrión todavía.
   const bin = prog('arreglo.bin');
+  // Dentro de un texto de Ñ la ruta va con «/»: en Windows, «C:\Users\…» se
+  // leía como escapes («\U», «\A»…) y las cinco pruebas de aquí fallaban (fase
+  // W1). Windows entiende «/» igual; es lo que ya hace «base» más arriba.
+  const binN = bin.replace(/\\/g, '/');
   const r = correr('node', `usar arreglo, ceros, transpuesta, aListaA from "numerico"`.replace(' from ', ' de ') + `
 fijo a = arreglo([[1.5, -2.25, 3], [4, 5.5, 1e-9]], "real")
-escribirArregloBinario("${bin}", a)
-imprimir(tamanoArchivo("${bin}"))
-imprimir(aListaA(leerArregloBinario("${bin}", "real", [2, 3])) == aListaA(a))
-escribirArregloBinario("${bin}", arreglo([7, -8, 2147483647, -2147483648], "entero"))
-imprimir(tamanoArchivo("${bin}"), aListaA(leerArregloBinario("${bin}", "entero", [4])))
-escribirArregloBinario("${bin}", transpuesta(arreglo([[1, 2, 3], [4, 5, 6]], "real")))
-imprimir(aListaA(leerArregloBinario("${bin}", "real", [3, 2])))
-escribirArregloBinario("${bin}", ceros([4], "real"))
-intentar { leerArregloBinario("${bin}", "real", [5]) } capturar (e) { imprimir(e.mensaje) }
-intentar { leerArregloBinario("${bin}", "texto", [4]) } capturar (e) { imprimir(e.mensaje) }`);
+escribirArregloBinario("${binN}", a)
+imprimir(tamanoArchivo("${binN}"))
+imprimir(aListaA(leerArregloBinario("${binN}", "real", [2, 3])) == aListaA(a))
+escribirArregloBinario("${binN}", arreglo([7, -8, 2147483647, -2147483648], "entero"))
+imprimir(tamanoArchivo("${binN}"), aListaA(leerArregloBinario("${binN}", "entero", [4])))
+escribirArregloBinario("${binN}", transpuesta(arreglo([[1, 2, 3], [4, 5, 6]], "real")))
+imprimir(aListaA(leerArregloBinario("${binN}", "real", [3, 2])))
+escribirArregloBinario("${binN}", ceros([4], "real"))
+intentar { leerArregloBinario("${binN}", "real", [5]) } capturar (e) { imprimir(e.mensaje) }
+intentar { leerArregloBinario("${binN}", "texto", [4]) } capturar (e) { imprimir(e.mensaje) }`);
   const l = r.salida.split('\n');
   comprobar('un real ocupa 8 bytes y da la vuelta igual', l[0] === '48' && l[1] === 'cierto', r.salida + r.error);
   comprobar('un entero ocupa 4 bytes, con los extremos de int32', l[2] === '16 [7, -8, 2147483647, -2147483648]', l[2]);

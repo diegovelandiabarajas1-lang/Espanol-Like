@@ -272,7 +272,8 @@ imprimir("no espero")`);
 }
 falla('un método inventado se rechaza', 'pedir("https://x.test/y", {"metodo": "ROBAR"}, fn(r) { })', 'no está permitido');
 falla('una opción que no existe se rechaza', 'pedir("https://x.test/y", {"tiempo": 5}, fn(r) { })', 'no conozco la opción');
-falla('y hace falta la función', 'pedir("https://x.test/y")', 'necesita una función');
+// (4.1) sin función, «pedir» devuelve una promesa para «esperar pedir(url)».
+bien('sin función, pedir devuelve una promesa', 'imprimir(tipo(pedir("https://x.test/y")))', c => c.salida[0] === 'promesa');
 
 console.log('\n── 8. los fotogramas sobreviven al repintado ──');
 {

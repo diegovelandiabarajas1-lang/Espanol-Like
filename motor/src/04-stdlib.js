@@ -5,6 +5,15 @@
 'use strict';
 
 function instalarBiblioteca(vm, host) {
+  let cuerpoCorrutinas = null;     // (4.1) se llena abajo; se instala como eDSL
+  let cuerpoNativo = null;         // (4.1, S1) ídem, el eDSL «nativo»
+  let cuerpoSistema = null;        // (4.1, S2) ídem, el eDSL «sistema»
+  // (4.1, S1) Lo que llega de fuera cuando ya no corre nada —una llamada
+  // nativa en segundo plano que acaba, una retrollamada registrada que C
+  // dispara— es un turno nuevo, como un clic. Si falla, el anfitrión decide
+  // cómo enseñarlo (la consola lo imprime); si no dice nada, se lanza.
+  const errorDeTurno = e => { if (host.errorEnTurno) host.errorEnTurno(e); else throw e; };
+  const enTurno = f => { vm.nuevoTurno(); try { f(); } catch (e) { errorDeTurno(e); } };
   host = host || {};
   vm.edsls = new Map();          // nombre del eDSL → { nombre, clave, exporta }
   vm.edslPorClave = new Map();   // clave          → el mismo registro
@@ -42,23 +51,95 @@ function instalarBiblioteca(vm, host) {
     vm.error(`«real»: no se puede convertir ${tipoDe(v)}`);
   }, 'convierte a número con decimales');
   def('bool', 'cualquiera -> bool', (a) => verdad(a[0]), 'convierte a verdadero/falso');
-  def('tipo', 'cualquiera -> texto', (a) => tipoDe(a[0]), 'devuelve el nombre del tipo');
+  def('tipo', 'cualquiera -> texto', (a) => (a[0] instanceof ObjDic && a[0].tipoReg ? a[0].tipoReg.nombre : tipoDe(a[0])), 'devuelve el nombre del tipo');
+  // Lleva firma como toda nativa (la prueba «ninguna nativa sin firma»).
+  if (!FALTANTE.firma) { FALTANTE.firma = firma('-> nulo'); FALTANTE.firmaTxt = '-> nulo'; }
+  vm.globals.set(' faltante', FALTANTE);
+
+  // (4.1) corrutinas. « producir» y « esperar» los emite el compilador.
+  const corrutinaActual = () => vm.corrutinas.length ? vm.corrutinas[vm.corrutinas.length - 1] : null;
+  def(' producir', 'cualquiera -> nulo', a => {
+    const g = corrutinaActual();
+    if (!g || g.asincrono) vm.error('«producir» solo funciona dentro de un generador que alguien esté recorriendo');
+    vm.pausa = { valor: a[0] };
+    return null;
+  });
+  def(' esperar', 'cualquiera -> cualquiera', a => {
+    const g = corrutinaActual();
+    if (!g || !g.asincrono) vm.error('«esperar» solo funciona dentro de una función asíncrona');
+    vm.pausa = { valor: a[0] };
+    return null;
+  });
+  // Los ayudantes van en un eDSL, «usar siguiente, recoger de "corrutinas"»,
+  // y no en el ámbito global: un nombre global nuevo rompe a quien ya tenía
+  // una función con ese nombre (pasó: «todas» en 20-contador-palabras.txt y
+  // «siguiente» en 28-dias-habiles.txt). Solo «pedir» sin función es global.
+  cuerpoCorrutinas = def => {
+  const gen = (v, n, f) => { if (!(v instanceof ObjGenerador) || v.asincrono) vm.error(`«${f}»: el argumento ${n} debe ser un generador y es ${tipoDe(v)}`); return v; };
+  def('siguiente', '... -> cualquiera', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«siguiente» acepta el generador y, si quieres, el valor para cuando se acabe');
+    const g = gen(a[0], 1, 'siguiente');
+    return vm.genAvanzar(g) ? g.actual : (a.length > 1 ? a[1] : null);
+  }, 'siguiente(g, siSeAcaba?) — el próximo valor del generador; si ya no hay, siSeAcaba (o nulo)');
+  def('terminado', 'cualquiera -> bool', a => {
+    const v = a[0];
+    if (v instanceof ObjGenerador) return v.estado === 'terminado';
+    if (v instanceof ObjPromesa) return v.estado !== 'pendiente';
+    vm.error(`«terminado»: necesita un generador o una promesa y recibió ${tipoDe(v)}`);
+  }, 'terminado(g) — si el generador ya no da más, o si la promesa ya está lista');
+  def('recoger', 'cualquiera -> lista', a => {
+    const g = gen(a[0], 1, 'recoger');
+    const out = [];
+    while (vm.genAvanzar(g)) { out.push(g.actual); vm.cobrar(1); }
+    return L(out);
+  }, 'recoger(g) — todos los valores que queden en el generador, en una lista');
+  def('dormir', 'real -> cualquiera', a => {
+    if (!host.tiempo) vm.error('«dormir» necesita un anfitrión con reloj', 'está en el IDE y en las aplicaciones exportadas');
+    const ms = vm.exigeNum(a[0], 1, 'dormir');
+    const p = vm.registrar(new ObjPromesa());
+    host.tiempo.luego(ms, new ObjNativa(' despertar', 0, () => { vm.cumplir(p, null, true); return null; }), vm);
+    return p;
+  }, 'dormir(ms) — una promesa que se cumple pasado ese tiempo: «esperar dormir(500)»');
+  def('todas', 'lista -> cualquiera', a => {
+    const ps = lst(a[0], 1, 'todas').items;
+    const p = vm.registrar(new ObjPromesa());
+    const res = new Array(ps.length);
+    let faltan = ps.length;
+    if (!faltan) { vm.cumplir(p, L([]), true); return p; }
+    ps.forEach((x, i) => {
+      const listo = (ok, v) => {
+        if (p.estado !== 'pendiente') return;
+        if (!ok) { vm.cumplir(p, v, false); return; }
+        res[i] = v;
+        if (--faltan === 0) vm.cumplir(p, L(res), true);
+      };
+      if (x instanceof ObjPromesa) { x.vista = true; if (x.estado === 'pendiente') x.esperando.push(listo); else listo(x.estado === 'cumplida', x.valor); }
+      else listo(true, x);
+    });
+    return p;
+  }, 'todas(promesas) — una promesa con la lista de resultados, cuando estén todas');
+  };
+  // (4.1) Lo que hay detrás de «tipo Punto { x, y }». La llama el
+  // compilador, no el programa: el nombre lleva un espacio y no se puede
+  // escribir. Devuelve el constructor, que queda como el global «Punto».
+  def(' registro', 'texto, lista, dic -> cualquiera', a => {
+    const desc = { nombre: a[0], campos: a[1].items.slice(), metodos: new Map(a[2].mapa) };
+    const n = desc.campos.length;
+    const ctor = new ObjNativa(desc.nombre, n, (args) => {
+      const d = vm.nuevoDic();
+      d.tipoReg = desc;
+      for (let i = 0; i < n; i++) d.mapa.set(desc.campos[i], args[i]);
+      return d;
+    }, `${desc.nombre}(${desc.campos.join(', ')}) — crea un ${desc.nombre}`);
+    ctor.registro = desc;
+    return ctor;
+  });
   def('longitud', 'cualquiera -> entero', (a) => vm.longitud(a[0]), 'longitud de un texto, lista o diccionario');
   def('rango', '... -> lista<entero>', (a) => {
-    let ini = 0, fin = 0, paso = 1;
-    if (a.length === 1) fin = num(a[0], 1, 'rango');
-    else if (a.length === 2) { ini = num(a[0], 1, 'rango'); fin = num(a[1], 2, 'rango'); }
-    else if (a.length === 3) { ini = num(a[0], 1, 'rango'); fin = num(a[1], 2, 'rango'); paso = num(a[2], 3, 'rango'); }
-    else vm.error('«rango» acepta 1, 2 o 3 argumentos');
-    if (paso === 0) vm.error('«rango»: el paso no puede ser 0');
-    // La cuenta se hace ANTES de construir nada. Estaba después, así que
-    // «rango(1000000000)» intentaba primero llenar la lista y salía por un
-    // error de JavaScript en crudo —«Invalid array length»— en vez de por el
-    // mensaje de Ñ que había justo debajo.
-    const cuantos = Math.max(0, Math.ceil((fin - ini) / paso));
-    if (cuantos > 5e6)
-      vm.error(`«rango» generaría ${cuantos.toLocaleString('es')} elementos y el tope son 5 millones`,
-        'si solo quieres contar, usa «repetir n { … }», que no construye la lista');
+    // La validación vive en la VM (vm.prepararRango) porque el JIT la necesita
+    // igual: «para i en rango(n)» compilado no construye la lista, pero tiene
+    // que dar exactamente los mismos errores que si la construyera.
+    const { ini, fin, paso, cuantos } = vm.prepararRango(a);
     const out = new Array(cuantos);
     let n = 0;
     if (paso > 0) for (let i = ini; i < fin; i += paso) out[n++] = i;
@@ -66,6 +147,10 @@ function instalarBiblioteca(vm, host) {
     out.length = n;
     return L(out);
   }, 'rango(n) · rango(ini,fin) · rango(ini,fin,paso)');
+  // Marcas para el JIT (4.1): son ESTAS funciones y no otras con el
+  // mismo nombre. Si un programa las tapa con su propio «fn», la marca no está
+  // y el JIT no toma el atajo.
+  vm.globals.get('rango').puro = 'rango';
   def('afirmar', '... -> nulo', (a) => {
     if (!verdad(a[0])) vm.error(a.length > 1 ? repr(a[1], 0) : 'la afirmación resultó falsa');
     return null;
@@ -139,6 +224,7 @@ function instalarBiblioteca(vm, host) {
   // ----------------------------------------------------------------- listas
   seccion('listas');
   def('agregar', '... -> lista', a => { const l = lst(a[0], 1, 'agregar'); for (let i = 1; i < a.length; i++) l.items.push(a[i]); return l; });
+  vm.globals.get('agregar').puro = 'agregar';
   def('quitar', 'lista, cualquiera -> lista', a => {
     const l = lst(a[0], 1, 'quitar');
     const i = l.items.findIndex(x => iguales(x, a[1]));
@@ -153,7 +239,7 @@ function instalarBiblioteca(vm, host) {
   def('copiar', 'cualquiera -> cualquiera', a => {
     const v = a[0];
     if (v instanceof ObjLista) return L(v.items.slice());
-    if (v instanceof ObjDic) { const d = D(); for (const [k, x] of v.mapa) d.mapa.set(k, x); return d; }
+    if (v instanceof ObjDic) { const d = D(); for (const [k, x] of v.mapa) d.mapa.set(k, x); if (v.tipoReg) d.tipoReg = v.tipoReg; return d; }
     return v;
   });
   def('ordenar', '... -> lista', a => {
@@ -682,7 +768,7 @@ function instalarBiblioteca(vm, host) {
   const red = host.red || null;
   const METODOS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']);
 
-  def('pedir', '... -> nulo', a => {
+  def('pedir', '... -> cualquiera', a => {
     if (!red) vm.error('«pedir» necesita un anfitrión con red',
       'está en el IDE, en una aplicación exportada y en el intérprete de Node; QuickJS no trae «fetch»');
     const url = txt(a[0], 1, 'pedir');
@@ -695,8 +781,13 @@ function instalarBiblioteca(vm, host) {
       if (x === null) continue;
       vm.error(`«pedir» no sabe qué hacer con ${tipoDe(x)} en la posición ${i + 1}`);
     }
-    if (!fn) vm.error('«pedir» necesita una función que reciba la respuesta',
-      'pedir("https://…", fn(r) { imprimir(r["cuerpo"]) })');
+    // (4.1) Sin función, «pedir» devuelve una promesa: dentro de una
+    // función asíncrona se escribe «var r = esperar pedir(url)».
+    let promesa = null;
+    if (!fn) {
+      promesa = vm.registrar(new ObjPromesa());
+      fn = new ObjNativa(' respuesta', 1, x => { vm.cumplir(promesa, x[0], true); return null; });
+    }
     const o = { metodo: 'GET', cuerpo: null, cabeceras: {} };
     if (op) for (const [k, v] of op.mapa) {
       const clave = String(k);
@@ -721,8 +812,8 @@ function instalarBiblioteca(vm, host) {
     }
     vm.cobrar(4);
     red.pedir(url, o, fn, vm);
-    return null;
-  }, 'pedir(url, opciones?, funcion) — trae datos de la red; la respuesta llega a la función, como un clic');
+    return promesa;
+  }, 'pedir(url, opciones?, funcion?) — trae datos de la red; la respuesta llega a la función, o con «esperar pedir(url)»');
 
   // JSON, que es en lo que habla casi todo lo que hay al otro lado de pedir().
   function aValor(v, prof) {
@@ -880,6 +971,226 @@ function instalarBiblioteca(vm, host) {
     return null;
   }, 'escribirArregloBinario(ruta, arreglo) — lo guarda como bytes crudos (float64 o int32), el formato de NumPy');
 
+  // ── (4.1, S2) el eDSL «sistema»: usar servir, leerLineas, unirRuta de "sistema"
+  // Nombres nuevos en un eDSL, no globales: lección de X4 («todas» y
+  // «siguiente» globales rompieron dos programas que ya existían).
+  cuerpoSistema = def => {
+    const rut = host.rutas || null;
+    const exigeArch = (q, k) => { if (!arch || (k && !arch[k])) faltaArch(q); };
+    // ── archivos
+    def('leerLineas', 'texto -> cualquiera', a => {
+      const r = txt(a[0], 1, 'leerLineas');
+      exigeArch('leerLineas', 'lineas');
+      const sig = conArchivo('leerLineas', r, () => arch.lineas(r));
+      const g = vm.registrar(new ObjGenerador(null, null, false));
+      g.nombreNativo = 'leerLineas';
+      g.nativo = () => { const l = conArchivo('leerLineas', r, sig); if (l !== undefined) vm.cobrar(1 + (l.length >> 6)); return l; };
+      g.alAcabar = () => sig.cerrar && sig.cerrar();
+      return g;
+    }, 'leerLineas(ruta) — un generador con las líneas del archivo, sin cargarlo entero: «para l en leerLineas("enorme.csv")»');
+    def('copiarArchivo', 'texto, texto -> nulo', a => {
+      const de = txt(a[0], 1, 'copiarArchivo'), aa = txt(a[1], 2, 'copiarArchivo');
+      exigeArch('copiarArchivo', 'copiar');
+      vm.cobrar(20);
+      conArchivo('copiarArchivo', de, () => arch.copiar(de, aa));
+      return null;
+    }, 'copiarArchivo(de, a) — copia un archivo (o una carpeta entera)');
+    def('moverArchivo', 'texto, texto -> nulo', a => {
+      const de = txt(a[0], 1, 'moverArchivo'), aa = txt(a[1], 2, 'moverArchivo');
+      exigeArch('moverArchivo', 'mover');
+      conArchivo('moverArchivo', de, () => arch.mover(de, aa));
+      return null;
+    }, 'moverArchivo(de, a) — lo mueve o le cambia el nombre');
+    def('infoArchivo', 'texto -> dic<texto,cualquiera>', a => {
+      const r = txt(a[0], 1, 'infoArchivo');
+      exigeArch('infoArchivo', 'info');
+      const i = conArchivo('infoArchivo', r, () => arch.info(r));
+      const d = D();
+      d.mapa.set('tamano', i.tamano);
+      d.mapa.set('modificado', vm.nuevaFecha(i.modificado));
+      d.mapa.set('creado', vm.nuevaFecha(i.creado));
+      d.mapa.set('esCarpeta', !!i.esCarpeta);
+      d.mapa.set('esArchivo', !!i.esArchivo);
+      return d;
+    }, 'infoArchivo(ruta) — {tamano, modificado, creado, esCarpeta, esArchivo}; las fechas son fechas de Ñ');
+    def('carpetaActual', ' -> texto', () => {
+      if (!sis || !sis.carpetaActual) faltaSis('carpetaActual');
+      return String(sis.carpetaActual());
+    }, 'carpetaActual() — la carpeta desde la que corre el programa');
+    def('cambiarCarpeta', 'texto -> nulo', a => {
+      if (!sis || !sis.cambiarCarpeta) faltaSis('cambiarCarpeta');
+      const r = txt(a[0], 1, 'cambiarCarpeta');
+      conSistema('cambiarCarpeta', () => sis.cambiarCarpeta(r));
+      return null;
+    }, 'cambiarCarpeta(ruta) — las rutas relativas pasan a contar desde ahí');
+    def('infoSistema', ' -> dic<texto,cualquiera>', () => {
+      if (!sis || !sis.info) faltaSis('infoSistema');
+      const i = sis.info(), d = D();
+      for (const k of Object.keys(i)) d.mapa.set(k, i[k]);
+      return d;
+    }, 'infoSistema() — so, arquitectura, procesadores, memoria, libre, usuario, personal, temporal, equipo, motor');
+    // ── procesos
+    def('ejecutarEnFondo', '... -> cualquiera', a => {
+      if (!sis || !sis.ejecutarFondo) faltaSis('ejecutarEnFondo');
+      if (a.length < 1 || a.length > 3) vm.error('«ejecutarEnFondo» es ejecutarEnFondo(orden, argumentos?, opciones?)');
+      const orden = txt(a[0], 1, 'ejecutarEnFondo');
+      const args = a.length > 1 && a[1] !== null ? lst(a[1], 2, 'ejecutarEnFondo').items.map(x => repr(x, 0)) : [];
+      const op = opcionesProceso(a[2], 'ejecutarEnFondo');
+      const p = vm.registrar(new ObjPromesa());
+      vm.cobrar(50);
+      conSistema('ejecutarEnFondo', () => sis.ejecutarFondo(orden, args, op, r => enTurno(() => vm.cumplir(p, resultadoProceso(r), true))));
+      return p;
+    }, 'ejecutarEnFondo(orden, argumentos?, opciones?) — como ejecutar, sin parar el programa: «fijo r = esperar ejecutarEnFondo("git", ["status"])»');
+    // ── el servidor
+    const srv = host.servidor || null;
+    const faltaSrv = q => vm.error(`«${q}» necesita un anfitrión que pueda abrir puertos`,
+      'esto corre en la consola: node motor/util/n-node.js programa.esl');
+    // Lo que devuelve el manejador, convertido en una respuesta HTTP. Un texto
+    // es texto (o HTML si empieza por «<»), una lista o un dic es JSON —
+    // siempre: un dic de datos que tenga una clave «estado» o «cuerpo» no se
+    // confunde con una respuesta—, nulo es 204, y para el estado o las
+    // cabeceras está respuesta(estado, cuerpo, opciones?).
+    const MARCA_RESP = Symbol('respuesta');
+    const json = v => ({ estado: 200, tipo: 'application/json; charset=utf-8', cuerpo: JSON.stringify(deValor(v, 0)) });
+    const tipoTexto = t => (/^\s*</.test(t) ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8');
+    function respuesta(v) {
+      if (v === null || v === undefined) return { estado: 204, tipo: 'text/plain; charset=utf-8', cuerpo: '' };
+      if (typeof v === 'string') return { estado: 200, tipo: tipoTexto(v), cuerpo: v };
+      if (v instanceof ObjDic && v[MARCA_RESP]) return v[MARCA_RESP];
+      if (v instanceof ObjLista || v instanceof ObjDic) return json(v);
+      return { estado: 200, tipo: 'text/plain; charset=utf-8', cuerpo: repr(v, 0) };
+    }
+    def('respuesta', '... -> dic<texto,cualquiera>', a => {
+      if (a.length < 2 || a.length > 3) vm.error('«respuesta» es respuesta(estado, cuerpo) o respuesta(estado, cuerpo, {"tipo": …, "cabeceras": {…}})');
+      const estado = vm.exigeEnt(a[0], 1, 'respuesta');
+      if (estado < 100 || estado > 599) vm.error(`«respuesta»: ${estado} no es un estado HTTP (van de 100 a 599)`);
+      const base = respuesta(a[1]);
+      const r = { estado, tipo: base.tipo, cuerpo: estado === 204 ? '' : base.cuerpo, cabeceras: {} };
+      if (a.length > 2 && a[2] !== null) {
+        const o = a[2];
+        if (!(o instanceof ObjDic)) vm.error('«respuesta»: las opciones van en un diccionario');
+        for (const [k, x] of o.mapa) {
+          if (k === 'tipo') r.tipo = txt(x, 3, 'respuesta');
+          else if (k === 'cabeceras') {
+            if (!(x instanceof ObjDic)) vm.error('«respuesta»: «cabeceras» es un diccionario {Nombre: valor}');
+            for (const [ck, cv] of x.mapa) {
+              const n = String(ck), val = repr(cv, 0);
+              if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(n)) vm.error(`«respuesta»: «${n}» no es un nombre de cabecera válido`);
+              if (/[\r\n]/.test(val)) vm.error(`«respuesta»: el valor de «${n}» lleva un salto de línea`);
+              r.cabeceras[n] = val;
+            }
+          } else vm.error(`«respuesta»: no conozco la opción «${k}»`, 'las opciones son tipo y cabeceras');
+        }
+      }
+      // Es un dic normal para el programa (se puede imprimir y mirar), con la
+      // respuesta ya comprobada guardada aparte.
+      const d = D();
+      d.mapa.set('estado', estado); d.mapa.set('cuerpo', a[1]);
+      d[MARCA_RESP] = r;
+      return d;
+    }, 'respuesta(estado, cuerpo, opciones?) — para «servir»: respuesta(404, "no está"), respuesta(201, datos, {"cabeceras": {"X-Algo": "sí"}})');
+    // A quien pidió no se le cuenta qué falló por dentro (podría ser cualquiera
+    // en la red): eso va a la consola, entero, con su línea.
+    const error500 = () => ({ estado: 500, tipo: 'text/plain; charset=utf-8', cuerpo: 'error interno del servidor' });
+    def('servir', '... -> cualquiera', a => {
+      if (!srv) faltaSrv('servir');
+      if (a.length < 2 || a.length > 3) vm.error('«servir» es servir(puerto, funcion) o servir(puerto, funcion, {"anfitrion": "0.0.0.0"})');
+      const puerto = vm.exigeEnt(a[0], 1, 'servir');
+      if (puerto < 0 || puerto > 65535) vm.error(`«servir»: ${puerto} no es un puerto (van de 0 a 65535; 0 elige uno libre)`);
+      const fn = a[1];
+      if (!esFn(fn)) vm.error(`«servir»: el argumento 2 debe ser una función y es ${tipoDe(fn)}`);
+      // Por defecto solo escucha en este equipo: abrirlo a la red es una
+      // decisión, y se escribe.
+      let ip = '127.0.0.1';
+      if (a.length > 2 && a[2] !== null) {
+        const o = a[2];
+        if (!(o instanceof ObjDic)) vm.error('«servir»: las opciones van en un diccionario');
+        for (const [k, x] of o.mapa) {
+          if (k === 'anfitrion') ip = txt(x, 3, 'servir');
+          else vm.error(`«servir»: no conozco la opción «${k}»`, 'la opción es anfitrion ("0.0.0.0" para abrirlo a la red)');
+        }
+      }
+      const p = vm.registrar(new ObjPromesa());
+      const d = D();
+      const id = conSistema('servir', () => srv.escuchar(puerto, ip, (pet, responder) => {
+        enTurno(() => {
+          const q = D();
+          for (const k of Object.keys(pet.consulta)) q.mapa.set(k, pet.consulta[k]);
+          const c = D();
+          for (const k of Object.keys(pet.cabeceras)) c.mapa.set(k, String(pet.cabeceras[k]));
+          const pd = D();
+          pd.mapa.set('metodo', pet.metodo); pd.mapa.set('ruta', pet.ruta); pd.mapa.set('consulta', q);
+          pd.mapa.set('cabeceras', c); pd.mapa.set('cuerpo', pet.cuerpo); pd.mapa.set('ip', pet.ip);
+          let r;
+          try { r = vm.invocar(fn, [pd]); }
+          catch (e) { responder(error500(e)); throw e; }
+          // Un manejador asíncrono devuelve una promesa: se responde cuando esté.
+          if (r instanceof ObjPromesa) {
+            r.vista = true;
+            const listo = (ok, v) => {
+              if (!ok) { responder(error500({ message: v instanceof ObjError ? v.mensaje : repr(v, 0) })); errorDeTurno(new ErrorTiempoEjecucion(`una petición a ${pet.ruta} falló: ${v instanceof ObjError ? v.mensaje : repr(v, 0)}`)); return; }
+              try { responder(respuesta(v)); } catch (e) { responder(error500(e)); errorDeTurno(e); }
+            };
+            if (r.estado === 'pendiente') r.esperando.push(listo); else listo(r.estado === 'cumplida', r.valor);
+            return;
+          }
+          try { responder(respuesta(r)); } catch (e) { responder(error500(e)); throw e; }
+        });
+      }, (err, puertoReal) => enTurno(() => {
+        if (err) { vm.cumplir(p, vm.nuevoError('sistema', `«servir»: ${err}`, vm.lineaActual), false); return; }
+        d.mapa.set('puerto', puertoReal);
+        vm.cumplir(p, d, true);
+      })));
+      d.mapa.set('id', id); d.mapa.set('puerto', puerto); d.mapa.set('listo', p);
+      return d;
+    }, 'servir(puerto, funcion) — un servidor HTTP: la función recibe {metodo, ruta, consulta, cabeceras, cuerpo, ip} y devuelve texto, un dic (JSON) o {estado, cuerpo, tipo, cabeceras}; puede ser asíncrona');
+    def('detenerServidor', 'cualquiera -> bool', a => {
+      if (!srv) faltaSrv('detenerServidor');
+      const s = a[0];
+      if (!(s instanceof ObjDic) || !s.mapa.has('id')) vm.error('«detenerServidor»: necesita lo que devolvió servir()');
+      return !!srv.cerrar(s.mapa.get('id'));
+    }, 'detenerServidor(s) — deja de escuchar; el programa puede acabar');
+    // ── rutas: con las del sistema operativo si el anfitrión las da; si no
+    // (el navegador), con «/», que es lo que entiende una URL.
+    const pos = {
+      unir: ps => pos.normalizar(ps.filter(x => x !== '').join('/')),
+      normalizar: r => {
+        const abs = r.startsWith('/'), out = [];
+        for (const t of r.split('/')) { if (t === '' || t === '.') continue; if (t === '..' && out.length && out[out.length - 1] !== '..') out.pop(); else if (t !== '..' || !abs) out.push(t); }
+        return (abs ? '/' : '') + out.join('/') || (abs ? '/' : '.');
+      },
+      nombre: r => r.replace(/\/+$/, '').split('/').pop(),
+      extension: r => { const n = pos.nombre(r), i = n.lastIndexOf('.'); return i > 0 ? n.slice(i) : ''; },
+      carpeta: r => { const t = r.replace(/\/+$/, ''), i = t.lastIndexOf('/'); return i < 0 ? '.' : i === 0 ? '/' : t.slice(0, i); },
+      esAbsoluta: r => r.startsWith('/'),
+    };
+    const R = rut || pos;
+    def('unirRuta', '... -> texto', a => {
+      if (!a.length) vm.error('«unirRuta» necesita al menos un trozo');
+      return R.unir(a.map((x, i) => txt(x, i + 1, 'unirRuta')));
+    }, 'unirRuta("datos", "2026", "ventas.csv") — con el separador de este sistema, y sin barras dobles');
+    def('nombreArchivo', 'texto -> texto', a => R.nombre(txt(a[0], 1, 'nombreArchivo')),
+      'nombreArchivo("a/b/ventas.csv") — "ventas.csv"');
+    def('extension', 'texto -> texto', a => R.extension(txt(a[0], 1, 'extension')),
+      'extension("ventas.csv") — ".csv" (vacío si no tiene)');
+    def('sinExtension', 'texto -> texto', a => { const r = txt(a[0], 1, 'sinExtension'), e = R.extension(r); return e ? r.slice(0, -e.length) : r; },
+      'sinExtension("a/ventas.csv") — "a/ventas"');
+    def('carpetaDe', 'texto -> texto', a => R.carpeta(txt(a[0], 1, 'carpetaDe')),
+      'carpetaDe("a/b/ventas.csv") — "a/b"');
+    def('esRutaAbsoluta', 'texto -> bool', a => !!R.esAbsoluta(txt(a[0], 1, 'esRutaAbsoluta')),
+      'esRutaAbsoluta(ruta) — si empieza desde la raíz (o desde una unidad, en Windows)');
+    def('normalizarRuta', 'texto -> texto', a => R.normalizar(txt(a[0], 1, 'normalizarRuta')),
+      'normalizarRuta("a/./b/../c") — "a/c"');
+    def('rutaAbsoluta', 'texto -> texto', a => {
+      if (!rut) faltaSis('rutaAbsoluta');
+      return rut.absoluta(txt(a[0], 1, 'rutaAbsoluta'));
+    }, 'rutaAbsoluta(ruta) — la ruta completa, contando desde la carpeta actual');
+    def('rutaRelativa', 'texto, texto -> texto', a => {
+      if (!rut) faltaSis('rutaRelativa');
+      return rut.relativa(txt(a[0], 1, 'rutaRelativa'), txt(a[1], 2, 'rutaRelativa'));
+    }, 'rutaRelativa(desde, hasta) — cómo llegar de una carpeta a otra ruta');
+  };
+
   def('argumentos', ' -> lista<texto>', () => {
     if (!sis) faltaSis('argumentos');
     return L(sis.argumentos().map(String));
@@ -898,17 +1209,44 @@ function instalarBiblioteca(vm, host) {
       const l = lst(a[1], 2, 'ejecutar');
       args = l.items.map(x => repr(x, 0));
     }
+    const op = opcionesProceso(a[2], 'ejecutar');
+    if (op && sis.ejecutar.length < 3)
+      vm.error('«ejecutar»: este anfitrión no entiende opciones (entrada, carpeta, entorno, espera)',
+        'están en el intérprete de Node: node motor/util/n-node.js', false, 'sistema');
     vm.cobrar(50);
-    const r = conSistema('ejecutar', () => sis.ejecutar(orden, args));
+    const r = conSistema('ejecutar', () => sis.ejecutar(orden, args, op));
+    return resultadoProceso(r);
+  }, 'ejecutar(orden, argumentos?, opciones?) — lanza un programa y espera; devuelve {codigo, salida, error}. Opciones: entrada, carpeta, entorno, espera (ms)');
+  // (4.1, S2) Las opciones de un proceso, comprobadas aquí: un nombre mal
+  // escrito («carpta») se diría como error y no se ignoraría en silencio.
+  function opcionesProceso(v, quien) {
+    if (v === undefined || v === null) return null;
+    if (!(v instanceof ObjDic)) vm.error(`«${quien}»: las opciones van en un diccionario y es ${tipoDe(v)}`);
+    const o = {};
+    for (const [k, x] of v.mapa) {
+      if (k === 'entrada') o.entrada = txt(x, 3, quien);
+      else if (k === 'carpeta') o.carpeta = txt(x, 3, quien);
+      else if (k === 'espera') { o.espera = vm.exigeEnt(x, 3, quien); if (o.espera <= 0) vm.error(`«${quien}»: «espera» son milisegundos, más de cero`); }
+      else if (k === 'entorno') {
+        if (!(x instanceof ObjDic)) vm.error(`«${quien}»: «entorno» es un diccionario {NOMBRE: valor}`);
+        o.entorno = {};
+        for (const [ek, ev] of x.mapa) o.entorno[String(ek)] = repr(ev, 0);
+      } else vm.error(`«${quien}»: no conozco la opción «${k}»`, 'las opciones son entrada, carpeta, entorno y espera');
+    }
+    return o;
+  }
+  function resultadoProceso(r) {
     const d = D();
     d.mapa.set('codigo', r.codigo | 0);
     d.mapa.set('salida', String(r.salida || ''));
     d.mapa.set('error', String(r.error || ''));
     return d;
-  }, 'ejecutar(orden, argumentos?) — lanza un programa y espera; devuelve {codigo, salida, error}');
+  }
   def('leerLinea', '... -> cualquiera', a => {
     if (!sis) faltaSis('leerLinea');
-    if (a.length && a[0] !== null) vm.salida(repr(a[0], 0));
+    // (4.1, S2) Si el anfitrión sabe escribir sin salto de línea, la
+    // pregunta queda en la misma línea que la respuesta, como en cualquier consola.
+    if (a.length && a[0] !== null) { if (sis.indicar) sis.indicar(repr(a[0], 0)); else vm.salida(repr(a[0], 0)); }
     const l = sis.leerLinea();
     return l === null || l === undefined ? null : String(l);
   }, 'leerLinea(pista?) — lee una línea de la entrada; nulo cuando se acaba');
@@ -1033,10 +1371,149 @@ function instalarBiblioteca(vm, host) {
     return n;
   }, 'estructuraNativa(nombre, {campo: tipo, …}) — declara una estructura de C; devuelve su nombre para usarlo como tipo');
 
+  // ── (4.1, S1) la llamada, con lo que el anfitrión sabe de cada parámetro
+  // Si el anfitrión describe los parámetros (koffi lo hace), la conversión los
+  // mira: un arreglo solo va a un puntero de SU tipo de número, un parámetro de
+  // salida no se pasa y se devuelve, y una función de Ñ que va a un puntero a
+  // función se envuelve como retrollamada. Sin descripción, lo de siempre.
+  const pilaNativa = [];      // las llamadas nativas en curso (una retrollamada puede anidar otra)
+  const esFuncionN = v => v instanceof ObjCierre || v instanceof ObjNativa;
+  const defectoDe = d => (!d ? null : d.clase === 'numero' ? 0 : d.clase === 'bool' ? false : null);
+  function deNativo(r, d, quien) {
+    if (d && d.clase === 'puntero') return r === null || r === undefined ? null : new ObjOpaco('puntero', r);
+    return deCrudo(r, quien);
+  }
+  function aNativo(v, d, ctx, quien, i) {
+    if (!d) return aCrudo(v, quien, i);
+    if (v === null || v === undefined) return null;
+    if (d.clase === 'retrollamada') {
+      if (v instanceof ObjOpaco && v.clase === 'retrollamada') {
+        if (!v.vivo) vm.error(`«${quien}»: el argumento ${i} es una retrollamada ya soltada`, null, false, 'nativo');
+        return v.crudo;
+      }
+      if (!esFuncionN(v))
+        vm.error(`«${quien}»: el argumento ${i} es un puntero a función (${d.c}) y recibió ${tipoDe(v)}`, null, false, 'nativo');
+      if (ctx.enFondo)
+        vm.error(`«${quien}»: una llamada en segundo plano no puede llevar retrollamadas`,
+          'C la llamaría desde otro hilo, y Ñ corre en uno solo: hazla normal, sin «enFondo»', false, 'nativo');
+      return retro(v, d.resultado, ctx);
+    }
+    if (v instanceof ObjArreglo) {
+      if (d.clase !== 'puntero')
+        vm.error(`«${quien}»: el argumento ${i} es un arreglo y C espera ${d.c}`, 'un arreglo va a un puntero: «double *» o «int *»', false, 'nativo');
+      const elemN = v.tipo === 'entero' ? 'entero' : 'real';
+      const cDe = v.tipo === 'entero' ? 'int (int32_t)' : 'double';
+      if (d.apunta === 'numero' && (d.elem !== elemN || (elemN === 'entero' && d.ancho !== 4)))
+        vm.error(`«${quien}»: el argumento ${i} es un arreglo ${v.tipo}, de ${cDe}, y C espera ${d.c}`,
+          'C leería esos bytes como si fueran de otro tipo; convierte el arreglo o corrige la firma', false, 'nativo');
+      if (d.apunta === 'estructura')
+        vm.error(`«${quien}»: el argumento ${i} es un arreglo y C espera ${d.c}, un puntero a estructura`, null, false, 'nativo');
+      // Seguida desde donde empiece (una fila de una matriz lo está, aunque no
+      // empiece en 0): basta con que las zancadas sean las de su forma.
+      const z = zancadasDe(v.forma);
+      let contigua = true;
+      for (let q = 0; q < z.length; q++) if (v.forma[q] > 1 && z[q] !== v.zancadas[q]) contigua = false;
+      if (!contigua)
+        vm.error(`«${quien}»: el argumento ${i} es una vista con huecos de un arreglo, y C necesita los números seguidos`,
+          'pásale copia(a), de "numerico": una copia seguida (y lo que C escriba irá a la copia)', false, 'nativo');
+      const dt = v.datos;   // «datos» trae la copia buena si vivía en la GPU
+      return dt.subarray(v.desp * (v.tipo === 'complejo' ? 2 : 1), (v.desp + v.tamano) * (v.tipo === 'complejo' ? 2 : 1));
+    }
+    if (v instanceof ObjOpaco) {
+      if (!v.vivo) vm.error(`«${quien}»: el argumento ${i} es ${repr(v, 0)}`, null, false, 'nativo');
+      if (v.clase === 'retrollamada') vm.error(`«${quien}»: el argumento ${i} es una retrollamada y C espera ${d.c}`, null, false, 'nativo');
+      if (d.clase === 'numero') {   // la forma vieja: «puntero» es un entero (uintptr_t)
+        const dir = v.clase === 'memoria' ? nat.direccion(v.crudo) : v.direccion();
+        return Number(dir);
+      }
+      if (d.clase !== 'puntero' && d.clase !== 'texto')
+        vm.error(`«${quien}»: el argumento ${i} es un ${v.clase} y C espera ${d.c}`, null, false, 'nativo');
+      return v.crudo;
+    }
+    return aCrudo(v, quien, i);
+  }
+  // Una función de Ñ que C va a llamar. Nada puede cruzar los marcos de C
+  // lanzado —un error de JavaScript a través de C es un proceso roto—, así que
+  // el error se guarda, la retrollamada devuelve un valor neutro, y la llamada
+  // nativa, al volver, lo lanza como error de Ñ normal y capturable.
+  function retro(f, dres, ctx) {
+    return (...xs) => {
+      if (ctx.error) return defectoDe(dres);
+      try {
+        const r = vm.invocar(f, xs.map(x => (typeof x === 'bigint' && (x > 9007199254740991n || x < -9007199254740991n))
+          ? new ObjOpaco('puntero', x) : deCrudo(x, f.nombre || 'retrollamada')));
+        if (!dres || dres.clase === 'nulo') return undefined;
+        if (dres.clase === 'numero' && typeof r !== 'number' && typeof r !== 'boolean')
+          vm.error(`la retrollamada tenía que devolver un número (${dres.c}) y devolvió ${tipoDe(r)}`, null, false, 'nativo');
+        return aNativo(r, dres, ctx, 'retrollamada', 0);
+      } catch (e) { ctx.error = e; return defectoDe(dres); }
+    };
+  }
+  // Prepara los argumentos de Ñ y devuelve los crudos y las cajas de salida.
+  function prepararNativa(llamar, args, quien, enFondo) {
+    const ps = llamar.parametros || null;
+    const ctx = { error: null, enFondo };
+    if (!ps) return { ctx, crudos: args.map((x, i) => aCrudo(x, quien, i + 1)), cajas: null };
+    const crudos = new Array(ps.length), cajas = [];
+    let k = 0;
+    for (let j = 0; j < ps.length; j++) {
+      const d = ps[j];
+      if (d.dir === 'sale') { const c = [null]; crudos[j] = c; cajas.push({ c, d }); continue; }
+      const v = aNativo(args[k], d, ctx, quien, k + 1);
+      k++;
+      if (d.dir === 'entra y sale') { const c = [v]; crudos[j] = c; cajas.push({ c, d }); }
+      else crudos[j] = v;
+    }
+    return { ctx, crudos, cajas };
+  }
+  // Y lo que vuelve: el resultado y, detrás, lo que dejaron los de salida.
+  // Uno solo va tal cual; varios, en una lista: «fijo [q, r] = dividir(17, 5)».
+  function terminarNativa(llamar, r, cajas, quien) {
+    if (!cajas || !cajas.length) return deNativo(r, llamar.resultado, quien);
+    const vals = [];
+    if (!llamar.resultado || llamar.resultado.clase !== 'nulo') vals.push(deNativo(r, llamar.resultado, quien));
+    for (const { c, d } of cajas) vals.push(deNativo(c[0], d.apunta === 'opaco' ? { clase: 'puntero' } : null, quien));
+    return vals.length === 1 ? vals[0] : L(vals);
+  }
+  function hacerNativa(llamar, sim, bib, aridad, doc) {
+    const n = new ObjNativa(sim, aridad, (args) => {
+      vm.cobrar(20 + aridad * 2);
+      const { ctx, crudos, cajas } = prepararNativa(llamar, args, sim, false);
+      let r;
+      pilaNativa.push(ctx);
+      try { r = llamar(crudos); }
+      catch (e) {
+        if (e instanceof ErrorTiempoEjecucion) throw e;
+        vm.error(`«${sim}»: ${String((e && e.message) || e)}`, null, false, 'nativo');
+      }
+      finally { pilaNativa.pop(); }
+      if (ctx.error) throw ctx.error;      // lo que falló dentro de una retrollamada
+      return terminarNativa(llamar, r, cajas, sim);
+    }, doc);
+    n.llamarNativo = llamar;               // para «enFondo»
+    return n;
+  }
+  const contarEntradas = llamar => llamar.parametros ? llamar.parametros.filter(d => d.dir !== 'sale').length : null;
+
   def('nativa', '... -> funcion', a => {
     if (!nat) faltaNat('nativa');
+    // (S1) La forma corta: nativa(biblioteca, "double cos(double)").
+    if (a.length === 2) {
+      const bib = txt(a[0], 1, 'nativa');
+      const proto = txt(a[1], 2, 'nativa');
+      if (!nat.funcionC) vm.error('«nativa» con una firma de C necesita un anfitrión más nuevo', null, false, 'nativo');
+      if (++nDeclaradas > MAX_NATIVAS)
+        vm.error(`«nativa»: no se declaran más de ${MAX_NATIVAS} funciones nativas en una ejecución`,
+          'declárala una vez y guarda el resultado en una variable, no dentro de un bucle', false, 'nativo');
+      vm.cobrar(100);
+      const llamar = conNativo('nativa', () => nat.funcionC(bib, proto));
+      const ar = contarEntradas(llamar);
+      if (ar > MAX_ARGS_NAT)
+        vm.error(`«nativa»: no se declaran más de ${MAX_ARGS_NAT} argumentos y se declararon ${ar}`, null, false, 'nativo');
+      return hacerNativa(llamar, llamar.nombre, bib, ar, `${proto} — de ${bib}`);
+    }
     if (a.length < 3 || a.length > 4)
-      vm.error('«nativa» acepta 3 o 4 argumentos: nativa(biblioteca, simbolo, devuelve, argumentos?)');
+      vm.error('«nativa» acepta 2, 3 o 4 argumentos: nativa(biblioteca, "double cos(double)") o nativa(biblioteca, simbolo, devuelve, argumentos?)');
     const bib = txt(a[0], 1, 'nativa');
     const sim = txt(a[1], 2, 'nativa');
     const dev = txt(a[2], 3, 'nativa');
@@ -1061,19 +1538,128 @@ function instalarBiblioteca(vm, host) {
     const llamar = conNativo('nativa', () => nat.funcion(bib, sim, dev, tipos));
     // La aridad va en el propio valor, así que el número de argumentos lo
     // comprueba la máquina con su mensaje de siempre antes de que nada cruce.
-    return new ObjNativa(sim, tipos.length, (args) => {
-      vm.cobrar(20 + tipos.length * 2);
-      const crudos = new Array(args.length);
-      for (let i = 0; i < args.length; i++) crudos[i] = aCrudo(args[i], sim, i + 1);
-      let r;
-      try { r = llamar(crudos); }
-      catch (e) {
-        if (e instanceof ErrorTiempoEjecucion) throw e;
-        vm.error(`«${sim}»: ${String((e && e.message) || e)}`, null, false, 'nativo');
-      }
-      return deCrudo(r, sim);
-    }, `${sim}() de ${bib} — declarada con nativa()`);
-  }, 'nativa(biblioteca, simbolo, devuelve, argumentos?) — declara una función compilada y la devuelve como función de Ñ');
+    return hacerNativa(llamar, sim, bib, tipos.length, `${sim}() de ${bib} — declarada con nativa()`);
+  }, 'nativa(biblioteca, "double cos(double)") o nativa(biblioteca, simbolo, devuelve, argumentos?) — declara una función compilada y la devuelve como función de Ñ');
+
+  // (4.1, S1) Lo demás del FFI va en el eDSL «nativo»: usar retrollamada,
+  // memoria, leerMemoria de "nativo". No son globales para no quitarle nombres a nadie.
+  cuerpoNativo = def => {
+    const exigeNat = q => { if (!nat || !nat.tipoC) faltaNat(q); };
+    def('tipoNativo', 'texto -> texto', a => {
+      exigeNat('tipoNativo');
+      return conNativo('tipoNativo', () => nat.tipoC(txt(a[0], 1, 'tipoNativo')));
+    }, 'tipoNativo("int Comparar(const void *, const void *)") — un tipo de función para retrollamadas; tipoNativo("FILE") — un tipo opaco');
+    def('retrollamada', 'cualquiera, texto -> cualquiera', a => {
+      exigeNat('retrollamada');
+      if (!esFuncionN(a[0])) vm.error(`«retrollamada»: el argumento 1 debe ser una función y es ${tipoDe(a[0])}`);
+      const nombre = txt(a[1], 2, 'retrollamada');
+      // Una registrada vive más que la llamada: sus errores no tienen llamada
+      // a la que volver, así que salen como error del turno.
+      const ctx = { error: null };
+      const f = retro(a[0], null, ctx);
+      // Si C la dispara dentro de una llamada nativa de Ñ, el error es de esa
+      // llamada. Si la dispara él solo (un temporizador de C, otro hilo), es un
+      // turno aparte, y el error se enseña sin lanzarlo: lanzar a través de C
+      // es romper el proceso.
+      const envuelta = (...xs) => {
+        const dentro = pilaNativa.length ? pilaNativa[pilaNativa.length - 1] : null;
+        if (!dentro) vm.nuevoTurno();
+        const r = f(...xs);
+        if (ctx.error) {
+          const e = ctx.error; ctx.error = null;
+          if (dentro) { if (!dentro.error) dentro.error = e; }
+          else if (host.errorEnTurno) host.errorEnTurno(e);
+          else vm.salida(e.formato ? e.formato() : String(e.message || e));
+        }
+        return r;
+      };
+      const h = conNativo('retrollamada', () => nat.registrar(envuelta, nombre));
+      return new ObjOpaco('retrollamada', h, { nombre, fn: a[0] });
+    }, 'retrollamada(funcion, "Tipo") — una retrollamada que C puede guardar y llamar más tarde; suéltala con soltarRetrollamada');
+    def('soltarRetrollamada', 'cualquiera -> nulo', a => {
+      exigeNat('soltarRetrollamada');
+      const r = a[0];
+      if (!(r instanceof ObjOpaco) || r.clase !== 'retrollamada') vm.error(`«soltarRetrollamada»: necesita una retrollamada y recibió ${tipoDe(r)}`);
+      if (r.vivo) { conNativo('soltarRetrollamada', () => nat.desregistrar(r.crudo)); r.vivo = false; }
+      return null;
+    }, 'soltarRetrollamada(r) — C ya no la va a llamar; llamarla después sería un fallo');
+    def('reservarMemoria', 'entero -> cualquiera', a => {
+      exigeNat('reservarMemoria');
+      const n = vm.exigeEnt(a[0], 1, 'reservarMemoria');
+      if (n < 1 || n > 256 * 1024 * 1024) vm.error('«reservarMemoria»: entre 1 byte y 256 MB');
+      vm.cobrar(4 + (n >> 10));
+      return new ObjOpaco('memoria', nat.memoria(n), { bytes: n });
+    }, 'reservarMemoria(bytes) — un bloque de bytes a cero, para pasarlo donde C pide char * o void *; se libera solo');
+    const ptr = (v, i, q) => {
+      if (v instanceof ObjOpaco && (v.clase === 'puntero' || v.clase === 'memoria') && v.vivo) return v.crudo;
+      if (typeof v === 'number' && v > 0) return v;
+      vm.error(`«${q}»: el argumento ${i} debe ser un puntero o una memoria y es ${v === null ? 'nulo' : tipoDe(v)}`,
+        v === null ? 'leer de un puntero nulo tumbaría el proceso; compruébalo antes' : null, false, 'nativo');
+    };
+    def('leerMemoria', '... -> cualquiera', a => {
+      exigeNat('leerMemoria');
+      if (a.length < 2 || a.length > 3) vm.error('«leerMemoria» es leerMemoria(p, tipo) o leerMemoria(p, tipo, cuantos)');
+      const p = ptr(a[0], 1, 'leerMemoria'), t = txt(a[1], 2, 'leerMemoria');
+      const n = a.length > 2 ? vm.exigeEnt(a[2], 3, 'leerMemoria') : null;
+      if (a[0] instanceof ObjOpaco && a[0].clase === 'memoria' && n !== null && n * nat.tamano(t === 'texto' ? 'entero8' : t) > a[0].bytes)
+        vm.error(`«leerMemoria»: ${n} de ${t} no caben en ${a[0].bytes} bytes`, null, false, 'nativo');
+      const r = conNativo('leerMemoria', () => nat.leer(p, t, n));
+      if (ArrayBuffer.isView(r) || Array.isArray(r)) return L(Array.from(r, x => deCrudo(x, 'leerMemoria')));
+      return deCrudo(r, 'leerMemoria');
+    }, 'leerMemoria(p, tipo, cuantos?) — lee de un puntero: un número, una lista de cuantos, o "texto" hasta el cero');
+    def('escribirMemoria', 'cualquiera, texto, cualquiera -> nulo', a => {
+      exigeNat('escribirMemoria');
+      const p = ptr(a[0], 1, 'escribirMemoria'), t = txt(a[1], 2, 'escribirMemoria');
+      const v = a[2] instanceof ObjLista ? a[2].items.map(x => aCrudo(x, 'escribirMemoria', 3)) : aCrudo(a[2], 'escribirMemoria', 3);
+      const n = Array.isArray(v) ? v.length : null;
+      if (a[0] instanceof ObjOpaco && a[0].clase === 'memoria' && (n || 1) * nat.tamano(t) > a[0].bytes)
+        vm.error(`«escribirMemoria»: eso no cabe en ${a[0].bytes} bytes`, null, false, 'nativo');
+      conNativo('escribirMemoria', () => nat.escribir(p, t, v, n));
+      return null;
+    }, 'escribirMemoria(p, tipo, valor) — escribe un número (o una lista) en esa dirección');
+    def('textoDeMemoria', 'cualquiera -> texto', a => {
+      const m = a[0];
+      if (!(m instanceof ObjOpaco) || m.clase !== 'memoria') vm.error(`«textoDeMemoria»: necesita una memoria y recibió ${tipoDe(m)}`);
+      const b = m.crudo, fin = b.indexOf(0);
+      return b.toString('utf8', 0, fin < 0 ? b.length : fin);
+    }, 'textoDeMemoria(m) — el texto que C dejó en una memoria, hasta el primer cero');
+    def('tamanoNativo', 'texto -> entero', a => {
+      exigeNat('tamanoNativo');
+      return conNativo('tamanoNativo', () => nat.tamano(txt(a[0], 1, 'tamanoNativo')));
+    }, 'tamanoNativo(tipo) — cuántos bytes ocupa: "real", "int", o una estructura declarada');
+    def('direccion', 'cualquiera -> entero', a => {
+      exigeNat('direccion');
+      const v = a[0];
+      if (!(v instanceof ObjOpaco) || v.clase === 'retrollamada') vm.error(`«direccion»: necesita un puntero o una memoria y recibió ${tipoDe(v)}`);
+      return Number(v.clase === 'memoria' ? nat.direccion(v.crudo) : v.direccion());
+    }, 'direccion(p) — la dirección como entero, para imprimirla o compararla');
+    def('errorC', ' -> entero', () => { exigeNat('errorC'); return nat.errno(); },
+      'errorC() — el errno de la última llamada a C (0 si no hubo error)');
+    def('enFondo', '... -> cualquiera', a => {
+      exigeNat('enFondo');
+      const f = a[0];
+      if (!(f instanceof ObjNativa) || !f.llamarNativo || !f.llamarNativo.enFondo)
+        vm.error(`«enFondo»: el argumento 1 debe ser una función declarada con nativa() y es ${tipoDe(f)}`,
+          'en segundo plano solo corre código de C: lo de Ñ ya es de un solo hilo');
+      const args = a.slice(1);
+      if (f.aridad >= 0 && args.length !== f.aridad)
+        vm.error(`«${f.nombre}» espera ${f.aridad} argumento(s) y recibió ${args.length}`);
+      const llamar = f.llamarNativo;
+      const { crudos, cajas } = prepararNativa(llamar, args, f.nombre, true);
+      const p = vm.registrar(new ObjPromesa());
+      vm.cobrar(50);
+      conNativo('enFondo', () => llamar.enFondo(crudos, (err, r) => enTurno(() => {
+        if (err) vm.cumplir(p, vm.nuevoError('nativo', `«${f.nombre}»: ${String((err && err.message) || err)}`, vm.lineaActual), false);
+        else {
+          let v, ok = true;
+          try { v = terminarNativa(llamar, r, cajas, f.nombre); }
+          catch (e) { if (!(e instanceof ErrorTiempoEjecucion)) throw e; ok = false; v = vm.nuevoError('nativo', e.message, vm.lineaActual); }
+          vm.cumplir(p, v, ok);
+        }
+      })));
+      return p;
+    }, 'enFondo(f, args…) — llama a una función nativa en otro hilo y devuelve una promesa: «esperar enFondo(f, x)»');
+  };
 
   // ------------------------------------------------------------- excepciones
   seccion('excepciones');
@@ -1154,6 +1740,9 @@ function instalarBiblioteca(vm, host) {
   // «datos» no lleva «enClasico»: ninguno de sus nombres estuvo en el ámbito
   // global, así que nada viejo los espera ahí.
   instalarEdsl(vm, 'datos', instalarDatos(vm));
+  instalarEdsl(vm, 'corrutinas', cuerpoCorrutinas);     // (4.1) fase X4
+  instalarEdsl(vm, 'nativo', cuerpoNativo);             // (4.1) fase S1
+  instalarEdsl(vm, 'sistema', cuerpoSistema);           // (4.1) fase S2
   // De «estilo» sí eran globales 22 nombres. «pares» es el único que NO se
   // reexporta en «clasico»: su sitio en el ámbito global ya está ocupado por el
   // «pares» de los diccionarios, que es quien debía tenerlo desde el principio.

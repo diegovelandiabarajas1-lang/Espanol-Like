@@ -24,6 +24,11 @@ const SUITES = [
   ['perfil C1EÑ', 'perfil-c1en.js',  'el bundle con numerico y nen abiertos: sin «usar», y el mismo código que Ñ'],
   ['empaquetar',  'empaquetar.js',   'un programa de varios archivos cosido en un ejecutable, de consola y de ventana'],
   ['.elb varios', 'elb-varios.js',   'un programa con sus módulos en un solo .elb: portable, verificado entero'],
+  ['rendimiento', 'rendimiento.js',  'a[i] en arreglos, rango sin lista, a[i] y agregar en línea, autollamada (4.1, R1)'],
+  ['página',      'pagina.js',       'la página se reconcilia y los controles recuerdan lo escrito, en Chromium (4.1, P1)'],
+  ['expresividad','expresividad.js', 'registros con métodos, si-expresión, ??, ?., desestructurar, segun (4.1, X1)'],
+  ['expresiv. 2', 'expresividad2.js','defectos, con nombre, publico tipo, a?.m(), genéricos, generadores, asíncronas (4.1, X2–X4)'],
+  ['sistema',     'sistema.js',      'FFI con firmas de C, arreglos sin copiar, retrollamadas, servidor, reloj, procesos, entrada (4.1, S1–S2)'],
 ];
 
 let fallan = 0, saltadas = 0;

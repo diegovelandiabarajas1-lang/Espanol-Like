@@ -122,12 +122,90 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       nodo.linea, nodo.col, `a partir de aquí «${nombre}» ya no es la de Ñ; si es a propósito, ponle otro nombre para que se lea`));
   }
 
+  // (4.1) Los registros del archivo: nombre → { campos, metodos }.
+  const registros = new Map();
+  // Los registros que llegan de otro archivo con su constructor importado.
+  if (enlace) for (const [, i] of enlace.nombres) {
+    const f = i.tipo && i.tipo.k === 'funcion' && i.tipo.ret && i.tipo.ret.forma;
+    if (f && !registros.has(f.nombre)) registros.set(f.nombre, f);
+  }
+  const tipoReg = nombre => registros.get(nombre) || null;
+  function campoDe(r, nombre) { return r.campos.find(c => c.nombre === nombre) || null; }
+  function sinCampo(n, r, nombre) {
+    const lista = r.campos.map(c => c.nombre).concat([...r.metodos.keys()]);
+    const cerca = sugerirEntre(nombre, lista);
+    return err(n, `«${r.nombre}» no tiene «${nombre}»`,
+      cerca ? `¿querías decir «${cerca}»? tiene: ${lista.join(', ')}` : `tiene: ${lista.join(', ')}`);
+  }
+  // (4.1) Genéricos. «unificar» aprende qué es cada variable de tipo a
+  // partir de un argumento y devuelve un mensaje si choca con lo aprendido.
+  function unificar(param, arg, vinc) {
+    if (!param || !arg) return null;
+    if (param.k === 'var') {
+      if (arg.k === 'cualquiera') return null;
+      const ya = vinc.get(param.nombre);
+      if (!ya) { vinc.set(param.nombre, arg); return null; }
+      if (compatible(ya, arg)) return null;
+      if (compatible(arg, ya)) { vinc.set(param.nombre, arg); return null; }   // entero → real
+      return `«${param.nombre}» ya era ${tipoATexto(ya)} y aquí llega ${tipoATexto(arg)}`;
+    }
+    if (param.k === 'lista' && arg.k === 'lista') return unificar(param.elem, arg.elem, vinc);
+    if (param.k === 'dic' && arg.k === 'dic') return unificar(param.clave, arg.clave, vinc) || unificar(param.valor, arg.valor, vinc);
+    if (param.k === 'funcion' && arg.k === 'funcion' && param.params && arg.params && param.params.length === arg.params.length) {
+      for (let i = 0; i < param.params.length; i++) { const f = unificar(param.params[i], arg.params[i], vinc); if (f) return f; }
+      return unificar(param.ret, arg.ret, vinc);
+    }
+    return null;
+  }
+  function sustituir(t, vinc) {
+    if (!t) return t;
+    if (t.k === 'var') return vinc.get(t.nombre) || T.cualquiera;
+    if (t.k === 'lista') return T.lista(sustituir(t.elem, vinc));
+    if (t.k === 'dic') return T.dic(sustituir(t.clave, vinc), sustituir(t.valor, vinc));
+    if (t.k === 'funcion') return T.fn(t.params ? t.params.map(x => sustituir(x, vinc)) : null, sustituir(t.ret, vinc));
+    return t;
+  }
+
+  // El parecido más cercano entre unos nombres dados (distancia de edición).
+  function sugerirEntre(nombre, lista) {
+    let mejor = null, d0 = 3;
+    for (const x of lista) {
+      const a = nombre, b = x, m = a.length, n2 = b.length;
+      const f = Array.from({ length: m + 1 }, (_, i) => [i, ...new Array(n2).fill(0)]);
+      for (let j = 1; j <= n2; j++) f[0][j] = j;
+      for (let i = 1; i <= m; i++) for (let j = 1; j <= n2; j++)
+        f[i][j] = Math.min(f[i - 1][j] + 1, f[i][j - 1] + 1, f[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (f[m][n2] < d0) { d0 = f[m][n2]; mejor = x; }
+    }
+    return mejor;
+  }
+
   // pre-registrar funciones de nivel superior (permite llamadas antes de definirlas)
   function registrarFunciones(cuerpo, amb) {
+    // Primero los registros, para que sus métodos y sus constructores existan
+    // antes que cualquier función que los use.
+    for (const s of cuerpo) {
+      if (s.tipo !== 'DeclTipo') continue;
+      if (registros.has(s.nombre)) { err(s, `el registro «${s.nombre}» ya estaba declarado`); continue; }
+      if (amb.vars.has(s.nombre) || Object.prototype.hasOwnProperty.call(globalesTipos, s.nombre))
+        err(s, `«${s.nombre}» ya es un nombre en uso; el registro necesita otro`);
+      const campos = s.campos.map(c => ({ nombre: c.nombre, tipo: c.anotacion || T.cualquiera }));
+      registros.set(s.nombre, { nombre: s.nombre, campos, metodos: new Map() });
+      // El constructor lo declara su propia función (la genera el parser).
+    }
+    for (const s of cuerpo) {
+      if (s.tipo !== 'DeclFuncion' || !s.metodo) continue;
+      const r = tipoReg(s.metodo.tipo);
+      if (!r) { err(s, `«${s.metodo.tipo}» no es un registro de este archivo`); continue; }
+      if (campoDe(r, s.metodo.nombre)) err(s, `«${r.nombre}» ya tiene un campo llamado «${s.metodo.nombre}»`, 'un método y un campo no pueden llamarse igual');
+      if (r.metodos.has(s.metodo.nombre)) err(s, `«${r.nombre}» ya tiene un método «${s.metodo.nombre}»`);
+      // El tipo del método visto desde fuera: sin «yo», que lo pone la llamada.
+      r.metodos.set(s.metodo.nombre, tipoDeFuncion(s, true));
+    }
     for (const s of cuerpo) {
       if (s.tipo === 'DeclFuncion') {
         if (amb === raiz) avisarSiTapa(s, s.nombre, 'la función');
-        amb.declarar(s.nombre, T.fn(s.params.map(p => p.anotacion || T.cualquiera), s.retorno || T.cualquiera), true);
+        amb.declarar(s.nombre, tipoDeFuncion(s), true);
       }
     }
   }
@@ -155,16 +233,20 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       }
       case 'DeclFuncion': {
         if (!amb.vars.has(n.nombre))
-          amb.declarar(n.nombre, T.fn(n.params.map(p => p.anotacion || T.cualquiera), n.retorno || T.cualquiera), true);
-        const sub = new Ambito(amb, n.retorno || null);
-        for (const p of n.params) sub.declarar(p.nombre, p.anotacion || T.cualquiera, false);
+          amb.declarar(n.nombre, tipoDeFuncion(n), true);
+        const sub = new Ambito(amb, n.corrutina ? null : (n.retorno || null));
+        // «yo» es fijo: reasignarlo dentro de un método no cambiaría el
+        // registro de quien llama y casi siempre es un error.
+        for (const p of n.params) sub.declarar(p.nombre, p.anotacion || T.cualquiera, !!p.esYo);
         bloqueTipos(n.cuerpo, sub);
-        if (n.retorno && n.retorno.k !== 'nulo' && n.retorno.k !== 'cualquiera' && !sub.hayRetorno)
+        if (!n.corrutina && n.retorno && n.retorno.k !== 'nulo' && n.retorno.k !== 'cualquiera' && !sub.hayRetorno)
           err(n, `«${n.nombre}» promete devolver ${tipoATexto(n.retorno)} pero hay caminos sin «devolver»`,
             'añade un «devolver» al final de la función');
         return;
       }
       case 'Bloque': return bloqueTipos(n, new Ambito(amb));
+      case 'DeclTipo': return;   // ya registrado al empezar
+      case 'Producir': expr(n.valor, amb); return;
       case 'Si': {
         const c = expr(n.cond, amb);
         if (c.k !== 'bool' && c.k !== 'cualquiera')
@@ -184,8 +266,8 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         let elem = T.cualquiera;
         if (it.k === 'lista') elem = it.elem;
         else if (it.k === 'texto') elem = T.texto;
-        else if (it.k !== 'cualquiera' && it.k !== 'dic')
-          err(n, `no se puede recorrer un valor de tipo ${tipoATexto(it)}`, 'usa una lista, un texto o rango(n)');
+        else if (it.k !== 'cualquiera' && it.k !== 'dic' && it.k !== 'arreglo')
+          err(n, `no se puede recorrer un valor de tipo ${tipoATexto(it)}`, 'usa una lista, un texto, un arreglo o rango(n)');
         const sub = new Ambito(amb);
         sub.declarar(n.nombre, elem, false);
         bloqueTipos(n.cuerpo, sub);
@@ -227,6 +309,10 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       case 'Literal': return n.tipoLit;
       case 'Interpolacion': for (const q of n.partes) expr(q, amb); return T.texto;
       case 'Variable': {
+        // Los nombres internos que genera el parser (« faltante», « hacer
+        // Punto», « t0»…) llevan un espacio delante: el programa no puede
+        // escribirlos, y no tienen tipo que comprobar.
+        if (n.nombre.charCodeAt(0) === 32 && !amb.buscar(n.nombre)) return T.cualquiera;
         const v = amb.buscar(n.nombre);
         if (!v) return err(n, `«${n.nombre}» no está definida`, pistaNombre(n.nombre, amb));
         // El alias de un módulo no es un valor: no se puede pasar, ni guardar,
@@ -252,7 +338,9 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           if (v.tipo && v.tipo.k === 'modulo') return err(n, `«${n.destino.nombre}» es un módulo, no una variable`);
           if (v.esFijo) err(n, `«${n.destino.nombre}» es fijo y no se puede reasignar`, 'decláralo con «var» si debe cambiar');
           if (n.op === '=' && !compatible(v.tipo, tv))
-            err(n, `«${n.destino.nombre}» es ${tipoATexto(v.tipo)} y se le asigna ${tipoATexto(tv)}`);
+            err(n, n.esDefecto
+              ? `el valor por defecto de «${n.destino.nombre}» es ${tipoATexto(tv)} y el parámetro es ${tipoATexto(v.tipo)}`
+              : `«${n.destino.nombre}» es ${tipoATexto(v.tipo)} y se le asigna ${tipoATexto(tv)}`);
           return v.tipo;
         }
         if (n.destino.tipo === 'Propiedad' && n.destino.obj.tipo === 'Variable') {
@@ -260,6 +348,18 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           if (mod && mod.tipo && mod.tipo.k === 'modulo')
             return err(n, `«${n.destino.obj.nombre}.${n.destino.nombre}» viene de «${mod.tipo.ruta}» y no se puede cambiar desde aquí`,
               'lo que exporta un módulo solo lo cambia ese módulo');
+        }
+        if (n.destino.tipo === 'Propiedad') {
+          const o = expr(n.destino.obj, amb);
+          const r = o.k === 'registro' ? tipoReg(o.nombre) : null;
+          if (r) {
+            const c = campoDe(r, n.destino.nombre);
+            if (!c) { if (r.metodos.has(n.destino.nombre)) return err(n, `«${n.destino.nombre}» es un método de «${r.nombre}» y no se puede reasignar`); return sinCampo(n.destino, r, n.destino.nombre); }
+            if (n.op === '=' && !compatible(c.tipo, tv))
+              err(n, `«${r.nombre}.${c.nombre}» es ${tipoATexto(c.tipo)} y se le asigna ${tipoATexto(tv)}`);
+            return c.tipo;
+          }
+          return tv;
         }
         expr(n.destino, amb);
         return tv;
@@ -277,6 +377,13 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       case 'Binario': {
         const a = expr(n.izq, amb), b = expr(n.der, amb);
         const op = n.op;
+        // (4.1) «a ?? b»: si a puede ser nulo, sale b; el tipo es el de
+        // los dos si coinciden.
+        if (op === '??') {
+          if (a.k === 'nulo') return b;
+          if (compatible(a, b) && compatible(b, a)) return a;
+          return T.cualquiera;
+        }
         if (op === 'o' || op === 'y') return T.bool;
         if (['==', '!='].includes(op)) return T.bool;
         if (['<', '<=', '>', '>='].includes(op)) {
@@ -333,17 +440,60 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       }
       case 'Llamada': {
         const ft = expr(n.callee, amb);
+        const nom = n.callee.tipo === 'Variable' ? `«${n.callee.nombre}»`
+          : n.callee.tipo === 'Propiedad' ? `«${n.callee.nombre}»` : 'la función';
+        // (4.1) Argumentos con nombre y valores por defecto. Se resuelven
+        // AQUÍ, donde se sabe a qué función se llama, y se reescriben los
+        // argumentos del nodo en su orden: el compilador y el JIT no se enteran.
+        // Lo que no llega y tiene defecto viaja como « faltante».
+        if (n.nombrados || (ft.k === 'funcion' && ft.params && n.args.length < ft.params.length &&
+                            ft.minimos !== undefined && ft.minimos < ft.params.length)) {
+          if (!(ft.k === 'funcion' && ft.params && ft.nombres)) {
+            if (n.nombrados) return err(n, `los argumentos con nombre necesitan saber a qué función se llama, y aquí no se sabe`,
+              'llama a una función declarada con «fn», o pasa los argumentos por posición');
+          } else {
+            const ranuras = new Array(ft.params.length).fill(null);
+            if (n.args.length > ft.params.length)
+              return err(n, `${nom} espera como mucho ${ft.params.length} argumento(s) y recibió ${n.args.length}`);
+            n.args.forEach((a, i) => { ranuras[i] = a; });
+            for (const x of (n.nombrados || [])) {
+              const i = ft.nombres.indexOf(x.nombre);
+              if (i < 0) return err(x, `${nom} no tiene ningún parámetro «${x.nombre}»`, `sus parámetros son: ${ft.nombres.join(', ')}`);
+              if (ranuras[i]) return err(x, `«${x.nombre}» ya llegó por posición`, 'pásalo de una sola manera');
+              ranuras[i] = x.valor;
+            }
+            for (let i = 0; i < ranuras.length; i++) {
+              if (ranuras[i]) continue;
+              if (i < ft.minimos) return err(n, `${nom}: falta el argumento «${ft.nombres[i]}»`,
+                ft.minimos < ft.params.length
+                  ? (ft.minimos === 1 ? `solo «${ft.nombres[0]}» es obligatorio` : `«${ft.nombres.slice(0, ft.minimos).join('», «')}» son obligatorios`) + '; el resto tiene valor por defecto'
+                  : null);
+              ranuras[i] = { tipo: 'Variable', nombre: ' faltante', linea: n.linea, col: n.col };
+            }
+            n.args = ranuras;
+            delete n.nombrados;
+          }
+        }
         const args = n.args.map(a => expr(a, amb));
         if (ft.k === 'funcion' && ft.params) {
           if (ft.params.length !== args.length) {
-            const nom = n.callee.tipo === 'Variable' ? `«${n.callee.nombre}»` : 'la función';
-            err(n, `${nom} espera ${ft.params.length} argumento(s) y recibió ${args.length}`);
-          } else {
-            for (let i = 0; i < args.length; i++)
-              if (!compatible(ft.params[i], args[i]))
-                err(n.args[i], `argumento ${i + 1}: se esperaba ${tipoATexto(ft.params[i])} y llegó ${tipoATexto(args[i])}`);
+            const rango = ft.minimos !== undefined && ft.minimos < ft.params.length ? `entre ${ft.minimos} y ${ft.params.length}` : ft.params.length;
+            err(n, `${nom} espera ${rango} argumento(s) y recibió ${args.length}`);
+            return ft.ret;
           }
-          return ft.ret;
+          // (4.1) Genéricos: cada variable de tipo toma el tipo de lo que
+          // llega, y tiene que ser el MISMO en todas partes.
+          const vinc = ft.genericos ? new Map() : null;
+          for (let i = 0; i < args.length; i++) {
+            if (n.args[i].tipo === 'Variable' && n.args[i].nombre === ' faltante') continue;
+            if (vinc) {
+              const fallo = unificar(ft.params[i], args[i], vinc);
+              if (fallo) { err(n.args[i], `argumento ${i + 1}: ${fallo}`); continue; }
+            }
+            if (!compatible(ft.params[i], args[i]))
+              err(n.args[i], `argumento ${i + 1}: se esperaba ${tipoATexto(ft.params[i])} y llegó ${tipoATexto(args[i])}`);
+          }
+          return vinc ? sustituir(ft.ret, vinc) : ft.ret;
         }
         if (ft.k !== 'cualquiera' && ft.k !== 'funcion')
           err(n, `${tipoATexto(ft)} no es una función; no se puede llamar`);
@@ -358,6 +508,10 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         if (o.k === 'lista') { if (!esNum(i)) err(n, `el índice de una lista debe ser entero y es ${tipoATexto(i)}`); return o.elem; }
         if (o.k === 'texto') return T.texto;
         if (o.k === 'dic') return o.valor;
+        // a[i] sobre un arreglo (4.1): un número si es de 1 dimensión, una
+        // vista de la fila si tiene más. El número de dimensiones no está en el
+        // tipo, así que el resultado es «cualquiera»; el índice sí se comprueba.
+        if (o.k === 'arreglo') { if (!esNum(i)) err(n, `el índice de un arreglo debe ser entero y es ${tipoATexto(i)}`); return T.cualquiera; }
         if (o.k !== 'cualquiera') err(n, `no se puede indexar un valor de tipo ${tipoATexto(o)}`);
         return T.cualquiera;
       }
@@ -377,6 +531,27 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         const o = expr(n.obj, amb);
         // dic<texto,real> accedido con «.» debe seguir siendo real, no «cualquiera»
         if (o.k === 'dic') return o.valor;
+        // (4.1) Un registro: el verificador SABE qué campos tiene. Es la
+        // razón de que existan: «p.nombre» mal escrito se para aquí, no al
+        // ejecutar.
+        if (o.k === 'registro') {
+          const r = tipoReg(o.nombre);
+          if (!r) return T.cualquiera;
+          const c = campoDe(r, n.nombre);
+          if (c) return c.tipo;
+          if (r.metodos.has(n.nombre)) return r.metodos.get(n.nombre);
+          return sinCampo(n, r, n.nombre);
+        }
+        return T.cualquiera;
+      }
+      case 'Esperar': expr(n.valor, amb); return T.cualquiera;
+      case 'SiExpr': {
+        const c = expr(n.cond, amb);
+        if (c.k !== 'bool' && c.k !== 'cualquiera')
+          avisos.push(new ErrorFuente('tipos', `la condición de «si» es ${tipoATexto(c)}, no bool`, n.linea, n.col, 'se usará su valor de verdad'));
+        const a = expr(n.entonces, amb), b = expr(n.sino, amb);
+        if (compatible(a, b) && compatible(b, a)) return a.k === 'cualquiera' ? b : a;
+        if ((a.k === 'entero' && b.k === 'real') || (a.k === 'real' && b.k === 'entero')) return T.real;
         return T.cualquiera;
       }
       case 'ListaLit': {
@@ -391,10 +566,10 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         return T.dic(T.cualquiera, T.cualquiera);
       }
       case 'FuncionAnon': {
-        const sub = new Ambito(amb, n.retorno || null);
+        const sub = new Ambito(amb, n.corrutina ? null : (n.retorno || null));
         for (const p of n.params) sub.declarar(p.nombre, p.anotacion || T.cualquiera, false);
         bloqueTipos(n.cuerpo, sub);
-        return T.fn(n.params.map(p => p.anotacion || T.cualquiera), n.retorno || T.cualquiera);
+        return tipoDeFuncion(n);
       }
       default: return T.cualquiera;
     }
@@ -606,7 +781,15 @@ function compilar(ast, nombreScript, enlace) {
   function buscarUpvalue(ctx, nombre) {
     if (!ctx.padre) return -1;
     const l = buscarLocal(ctx.padre, nombre);
-    if (l !== -1) { ctx.padre.locals[l].capturada = true; return addUpvalue(ctx, l, true, nombre); }
+    if (l !== -1) {
+      // (4.1) Al pausar una corrutina su pila se guarda aparte; un
+      // cierre que apuntara a una de sus variables quedaría mirando a otra
+      // cosa. Hasta que eso tenga solución, se dice aquí y no se adivina.
+      if (ctx.padre.fn.corrutina)
+        throw new ErrorFuente('compilación', `«${nombre}» es de una corrutina y una función de dentro la usa: eso todavía no se puede`,
+          ultimaLinea, 1, 'pásasela como argumento, o saca esa función fuera de la corrutina');
+      ctx.padre.locals[l].capturada = true; return addUpvalue(ctx, l, true, nombre);
+    }
     const u = buscarUpvalue(ctx.padre, nombre);
     if (u !== -1) return addUpvalue(ctx, u, false, nombre);
     return -1;
@@ -628,6 +811,27 @@ function compilar(ast, nombreScript, enlace) {
         return;
       }
       case 'Bloque': ambitoAbrir(); for (const s of n.cuerpo) sent(s); ambitoCerrar(n.linea); return;
+      // (4.1) Un registro. No hay opcode nuevo: se llama a la nativa
+      // interna « registro» con el nombre, los campos y los métodos (que ya
+      // están definidos, porque las funciones van primero), y lo que devuelve
+      // —el constructor— queda como global con el nombre del tipo. Todo son
+      // constantes de texto, así que el .elb no cambia de formato.
+      case 'DeclTipo': {
+        emitOp(OP.GET_GLOBAL, chunk().cte(' registro'), n.linea);
+        emitCte(n.nombre, n.linea);
+        for (const c2 of n.campos) emitCte(c2.nombre, n.linea);
+        emitOp(OP.LISTA, n.campos.length, n.linea);
+        const mets = n.metodos || [];
+        for (const m of mets) {
+          emitCte(m, n.linea);
+          emitOp(OP.GET_GLOBAL, chunk().cte(gl(n.nombre + '.' + m)), n.linea);
+        }
+        emitOp(OP.DIC, mets.length, n.linea);
+        emitOp(OP.CALL, 3, n.linea);
+        // La fábrica queda escondida; «Punto» es la función constructora.
+        emitOp(OP.DEF_GLOBAL, chunk().cte(gl(' hacer ' + n.nombre)), n.linea);
+        return;
+      }
       case 'Si': {
         expr(n.cond);
         const aElse = emitSalto(OP.JMP_FALSE, n.linea);
@@ -791,6 +995,14 @@ function compilar(ast, nombreScript, enlace) {
         return;
       }
       case 'ExprSent': expr(n.expr); emit(OP.POP, n.linea); return;
+      // «producir v» es una llamada a la nativa interna « producir»: la VM se
+      // pausa justo al volver de ella. Sin opcode nuevo.
+      case 'Producir':
+        emitOp(OP.GET_GLOBAL, chunk().cte(' producir'), n.linea);
+        expr(n.valor);
+        emitOp(OP.CALL, 1, n.linea);
+        emit(OP.POP, n.linea);
+        return;
 
       // ── usar ─────────────────────────────────────────────────────────────
       // Una llamada a una nativa, no un opcode nuevo: así la tabla de
@@ -821,6 +1033,13 @@ function compilar(ast, nombreScript, enlace) {
     sub.fn.enlace = enl;
     sub.fn.ast = n;
     sub.fn.nombresParams = n.params.map(p => p.nombre);
+    // (4.1) Cuántos argumentos son obligatorios. Viaja en el .elb como una
+    // constante marcadora (« minimos:N»): así el formato no cambia y un .elb
+    // sin valores por defecto es idéntico al de la 4.0.
+    const primero = n.params.findIndex(p => p.defecto);
+    if (primero >= 0) { sub.fn.minimos = primero; sub.fn.chunk.cte(' minimos:' + primero); }
+    // (4.1) Generador o asíncrona: viaja igual, como constante marcadora.
+    if (n.corrutina) { sub.fn.corrutina = n.corrutina; sub.fn.chunk.cte(' corrutina:' + n.corrutina); }
     c = sub;
     ambitoAbrir();
     for (const p of n.params) declararLocal(p.nombre, p.linea || n.linea);
@@ -841,7 +1060,9 @@ function compilar(ast, nombreScript, enlace) {
   }
 
   // ---- expresiones
+  let ultimaLinea = 1;
   function expr(n) {
+    if (n.linea) ultimaLinea = n.linea;
     switch (n.tipo) {
       case 'Literal':
         if (n.valor === null) return emit(OP.NULO, n.linea);
@@ -887,7 +1108,36 @@ function compilar(ast, nombreScript, enlace) {
       case 'Unario':
         expr(n.expr);
         return emit(n.op === '-' ? OP.NEG : OP.NOT, n.linea);
+      case 'Esperar':
+        emitOp(OP.GET_GLOBAL, chunk().cte(' esperar'), n.linea);
+        expr(n.valor);
+        return emitOp(OP.CALL, 1, n.linea);
+      case 'SiExpr': {
+        expr(n.cond);
+        const aElse = emitSalto(OP.JMP_FALSE, n.linea);
+        emit(OP.POP, n.linea);
+        expr(n.entonces);
+        const aFin = emitSalto(OP.JMP, n.linea);
+        parchear(aElse);
+        emit(OP.POP, n.linea);
+        expr(n.sino);
+        parchear(aFin);
+        return;
+      }
       case 'Binario': {
+        // a ?? b  →  [a] DUP NULO EQ JMP_FALSE(L) POP POP b JMP(F) L: POP F:
+        if (n.op === '??') {
+          expr(n.izq);
+          emit(OP.DUP, n.linea); emit(OP.NULO, n.linea); emit(OP.EQ, n.linea);
+          const noNulo = emitSalto(OP.JMP_FALSE, n.linea);
+          emit(OP.POP, n.linea); emit(OP.POP, n.linea);
+          expr(n.der);
+          const fin = emitSalto(OP.JMP, n.linea);
+          parchear(noNulo);
+          emit(OP.POP, n.linea);
+          parchear(fin);
+          return;
+        }
         if (n.op === 'y') {
           expr(n.izq);
           const s = emitSalto(OP.JMP_FALSE, n.linea);
@@ -904,6 +1154,21 @@ function compilar(ast, nombreScript, enlace) {
         return emit(m[n.op], n.linea);
       }
       case 'Llamada': {
+        // (4.1) «a?.m(x)»: si a es nulo, nulo, y la llamada no ocurre.
+        if (n.callee.tipo === 'Propiedad' && n.callee.opcional) {
+          expr(n.callee.obj);
+          emit(OP.DUP, n.linea); emit(OP.NULO, n.linea); emit(OP.EQ, n.linea);
+          const noNulo = emitSalto(OP.JMP_FALSE, n.linea);
+          emit(OP.POP, n.linea);
+          const fin = emitSalto(OP.JMP, n.linea);
+          parchear(noNulo);
+          emit(OP.POP, n.linea);
+          emitOp(OP.PROP_GET, chunk().cte(n.callee.nombre), n.linea);
+          for (const a of n.args) expr(a);
+          emitOp(OP.CALL, n.args.length, n.linea);
+          parchear(fin);
+          return;
+        }
         expr(n.callee);
         for (const a of n.args) expr(a);
         return emitOp(OP.CALL, n.args.length, n.linea);
@@ -913,6 +1178,19 @@ function compilar(ast, nombreScript, enlace) {
         // «m.algo» con m alias de módulo es un global de allí, resuelto aquí.
         // Un local o un parámetro con ese nombre manda: «fn f(m) { m.x }» es un
         // acceso a propiedad normal aunque haya un módulo llamado «m».
+        if (n.opcional) {
+          // a?.b  →  [a] DUP NULO EQ JMP_FALSE(L) POP JMP(F) L: POP PROP_GET b F:
+          expr(n.obj);
+          emit(OP.DUP, n.linea); emit(OP.NULO, n.linea); emit(OP.EQ, n.linea);
+          const noNulo = emitSalto(OP.JMP_FALSE, n.linea);
+          emit(OP.POP, n.linea);
+          const fin = emitSalto(OP.JMP, n.linea);
+          parchear(noNulo);
+          emit(OP.POP, n.linea);
+          emitOp(OP.PROP_GET, chunk().cte(n.nombre), n.linea);
+          parchear(fin);
+          return;
+        }
         const g = (n.obj.tipo === 'Variable' && !visibleComoLocal(c, n.obj.nombre))
           ? miembroDeEnlace(enl, n.obj.nombre, n.nombre) : null;
         if (g) return emitOp(OP.GET_GLOBAL, chunk().cte(g), n.linea);
@@ -935,9 +1213,15 @@ function compilar(ast, nombreScript, enlace) {
   // cuando A importa B y B importa A, A ya tiene definidas todas sus funciones
   // antes de que empiece B, así que B las ve. Lo que B no ve son los valores que
   // A calcula después, y eso se dice con un mensaje que nombra el ciclo.
+  // (4.1) Los registros van justo después de las funciones —sus
+  // métodos son funciones y tienen que existir ya— y antes que todo lo demás:
+  // así «Punto(1, 2)» funciona aunque el «tipo» esté más abajo.
+  for (const s of ast.cuerpo) if (s.tipo === 'DeclTipo')
+    s.metodos = ast.cuerpo.filter(f => f.tipo === 'DeclFuncion' && f.metodo && f.metodo.tipo === s.nombre).map(f => f.metodo.nombre);
   for (const s of ast.cuerpo) if (s.tipo === 'DeclFuncion') sent(s);
+  for (const s of ast.cuerpo) if (s.tipo === 'DeclTipo') sent(s);
   for (const s of ast.cuerpo) if (s.tipo === 'Usar') sent(s);
-  for (const s of ast.cuerpo) if (s.tipo !== 'DeclFuncion' && s.tipo !== 'Usar') sent(s);
+  for (const s of ast.cuerpo) if (s.tipo !== 'DeclFuncion' && s.tipo !== 'Usar' && s.tipo !== 'DeclTipo') sent(s);
   // El retorno implícito del final se atribuye a la última línea real, no a un
   // 9999 de relleno: se ve mejor en el desensamblador y la tabla de líneas no
   // pega un salto absurdo al serializarse.

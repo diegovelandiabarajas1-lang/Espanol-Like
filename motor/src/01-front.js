@@ -203,7 +203,10 @@ function lexer(fuente) {
     const tres = fuente.substr(i, 3);
     const dos = fuente.substr(i, 2);
     const OP3 = ['**='];
-    const OP2 = ['**', '//', '==', '!=', '<=', '>=', '+=', '-=', '*=', '/=', '->', '..'];
+    // «??» y «?.» (4.1): el nulo como valor por defecto y el acceso
+    // que no revienta si el objeto es nulo.
+    const OP2 = ['**', '//', '==', '!=', '<=', '>=', '+=', '-=', '*=', '/=', '->', '..', '??'];
+    if (dos === '?.') { avanzar(); avanzar(); push('?.', '?.', L, C); continue; }
     if (OP3.includes(tres)) { avanzar(); avanzar(); avanzar(); push('OP', tres, L, C); continue; }
     if (OP2.includes(dos)) { avanzar(); avanzar(); push('OP', dos, L, C); continue; }
     if (dos === '&&') { avanzar(); avanzar(); push('Y', 'y', L, C); continue; }
@@ -253,6 +256,9 @@ const T = {
   // después de guardarla y volverla a leer.
   tabla: { k: 'tabla' },
   arreglo: { k: 'arreglo' },
+  // (4.1) Un registro declarado con «tipo Nombre { … }». Lo que lleva
+  // —campos y métodos— lo sabe el verificador; aquí solo viaja el nombre.
+  registro: (nombre) => ({ k: 'registro', nombre }),
   lista: (e) => ({ k: 'lista', elem: e || T.cualquiera }),
   dic: (c, v) => ({ k: 'dic', clave: c || T.cualquiera, valor: v || T.cualquiera }),
   fn: (params, ret) => ({ k: 'funcion', params: params || null, ret: ret || T.cualquiera }),
@@ -277,6 +283,8 @@ function tipoATexto(t) {
     // verificador le asigna al nombre de un «usar … como …», para poder decir
     // «un módulo no es un valor» en vez de dejarlo pasar como «cualquiera».
     case 'modulo': return `módulo «${t.ruta || t.clave}»`;
+    case 'registro': return t.nombre;
+    case 'var': return t.nombre;
     default: return t.k;
   }
 }
@@ -360,10 +368,30 @@ function firma(s) {
 const aridadDe = t => (t && t.k === 'funcion' && t.params === null ? -1
   : t && t.k === 'funcion' ? t.params.length : 0);
 
+// (4.1) El tipo de una función declarada, con lo que hace falta para
+// llamarla bien: los nombres de sus parámetros (argumentos con nombre), cuántos
+// son obligatorios (los demás tienen valor por defecto) y sus variables de tipo
+// (genéricos). Lo usan el verificador y los módulos: un solo sitio.
+function tipoDeFuncion(n, quitarYo) {
+  const ps = quitarYo ? n.params.slice(1) : n.params;
+  // Llamar a un generador devuelve el generador, y a una asíncrona su promesa:
+  // no lo que pone su «devolver».
+  const t = T.fn(ps.map(p => p.anotacion || T.cualquiera), n.corrutina ? T.cualquiera : (n.retorno || T.cualquiera));
+  t.nombres = ps.map(p => p.nombre);
+  const primero = ps.findIndex(p => p.defecto);
+  t.minimos = primero < 0 ? ps.length : primero;
+  if (n.genericos && n.genericos.length) t.genericos = n.genericos;
+  return t;
+}
+
 // ¿se puede usar un valor de tipo `origen` donde se espera `destino`?
 function compatible(destino, origen) {
   if (!destino || !origen) return true;
   if (destino.k === 'cualquiera' || origen.k === 'cualquiera') return true;
+  // (4.1) Una variable de tipo (la T de un genérico) dentro del cuerpo
+  // de la función vale lo que valga: se comprueba en cada LLAMADA, donde se
+  // sabe qué es T.
+  if (destino.k === 'var' || origen.k === 'var') return true;
   // Una unión acepta cualquiera de sus miembros. Existe por «seno»: tiene que
   // recibir un número o un arreglo, y la alternativa era poner «cualquiera» y
   // perder la comprobación del todo, o inventar «senoA» al lado de «seno», que
@@ -372,6 +400,9 @@ function compatible(destino, origen) {
   if (destino.k === 'union') return destino.de.some(t => compatible(t, origen));
   if (origen.k === 'union') return origen.de.every(t => compatible(destino, t));
   if (destino.k === origen.k) {
+    // Dos registros solo son compatibles si son del MISMO tipo: un Punto no
+    // vale donde se espera un Color aunque los dos tengan tres números.
+    if (destino.k === 'registro') return destino.nombre === origen.nombre;
     if (destino.k === 'lista') return compatible(destino.elem, origen.elem);
     if (destino.k === 'dic') return compatible(destino.clave, origen.clave) && compatible(destino.valor, origen.valor);
     return true;
@@ -397,8 +428,57 @@ function reubicar(nodo, linea, col) {
   return nodo;
 }
 
-function parser(toks, fuenteNombre) {
+function parser(toks, fuenteNombre, opciones) {
   let p = 0;
+  // (4.1) «soloExpresion»: lo que va entre las llaves de un texto se lee
+  // como UNA expresión, no como un programa. Antes daba igual; ahora no, porque
+  // «si … entonces … sino …» empieza por «si», que como programa sería la
+  // sentencia.
+  const soloExpresion = !!(opciones && opciones.soloExpresion);
+  // (4.1) Los nombres de los registros del archivo se buscan ANTES de
+  // analizar nada, para que «fn f(p: Punto)» se entienda aunque «tipo Punto»
+  // esté más abajo, igual que una función se puede llamar antes de declararla.
+  const tiposDeclarados = new Set();
+  for (let i = 0; i + 2 < toks.length; i++)
+    if (toks[i].tipo === 'IDENT' && toks[i].valor === 'tipo' && toks[i + 1].tipo === 'IDENT' && toks[i + 2].tipo === '{')
+      tiposDeclarados.add(toks[i + 1].valor);
+  // Nombres internos para lo que el parser se inventa (desestructurar, segun).
+  // Llevan un espacio: el léxico no deja escribirlo, así que no chocan con nada.
+  let sigTmp = 0;
+  const tmpNombre = () => ' t' + (sigTmp++);
+  // (4.1) Corrutinas. «producir» y «esperar» no son palabras
+  // reservadas: si el archivo declara algo con ese nombre, se respeta y no se
+  // leen como corrutina.
+  const tapadas = new Set();
+  for (let i = 0; i + 1 < toks.length; i++)
+    if ((toks[i].tipo === 'FUNCION' || toks[i].tipo === 'VAR' || toks[i].tipo === 'FIJO') && toks[i + 1].tipo === 'IDENT')
+      tapadas.add(toks[i + 1].valor);
+  const esClave = (t, v) => t.tipo === 'IDENT' && t.valor === v && !tapadas.has(v);
+  // La función que se está leyendo, para saber si es corrutina.
+  const funciones = [];
+  function marcarCorrutina(clase, t) {
+    const f = funciones[funciones.length - 1];
+    if (!f) throw new ErrorFuente('sintaxis', `«${clase === 'generador' ? 'producir' : 'esperar'}» solo puede ir dentro de una función`, t.linea, t.col,
+      clase === 'generador' ? 'una función con «producir» es un generador: «fn contar(n) { para i en rango(n) { producir i } }»'
+                            : 'una función con «esperar» es asíncrona: «fn cargar() { var r = esperar pedir(url) }»');
+    if (f.corrutina && f.corrutina !== clase)
+      throw new ErrorFuente('sintaxis', 'una función no puede tener «producir» y «esperar» a la vez', t.linea, t.col,
+        'sepáralo en dos funciones: un generador y una asíncrona');
+    f.corrutina = clase;
+  }
+  // Las variables de tipo de los genéricos que se están leyendo ahora mismo.
+  const varsTipo = [];
+  const esVarTipo = n => varsTipo.some(s => s.has(n));
+  // Los nombres que se importan con «usar A, B de …» y empiezan por mayúscula
+  // pueden ser registros de otro archivo: se aceptan como tipo en una anotación.
+  for (let i = 0; i + 1 < toks.length; i++) {
+    if (!(toks[i].tipo === 'IDENT' && toks[i].valor === 'usar')) continue;
+    for (let k = i + 1; k < toks.length && toks[k].tipo === 'IDENT'; k += 2) {
+      if (toks[k].valor === 'de') break;
+      if (/^[A-ZÁÉÍÓÚÑ]/.test(toks[k].valor)) tiposDeclarados.add(toks[k].valor);
+      if (!toks[k + 1] || toks[k + 1].tipo !== ',') break;
+    }
+  }
   const ver = (k = 0) => toks[Math.min(p + k, toks.length - 1)];
   const fin = () => ver().tipo === 'FIN';
   const comprobar = (tipo, valor) => {
@@ -446,6 +526,8 @@ function parser(toks, fuenteNombre) {
       throw new ErrorFuente('sintaxis', `se esperaba un tipo y llegó «${t.valor}»`, t.linea, t.col);
     const nombre = t.tipo === 'NULO' ? 'nulo' : (t.tipo === 'FUNCION' ? 'funcion' : t.valor);
     p++;
+    if (esVarTipo(nombre)) return { k: 'var', nombre };
+    if (tiposDeclarados.has(nombre) && !TIPOS_BASE.has(nombre)) return T.registro(nombre);
     if (!TIPOS_BASE.has(nombre))
       throw new ErrorFuente('tipos', `tipo desconocido «${nombre}»`, t.linea, t.col,
         `tipos válidos: ${[...TIPOS_BASE].join(', ')}`);
@@ -469,20 +551,35 @@ function parser(toks, fuenteNombre) {
 
   // --- programa ---
   function programa() {
+    if (soloExpresion) {
+      const e = expresion();
+      if (!fin()) throw new ErrorFuente('sintaxis', 'la interpolación { } debe contener una sola expresión', ver().linea, ver().col);
+      return { tipo: 'Programa', cuerpo: [{ tipo: 'ExprSent', expr: e, linea: e.linea, col: e.col }], linea: 1, col: 1 };
+    }
     const cuerpo = [];
-    while (!fin()) cuerpo.push(declaracion(true));
+    while (!fin()) poner(cuerpo, declaracion(true));
     return { tipo: 'Programa', cuerpo, linea: 1, col: 1 };
   }
 
   // «esTop» dice si estamos en el nivel superior del archivo. Solo ahí valen
   // «usar» y «publico»: un módulo se carga una vez al empezar, y lo que se
   // exporta es la cara del archivo, no algo que aparezca a mitad de un bucle.
+  // Una desestructuración se convierte en varias declaraciones: se aplanan aquí.
+  const poner = (cuerpo, d) => { if (Array.isArray(d)) cuerpo.push(...d); else cuerpo.push(d); };
+
   function declaracion(esTop) {
     const imp = quizaUsar(esTop);
     if (imp) return imp;
     const pub = quizaPublico(esTop);
     if (pub) return pub;
+    const tt = quizaTipo(esTop);
+    if (tt) return tt;
+    const sg = quizaSegun();
+    if (sg) return sg;
+    if ((comprobar('VAR') || comprobar('FIJO')) && (ver(1).tipo === '[' || ver(1).tipo === '{')) return desestructurar();
     if (comprobar('VAR') || comprobar('FIJO')) return declVar();
+    if (comprobar('FUNCION') && esNombre(ver(1)) && ver(2).tipo === '.' && tiposDeclarados.has(ver(1).valor))
+      return declMetodo(esTop);
     // «fn |f» no es una función anónima: es alguien intentando declarar una
     // constante del lenguaje. Se manda a declFuncion para que dé el mensaje
     // bueno en vez de «falta ( tras <anónima>».
@@ -573,6 +670,22 @@ function parser(toks, fuenteNombre) {
     const t = ver();
     if (!esPalabra(t, 'publico') && !esPalabra(t, 'público')) return null;
     const sig = ver(1);
+    // (4.1) «publico tipo Punto { … }»: se exporta el constructor, y con
+    // él el registro entero (los métodos viajan dentro de cada valor).
+    if (esPalabra(sig, 'tipo') && esNombre(ver(2)) && ver(3).tipo === '{') {
+      if (!esTop)
+        throw new ErrorFuente('sintaxis', '«publico» solo puede marcar algo del nivel superior del archivo', t.linea, t.col);
+      p++;
+      const d = quizaTipo(esTop);
+      d[0].publico = true; d[1].publico = true;
+      return d;
+    }
+    // (4.1) «publico fn Punto.m()»: se acepta, aunque sobra — los
+    // métodos viajan dentro de cada valor del registro, públicos o no.
+    if (sig.tipo === 'FUNCION' && esNombre(ver(2)) && ver(3).tipo === '.' && tiposDeclarados.has(ver(2).valor)) {
+      p++;
+      return declMetodo(esTop);
+    }
     if (sig.tipo !== 'FUNCION' && sig.tipo !== 'FIJO' && sig.tipo !== 'VAR') return null;
     if (!esTop)
       throw new ErrorFuente('sintaxis', '«publico» solo puede marcar algo del nivel superior del archivo', t.linea, t.col,
@@ -581,6 +694,171 @@ function parser(toks, fuenteNombre) {
     const d = comprobar('FUNCION') ? declFuncion() : declVar();
     d.publico = true;
     return d;
+  }
+
+  // ── (4.1) registros ──────────────────────────────────────────────
+  //   tipo Punto {
+  //     x: real
+  //     y: real
+  //   }
+  // Los campos van uno por línea o separados por comas. El tipo de un campo es
+  // opcional, como en una variable. Solo en el nivel superior: un tipo es la
+  // forma de los datos del archivo, no algo que aparezca a mitad de un bucle.
+  function quizaTipo(esTop) {
+    const t = ver();
+    if (!esPalabra(t, 'tipo') || !esNombre(ver(1)) || ver(2).tipo !== '{') return null;
+    if (!esTop)
+      throw new ErrorFuente('sintaxis', '«tipo» solo puede ir en el nivel superior del archivo', t.linea, t.col,
+        'declara el registro fuera de funciones y bloques');
+    p++;
+    const nom = exigirNombre('se esperaba el nombre del registro');
+    if (TIPOS_BASE.has(nom.valor))
+      throw new ErrorFuente('sintaxis', `«${nom.valor}» ya es un tipo de Ñ`, nom.linea, nom.col, 'ponle otro nombre al registro');
+    exigir('{', '{');
+    const campos = [];
+    const vistos = new Set();
+    while (!comprobar('}') && !fin()) {
+      const c = exigirNombre('se esperaba el nombre de un campo');
+      if (vistos.has(c.valor))
+        throw new ErrorFuente('sintaxis', `el campo «${c.valor}» está dos veces en «${nom.valor}»`, c.linea, c.col);
+      vistos.add(c.valor);
+      const anot = tipoOpcional();
+      // (4.1) Valor por defecto del campo: «y: real = 0.0».
+      let defecto = null;
+      if (igualar('OP', '=')) defecto = expresion();
+      else if (campos.some(q => q.defecto))
+        throw new ErrorFuente('sintaxis', `el campo «${c.valor}» va después de uno con valor por defecto y no tiene el suyo`,
+          c.linea, c.col, 'los campos con valor por defecto van al final');
+      campos.push({ nombre: c.valor, anotacion: anot, defecto, linea: c.linea, col: c.col });
+      igualar(','); saltarPuntoYComa();
+    }
+    exigir('}', '}', `falta «}» al cerrar «tipo ${nom.valor}»`);
+    if (!campos.length)
+      throw new ErrorFuente('sintaxis', `«${nom.valor}» no tiene campos`, nom.linea, nom.col, 'un registro necesita al menos un campo');
+    // El constructor es una función de verdad: «Punto(x, y)», con los mismos
+    // valores por defecto y argumentos con nombre que cualquier otra. Su cuerpo
+    // llama a la fábrica interna « hacer Punto», que crea el registro.
+    const L = t.linea, C = t.col;
+    const params = campos.map(c => ({ nombre: c.nombre, anotacion: c.anotacion, defecto: c.defecto, linea: c.linea, col: c.col }));
+    const cuerpoCtor = { tipo: 'Bloque', linea: L, col: C, cuerpo: [{ tipo: 'Devolver', linea: L, col: C,
+      valor: { tipo: 'Llamada', linea: L, col: C, callee: { tipo: 'Variable', nombre: ' hacer ' + nom.valor, linea: L, col: C },
+        args: campos.map(c => ({ tipo: 'Variable', nombre: c.nombre, linea: L, col: C })) } }] };
+    ponerDefectos(params, cuerpoCtor);
+    const ctor = { tipo: 'DeclFuncion', nombre: nom.valor, params, retorno: T.registro(nom.valor), cuerpo: cuerpoCtor,
+      esConstructor: true, linea: L, col: C };
+    return [{ tipo: 'DeclTipo', nombre: nom.valor, campos, linea: L, col: C }, ctor];
+  }
+  //   fn Punto.distancia(otro: Punto): real { … yo.x … }
+  // Es una función normal con un primer parámetro implícito, «yo», que es el
+  // registro sobre el que se llama: p.distancia(q) es Punto.distancia(p, q).
+  function declMetodo(esTop) {
+    const t = toks[p++];
+    const tipoN = toks[p++];
+    p++;                                              // «.»
+    if (!esTop)
+      throw new ErrorFuente('sintaxis', 'un método solo puede ir en el nivel superior del archivo', t.linea, t.col);
+    const met = exigirNombre(`se esperaba el nombre del método de «${tipoN.valor}»`);
+    const nombre = tipoN.valor + '.' + met.valor;
+    const { params, retorno, cuerpo, genericos, corrutina } = restoFuncion(nombre);
+    if (params.some(q => q.nombre === 'yo'))
+      throw new ErrorFuente('sintaxis', '«yo» ya es el registro sobre el que se llama el método', met.linea, met.col,
+        'no lo pongas en los parámetros: está siempre');
+    params.unshift({ nombre: 'yo', anotacion: T.registro(tipoN.valor), linea: met.linea, col: met.col, esYo: true });
+    return { tipo: 'DeclFuncion', nombre, params, retorno, cuerpo, genericos, corrutina, metodo: { tipo: tipoN.valor, nombre: met.valor },
+      linea: t.linea, col: t.col };
+  }
+
+  // ── (4.1) desestructurar ──────────────────────────────────────────
+  //   var [a, b] = lista       →  var a = lista[0]   var b = lista[1]
+  //   fijo {x, y} = punto      →  fijo x = punto.x   fijo y = punto.y
+  // La expresión se evalúa UNA vez, en una variable interna.
+  function desestructurar() {
+    const t = toks[p++];
+    const esFijo = t.tipo === 'FIJO';
+    const lista = comprobar('[');
+    p++;
+    const nombres = [];
+    const cierre = lista ? ']' : '}';
+    if (!comprobar(cierre)) do {
+      if (comprobar(cierre)) break;
+      const n = exigirNombre('se esperaba un nombre');
+      nombres.push({ nombre: n.valor, anotacion: tipoOpcional(), linea: n.linea, col: n.col });
+    } while (igualar(','));
+    exigir(cierre, cierre, `falta «${cierre}»`);
+    if (!nombres.length) throw new ErrorFuente('sintaxis', 'no hay nada que desestructurar', t.linea, t.col);
+    exigir('OP', '=', 'falta «=» y el valor que desestructurar');
+    const valor = expresion();
+    saltarPuntoYComa();
+    const tmp = tmpNombre();
+    const L = t.linea, C = t.col;
+    const out = [{ tipo: 'DeclVar', nombre: tmp, anotacion: null, valor, esFijo: true, linea: L, col: C }];
+    nombres.forEach((n, i) => {
+      const fuente = { tipo: 'Variable', nombre: tmp, linea: L, col: C };
+      const v = lista
+        ? { tipo: 'Indice', obj: fuente, indice: { tipo: 'Literal', valor: i, tipoLit: T.entero, linea: L, col: C }, linea: L, col: C }
+        : { tipo: 'Propiedad', obj: fuente, nombre: n.nombre, linea: L, col: C };
+      out.push({ tipo: 'DeclVar', nombre: n.nombre, anotacion: n.anotacion, valor: v, esFijo, linea: n.linea, col: n.col });
+    });
+    return out;
+  }
+
+  // ── (4.1) segun ───────────────────────────────────────────────────
+  //   segun x {
+  //     caso 1, 2 { … }
+  //     caso "a"  { … }
+  //     otro      { … }
+  //   }
+  // Se traduce a una cadena de «si … sino si …» comparando con «==». La
+  // expresión se evalúa una vez. Sin caída de un caso al siguiente: cada caso
+  // es su bloque y ya está, que es el fallo clásico del switch de C.
+  // «segun», «caso» y «otro» no son palabras reservadas: solo cuentan con
+  // esta forma, igual que «usar».
+  function quizaSegun() {
+    const t = ver();
+    if (!esPalabra(t, 'segun') && !esPalabra(t, 'según')) return null;
+    const sig = ver(1);
+    if (sig.tipo === 'OP' || sig.tipo === '.' || sig.tipo === '[' || sig.tipo === ')' || sig.tipo === ',') return null;
+    const guardado = p;
+    let valor;
+    try { p++; valor = expresion(); }
+    catch (_) { p = guardado; return null; }
+    // «segun x {» no es nada más en Ñ: si después de la expresión viene una
+    // llave, es un segun, y lo que haya dentro se valida con su mensaje.
+    if (!comprobar('{')) { p = guardado; return null; }
+    p++;
+    const tmp = tmpNombre();
+    const L = t.linea, C = t.col;
+    const casos = [];
+    let otro = null;
+    while (!comprobar('}') && !fin()) {
+      const c = ver();
+      if (esPalabra(c, 'otro')) {
+        if (otro) throw new ErrorFuente('sintaxis', '«segun» tiene dos «otro»', c.linea, c.col);
+        p++; otro = bloque(); continue;
+      }
+      if (!esPalabra(c, 'caso'))
+        throw new ErrorFuente('sintaxis', `dentro de «segun» va «caso …» u «otro» y llegó «${c.valor}»`, c.linea, c.col,
+          'escribe «caso 1, 2 { … }»');
+      if (otro) throw new ErrorFuente('sintaxis', '«otro» va al final del «segun»', c.linea, c.col);
+      p++;
+      const valores = [];
+      do { valores.push(expresion()); } while (igualar(','));
+      casos.push({ valores, cuerpo: bloque(), linea: c.linea, col: c.col });
+    }
+    exigir('}', '}', 'falta «}» al cerrar el «segun»');
+    let cadena = otro;
+    for (let i = casos.length - 1; i >= 0; i--) {
+      const k = casos[i];
+      let cond = null;
+      for (const v of k.valores) {
+        const eq = { tipo: 'Binario', op: '==', izq: { tipo: 'Variable', nombre: tmp, linea: k.linea, col: k.col }, der: v, linea: k.linea, col: k.col };
+        cond = cond ? { tipo: 'Binario', op: 'o', izq: cond, der: eq, linea: k.linea, col: k.col } : eq;
+      }
+      cadena = { tipo: 'Si', cond, entonces: k.cuerpo, sino: cadena, linea: k.linea, col: k.col };
+    }
+    const cuerpo = [{ tipo: 'DeclVar', nombre: tmp, anotacion: null, valor, esFijo: true, linea: L, col: C }];
+    if (cadena) cuerpo.push(cadena);
+    return { tipo: 'Bloque', cuerpo, linea: L, col: C };
   }
 
   function declVar() {
@@ -598,38 +876,91 @@ function parser(toks, fuenteNombre) {
   function declFuncion() {
     const t = toks[p++];
     const nom = exigirNombre('se esperaba el nombre de la función');
-    const { params, retorno, cuerpo } = restoFuncion(nom.valor);
-    return { tipo: 'DeclFuncion', nombre: nom.valor, params, retorno, cuerpo, linea: t.linea, col: t.col };
+    const { params, retorno, cuerpo, genericos, corrutina } = restoFuncion(nom.valor);
+    return { tipo: 'DeclFuncion', nombre: nom.valor, params, retorno, cuerpo, genericos, corrutina, linea: t.linea, col: t.col };
   }
 
   function restoFuncion(nombre) {
-    exigir('(', '(', `falta «(» tras «${nombre}»`);
-    const params = [];
-    if (!comprobar(')')) {
+    // (4.1) fn primero<T>(xs: lista<T>): T — las variables de tipo.
+    const genericos = [];
+    if (comprobar('OP', '<')) {
+      p++;
       do {
-        const pn = exigirNombre('se esperaba el nombre de un parámetro');
-        const pt = tipoOpcional();
-        params.push({ nombre: pn.valor, anotacion: pt, linea: pn.linea, col: pn.col });
+        const g = exigirNombre('se esperaba el nombre de una variable de tipo, como «T»');
+        if (TIPOS_BASE.has(g.valor)) throw new ErrorFuente('sintaxis', `«${g.valor}» ya es un tipo de Ñ y no puede ser variable de tipo`, g.linea, g.col);
+        genericos.push(g.valor);
       } while (igualar(','));
+      exigir('OP', '>', 'falta «>» al cerrar las variables de tipo');
     }
-    exigir(')', ')', 'falta «)» al cerrar los parámetros');
-    let retorno = null;
-    if (igualar(':')) retorno = parseTipo();
-    else if (igualar('OP', '->')) retorno = parseTipo();
-    const cuerpo = bloque();
-    return { params, retorno, cuerpo };
+    varsTipo.push(new Set(genericos));
+    try {
+      exigir('(', '(', `falta «(» tras «${nombre}»`);
+      const params = [];
+      if (!comprobar(')')) {
+        do {
+          const pn = exigirNombre('se esperaba el nombre de un parámetro');
+          const pt = tipoOpcional();
+          // (4.1) Valor por defecto: «fn f(a, b = 2)».
+          let defecto = null;
+          if (igualar('OP', '=')) defecto = expresion();
+          else if (params.some(q => q.defecto))
+            throw new ErrorFuente('sintaxis', `«${pn.valor}» va después de un parámetro con valor por defecto y no tiene el suyo`,
+              pn.linea, pn.col, 'los parámetros con valor por defecto van al final');
+          if (params.some(q => q.nombre === pn.valor))
+            throw new ErrorFuente('sintaxis', `el parámetro «${pn.valor}» está dos veces`, pn.linea, pn.col);
+          params.push({ nombre: pn.valor, anotacion: pt, defecto, linea: pn.linea, col: pn.col });
+        } while (igualar(','));
+      }
+      exigir(')', ')', 'falta «)» al cerrar los parámetros');
+      let retorno = null;
+      if (igualar(':')) retorno = parseTipo();
+      else if (igualar('OP', '->')) retorno = parseTipo();
+      const marco = { corrutina: null };
+      funciones.push(marco);
+      let cuerpo;
+      try { cuerpo = bloque(); } finally { funciones.pop(); }
+      ponerDefectos(params, cuerpo);
+      return { params, retorno, cuerpo, genericos, corrutina: marco.corrutina };
+    } finally { varsTipo.pop(); }
+  }
+  // Un parámetro con valor por defecto que no llega recibe un valor interno
+  // (« faltante», imposible de escribir) y la función lo cambia al empezar:
+  //     si b == « faltante» { b = <defecto> }
+  // Así el defecto se calcula EN CADA LLAMADA y puede usar los parámetros de
+  // antes —«fn f(a, b = a * 2)»—, y no hace falta ninguna instrucción nueva.
+  function ponerDefectos(params, cuerpo) {
+    const pro = [];
+    for (const q of params) {
+      if (!q.defecto) continue;
+      const L = q.linea, C = q.col;
+      const v = { tipo: 'Variable', nombre: q.nombre, linea: L, col: C };
+      pro.push({ tipo: 'Si', linea: L, col: C, sino: null,
+        cond: { tipo: 'Binario', op: '==', izq: v, der: { tipo: 'Variable', nombre: ' faltante', linea: L, col: C }, linea: L, col: C },
+        entonces: { tipo: 'Bloque', linea: L, col: C, cuerpo: [{ tipo: 'ExprSent', linea: L, col: C,
+          expr: { tipo: 'Asignacion', op: '=', esDefecto: true, destino: { tipo: 'Variable', nombre: q.nombre, linea: L, col: C }, valor: q.defecto, linea: L, col: C } }] } });
+    }
+    if (pro.length) cuerpo.cuerpo.unshift(...pro);
   }
 
   function bloque() {
     const t = exigir('{', '{', 'falta «{» para abrir el bloque');
     const cuerpo = [];
-    while (!comprobar('}') && !fin()) cuerpo.push(declaracion(false));
+    while (!comprobar('}') && !fin()) poner(cuerpo, declaracion(false));
     exigir('}', '}', 'falta «}» para cerrar el bloque');
     return { tipo: 'Bloque', cuerpo, linea: t.linea, col: t.col };
   }
 
   function sentencia() {
     const t = ver();
+    // (4.1) «producir v»: entrega un valor y la función se queda en
+    // pausa hasta que le pidan el siguiente.
+    if (esClave(t, 'producir') && !(ver(1).tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(ver(1).valor)) && ver(1).tipo !== '.' && ver(1).tipo !== '[') {
+      p++;
+      marcarCorrutina('generador', t);
+      const v = (comprobar('}') || comprobar(';') || fin() || inicioDeLineaNueva(t)) ? { tipo: 'Literal', valor: null, tipoLit: T.nulo, linea: t.linea, col: t.col } : expresion();
+      saltarPuntoYComa();
+      return { tipo: 'Producir', valor: v, linea: t.linea, col: t.col };
+    }
     if (comprobar('SI')) return sentSi();
     if (comprobar('MIENTRAS')) return sentMientras();
     if (comprobar('PARA')) return sentPara();
@@ -711,7 +1042,7 @@ function parser(toks, fuenteNombre) {
   function expresion() { return asignacion(); }
 
   function asignacion() {
-    const izq = oLogico();
+    const izq = coalescer();
     const t = ver();
     if (t.tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(t.valor)) {
       p++;
@@ -756,6 +1087,8 @@ function parser(toks, fuenteNombre) {
     if (sig.tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(sig.valor)) return false;
     return true;
   }
+  // (4.1) «a ?? b»: a, salvo que sea nulo; entonces b. Más flojo que «o».
+  const coalescer = () => binarioIzq(oLogico, t => t.tipo === 'OP' && t.valor === '??');
   const oLogico = () => binarioIzq(yLogico, t => esOperadorLogico(t, 'O'));
   const yLogico = () => binarioIzq(igualdad, t => esOperadorLogico(t, 'Y'));
   const igualdad = () => binarioIzq(comparacion, t => t.tipo === 'OP' && ['==', '!='].includes(t.valor));
@@ -765,6 +1098,18 @@ function parser(toks, fuenteNombre) {
 
   function unario() {
     const t = ver();
+    // (4.1) «esperar x»: si x es una promesa, la función se pausa hasta
+    // que esté lista y sigue con su valor; si no, sigue con x tal cual.
+    if (esClave(t, 'esperar')) {
+      const sig = ver(1);
+      const empiezaExpr = sig.linea === t.linea && !(sig.tipo === 'OP' && sig.valor !== '-') &&
+        !['.', '[', ')', ']', '}', ',', ':', ';', 'FIN', 'Y', 'O', '?.'].includes(sig.tipo);
+      if (empiezaExpr) {
+        p++;
+        marcarCorrutina('asincrona', t);
+        return { tipo: 'Esperar', valor: unario(), linea: t.linea, col: t.col };
+      }
+    }
     if (t.tipo === 'NO' || (t.tipo === 'OP' && t.valor === '-')) {
       p++;
       return { tipo: 'Unario', op: t.tipo === 'NO' ? 'no' : '-', expr: unario(), linea: t.linea, col: t.col };
@@ -787,10 +1132,25 @@ function parser(toks, fuenteNombre) {
       const t = ver();
       if (comprobar('(')) {
         p++;
-        const args = [];
-        if (!comprobar(')')) do { args.push(expresion()); } while (igualar(','));
+        const args = [], nombrados = [];
+        // (4.1) Argumentos con nombre: «f(1, tasa: 0.5)». Van después de
+        // los posicionales. El verificador los coloca en su sitio.
+        if (!comprobar(')')) do {
+          if (esNombre(ver()) && ver(1).tipo === ':') {
+            const nn = toks[p]; p += 2;
+            if (nombrados.some(x => x.nombre === nn.valor))
+              throw new ErrorFuente('sintaxis', `el argumento «${nn.valor}» está dos veces`, nn.linea, nn.col);
+            nombrados.push({ nombre: nn.valor, valor: expresion(), linea: nn.linea, col: nn.col });
+          } else {
+            if (nombrados.length)
+              throw new ErrorFuente('sintaxis', 'un argumento sin nombre no puede ir después de uno con nombre', ver().linea, ver().col,
+                'pon primero los de posición y al final los de nombre');
+            args.push(expresion());
+          }
+        } while (igualar(','));
         exigir(')', ')', 'falta «)» al cerrar la llamada');
         e = { tipo: 'Llamada', callee: e, args, linea: t.linea, col: t.col };
+        if (nombrados.length) e.nombrados = nombrados;
       } else if (comprobar('[')) {
         p++;
         const idx = expresion();
@@ -800,6 +1160,11 @@ function parser(toks, fuenteNombre) {
         p++;
         const nom = exigirNombre('se esperaba un nombre tras «.»');
         e = { tipo: 'Propiedad', obj: e, nombre: nom.valor, linea: nom.linea, col: nom.col };
+      } else if (comprobar('?.')) {
+        // (4.1) «a?.b»: nulo si a es nulo, a.b si no. Vale para ESE paso.
+        p++;
+        const nom = exigirNombre('se esperaba un nombre tras «?.»');
+        e = { tipo: 'Propiedad', obj: e, nombre: nom.valor, opcional: true, linea: nom.linea, col: nom.col };
       } else return e;
     }
   }
@@ -823,7 +1188,7 @@ function parser(toks, fuenteNombre) {
           // numerado desde su propia línea 1. Sin corregirlo, un fallo dentro de
           // una interpolación se reporta en la línea 1 del programa.
           let sub;
-          try { sub = parser(lexer(q.valor), fuenteNombre); }
+          try { sub = parser(lexer(q.valor), fuenteNombre, { soloExpresion: true }); }
           catch (e) { throw pistaLlaves(e, q); }
           if (sub.cuerpo.length !== 1 || sub.cuerpo[0].tipo !== 'ExprSent')
             throw pistaLlaves(new ErrorFuente('sintaxis',
@@ -832,10 +1197,25 @@ function parser(toks, fuenteNombre) {
         });
         return { tipo: 'Interpolacion', partes, linea: t.linea, col: t.col };
       }
+      // (4.1) «si c entonces a sino b» como expresión. Como sentencia,
+      // «si» sigue siendo el de siempre: esto solo aparece donde va un valor.
+      case 'SI': {
+        p++;
+        const cond = expresion();
+        const ent = ver();
+        if (!esPalabra(ent, 'entonces'))
+          throw new ErrorFuente('sintaxis', `en un «si» que da un valor falta «entonces» y llegó «${ent.valor === null ? 'fin de archivo' : ent.valor}»`,
+            ent.linea, ent.col, 'escribe «si x > 0 entonces "positivo" sino "no"»');
+        p++;
+        const a = expresion();
+        exigir('SINO', undefined, 'un «si … entonces …» que da un valor necesita su «sino»');
+        const b = expresion();
+        return { tipo: 'SiExpr', cond, entonces: a, sino: b, linea: t.linea, col: t.col };
+      }
       case 'FUNCION': {
         p++;
-        const { params, retorno, cuerpo } = restoFuncion('<anónima>');
-        return { tipo: 'FuncionAnon', params, retorno, cuerpo, linea: t.linea, col: t.col };
+        const { params, retorno, cuerpo, genericos, corrutina } = restoFuncion('<anónima>');
+        return { tipo: 'FuncionAnon', params, retorno, cuerpo, genericos, corrutina, linea: t.linea, col: t.col };
       }
       case '(': {
         p++;
@@ -871,4 +1251,4 @@ function parser(toks, fuenteNombre) {
   return programa();
 }
 
-if (typeof module !== 'undefined') module.exports = { ErrorFuente, lexer, parser, T, tipoATexto, compatible, esNum, TIPOS_BASE, firma, textoATipo, aridadDe };
+if (typeof module !== 'undefined') module.exports = { ErrorFuente, lexer, parser, T, tipoATexto, compatible, esNum, TIPOS_BASE, firma, textoATipo, aridadDe, tipoDeFuncion };

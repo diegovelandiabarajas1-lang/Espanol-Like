@@ -3,7 +3,7 @@
   "version": "4.0.0",
   "description": "Ñ — lenguaje de programación en español: verificador de tipos, VM de bytecode y JIT a JavaScript",
   "license": "Apache-2.0",
-  "author": "Nicolás Stiven Jaimes Duarte",
+  "author": "Diego Velandia Barajas",
   "homepage": "https://github.com/diegovelandiabarajas1-lang/Espanol-Like#readme",
   "repository": {
     "type": "git",

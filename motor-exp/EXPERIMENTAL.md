@@ -3,6 +3,11 @@
 > **Regla (Diego, 16-oct-2026):** se experimenta aquí. `motor/` es el **LTS** y no se toca. Un cambio pasa al LTS
 > solo si funciona, no rompe nada **y Diego dice que se haga**.
 
+> **17-oct-2026: ascendido.** Diego lo pidió («traspasa las funciones experimentales del motor-exp al LTS») y todo
+> lo de R1, P1, X1–X4, S1–S2 y W1 está ahora en `motor/` como **4.1**. Qué entró, qué cambia para un programa de la
+> 4.0 y qué se comprobó: `docs/CAMBIOS-4.1.md`. Este clon sigue siendo el sitio de lo que viene (R2, D1, S3, P2–P5):
+> desde hoy parte de la 4.1, así que las comparaciones con `util/banco.js` miden clon contra 4.1, no contra la 4.0.
+
 ## Qué es esta carpeta
 
 Una copia de `motor/` del 16-oct (versión 4.0, 19 de 20 suites en verde) con su propia versión: **`4.1-exp`**.

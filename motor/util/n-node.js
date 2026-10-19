@@ -13,7 +13,8 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
+const os = require('os');
 const R = require('../rutas.js');
 // Perfil del motor: «node motor/util/n-node.js --c1en programa.esl» carga el
 // bundle de C1EÑ, con numerico y nen abiertos sin «usar». También con la
@@ -69,6 +70,56 @@ const archivos = {
   crearCarpeta: r => intenta('no se pudo crear ' + r, () => { fs.mkdirSync(r, { recursive: true }); }),
   borrar: r => { if (!fs.existsSync(r)) return false; intenta('no se pudo borrar ' + r, () => fs.rmSync(r)); return true; },
   tamano: r => intenta('no existe ' + r, () => fs.statSync(r).size),
+  // (4.1, S2)
+  copiar: (a, b) => intenta('no se pudo copiar ' + a + ' a ' + b, () => fs.cpSync(a, b, { recursive: true })),
+  mover: (a, b) => intenta('no se pudo mover ' + a + ' a ' + b, () => fs.renameSync(a, b)),
+  info: r => {
+    const st = intenta('no existe ' + r, () => fs.statSync(r));
+    return { tamano: st.size, modificado: st.mtimeMs, creado: st.birthtimeMs, esCarpeta: st.isDirectory(), esArchivo: st.isFile() };
+  },
+  // Línea a línea, sin cargar el archivo entero: lee trozos de 64 KB y va
+  // soltando líneas. Devuelve una función que da la siguiente, o undefined al
+  // acabar (y entonces cierra el archivo).
+  lineas(r) {
+    const fd = intenta('no se pudo abrir ' + r, () => fs.openSync(r, 'r'));
+    const buf = Buffer.alloc(65536);
+    let resto = Buffer.alloc(0), fin = false, cerrado = false;
+    const cerrar = () => { if (!cerrado) { cerrado = true; try { fs.closeSync(fd); } catch (_) {} } };
+    const siguiente = () => {
+      for (;;) {
+        const nl = resto.indexOf(10);
+        if (nl >= 0) {
+          let linea = resto.subarray(0, nl);
+          resto = resto.subarray(nl + 1);
+          if (linea.length && linea[linea.length - 1] === 13) linea = linea.subarray(0, linea.length - 1);
+          return linea.toString('utf8');
+        }
+        if (fin) {
+          cerrar();
+          if (!resto.length) return undefined;
+          const ultima = resto.toString('utf8').replace(/\r$/, ''); resto = Buffer.alloc(0);
+          return ultima;
+        }
+        const n = fs.readSync(fd, buf, 0, buf.length, null);
+        if (n === 0) fin = true;
+        else resto = Buffer.concat([resto, buf.subarray(0, n)]);
+      }
+    };
+    siguiente.cerrar = cerrar;
+    return siguiente;
+  },
+};
+// Rutas: las de este sistema operativo (\\ en Windows, / en el resto).
+const rutas = {
+  unir: partes => path.join(...partes),
+  absoluta: r => path.resolve(r),
+  normalizar: r => path.normalize(r),
+  nombre: r => path.basename(r),
+  extension: r => path.extname(r),
+  carpeta: r => path.dirname(r),
+  esAbsoluta: r => path.isAbsolute(r),
+  relativa: (de, a) => path.relative(de, a),
+  separador: path.sep,
 };
 
 // ------------------------------------------------------------------- módulos
@@ -98,32 +149,90 @@ const modulos = {
   },
 };
 
-// La entrada se lee entera de golpe y se va sirviendo por líneas: el motor es
-// síncrono y no hay forma de esperar a que llegue una línea a mitad de turno.
-let lineas = null, iLinea = 0;
-function entradaEntera() {
-  if (lineas !== null) return;
-  let t = '';
-  try { t = fs.readFileSync(0, 'utf8'); } catch (_) { t = ''; }
-  lineas = t.length ? t.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n') : [];
+// (4.1, S2) La entrada se lee de verdad línea a línea. En la 4.0 se leía
+// ENTERA de golpe, y en una terminal eso es esperar al Ctrl+D: un programa que
+// pregunta «¿cómo te llamas?» se quedaba colgado sin enseñar nada. Ahora se
+// lee lo que haya llegado (en una terminal, hasta que se pulsa Intro) y se
+// guarda lo que sobre para la siguiente línea.
+let pendienteEntrada = Buffer.alloc(0), finEntrada = false;
+const bufEntrada = Buffer.alloc(4096);
+const dormirSync = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+function siguienteLinea() {
+  for (;;) {
+    const nl = pendienteEntrada.indexOf(10);
+    if (nl >= 0) {
+      let l = pendienteEntrada.subarray(0, nl);
+      pendienteEntrada = pendienteEntrada.subarray(nl + 1);
+      if (l.length && l[l.length - 1] === 13) l = l.subarray(0, l.length - 1);
+      return l.toString('utf8');
+    }
+    if (finEntrada) {
+      if (!pendienteEntrada.length) return null;
+      const u = pendienteEntrada.toString('utf8'); pendienteEntrada = Buffer.alloc(0);
+      return u;
+    }
+    let n;
+    try { n = fs.readSync(0, bufEntrada, 0, bufEntrada.length, null); }
+    catch (e) {
+      if (e.code === 'EAGAIN') { dormirSync(10); continue; }   // entrada no bloqueante: esperar un poco
+      if (e.code === 'EOF') n = 0; else n = 0;
+    }
+    if (n === 0) finEntrada = true;
+    else pendienteEntrada = Buffer.concat([pendienteEntrada, bufEntrada.subarray(0, n)]);
+  }
+}
+
+function opcionesProceso(op, sincrono) {
+  op = op || {};
+  const o = { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 };
+  if (op.carpeta) o.cwd = op.carpeta;
+  if (op.entorno) o.env = Object.assign({}, process.env, op.entorno);
+  if (op.espera) o.timeout = op.espera;
+  if (sincrono) {
+    if (typeof op.entrada === 'string') { o.input = op.entrada; o.stdio = ['pipe', 'pipe', 'pipe']; }
+    else o.stdio = ['ignore', 'pipe', 'pipe'];
+  }
+  return o;
+}
+function resultadoFallido(e) {
+  const muerto = e.code === 'ETIMEDOUT' || (e.signal === 'SIGTERM' && e.killed);
+  return { codigo: e.status === undefined || e.status === null ? -1 : e.status,
+           salida: e.stdout ? String(e.stdout) : '',
+           error: muerto ? 'se pasó del tiempo de espera y se paró' : e.stderr ? String(e.stderr) : String(e.message || e) };
 }
 
 const sistema = {
   argumentos: () => args.slice(1),
   entorno: n => (n in process.env ? process.env[n] : null),
-  ejecutar(orden, extra) {
+  ejecutar(orden, extra, op) {
     // Sin shell, igual que en la versión de QuickJS: la orden y sus argumentos
     // van por separado y un dato con espacios no se convierte en otra orden.
+    // (4.1, S2) op: { entrada, carpeta, entorno, espera } — todas opcionales.
     try {
-      const salida = execFileSync(orden, extra, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+      const salida = execFileSync(orden, extra, opcionesProceso(op, true));
       return { codigo: 0, salida, error: '' };
-    } catch (e) {
-      return { codigo: e.status === undefined || e.status === null ? -1 : e.status,
-               salida: e.stdout ? String(e.stdout) : '',
-               error: e.stderr ? String(e.stderr) : String(e.message || e) };
-    }
+    } catch (e) { return resultadoFallido(e); }
   },
-  leerLinea() { entradaEntera(); return iLinea < lineas.length ? lineas[iLinea++] : null; },
+  // (4.1, S2) Lo mismo sin esperar: «listo» recibe el resultado.
+  ejecutarFondo(orden, extra, op, listo) {
+    const hijo = execFile(orden, extra, opcionesProceso(op, false), (e, salida, error) => {
+      if (!e) return listo({ codigo: 0, salida: String(salida), error: String(error) });
+      const codigo = typeof e.code === 'number' ? e.code : -1;      // ENOENT y compañía llegan como texto
+      const msg = e.killed ? 'se pasó del tiempo de espera y se paró'
+        : String(error || '') || (typeof e.code === 'string' ? `no se pudo lanzar «${orden}» (${e.code})` : String(e.message || e));
+      listo({ codigo, salida: String(salida || ''), error: msg });
+    });
+    if (op && typeof op.entrada === 'string') { hijo.stdin.end(op.entrada); }
+    else if (hijo.stdin) hijo.stdin.end();
+  },
+  carpetaActual: () => process.cwd(),
+  cambiarCarpeta: r => process.chdir(r),
+  info: () => ({ so: process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'mac' : process.platform,
+                 arquitectura: process.arch, procesadores: os.cpus().length, memoria: os.totalmem(),
+                 libre: os.freemem(), usuario: os.userInfo().username, personal: os.homedir(),
+                 temporal: os.tmpdir(), equipo: os.hostname(), motor: 'node ' + process.version }),
+  leerLinea() { return siguienteLinea(); },
+  indicar: t => { try { fs.writeSync(1, t); } catch (_) { console.log(t); } },
   salir: c => process.exit(c),
 };
 
@@ -184,9 +293,82 @@ const red = typeof fetch === 'function' ? {
   },
 } : null;
 
+// (4.1, S2) Lo que llega de fuera cuando el programa principal ya acabó
+// —un temporizador, una respuesta, una petición al servidor— es un turno. Si
+// falla, se dice y el proceso acabará con código 1, pero lo demás sigue: un
+// servidor no se cae porque una petición falle.
+const errorEnTurno = e => { console.log(e && e.formato ? e.formato() : String((e && e.message) || e)); process.exitCode = 1; };
+function turno(vm, fn, args) {
+  try { vm.nuevoTurno(); vm.invocar(fn, args || []); }
+  catch (e) { errorEnTurno(e); }
+}
+// El reloj. En la 4.0 la consola no tenía: «luego» y «cada» solo funcionaban
+// en el IDE. Desde la 4.1 funcionan aquí, y con ellos «dormir» y lo asíncrono.
+const temporizadores = new Map();
+let sigTemp = 1;
+const tiempo = {
+  luego(ms, fn, vm) {
+    const id = sigTemp++;
+    temporizadores.set(id, setTimeout(() => { temporizadores.delete(id); turno(vm, fn, []); }, Math.max(0, ms)));
+    return id;
+  },
+  cada(ms, fn, vm) {
+    const id = sigTemp++;
+    temporizadores.set(id, setInterval(() => turno(vm, fn, []), Math.max(1, ms)));
+    return id;
+  },
+  detener(id) {
+    const h = temporizadores.get(id);
+    if (!h) return false;
+    clearTimeout(h); clearInterval(h); temporizadores.delete(id);
+    return true;
+  },
+};
+// El servidor HTTP: «servir(puerto, fn)» del eDSL «sistema». El motor recibe
+// la petición en datos planos y devuelve la respuesta por «responder».
+const http = require('http');
+const servidores = new Map();
+let sigServ = 1;
+const MAX_CUERPO = 8 * 1024 * 1024;
+const servidor = {
+  escuchar(puerto, anfitrionIp, manejar, listo) {
+    const id = sigServ++;
+    const srv = http.createServer((req, res) => {
+      const trozos = [];
+      let largo = 0, cortado = false;
+      req.on('data', c => { largo += c.length; if (largo > MAX_CUERPO) { cortado = true; req.destroy(); } else trozos.push(c); });
+      req.on('end', () => {
+        if (cortado) return;
+        const u = new URL(req.url, 'http://x');
+        const consulta = {};
+        for (const [k, v] of u.searchParams) consulta[k] = v;
+        manejar({ metodo: req.method, ruta: decodeURIComponent(u.pathname), consulta,
+                  cabeceras: Object.assign({}, req.headers), cuerpo: Buffer.concat(trozos).toString('utf8'),
+                  ip: req.socket.remoteAddress || '' },
+          r => {
+            if (res.headersSent) return;
+            res.writeHead(r.estado, Object.assign({ 'Content-Type': r.tipo }, r.cabeceras || {}));
+            res.end(r.cuerpo);
+          });
+      });
+    });
+    srv.on('error', e => listo(e.code === 'EADDRINUSE' ? 'el puerto ' + puerto + ' ya está en uso' : String(e.message || e)));
+    srv.listen(puerto, anfitrionIp, () => listo(null, srv.address().port));
+    servidores.set(id, srv);
+    return id;
+  },
+  cerrar(id) {
+    const s = servidores.get(id);
+    if (!s) return false;
+    s.close(); if (s.closeAllConnections) s.closeAllConnections();
+    servidores.delete(id);
+    return true;
+  },
+};
+
 const m = globalThis.EspanolLike.crearMotor({
   salida: s => console.log(s),
-  host: Object.assign({ archivos, sistema, modulos },
+  host: Object.assign({ archivos, sistema, modulos, rutas, tiempo, servidor, errorEnTurno },
                       nativo ? { nativo } : null,
                       red ? { red } : null),
   limiteInstr: limite,

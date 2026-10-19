@@ -206,6 +206,7 @@
     irA('consola');
     motor = nuevoMotor();
     const r = motor.ejecutar(src);
+    anf.volcar();   // 4.1: la página se vuelca al acabar, no nodo a nodo
     ultimoFn = r.fn || null;
     if (!r.ok) for (const e of r.errores) linea(fmtErr(e), 'err');
     aPadre({
@@ -317,6 +318,7 @@
       try { p = P.leer(b64); } catch (e) { r = { ok: false, errores: [e] }; }
       if (p) r = motor.correr(p.fn, [], p.modulos);
     } else r = motor.ejecutarBytecode(b64);
+    anf.volcar();
     ultimoFn = r.fn || null;
     if (!r.ok) for (const e of r.errores) linea(fmtErr(e), 'err');
     aPadre({

@@ -182,3 +182,26 @@ todavía no se puede guardar como .elb»; en la consola nadie lo llama ya y en e
 mensaje podría apuntar a `util/elb.js` (una línea de `04-stdlib.js`, si quieres). (3) `n.js` (QuickJS) no carga
 paquetes todavía: QuickJS no está en la nube para probarlo.
 **Lo que cuesta:** un `.elb` corre sin JIT (regla del formato, a propósito).
+
+## 2026-10-17 (8) · la 4.1 pasa a ser el LTS
+**Pedido:** «traspasa las funciones experimentales del motor-exp al LTS». Antes, a pedido de Diego, el autor de
+`NOTICE` y `package.json` pasa a ser **Diego Velandia Barajas** (estaba mal puesto por una sesión anterior).
+**Hecho:** todo lo del clon (R1, P1, X1–X4, S1–S2, W1) está en `motor\` con versión **4.1**: `src\01`–`06`,
+`ide\anfitrion.js`, `app.html`, `hijo.html`, `util\n-node.js`, `nativo-koffi.js`, `c1en-nativo.js`; las suites del clon
+con nombre de LTS (`rendimiento`, `pagina` + `pagina-comun`, `expresividad`, `expresividad2`, `sistema`) en `todas.js`;
+`motor\pruebas\motor.js`, `interaccion.js`, `c1en.js`, `nen-nucleos.js`, `fuera.js` del clon (en `fuera.js` se queda la
+ruta del binario del LTS). Ejemplos del clon en `ejemplos\sistema\`. El libro (`referencia.js`) tiene ahora 793
+entradas: 36 ejemplos nuevos (corrutinas, nativo, sistema) y un anfitrión de mentira para archivos, rutas, servidor y
+memoria nativa; `inventario.ñdatos` resellado. Reconstruidos los dos bundles, `espanol-like-v4.html`, `c1en.html`,
+`publicar-*.html`, `referencia-stdlib.html`.
+**Antes de copiar se comprobó** que el clon era el LTS de hoy más sus cambios (el diff aplica limpio), así que no se
+pierde nada del LTS.
+**Probado:** batería 24 de 25 (la roja, `ecosim5`, la de siempre). Los 67 ejemplos con la 4.0 y la 4.1: 65 iguales; los
+otros dos son la hora actual (`49-registro-de-eventos`) y raylib que falta en la nube (`panel`). `.elb` de la 4.0 en la
+4.1: iguales (19 sueltos y un paquete de varios archivos). Flappy 11/11, Galaga 20/20, ARCADE 13/13.
+**Cambia para un programa viejo:** `pedir` sin función devuelve una promesa (antes era error) y el mensaje de `si` con
+llaves como valor es otro. Todo en `docs\CAMBIOS-4.1.md`.
+**Docs:** `LEEME.md` (versión, eDSL, tabla de sitios, lo que falta), `motor\ARQUITECTURA.md` (capítulo «4.1»),
+`docs\CAMBIOS-4.1.md` (nuevo), `motor-exp\EXPERIMENTAL.md` (nota de ascenso).
+**Sin tocar:** `motor-exp\` (salvo la nota), los juegos, `empaquetar.js`, `rutas.js`.
+**Pendiente:** correr la batería en Windows con la 4.1; decidir si `ecosim5` se arregla.

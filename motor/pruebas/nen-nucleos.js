@@ -122,7 +122,14 @@ const ulp = (a, b) => {
   const d = o(a) - o(b);
   return d < 0n ? -d : d;
 };
-const MAX_ULP = 8n;
+// 8 ulp con glibc (Linux). En Windows la biblioteca matemática de mingw (la de
+// msvcrt) redondea peor: «pow» dio 10 ulp y luego 19 en el PC de Diego (fase W1),
+// así que subir el tope a ojo no sirve. En Windows el tope es el que C1EÑ
+// promete para las funciones trascendentes: diferencia relativa menor que 1e-14,
+// que son 45 ulp (1e-14 / 2⁻⁵²). Si un núcleo pasa de ahí, ya no es redondeo de
+// la plataforma: es un fallo y se dice. Los núcleos sin trascendentes siguen
+// exigiéndose bit a bit en todas partes.
+const MAX_ULP = process.platform === 'win32' ? 45n : 8n;
 let exactos = 0, conUlp = 0, fallos = 0, casos = 0;
 for (const nombre of nombres) {
   const k = NEN_T_NUCLEOS[nombre];
@@ -155,7 +162,12 @@ for (const nombre of nombres) {
   if (peor === 0n) { exactos++; console.log(`  ✓ ${nombre.padEnd(18)} bit a bit`); }
   else { conUlp++; console.log(`  ✓ ${nombre.padEnd(18)} a ${peor} ulp como mucho (usa la biblioteca matemática)`); }
 }
-fs.rmSync(dir, { recursive: true, force: true });
+// Primero se suelta la biblioteca: Windows no deja borrar una DLL cargada (la
+// prueba terminaba con EPERM al limpiar, fase W1). Y si aun así no se puede
+// borrar, es basura en la carpeta temporal, no un fallo de los núcleos.
+try { lib.unload(); } catch (_) { /* koffi viejo o ya suelta */ }
+try { fs.rmSync(dir, { recursive: true, force: true }); }
+catch (e) { console.log(`  · no se pudo borrar ${dir} (${e.code}); bórrala a mano si molesta`); }
 console.log(`\n${nombres.length} núcleos compilados con gcc -ffp-contract=off · ${casos} casos · ` +
   `${exactos} iguales bit a bit, ${conUlp} a pocos ulp, ${fallos} fallan`);
 process.exit(fallos ? 1 : 0);

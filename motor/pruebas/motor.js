@@ -962,8 +962,10 @@ falla('gramática: no existe «usar X as Y»',
   `usar media as m de "numerico"`, 'usar');
 falla('gramática: «capturar» lleva los paréntesis del nombre',
   `intentar { } capturar e { }`, 'falta «{»');
-falla('gramática: «si» es sentencia, no hay ternario con si/sino',
-  `var x = si cierto { 1 } sino { 2 }`, 'no se esperaba «si»');
+// 4.1: ahora SÍ hay «si» como expresión, pero con «entonces» y sin
+// llaves. La forma con llaves sigue siendo un error, y el mensaje enseña la buena.
+falla('gramática: el «si» con llaves no es una expresión; la expresión es «si … entonces … sino …»',
+  `var x = si cierto { 1 } sino { 2 }`, 'entonces');
 falla('gramática: tampoco hay ternario con «?»',
   `var x = cierto ? 1 : 2`, 'carácter inesperado');
 falla('gramática: «dic» exige los DOS parámetros',

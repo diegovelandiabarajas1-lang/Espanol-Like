@@ -205,7 +205,10 @@ function lexer(fuente) {
     const tres = fuente.substr(i, 3);
     const dos = fuente.substr(i, 2);
     const OP3 = ['**='];
-    const OP2 = ['**', '//', '==', '!=', '<=', '>=', '+=', '-=', '*=', '/=', '->', '..'];
+    // «??» y «?.» (4.1): el nulo como valor por defecto y el acceso
+    // que no revienta si el objeto es nulo.
+    const OP2 = ['**', '//', '==', '!=', '<=', '>=', '+=', '-=', '*=', '/=', '->', '..', '??'];
+    if (dos === '?.') { avanzar(); avanzar(); push('?.', '?.', L, C); continue; }
     if (OP3.includes(tres)) { avanzar(); avanzar(); avanzar(); push('OP', tres, L, C); continue; }
     if (OP2.includes(dos)) { avanzar(); avanzar(); push('OP', dos, L, C); continue; }
     if (dos === '&&') { avanzar(); avanzar(); push('Y', 'y', L, C); continue; }
@@ -255,6 +258,9 @@ const T = {
   // después de guardarla y volverla a leer.
   tabla: { k: 'tabla' },
   arreglo: { k: 'arreglo' },
+  // (4.1) Un registro declarado con «tipo Nombre { … }». Lo que lleva
+  // —campos y métodos— lo sabe el verificador; aquí solo viaja el nombre.
+  registro: (nombre) => ({ k: 'registro', nombre }),
   lista: (e) => ({ k: 'lista', elem: e || T.cualquiera }),
   dic: (c, v) => ({ k: 'dic', clave: c || T.cualquiera, valor: v || T.cualquiera }),
   fn: (params, ret) => ({ k: 'funcion', params: params || null, ret: ret || T.cualquiera }),
@@ -279,6 +285,8 @@ function tipoATexto(t) {
     // verificador le asigna al nombre de un «usar … como …», para poder decir
     // «un módulo no es un valor» en vez de dejarlo pasar como «cualquiera».
     case 'modulo': return `módulo «${t.ruta || t.clave}»`;
+    case 'registro': return t.nombre;
+    case 'var': return t.nombre;
     default: return t.k;
   }
 }
@@ -362,10 +370,30 @@ function firma(s) {
 const aridadDe = t => (t && t.k === 'funcion' && t.params === null ? -1
   : t && t.k === 'funcion' ? t.params.length : 0);
 
+// (4.1) El tipo de una función declarada, con lo que hace falta para
+// llamarla bien: los nombres de sus parámetros (argumentos con nombre), cuántos
+// son obligatorios (los demás tienen valor por defecto) y sus variables de tipo
+// (genéricos). Lo usan el verificador y los módulos: un solo sitio.
+function tipoDeFuncion(n, quitarYo) {
+  const ps = quitarYo ? n.params.slice(1) : n.params;
+  // Llamar a un generador devuelve el generador, y a una asíncrona su promesa:
+  // no lo que pone su «devolver».
+  const t = T.fn(ps.map(p => p.anotacion || T.cualquiera), n.corrutina ? T.cualquiera : (n.retorno || T.cualquiera));
+  t.nombres = ps.map(p => p.nombre);
+  const primero = ps.findIndex(p => p.defecto);
+  t.minimos = primero < 0 ? ps.length : primero;
+  if (n.genericos && n.genericos.length) t.genericos = n.genericos;
+  return t;
+}
+
 // ¿se puede usar un valor de tipo `origen` donde se espera `destino`?
 function compatible(destino, origen) {
   if (!destino || !origen) return true;
   if (destino.k === 'cualquiera' || origen.k === 'cualquiera') return true;
+  // (4.1) Una variable de tipo (la T de un genérico) dentro del cuerpo
+  // de la función vale lo que valga: se comprueba en cada LLAMADA, donde se
+  // sabe qué es T.
+  if (destino.k === 'var' || origen.k === 'var') return true;
   // Una unión acepta cualquiera de sus miembros. Existe por «seno»: tiene que
   // recibir un número o un arreglo, y la alternativa era poner «cualquiera» y
   // perder la comprobación del todo, o inventar «senoA» al lado de «seno», que
@@ -374,6 +402,9 @@ function compatible(destino, origen) {
   if (destino.k === 'union') return destino.de.some(t => compatible(t, origen));
   if (origen.k === 'union') return origen.de.every(t => compatible(destino, t));
   if (destino.k === origen.k) {
+    // Dos registros solo son compatibles si son del MISMO tipo: un Punto no
+    // vale donde se espera un Color aunque los dos tengan tres números.
+    if (destino.k === 'registro') return destino.nombre === origen.nombre;
     if (destino.k === 'lista') return compatible(destino.elem, origen.elem);
     if (destino.k === 'dic') return compatible(destino.clave, origen.clave) && compatible(destino.valor, origen.valor);
     return true;
@@ -399,8 +430,57 @@ function reubicar(nodo, linea, col) {
   return nodo;
 }
 
-function parser(toks, fuenteNombre) {
+function parser(toks, fuenteNombre, opciones) {
   let p = 0;
+  // (4.1) «soloExpresion»: lo que va entre las llaves de un texto se lee
+  // como UNA expresión, no como un programa. Antes daba igual; ahora no, porque
+  // «si … entonces … sino …» empieza por «si», que como programa sería la
+  // sentencia.
+  const soloExpresion = !!(opciones && opciones.soloExpresion);
+  // (4.1) Los nombres de los registros del archivo se buscan ANTES de
+  // analizar nada, para que «fn f(p: Punto)» se entienda aunque «tipo Punto»
+  // esté más abajo, igual que una función se puede llamar antes de declararla.
+  const tiposDeclarados = new Set();
+  for (let i = 0; i + 2 < toks.length; i++)
+    if (toks[i].tipo === 'IDENT' && toks[i].valor === 'tipo' && toks[i + 1].tipo === 'IDENT' && toks[i + 2].tipo === '{')
+      tiposDeclarados.add(toks[i + 1].valor);
+  // Nombres internos para lo que el parser se inventa (desestructurar, segun).
+  // Llevan un espacio: el léxico no deja escribirlo, así que no chocan con nada.
+  let sigTmp = 0;
+  const tmpNombre = () => ' t' + (sigTmp++);
+  // (4.1) Corrutinas. «producir» y «esperar» no son palabras
+  // reservadas: si el archivo declara algo con ese nombre, se respeta y no se
+  // leen como corrutina.
+  const tapadas = new Set();
+  for (let i = 0; i + 1 < toks.length; i++)
+    if ((toks[i].tipo === 'FUNCION' || toks[i].tipo === 'VAR' || toks[i].tipo === 'FIJO') && toks[i + 1].tipo === 'IDENT')
+      tapadas.add(toks[i + 1].valor);
+  const esClave = (t, v) => t.tipo === 'IDENT' && t.valor === v && !tapadas.has(v);
+  // La función que se está leyendo, para saber si es corrutina.
+  const funciones = [];
+  function marcarCorrutina(clase, t) {
+    const f = funciones[funciones.length - 1];
+    if (!f) throw new ErrorFuente('sintaxis', `«${clase === 'generador' ? 'producir' : 'esperar'}» solo puede ir dentro de una función`, t.linea, t.col,
+      clase === 'generador' ? 'una función con «producir» es un generador: «fn contar(n) { para i en rango(n) { producir i } }»'
+                            : 'una función con «esperar» es asíncrona: «fn cargar() { var r = esperar pedir(url) }»');
+    if (f.corrutina && f.corrutina !== clase)
+      throw new ErrorFuente('sintaxis', 'una función no puede tener «producir» y «esperar» a la vez', t.linea, t.col,
+        'sepáralo en dos funciones: un generador y una asíncrona');
+    f.corrutina = clase;
+  }
+  // Las variables de tipo de los genéricos que se están leyendo ahora mismo.
+  const varsTipo = [];
+  const esVarTipo = n => varsTipo.some(s => s.has(n));
+  // Los nombres que se importan con «usar A, B de …» y empiezan por mayúscula
+  // pueden ser registros de otro archivo: se aceptan como tipo en una anotación.
+  for (let i = 0; i + 1 < toks.length; i++) {
+    if (!(toks[i].tipo === 'IDENT' && toks[i].valor === 'usar')) continue;
+    for (let k = i + 1; k < toks.length && toks[k].tipo === 'IDENT'; k += 2) {
+      if (toks[k].valor === 'de') break;
+      if (/^[A-ZÁÉÍÓÚÑ]/.test(toks[k].valor)) tiposDeclarados.add(toks[k].valor);
+      if (!toks[k + 1] || toks[k + 1].tipo !== ',') break;
+    }
+  }
   const ver = (k = 0) => toks[Math.min(p + k, toks.length - 1)];
   const fin = () => ver().tipo === 'FIN';
   const comprobar = (tipo, valor) => {
@@ -448,6 +528,8 @@ function parser(toks, fuenteNombre) {
       throw new ErrorFuente('sintaxis', `se esperaba un tipo y llegó «${t.valor}»`, t.linea, t.col);
     const nombre = t.tipo === 'NULO' ? 'nulo' : (t.tipo === 'FUNCION' ? 'funcion' : t.valor);
     p++;
+    if (esVarTipo(nombre)) return { k: 'var', nombre };
+    if (tiposDeclarados.has(nombre) && !TIPOS_BASE.has(nombre)) return T.registro(nombre);
     if (!TIPOS_BASE.has(nombre))
       throw new ErrorFuente('tipos', `tipo desconocido «${nombre}»`, t.linea, t.col,
         `tipos válidos: ${[...TIPOS_BASE].join(', ')}`);
@@ -471,20 +553,35 @@ function parser(toks, fuenteNombre) {
 
   // --- programa ---
   function programa() {
+    if (soloExpresion) {
+      const e = expresion();
+      if (!fin()) throw new ErrorFuente('sintaxis', 'la interpolación { } debe contener una sola expresión', ver().linea, ver().col);
+      return { tipo: 'Programa', cuerpo: [{ tipo: 'ExprSent', expr: e, linea: e.linea, col: e.col }], linea: 1, col: 1 };
+    }
     const cuerpo = [];
-    while (!fin()) cuerpo.push(declaracion(true));
+    while (!fin()) poner(cuerpo, declaracion(true));
     return { tipo: 'Programa', cuerpo, linea: 1, col: 1 };
   }
 
   // «esTop» dice si estamos en el nivel superior del archivo. Solo ahí valen
   // «usar» y «publico»: un módulo se carga una vez al empezar, y lo que se
   // exporta es la cara del archivo, no algo que aparezca a mitad de un bucle.
+  // Una desestructuración se convierte en varias declaraciones: se aplanan aquí.
+  const poner = (cuerpo, d) => { if (Array.isArray(d)) cuerpo.push(...d); else cuerpo.push(d); };
+
   function declaracion(esTop) {
     const imp = quizaUsar(esTop);
     if (imp) return imp;
     const pub = quizaPublico(esTop);
     if (pub) return pub;
+    const tt = quizaTipo(esTop);
+    if (tt) return tt;
+    const sg = quizaSegun();
+    if (sg) return sg;
+    if ((comprobar('VAR') || comprobar('FIJO')) && (ver(1).tipo === '[' || ver(1).tipo === '{')) return desestructurar();
     if (comprobar('VAR') || comprobar('FIJO')) return declVar();
+    if (comprobar('FUNCION') && esNombre(ver(1)) && ver(2).tipo === '.' && tiposDeclarados.has(ver(1).valor))
+      return declMetodo(esTop);
     // «fn |f» no es una función anónima: es alguien intentando declarar una
     // constante del lenguaje. Se manda a declFuncion para que dé el mensaje
     // bueno en vez de «falta ( tras <anónima>».
@@ -575,6 +672,22 @@ function parser(toks, fuenteNombre) {
     const t = ver();
     if (!esPalabra(t, 'publico') && !esPalabra(t, 'público')) return null;
     const sig = ver(1);
+    // (4.1) «publico tipo Punto { … }»: se exporta el constructor, y con
+    // él el registro entero (los métodos viajan dentro de cada valor).
+    if (esPalabra(sig, 'tipo') && esNombre(ver(2)) && ver(3).tipo === '{') {
+      if (!esTop)
+        throw new ErrorFuente('sintaxis', '«publico» solo puede marcar algo del nivel superior del archivo', t.linea, t.col);
+      p++;
+      const d = quizaTipo(esTop);
+      d[0].publico = true; d[1].publico = true;
+      return d;
+    }
+    // (4.1) «publico fn Punto.m()»: se acepta, aunque sobra — los
+    // métodos viajan dentro de cada valor del registro, públicos o no.
+    if (sig.tipo === 'FUNCION' && esNombre(ver(2)) && ver(3).tipo === '.' && tiposDeclarados.has(ver(2).valor)) {
+      p++;
+      return declMetodo(esTop);
+    }
     if (sig.tipo !== 'FUNCION' && sig.tipo !== 'FIJO' && sig.tipo !== 'VAR') return null;
     if (!esTop)
       throw new ErrorFuente('sintaxis', '«publico» solo puede marcar algo del nivel superior del archivo', t.linea, t.col,
@@ -583,6 +696,171 @@ function parser(toks, fuenteNombre) {
     const d = comprobar('FUNCION') ? declFuncion() : declVar();
     d.publico = true;
     return d;
+  }
+
+  // ── (4.1) registros ──────────────────────────────────────────────
+  //   tipo Punto {
+  //     x: real
+  //     y: real
+  //   }
+  // Los campos van uno por línea o separados por comas. El tipo de un campo es
+  // opcional, como en una variable. Solo en el nivel superior: un tipo es la
+  // forma de los datos del archivo, no algo que aparezca a mitad de un bucle.
+  function quizaTipo(esTop) {
+    const t = ver();
+    if (!esPalabra(t, 'tipo') || !esNombre(ver(1)) || ver(2).tipo !== '{') return null;
+    if (!esTop)
+      throw new ErrorFuente('sintaxis', '«tipo» solo puede ir en el nivel superior del archivo', t.linea, t.col,
+        'declara el registro fuera de funciones y bloques');
+    p++;
+    const nom = exigirNombre('se esperaba el nombre del registro');
+    if (TIPOS_BASE.has(nom.valor))
+      throw new ErrorFuente('sintaxis', `«${nom.valor}» ya es un tipo de Ñ`, nom.linea, nom.col, 'ponle otro nombre al registro');
+    exigir('{', '{');
+    const campos = [];
+    const vistos = new Set();
+    while (!comprobar('}') && !fin()) {
+      const c = exigirNombre('se esperaba el nombre de un campo');
+      if (vistos.has(c.valor))
+        throw new ErrorFuente('sintaxis', `el campo «${c.valor}» está dos veces en «${nom.valor}»`, c.linea, c.col);
+      vistos.add(c.valor);
+      const anot = tipoOpcional();
+      // (4.1) Valor por defecto del campo: «y: real = 0.0».
+      let defecto = null;
+      if (igualar('OP', '=')) defecto = expresion();
+      else if (campos.some(q => q.defecto))
+        throw new ErrorFuente('sintaxis', `el campo «${c.valor}» va después de uno con valor por defecto y no tiene el suyo`,
+          c.linea, c.col, 'los campos con valor por defecto van al final');
+      campos.push({ nombre: c.valor, anotacion: anot, defecto, linea: c.linea, col: c.col });
+      igualar(','); saltarPuntoYComa();
+    }
+    exigir('}', '}', `falta «}» al cerrar «tipo ${nom.valor}»`);
+    if (!campos.length)
+      throw new ErrorFuente('sintaxis', `«${nom.valor}» no tiene campos`, nom.linea, nom.col, 'un registro necesita al menos un campo');
+    // El constructor es una función de verdad: «Punto(x, y)», con los mismos
+    // valores por defecto y argumentos con nombre que cualquier otra. Su cuerpo
+    // llama a la fábrica interna « hacer Punto», que crea el registro.
+    const L = t.linea, C = t.col;
+    const params = campos.map(c => ({ nombre: c.nombre, anotacion: c.anotacion, defecto: c.defecto, linea: c.linea, col: c.col }));
+    const cuerpoCtor = { tipo: 'Bloque', linea: L, col: C, cuerpo: [{ tipo: 'Devolver', linea: L, col: C,
+      valor: { tipo: 'Llamada', linea: L, col: C, callee: { tipo: 'Variable', nombre: ' hacer ' + nom.valor, linea: L, col: C },
+        args: campos.map(c => ({ tipo: 'Variable', nombre: c.nombre, linea: L, col: C })) } }] };
+    ponerDefectos(params, cuerpoCtor);
+    const ctor = { tipo: 'DeclFuncion', nombre: nom.valor, params, retorno: T.registro(nom.valor), cuerpo: cuerpoCtor,
+      esConstructor: true, linea: L, col: C };
+    return [{ tipo: 'DeclTipo', nombre: nom.valor, campos, linea: L, col: C }, ctor];
+  }
+  //   fn Punto.distancia(otro: Punto): real { … yo.x … }
+  // Es una función normal con un primer parámetro implícito, «yo», que es el
+  // registro sobre el que se llama: p.distancia(q) es Punto.distancia(p, q).
+  function declMetodo(esTop) {
+    const t = toks[p++];
+    const tipoN = toks[p++];
+    p++;                                              // «.»
+    if (!esTop)
+      throw new ErrorFuente('sintaxis', 'un método solo puede ir en el nivel superior del archivo', t.linea, t.col);
+    const met = exigirNombre(`se esperaba el nombre del método de «${tipoN.valor}»`);
+    const nombre = tipoN.valor + '.' + met.valor;
+    const { params, retorno, cuerpo, genericos, corrutina } = restoFuncion(nombre);
+    if (params.some(q => q.nombre === 'yo'))
+      throw new ErrorFuente('sintaxis', '«yo» ya es el registro sobre el que se llama el método', met.linea, met.col,
+        'no lo pongas en los parámetros: está siempre');
+    params.unshift({ nombre: 'yo', anotacion: T.registro(tipoN.valor), linea: met.linea, col: met.col, esYo: true });
+    return { tipo: 'DeclFuncion', nombre, params, retorno, cuerpo, genericos, corrutina, metodo: { tipo: tipoN.valor, nombre: met.valor },
+      linea: t.linea, col: t.col };
+  }
+
+  // ── (4.1) desestructurar ──────────────────────────────────────────
+  //   var [a, b] = lista       →  var a = lista[0]   var b = lista[1]
+  //   fijo {x, y} = punto      →  fijo x = punto.x   fijo y = punto.y
+  // La expresión se evalúa UNA vez, en una variable interna.
+  function desestructurar() {
+    const t = toks[p++];
+    const esFijo = t.tipo === 'FIJO';
+    const lista = comprobar('[');
+    p++;
+    const nombres = [];
+    const cierre = lista ? ']' : '}';
+    if (!comprobar(cierre)) do {
+      if (comprobar(cierre)) break;
+      const n = exigirNombre('se esperaba un nombre');
+      nombres.push({ nombre: n.valor, anotacion: tipoOpcional(), linea: n.linea, col: n.col });
+    } while (igualar(','));
+    exigir(cierre, cierre, `falta «${cierre}»`);
+    if (!nombres.length) throw new ErrorFuente('sintaxis', 'no hay nada que desestructurar', t.linea, t.col);
+    exigir('OP', '=', 'falta «=» y el valor que desestructurar');
+    const valor = expresion();
+    saltarPuntoYComa();
+    const tmp = tmpNombre();
+    const L = t.linea, C = t.col;
+    const out = [{ tipo: 'DeclVar', nombre: tmp, anotacion: null, valor, esFijo: true, linea: L, col: C }];
+    nombres.forEach((n, i) => {
+      const fuente = { tipo: 'Variable', nombre: tmp, linea: L, col: C };
+      const v = lista
+        ? { tipo: 'Indice', obj: fuente, indice: { tipo: 'Literal', valor: i, tipoLit: T.entero, linea: L, col: C }, linea: L, col: C }
+        : { tipo: 'Propiedad', obj: fuente, nombre: n.nombre, linea: L, col: C };
+      out.push({ tipo: 'DeclVar', nombre: n.nombre, anotacion: n.anotacion, valor: v, esFijo, linea: n.linea, col: n.col });
+    });
+    return out;
+  }
+
+  // ── (4.1) segun ───────────────────────────────────────────────────
+  //   segun x {
+  //     caso 1, 2 { … }
+  //     caso "a"  { … }
+  //     otro      { … }
+  //   }
+  // Se traduce a una cadena de «si … sino si …» comparando con «==». La
+  // expresión se evalúa una vez. Sin caída de un caso al siguiente: cada caso
+  // es su bloque y ya está, que es el fallo clásico del switch de C.
+  // «segun», «caso» y «otro» no son palabras reservadas: solo cuentan con
+  // esta forma, igual que «usar».
+  function quizaSegun() {
+    const t = ver();
+    if (!esPalabra(t, 'segun') && !esPalabra(t, 'según')) return null;
+    const sig = ver(1);
+    if (sig.tipo === 'OP' || sig.tipo === '.' || sig.tipo === '[' || sig.tipo === ')' || sig.tipo === ',') return null;
+    const guardado = p;
+    let valor;
+    try { p++; valor = expresion(); }
+    catch (_) { p = guardado; return null; }
+    // «segun x {» no es nada más en Ñ: si después de la expresión viene una
+    // llave, es un segun, y lo que haya dentro se valida con su mensaje.
+    if (!comprobar('{')) { p = guardado; return null; }
+    p++;
+    const tmp = tmpNombre();
+    const L = t.linea, C = t.col;
+    const casos = [];
+    let otro = null;
+    while (!comprobar('}') && !fin()) {
+      const c = ver();
+      if (esPalabra(c, 'otro')) {
+        if (otro) throw new ErrorFuente('sintaxis', '«segun» tiene dos «otro»', c.linea, c.col);
+        p++; otro = bloque(); continue;
+      }
+      if (!esPalabra(c, 'caso'))
+        throw new ErrorFuente('sintaxis', `dentro de «segun» va «caso …» u «otro» y llegó «${c.valor}»`, c.linea, c.col,
+          'escribe «caso 1, 2 { … }»');
+      if (otro) throw new ErrorFuente('sintaxis', '«otro» va al final del «segun»', c.linea, c.col);
+      p++;
+      const valores = [];
+      do { valores.push(expresion()); } while (igualar(','));
+      casos.push({ valores, cuerpo: bloque(), linea: c.linea, col: c.col });
+    }
+    exigir('}', '}', 'falta «}» al cerrar el «segun»');
+    let cadena = otro;
+    for (let i = casos.length - 1; i >= 0; i--) {
+      const k = casos[i];
+      let cond = null;
+      for (const v of k.valores) {
+        const eq = { tipo: 'Binario', op: '==', izq: { tipo: 'Variable', nombre: tmp, linea: k.linea, col: k.col }, der: v, linea: k.linea, col: k.col };
+        cond = cond ? { tipo: 'Binario', op: 'o', izq: cond, der: eq, linea: k.linea, col: k.col } : eq;
+      }
+      cadena = { tipo: 'Si', cond, entonces: k.cuerpo, sino: cadena, linea: k.linea, col: k.col };
+    }
+    const cuerpo = [{ tipo: 'DeclVar', nombre: tmp, anotacion: null, valor, esFijo: true, linea: L, col: C }];
+    if (cadena) cuerpo.push(cadena);
+    return { tipo: 'Bloque', cuerpo, linea: L, col: C };
   }
 
   function declVar() {
@@ -600,38 +878,91 @@ function parser(toks, fuenteNombre) {
   function declFuncion() {
     const t = toks[p++];
     const nom = exigirNombre('se esperaba el nombre de la función');
-    const { params, retorno, cuerpo } = restoFuncion(nom.valor);
-    return { tipo: 'DeclFuncion', nombre: nom.valor, params, retorno, cuerpo, linea: t.linea, col: t.col };
+    const { params, retorno, cuerpo, genericos, corrutina } = restoFuncion(nom.valor);
+    return { tipo: 'DeclFuncion', nombre: nom.valor, params, retorno, cuerpo, genericos, corrutina, linea: t.linea, col: t.col };
   }
 
   function restoFuncion(nombre) {
-    exigir('(', '(', `falta «(» tras «${nombre}»`);
-    const params = [];
-    if (!comprobar(')')) {
+    // (4.1) fn primero<T>(xs: lista<T>): T — las variables de tipo.
+    const genericos = [];
+    if (comprobar('OP', '<')) {
+      p++;
       do {
-        const pn = exigirNombre('se esperaba el nombre de un parámetro');
-        const pt = tipoOpcional();
-        params.push({ nombre: pn.valor, anotacion: pt, linea: pn.linea, col: pn.col });
+        const g = exigirNombre('se esperaba el nombre de una variable de tipo, como «T»');
+        if (TIPOS_BASE.has(g.valor)) throw new ErrorFuente('sintaxis', `«${g.valor}» ya es un tipo de Ñ y no puede ser variable de tipo`, g.linea, g.col);
+        genericos.push(g.valor);
       } while (igualar(','));
+      exigir('OP', '>', 'falta «>» al cerrar las variables de tipo');
     }
-    exigir(')', ')', 'falta «)» al cerrar los parámetros');
-    let retorno = null;
-    if (igualar(':')) retorno = parseTipo();
-    else if (igualar('OP', '->')) retorno = parseTipo();
-    const cuerpo = bloque();
-    return { params, retorno, cuerpo };
+    varsTipo.push(new Set(genericos));
+    try {
+      exigir('(', '(', `falta «(» tras «${nombre}»`);
+      const params = [];
+      if (!comprobar(')')) {
+        do {
+          const pn = exigirNombre('se esperaba el nombre de un parámetro');
+          const pt = tipoOpcional();
+          // (4.1) Valor por defecto: «fn f(a, b = 2)».
+          let defecto = null;
+          if (igualar('OP', '=')) defecto = expresion();
+          else if (params.some(q => q.defecto))
+            throw new ErrorFuente('sintaxis', `«${pn.valor}» va después de un parámetro con valor por defecto y no tiene el suyo`,
+              pn.linea, pn.col, 'los parámetros con valor por defecto van al final');
+          if (params.some(q => q.nombre === pn.valor))
+            throw new ErrorFuente('sintaxis', `el parámetro «${pn.valor}» está dos veces`, pn.linea, pn.col);
+          params.push({ nombre: pn.valor, anotacion: pt, defecto, linea: pn.linea, col: pn.col });
+        } while (igualar(','));
+      }
+      exigir(')', ')', 'falta «)» al cerrar los parámetros');
+      let retorno = null;
+      if (igualar(':')) retorno = parseTipo();
+      else if (igualar('OP', '->')) retorno = parseTipo();
+      const marco = { corrutina: null };
+      funciones.push(marco);
+      let cuerpo;
+      try { cuerpo = bloque(); } finally { funciones.pop(); }
+      ponerDefectos(params, cuerpo);
+      return { params, retorno, cuerpo, genericos, corrutina: marco.corrutina };
+    } finally { varsTipo.pop(); }
+  }
+  // Un parámetro con valor por defecto que no llega recibe un valor interno
+  // (« faltante», imposible de escribir) y la función lo cambia al empezar:
+  //     si b == « faltante» { b = <defecto> }
+  // Así el defecto se calcula EN CADA LLAMADA y puede usar los parámetros de
+  // antes —«fn f(a, b = a * 2)»—, y no hace falta ninguna instrucción nueva.
+  function ponerDefectos(params, cuerpo) {
+    const pro = [];
+    for (const q of params) {
+      if (!q.defecto) continue;
+      const L = q.linea, C = q.col;
+      const v = { tipo: 'Variable', nombre: q.nombre, linea: L, col: C };
+      pro.push({ tipo: 'Si', linea: L, col: C, sino: null,
+        cond: { tipo: 'Binario', op: '==', izq: v, der: { tipo: 'Variable', nombre: ' faltante', linea: L, col: C }, linea: L, col: C },
+        entonces: { tipo: 'Bloque', linea: L, col: C, cuerpo: [{ tipo: 'ExprSent', linea: L, col: C,
+          expr: { tipo: 'Asignacion', op: '=', esDefecto: true, destino: { tipo: 'Variable', nombre: q.nombre, linea: L, col: C }, valor: q.defecto, linea: L, col: C } }] } });
+    }
+    if (pro.length) cuerpo.cuerpo.unshift(...pro);
   }
 
   function bloque() {
     const t = exigir('{', '{', 'falta «{» para abrir el bloque');
     const cuerpo = [];
-    while (!comprobar('}') && !fin()) cuerpo.push(declaracion(false));
+    while (!comprobar('}') && !fin()) poner(cuerpo, declaracion(false));
     exigir('}', '}', 'falta «}» para cerrar el bloque');
     return { tipo: 'Bloque', cuerpo, linea: t.linea, col: t.col };
   }
 
   function sentencia() {
     const t = ver();
+    // (4.1) «producir v»: entrega un valor y la función se queda en
+    // pausa hasta que le pidan el siguiente.
+    if (esClave(t, 'producir') && !(ver(1).tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(ver(1).valor)) && ver(1).tipo !== '.' && ver(1).tipo !== '[') {
+      p++;
+      marcarCorrutina('generador', t);
+      const v = (comprobar('}') || comprobar(';') || fin() || inicioDeLineaNueva(t)) ? { tipo: 'Literal', valor: null, tipoLit: T.nulo, linea: t.linea, col: t.col } : expresion();
+      saltarPuntoYComa();
+      return { tipo: 'Producir', valor: v, linea: t.linea, col: t.col };
+    }
     if (comprobar('SI')) return sentSi();
     if (comprobar('MIENTRAS')) return sentMientras();
     if (comprobar('PARA')) return sentPara();
@@ -713,7 +1044,7 @@ function parser(toks, fuenteNombre) {
   function expresion() { return asignacion(); }
 
   function asignacion() {
-    const izq = oLogico();
+    const izq = coalescer();
     const t = ver();
     if (t.tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(t.valor)) {
       p++;
@@ -758,6 +1089,8 @@ function parser(toks, fuenteNombre) {
     if (sig.tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(sig.valor)) return false;
     return true;
   }
+  // (4.1) «a ?? b»: a, salvo que sea nulo; entonces b. Más flojo que «o».
+  const coalescer = () => binarioIzq(oLogico, t => t.tipo === 'OP' && t.valor === '??');
   const oLogico = () => binarioIzq(yLogico, t => esOperadorLogico(t, 'O'));
   const yLogico = () => binarioIzq(igualdad, t => esOperadorLogico(t, 'Y'));
   const igualdad = () => binarioIzq(comparacion, t => t.tipo === 'OP' && ['==', '!='].includes(t.valor));
@@ -767,6 +1100,18 @@ function parser(toks, fuenteNombre) {
 
   function unario() {
     const t = ver();
+    // (4.1) «esperar x»: si x es una promesa, la función se pausa hasta
+    // que esté lista y sigue con su valor; si no, sigue con x tal cual.
+    if (esClave(t, 'esperar')) {
+      const sig = ver(1);
+      const empiezaExpr = sig.linea === t.linea && !(sig.tipo === 'OP' && sig.valor !== '-') &&
+        !['.', '[', ')', ']', '}', ',', ':', ';', 'FIN', 'Y', 'O', '?.'].includes(sig.tipo);
+      if (empiezaExpr) {
+        p++;
+        marcarCorrutina('asincrona', t);
+        return { tipo: 'Esperar', valor: unario(), linea: t.linea, col: t.col };
+      }
+    }
     if (t.tipo === 'NO' || (t.tipo === 'OP' && t.valor === '-')) {
       p++;
       return { tipo: 'Unario', op: t.tipo === 'NO' ? 'no' : '-', expr: unario(), linea: t.linea, col: t.col };
@@ -789,10 +1134,25 @@ function parser(toks, fuenteNombre) {
       const t = ver();
       if (comprobar('(')) {
         p++;
-        const args = [];
-        if (!comprobar(')')) do { args.push(expresion()); } while (igualar(','));
+        const args = [], nombrados = [];
+        // (4.1) Argumentos con nombre: «f(1, tasa: 0.5)». Van después de
+        // los posicionales. El verificador los coloca en su sitio.
+        if (!comprobar(')')) do {
+          if (esNombre(ver()) && ver(1).tipo === ':') {
+            const nn = toks[p]; p += 2;
+            if (nombrados.some(x => x.nombre === nn.valor))
+              throw new ErrorFuente('sintaxis', `el argumento «${nn.valor}» está dos veces`, nn.linea, nn.col);
+            nombrados.push({ nombre: nn.valor, valor: expresion(), linea: nn.linea, col: nn.col });
+          } else {
+            if (nombrados.length)
+              throw new ErrorFuente('sintaxis', 'un argumento sin nombre no puede ir después de uno con nombre', ver().linea, ver().col,
+                'pon primero los de posición y al final los de nombre');
+            args.push(expresion());
+          }
+        } while (igualar(','));
         exigir(')', ')', 'falta «)» al cerrar la llamada');
         e = { tipo: 'Llamada', callee: e, args, linea: t.linea, col: t.col };
+        if (nombrados.length) e.nombrados = nombrados;
       } else if (comprobar('[')) {
         p++;
         const idx = expresion();
@@ -802,6 +1162,11 @@ function parser(toks, fuenteNombre) {
         p++;
         const nom = exigirNombre('se esperaba un nombre tras «.»');
         e = { tipo: 'Propiedad', obj: e, nombre: nom.valor, linea: nom.linea, col: nom.col };
+      } else if (comprobar('?.')) {
+        // (4.1) «a?.b»: nulo si a es nulo, a.b si no. Vale para ESE paso.
+        p++;
+        const nom = exigirNombre('se esperaba un nombre tras «?.»');
+        e = { tipo: 'Propiedad', obj: e, nombre: nom.valor, opcional: true, linea: nom.linea, col: nom.col };
       } else return e;
     }
   }
@@ -825,7 +1190,7 @@ function parser(toks, fuenteNombre) {
           // numerado desde su propia línea 1. Sin corregirlo, un fallo dentro de
           // una interpolación se reporta en la línea 1 del programa.
           let sub;
-          try { sub = parser(lexer(q.valor), fuenteNombre); }
+          try { sub = parser(lexer(q.valor), fuenteNombre, { soloExpresion: true }); }
           catch (e) { throw pistaLlaves(e, q); }
           if (sub.cuerpo.length !== 1 || sub.cuerpo[0].tipo !== 'ExprSent')
             throw pistaLlaves(new ErrorFuente('sintaxis',
@@ -834,10 +1199,25 @@ function parser(toks, fuenteNombre) {
         });
         return { tipo: 'Interpolacion', partes, linea: t.linea, col: t.col };
       }
+      // (4.1) «si c entonces a sino b» como expresión. Como sentencia,
+      // «si» sigue siendo el de siempre: esto solo aparece donde va un valor.
+      case 'SI': {
+        p++;
+        const cond = expresion();
+        const ent = ver();
+        if (!esPalabra(ent, 'entonces'))
+          throw new ErrorFuente('sintaxis', `en un «si» que da un valor falta «entonces» y llegó «${ent.valor === null ? 'fin de archivo' : ent.valor}»`,
+            ent.linea, ent.col, 'escribe «si x > 0 entonces "positivo" sino "no"»');
+        p++;
+        const a = expresion();
+        exigir('SINO', undefined, 'un «si … entonces …» que da un valor necesita su «sino»');
+        const b = expresion();
+        return { tipo: 'SiExpr', cond, entonces: a, sino: b, linea: t.linea, col: t.col };
+      }
       case 'FUNCION': {
         p++;
-        const { params, retorno, cuerpo } = restoFuncion('<anónima>');
-        return { tipo: 'FuncionAnon', params, retorno, cuerpo, linea: t.linea, col: t.col };
+        const { params, retorno, cuerpo, genericos, corrutina } = restoFuncion('<anónima>');
+        return { tipo: 'FuncionAnon', params, retorno, cuerpo, genericos, corrutina, linea: t.linea, col: t.col };
       }
       case '(': {
         p++;
@@ -997,12 +1377,90 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       nodo.linea, nodo.col, `a partir de aquí «${nombre}» ya no es la de Ñ; si es a propósito, ponle otro nombre para que se lea`));
   }
 
+  // (4.1) Los registros del archivo: nombre → { campos, metodos }.
+  const registros = new Map();
+  // Los registros que llegan de otro archivo con su constructor importado.
+  if (enlace) for (const [, i] of enlace.nombres) {
+    const f = i.tipo && i.tipo.k === 'funcion' && i.tipo.ret && i.tipo.ret.forma;
+    if (f && !registros.has(f.nombre)) registros.set(f.nombre, f);
+  }
+  const tipoReg = nombre => registros.get(nombre) || null;
+  function campoDe(r, nombre) { return r.campos.find(c => c.nombre === nombre) || null; }
+  function sinCampo(n, r, nombre) {
+    const lista = r.campos.map(c => c.nombre).concat([...r.metodos.keys()]);
+    const cerca = sugerirEntre(nombre, lista);
+    return err(n, `«${r.nombre}» no tiene «${nombre}»`,
+      cerca ? `¿querías decir «${cerca}»? tiene: ${lista.join(', ')}` : `tiene: ${lista.join(', ')}`);
+  }
+  // (4.1) Genéricos. «unificar» aprende qué es cada variable de tipo a
+  // partir de un argumento y devuelve un mensaje si choca con lo aprendido.
+  function unificar(param, arg, vinc) {
+    if (!param || !arg) return null;
+    if (param.k === 'var') {
+      if (arg.k === 'cualquiera') return null;
+      const ya = vinc.get(param.nombre);
+      if (!ya) { vinc.set(param.nombre, arg); return null; }
+      if (compatible(ya, arg)) return null;
+      if (compatible(arg, ya)) { vinc.set(param.nombre, arg); return null; }   // entero → real
+      return `«${param.nombre}» ya era ${tipoATexto(ya)} y aquí llega ${tipoATexto(arg)}`;
+    }
+    if (param.k === 'lista' && arg.k === 'lista') return unificar(param.elem, arg.elem, vinc);
+    if (param.k === 'dic' && arg.k === 'dic') return unificar(param.clave, arg.clave, vinc) || unificar(param.valor, arg.valor, vinc);
+    if (param.k === 'funcion' && arg.k === 'funcion' && param.params && arg.params && param.params.length === arg.params.length) {
+      for (let i = 0; i < param.params.length; i++) { const f = unificar(param.params[i], arg.params[i], vinc); if (f) return f; }
+      return unificar(param.ret, arg.ret, vinc);
+    }
+    return null;
+  }
+  function sustituir(t, vinc) {
+    if (!t) return t;
+    if (t.k === 'var') return vinc.get(t.nombre) || T.cualquiera;
+    if (t.k === 'lista') return T.lista(sustituir(t.elem, vinc));
+    if (t.k === 'dic') return T.dic(sustituir(t.clave, vinc), sustituir(t.valor, vinc));
+    if (t.k === 'funcion') return T.fn(t.params ? t.params.map(x => sustituir(x, vinc)) : null, sustituir(t.ret, vinc));
+    return t;
+  }
+
+  // El parecido más cercano entre unos nombres dados (distancia de edición).
+  function sugerirEntre(nombre, lista) {
+    let mejor = null, d0 = 3;
+    for (const x of lista) {
+      const a = nombre, b = x, m = a.length, n2 = b.length;
+      const f = Array.from({ length: m + 1 }, (_, i) => [i, ...new Array(n2).fill(0)]);
+      for (let j = 1; j <= n2; j++) f[0][j] = j;
+      for (let i = 1; i <= m; i++) for (let j = 1; j <= n2; j++)
+        f[i][j] = Math.min(f[i - 1][j] + 1, f[i][j - 1] + 1, f[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (f[m][n2] < d0) { d0 = f[m][n2]; mejor = x; }
+    }
+    return mejor;
+  }
+
   // pre-registrar funciones de nivel superior (permite llamadas antes de definirlas)
   function registrarFunciones(cuerpo, amb) {
+    // Primero los registros, para que sus métodos y sus constructores existan
+    // antes que cualquier función que los use.
+    for (const s of cuerpo) {
+      if (s.tipo !== 'DeclTipo') continue;
+      if (registros.has(s.nombre)) { err(s, `el registro «${s.nombre}» ya estaba declarado`); continue; }
+      if (amb.vars.has(s.nombre) || Object.prototype.hasOwnProperty.call(globalesTipos, s.nombre))
+        err(s, `«${s.nombre}» ya es un nombre en uso; el registro necesita otro`);
+      const campos = s.campos.map(c => ({ nombre: c.nombre, tipo: c.anotacion || T.cualquiera }));
+      registros.set(s.nombre, { nombre: s.nombre, campos, metodos: new Map() });
+      // El constructor lo declara su propia función (la genera el parser).
+    }
+    for (const s of cuerpo) {
+      if (s.tipo !== 'DeclFuncion' || !s.metodo) continue;
+      const r = tipoReg(s.metodo.tipo);
+      if (!r) { err(s, `«${s.metodo.tipo}» no es un registro de este archivo`); continue; }
+      if (campoDe(r, s.metodo.nombre)) err(s, `«${r.nombre}» ya tiene un campo llamado «${s.metodo.nombre}»`, 'un método y un campo no pueden llamarse igual');
+      if (r.metodos.has(s.metodo.nombre)) err(s, `«${r.nombre}» ya tiene un método «${s.metodo.nombre}»`);
+      // El tipo del método visto desde fuera: sin «yo», que lo pone la llamada.
+      r.metodos.set(s.metodo.nombre, tipoDeFuncion(s, true));
+    }
     for (const s of cuerpo) {
       if (s.tipo === 'DeclFuncion') {
         if (amb === raiz) avisarSiTapa(s, s.nombre, 'la función');
-        amb.declarar(s.nombre, T.fn(s.params.map(p => p.anotacion || T.cualquiera), s.retorno || T.cualquiera), true);
+        amb.declarar(s.nombre, tipoDeFuncion(s), true);
       }
     }
   }
@@ -1030,16 +1488,20 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       }
       case 'DeclFuncion': {
         if (!amb.vars.has(n.nombre))
-          amb.declarar(n.nombre, T.fn(n.params.map(p => p.anotacion || T.cualquiera), n.retorno || T.cualquiera), true);
-        const sub = new Ambito(amb, n.retorno || null);
-        for (const p of n.params) sub.declarar(p.nombre, p.anotacion || T.cualquiera, false);
+          amb.declarar(n.nombre, tipoDeFuncion(n), true);
+        const sub = new Ambito(amb, n.corrutina ? null : (n.retorno || null));
+        // «yo» es fijo: reasignarlo dentro de un método no cambiaría el
+        // registro de quien llama y casi siempre es un error.
+        for (const p of n.params) sub.declarar(p.nombre, p.anotacion || T.cualquiera, !!p.esYo);
         bloqueTipos(n.cuerpo, sub);
-        if (n.retorno && n.retorno.k !== 'nulo' && n.retorno.k !== 'cualquiera' && !sub.hayRetorno)
+        if (!n.corrutina && n.retorno && n.retorno.k !== 'nulo' && n.retorno.k !== 'cualquiera' && !sub.hayRetorno)
           err(n, `«${n.nombre}» promete devolver ${tipoATexto(n.retorno)} pero hay caminos sin «devolver»`,
             'añade un «devolver» al final de la función');
         return;
       }
       case 'Bloque': return bloqueTipos(n, new Ambito(amb));
+      case 'DeclTipo': return;   // ya registrado al empezar
+      case 'Producir': expr(n.valor, amb); return;
       case 'Si': {
         const c = expr(n.cond, amb);
         if (c.k !== 'bool' && c.k !== 'cualquiera')
@@ -1059,8 +1521,8 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         let elem = T.cualquiera;
         if (it.k === 'lista') elem = it.elem;
         else if (it.k === 'texto') elem = T.texto;
-        else if (it.k !== 'cualquiera' && it.k !== 'dic')
-          err(n, `no se puede recorrer un valor de tipo ${tipoATexto(it)}`, 'usa una lista, un texto o rango(n)');
+        else if (it.k !== 'cualquiera' && it.k !== 'dic' && it.k !== 'arreglo')
+          err(n, `no se puede recorrer un valor de tipo ${tipoATexto(it)}`, 'usa una lista, un texto, un arreglo o rango(n)');
         const sub = new Ambito(amb);
         sub.declarar(n.nombre, elem, false);
         bloqueTipos(n.cuerpo, sub);
@@ -1102,6 +1564,10 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       case 'Literal': return n.tipoLit;
       case 'Interpolacion': for (const q of n.partes) expr(q, amb); return T.texto;
       case 'Variable': {
+        // Los nombres internos que genera el parser (« faltante», « hacer
+        // Punto», « t0»…) llevan un espacio delante: el programa no puede
+        // escribirlos, y no tienen tipo que comprobar.
+        if (n.nombre.charCodeAt(0) === 32 && !amb.buscar(n.nombre)) return T.cualquiera;
         const v = amb.buscar(n.nombre);
         if (!v) return err(n, `«${n.nombre}» no está definida`, pistaNombre(n.nombre, amb));
         // El alias de un módulo no es un valor: no se puede pasar, ni guardar,
@@ -1127,7 +1593,9 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           if (v.tipo && v.tipo.k === 'modulo') return err(n, `«${n.destino.nombre}» es un módulo, no una variable`);
           if (v.esFijo) err(n, `«${n.destino.nombre}» es fijo y no se puede reasignar`, 'decláralo con «var» si debe cambiar');
           if (n.op === '=' && !compatible(v.tipo, tv))
-            err(n, `«${n.destino.nombre}» es ${tipoATexto(v.tipo)} y se le asigna ${tipoATexto(tv)}`);
+            err(n, n.esDefecto
+              ? `el valor por defecto de «${n.destino.nombre}» es ${tipoATexto(tv)} y el parámetro es ${tipoATexto(v.tipo)}`
+              : `«${n.destino.nombre}» es ${tipoATexto(v.tipo)} y se le asigna ${tipoATexto(tv)}`);
           return v.tipo;
         }
         if (n.destino.tipo === 'Propiedad' && n.destino.obj.tipo === 'Variable') {
@@ -1135,6 +1603,18 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           if (mod && mod.tipo && mod.tipo.k === 'modulo')
             return err(n, `«${n.destino.obj.nombre}.${n.destino.nombre}» viene de «${mod.tipo.ruta}» y no se puede cambiar desde aquí`,
               'lo que exporta un módulo solo lo cambia ese módulo');
+        }
+        if (n.destino.tipo === 'Propiedad') {
+          const o = expr(n.destino.obj, amb);
+          const r = o.k === 'registro' ? tipoReg(o.nombre) : null;
+          if (r) {
+            const c = campoDe(r, n.destino.nombre);
+            if (!c) { if (r.metodos.has(n.destino.nombre)) return err(n, `«${n.destino.nombre}» es un método de «${r.nombre}» y no se puede reasignar`); return sinCampo(n.destino, r, n.destino.nombre); }
+            if (n.op === '=' && !compatible(c.tipo, tv))
+              err(n, `«${r.nombre}.${c.nombre}» es ${tipoATexto(c.tipo)} y se le asigna ${tipoATexto(tv)}`);
+            return c.tipo;
+          }
+          return tv;
         }
         expr(n.destino, amb);
         return tv;
@@ -1152,6 +1632,13 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       case 'Binario': {
         const a = expr(n.izq, amb), b = expr(n.der, amb);
         const op = n.op;
+        // (4.1) «a ?? b»: si a puede ser nulo, sale b; el tipo es el de
+        // los dos si coinciden.
+        if (op === '??') {
+          if (a.k === 'nulo') return b;
+          if (compatible(a, b) && compatible(b, a)) return a;
+          return T.cualquiera;
+        }
         if (op === 'o' || op === 'y') return T.bool;
         if (['==', '!='].includes(op)) return T.bool;
         if (['<', '<=', '>', '>='].includes(op)) {
@@ -1208,17 +1695,60 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       }
       case 'Llamada': {
         const ft = expr(n.callee, amb);
+        const nom = n.callee.tipo === 'Variable' ? `«${n.callee.nombre}»`
+          : n.callee.tipo === 'Propiedad' ? `«${n.callee.nombre}»` : 'la función';
+        // (4.1) Argumentos con nombre y valores por defecto. Se resuelven
+        // AQUÍ, donde se sabe a qué función se llama, y se reescriben los
+        // argumentos del nodo en su orden: el compilador y el JIT no se enteran.
+        // Lo que no llega y tiene defecto viaja como « faltante».
+        if (n.nombrados || (ft.k === 'funcion' && ft.params && n.args.length < ft.params.length &&
+                            ft.minimos !== undefined && ft.minimos < ft.params.length)) {
+          if (!(ft.k === 'funcion' && ft.params && ft.nombres)) {
+            if (n.nombrados) return err(n, `los argumentos con nombre necesitan saber a qué función se llama, y aquí no se sabe`,
+              'llama a una función declarada con «fn», o pasa los argumentos por posición');
+          } else {
+            const ranuras = new Array(ft.params.length).fill(null);
+            if (n.args.length > ft.params.length)
+              return err(n, `${nom} espera como mucho ${ft.params.length} argumento(s) y recibió ${n.args.length}`);
+            n.args.forEach((a, i) => { ranuras[i] = a; });
+            for (const x of (n.nombrados || [])) {
+              const i = ft.nombres.indexOf(x.nombre);
+              if (i < 0) return err(x, `${nom} no tiene ningún parámetro «${x.nombre}»`, `sus parámetros son: ${ft.nombres.join(', ')}`);
+              if (ranuras[i]) return err(x, `«${x.nombre}» ya llegó por posición`, 'pásalo de una sola manera');
+              ranuras[i] = x.valor;
+            }
+            for (let i = 0; i < ranuras.length; i++) {
+              if (ranuras[i]) continue;
+              if (i < ft.minimos) return err(n, `${nom}: falta el argumento «${ft.nombres[i]}»`,
+                ft.minimos < ft.params.length
+                  ? (ft.minimos === 1 ? `solo «${ft.nombres[0]}» es obligatorio` : `«${ft.nombres.slice(0, ft.minimos).join('», «')}» son obligatorios`) + '; el resto tiene valor por defecto'
+                  : null);
+              ranuras[i] = { tipo: 'Variable', nombre: ' faltante', linea: n.linea, col: n.col };
+            }
+            n.args = ranuras;
+            delete n.nombrados;
+          }
+        }
         const args = n.args.map(a => expr(a, amb));
         if (ft.k === 'funcion' && ft.params) {
           if (ft.params.length !== args.length) {
-            const nom = n.callee.tipo === 'Variable' ? `«${n.callee.nombre}»` : 'la función';
-            err(n, `${nom} espera ${ft.params.length} argumento(s) y recibió ${args.length}`);
-          } else {
-            for (let i = 0; i < args.length; i++)
-              if (!compatible(ft.params[i], args[i]))
-                err(n.args[i], `argumento ${i + 1}: se esperaba ${tipoATexto(ft.params[i])} y llegó ${tipoATexto(args[i])}`);
+            const rango = ft.minimos !== undefined && ft.minimos < ft.params.length ? `entre ${ft.minimos} y ${ft.params.length}` : ft.params.length;
+            err(n, `${nom} espera ${rango} argumento(s) y recibió ${args.length}`);
+            return ft.ret;
           }
-          return ft.ret;
+          // (4.1) Genéricos: cada variable de tipo toma el tipo de lo que
+          // llega, y tiene que ser el MISMO en todas partes.
+          const vinc = ft.genericos ? new Map() : null;
+          for (let i = 0; i < args.length; i++) {
+            if (n.args[i].tipo === 'Variable' && n.args[i].nombre === ' faltante') continue;
+            if (vinc) {
+              const fallo = unificar(ft.params[i], args[i], vinc);
+              if (fallo) { err(n.args[i], `argumento ${i + 1}: ${fallo}`); continue; }
+            }
+            if (!compatible(ft.params[i], args[i]))
+              err(n.args[i], `argumento ${i + 1}: se esperaba ${tipoATexto(ft.params[i])} y llegó ${tipoATexto(args[i])}`);
+          }
+          return vinc ? sustituir(ft.ret, vinc) : ft.ret;
         }
         if (ft.k !== 'cualquiera' && ft.k !== 'funcion')
           err(n, `${tipoATexto(ft)} no es una función; no se puede llamar`);
@@ -1233,6 +1763,10 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         if (o.k === 'lista') { if (!esNum(i)) err(n, `el índice de una lista debe ser entero y es ${tipoATexto(i)}`); return o.elem; }
         if (o.k === 'texto') return T.texto;
         if (o.k === 'dic') return o.valor;
+        // a[i] sobre un arreglo (4.1): un número si es de 1 dimensión, una
+        // vista de la fila si tiene más. El número de dimensiones no está en el
+        // tipo, así que el resultado es «cualquiera»; el índice sí se comprueba.
+        if (o.k === 'arreglo') { if (!esNum(i)) err(n, `el índice de un arreglo debe ser entero y es ${tipoATexto(i)}`); return T.cualquiera; }
         if (o.k !== 'cualquiera') err(n, `no se puede indexar un valor de tipo ${tipoATexto(o)}`);
         return T.cualquiera;
       }
@@ -1252,6 +1786,27 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         const o = expr(n.obj, amb);
         // dic<texto,real> accedido con «.» debe seguir siendo real, no «cualquiera»
         if (o.k === 'dic') return o.valor;
+        // (4.1) Un registro: el verificador SABE qué campos tiene. Es la
+        // razón de que existan: «p.nombre» mal escrito se para aquí, no al
+        // ejecutar.
+        if (o.k === 'registro') {
+          const r = tipoReg(o.nombre);
+          if (!r) return T.cualquiera;
+          const c = campoDe(r, n.nombre);
+          if (c) return c.tipo;
+          if (r.metodos.has(n.nombre)) return r.metodos.get(n.nombre);
+          return sinCampo(n, r, n.nombre);
+        }
+        return T.cualquiera;
+      }
+      case 'Esperar': expr(n.valor, amb); return T.cualquiera;
+      case 'SiExpr': {
+        const c = expr(n.cond, amb);
+        if (c.k !== 'bool' && c.k !== 'cualquiera')
+          avisos.push(new ErrorFuente('tipos', `la condición de «si» es ${tipoATexto(c)}, no bool`, n.linea, n.col, 'se usará su valor de verdad'));
+        const a = expr(n.entonces, amb), b = expr(n.sino, amb);
+        if (compatible(a, b) && compatible(b, a)) return a.k === 'cualquiera' ? b : a;
+        if ((a.k === 'entero' && b.k === 'real') || (a.k === 'real' && b.k === 'entero')) return T.real;
         return T.cualquiera;
       }
       case 'ListaLit': {
@@ -1266,10 +1821,10 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         return T.dic(T.cualquiera, T.cualquiera);
       }
       case 'FuncionAnon': {
-        const sub = new Ambito(amb, n.retorno || null);
+        const sub = new Ambito(amb, n.corrutina ? null : (n.retorno || null));
         for (const p of n.params) sub.declarar(p.nombre, p.anotacion || T.cualquiera, false);
         bloqueTipos(n.cuerpo, sub);
-        return T.fn(n.params.map(p => p.anotacion || T.cualquiera), n.retorno || T.cualquiera);
+        return tipoDeFuncion(n);
       }
       default: return T.cualquiera;
     }
@@ -1481,7 +2036,15 @@ function compilar(ast, nombreScript, enlace) {
   function buscarUpvalue(ctx, nombre) {
     if (!ctx.padre) return -1;
     const l = buscarLocal(ctx.padre, nombre);
-    if (l !== -1) { ctx.padre.locals[l].capturada = true; return addUpvalue(ctx, l, true, nombre); }
+    if (l !== -1) {
+      // (4.1) Al pausar una corrutina su pila se guarda aparte; un
+      // cierre que apuntara a una de sus variables quedaría mirando a otra
+      // cosa. Hasta que eso tenga solución, se dice aquí y no se adivina.
+      if (ctx.padre.fn.corrutina)
+        throw new ErrorFuente('compilación', `«${nombre}» es de una corrutina y una función de dentro la usa: eso todavía no se puede`,
+          ultimaLinea, 1, 'pásasela como argumento, o saca esa función fuera de la corrutina');
+      ctx.padre.locals[l].capturada = true; return addUpvalue(ctx, l, true, nombre);
+    }
     const u = buscarUpvalue(ctx.padre, nombre);
     if (u !== -1) return addUpvalue(ctx, u, false, nombre);
     return -1;
@@ -1503,6 +2066,27 @@ function compilar(ast, nombreScript, enlace) {
         return;
       }
       case 'Bloque': ambitoAbrir(); for (const s of n.cuerpo) sent(s); ambitoCerrar(n.linea); return;
+      // (4.1) Un registro. No hay opcode nuevo: se llama a la nativa
+      // interna « registro» con el nombre, los campos y los métodos (que ya
+      // están definidos, porque las funciones van primero), y lo que devuelve
+      // —el constructor— queda como global con el nombre del tipo. Todo son
+      // constantes de texto, así que el .elb no cambia de formato.
+      case 'DeclTipo': {
+        emitOp(OP.GET_GLOBAL, chunk().cte(' registro'), n.linea);
+        emitCte(n.nombre, n.linea);
+        for (const c2 of n.campos) emitCte(c2.nombre, n.linea);
+        emitOp(OP.LISTA, n.campos.length, n.linea);
+        const mets = n.metodos || [];
+        for (const m of mets) {
+          emitCte(m, n.linea);
+          emitOp(OP.GET_GLOBAL, chunk().cte(gl(n.nombre + '.' + m)), n.linea);
+        }
+        emitOp(OP.DIC, mets.length, n.linea);
+        emitOp(OP.CALL, 3, n.linea);
+        // La fábrica queda escondida; «Punto» es la función constructora.
+        emitOp(OP.DEF_GLOBAL, chunk().cte(gl(' hacer ' + n.nombre)), n.linea);
+        return;
+      }
       case 'Si': {
         expr(n.cond);
         const aElse = emitSalto(OP.JMP_FALSE, n.linea);
@@ -1666,6 +2250,14 @@ function compilar(ast, nombreScript, enlace) {
         return;
       }
       case 'ExprSent': expr(n.expr); emit(OP.POP, n.linea); return;
+      // «producir v» es una llamada a la nativa interna « producir»: la VM se
+      // pausa justo al volver de ella. Sin opcode nuevo.
+      case 'Producir':
+        emitOp(OP.GET_GLOBAL, chunk().cte(' producir'), n.linea);
+        expr(n.valor);
+        emitOp(OP.CALL, 1, n.linea);
+        emit(OP.POP, n.linea);
+        return;
 
       // ── usar ─────────────────────────────────────────────────────────────
       // Una llamada a una nativa, no un opcode nuevo: así la tabla de
@@ -1696,6 +2288,13 @@ function compilar(ast, nombreScript, enlace) {
     sub.fn.enlace = enl;
     sub.fn.ast = n;
     sub.fn.nombresParams = n.params.map(p => p.nombre);
+    // (4.1) Cuántos argumentos son obligatorios. Viaja en el .elb como una
+    // constante marcadora (« minimos:N»): así el formato no cambia y un .elb
+    // sin valores por defecto es idéntico al de la 4.0.
+    const primero = n.params.findIndex(p => p.defecto);
+    if (primero >= 0) { sub.fn.minimos = primero; sub.fn.chunk.cte(' minimos:' + primero); }
+    // (4.1) Generador o asíncrona: viaja igual, como constante marcadora.
+    if (n.corrutina) { sub.fn.corrutina = n.corrutina; sub.fn.chunk.cte(' corrutina:' + n.corrutina); }
     c = sub;
     ambitoAbrir();
     for (const p of n.params) declararLocal(p.nombre, p.linea || n.linea);
@@ -1716,7 +2315,9 @@ function compilar(ast, nombreScript, enlace) {
   }
 
   // ---- expresiones
+  let ultimaLinea = 1;
   function expr(n) {
+    if (n.linea) ultimaLinea = n.linea;
     switch (n.tipo) {
       case 'Literal':
         if (n.valor === null) return emit(OP.NULO, n.linea);
@@ -1762,7 +2363,36 @@ function compilar(ast, nombreScript, enlace) {
       case 'Unario':
         expr(n.expr);
         return emit(n.op === '-' ? OP.NEG : OP.NOT, n.linea);
+      case 'Esperar':
+        emitOp(OP.GET_GLOBAL, chunk().cte(' esperar'), n.linea);
+        expr(n.valor);
+        return emitOp(OP.CALL, 1, n.linea);
+      case 'SiExpr': {
+        expr(n.cond);
+        const aElse = emitSalto(OP.JMP_FALSE, n.linea);
+        emit(OP.POP, n.linea);
+        expr(n.entonces);
+        const aFin = emitSalto(OP.JMP, n.linea);
+        parchear(aElse);
+        emit(OP.POP, n.linea);
+        expr(n.sino);
+        parchear(aFin);
+        return;
+      }
       case 'Binario': {
+        // a ?? b  →  [a] DUP NULO EQ JMP_FALSE(L) POP POP b JMP(F) L: POP F:
+        if (n.op === '??') {
+          expr(n.izq);
+          emit(OP.DUP, n.linea); emit(OP.NULO, n.linea); emit(OP.EQ, n.linea);
+          const noNulo = emitSalto(OP.JMP_FALSE, n.linea);
+          emit(OP.POP, n.linea); emit(OP.POP, n.linea);
+          expr(n.der);
+          const fin = emitSalto(OP.JMP, n.linea);
+          parchear(noNulo);
+          emit(OP.POP, n.linea);
+          parchear(fin);
+          return;
+        }
         if (n.op === 'y') {
           expr(n.izq);
           const s = emitSalto(OP.JMP_FALSE, n.linea);
@@ -1779,6 +2409,21 @@ function compilar(ast, nombreScript, enlace) {
         return emit(m[n.op], n.linea);
       }
       case 'Llamada': {
+        // (4.1) «a?.m(x)»: si a es nulo, nulo, y la llamada no ocurre.
+        if (n.callee.tipo === 'Propiedad' && n.callee.opcional) {
+          expr(n.callee.obj);
+          emit(OP.DUP, n.linea); emit(OP.NULO, n.linea); emit(OP.EQ, n.linea);
+          const noNulo = emitSalto(OP.JMP_FALSE, n.linea);
+          emit(OP.POP, n.linea);
+          const fin = emitSalto(OP.JMP, n.linea);
+          parchear(noNulo);
+          emit(OP.POP, n.linea);
+          emitOp(OP.PROP_GET, chunk().cte(n.callee.nombre), n.linea);
+          for (const a of n.args) expr(a);
+          emitOp(OP.CALL, n.args.length, n.linea);
+          parchear(fin);
+          return;
+        }
         expr(n.callee);
         for (const a of n.args) expr(a);
         return emitOp(OP.CALL, n.args.length, n.linea);
@@ -1788,6 +2433,19 @@ function compilar(ast, nombreScript, enlace) {
         // «m.algo» con m alias de módulo es un global de allí, resuelto aquí.
         // Un local o un parámetro con ese nombre manda: «fn f(m) { m.x }» es un
         // acceso a propiedad normal aunque haya un módulo llamado «m».
+        if (n.opcional) {
+          // a?.b  →  [a] DUP NULO EQ JMP_FALSE(L) POP JMP(F) L: POP PROP_GET b F:
+          expr(n.obj);
+          emit(OP.DUP, n.linea); emit(OP.NULO, n.linea); emit(OP.EQ, n.linea);
+          const noNulo = emitSalto(OP.JMP_FALSE, n.linea);
+          emit(OP.POP, n.linea);
+          const fin = emitSalto(OP.JMP, n.linea);
+          parchear(noNulo);
+          emit(OP.POP, n.linea);
+          emitOp(OP.PROP_GET, chunk().cte(n.nombre), n.linea);
+          parchear(fin);
+          return;
+        }
         const g = (n.obj.tipo === 'Variable' && !visibleComoLocal(c, n.obj.nombre))
           ? miembroDeEnlace(enl, n.obj.nombre, n.nombre) : null;
         if (g) return emitOp(OP.GET_GLOBAL, chunk().cte(g), n.linea);
@@ -1810,9 +2468,15 @@ function compilar(ast, nombreScript, enlace) {
   // cuando A importa B y B importa A, A ya tiene definidas todas sus funciones
   // antes de que empiece B, así que B las ve. Lo que B no ve son los valores que
   // A calcula después, y eso se dice con un mensaje que nombra el ciclo.
+  // (4.1) Los registros van justo después de las funciones —sus
+  // métodos son funciones y tienen que existir ya— y antes que todo lo demás:
+  // así «Punto(1, 2)» funciona aunque el «tipo» esté más abajo.
+  for (const s of ast.cuerpo) if (s.tipo === 'DeclTipo')
+    s.metodos = ast.cuerpo.filter(f => f.tipo === 'DeclFuncion' && f.metodo && f.metodo.tipo === s.nombre).map(f => f.metodo.nombre);
   for (const s of ast.cuerpo) if (s.tipo === 'DeclFuncion') sent(s);
+  for (const s of ast.cuerpo) if (s.tipo === 'DeclTipo') sent(s);
   for (const s of ast.cuerpo) if (s.tipo === 'Usar') sent(s);
-  for (const s of ast.cuerpo) if (s.tipo !== 'DeclFuncion' && s.tipo !== 'Usar') sent(s);
+  for (const s of ast.cuerpo) if (s.tipo !== 'DeclFuncion' && s.tipo !== 'Usar' && s.tipo !== 'DeclTipo') sent(s);
   // El retorno implícito del final se atribuye a la última línea real, no a un
   // 9999 de relleno: se ve mejor en el desensamblador y la tabla de líneas no
   // pega un salto absurdo al serializarse.
@@ -2080,6 +2744,60 @@ class ObjNativa {
 
 const esObj = v => v !== null && typeof v === 'object';
 
+// ── (4.1) corrutinas ────────────────────────────────────────────────
+// Un generador o una función asíncrona en pausa. Mientras está en pausa, su
+// trozo de pila y sus marcos viven aquí, con posiciones relativas; al
+// reanudarla se copian encima de la pila de la VM y se sigue donde se quedó.
+class ObjGenerador {
+  constructor(cierre, args, asincrono) {
+    this.clase = asincrono ? 'tarea' : 'generador';
+    this.cierre = cierre; this.args = args; this.asincrono = !!asincrono;
+    this.estado = 'nuevo';            // nuevo | suspendido | corriendo | terminado
+    this.pila = null; this.marcos = null;
+    this.actual = null;               // lo último que produjo, para «para … en»
+    this.promesa = null;              // la de una función asíncrona
+    this.id = SIG_ID++; this.marca = false;
+  }
+}
+// Una promesa de Ñ: lo que devuelve una función asíncrona, «dormir» o
+// «pedir» sin función. «esperar» se queda en pausa hasta que esté lista.
+class ObjPromesa {
+  constructor() { this.clase = 'promesa'; this.estado = 'pendiente'; this.valor = null; this.esperando = []; this.vista = false; this.id = SIG_ID++; this.marca = false; }
+}
+// Lo que devuelve la longitud de un generador DENTRO de un «para». Al
+// compararse (i < longitud) avanza el generador y dice si hay otro valor. Así
+// el bucle «para» de siempre —bytecode y JIT— recorre un generador sin ninguna
+// instrucción nueva y sin tocar el camino de las listas.
+class ObjLongitudGen {
+  constructor(vm, g) { this.vm = vm; this.g = g; }
+  valueOf() { return this.vm.genAvanzar(this.g) ? Infinity : -Infinity; }
+}
+// (4.1, fase S1) Lo que viene de C y no es un número ni un texto: un
+// puntero, un bloque de memoria o una retrollamada registrada. Ñ no puede
+// hacer cuentas con ellos —no hay aritmética de punteros por accidente—, solo
+// guardarlos, compararlos y devolvérselos al mismo C.
+//   clase 'puntero'      crudo = la dirección (BigInt o número)
+//   clase 'memoria'      crudo = un Buffer de Node; «bytes» su tamaño
+//   clase 'retrollamada' crudo = el puntero de koffi; «nombre» su tipo
+class ObjOpaco {
+  constructor(clase, crudo, extra) {
+    this.clase = clase; this.crudo = crudo; this.vivo = true;
+    if (extra) Object.assign(this, extra);
+  }
+  direccion() {
+    const c = this.crudo;
+    if (typeof c === 'bigint') return c;
+    if (typeof c === 'number') return BigInt(c);
+    return null;
+  }
+}
+// La señal que devuelve el bucle de despacho cuando una corrutina se pausa.
+const SUSPENDIDO = { suspendido: true };
+// (4.1) El valor que recibe un parámetro con defecto cuando no llega. Es
+// único y el programa no lo puede escribir (su global es « faltante»).
+const FALTANTE = new ObjNativa(' faltante', 0, () => null, '');
+const aridadTexto = fn => (fn.minimos !== undefined && fn.minimos < fn.aridad ? `entre ${fn.minimos} y ${fn.aridad}` : String(fn.aridad));
+
 // ------------------------------------------------------------ Representación
 // La forma canónica de una fecha: día a secas si es medianoche, día y hora si
 // no. Es lo que imprime «imprimir», lo que devuelve «texto(f)» y lo que se
@@ -2271,6 +2989,11 @@ function repr(v, prof) {
     if (prof > 4) return '[…]';
     return '[' + v.items.map(x => repr(x, prof + 1)).join(', ') + ']';
   }
+  if (v instanceof ObjDic && v.tipoReg) {
+    // (4.1) Un registro se imprime con su tipo: Punto{x: 1, y: 2}.
+    if (prof > 4) return v.tipoReg.nombre + '{…}';
+    return v.tipoReg.nombre + '{' + [...v.mapa].map(([k, x]) => `${k}: ${repr(x, prof + 1)}`).join(', ') + '}';
+  }
   if (v instanceof ObjDic) {
     if (prof > 4) return '{…}';
     const p = [];
@@ -2298,6 +3021,14 @@ function repr(v, prof) {
   }
   if (v instanceof ObjError) return `<error ${v.tipoError}: ${v.mensaje}>`;
   if (v instanceof ObjCierre) return `<funcion ${v.fn.nombre}/${v.fn.aridad}>`;
+  if (v instanceof ObjGenerador) return `<${v.clase} ${v.cierre ? v.cierre.fn.nombre : v.nombreNativo}${v.estado === 'terminado' ? ' · terminado' : ''}>`;
+  if (v instanceof ObjPromesa) return `<promesa ${v.estado}>`;
+  if (v instanceof ObjOpaco) {
+    if (v.clase === 'memoria') return `<memoria ${v.bytes} bytes${v.vivo ? '' : ' · liberada'}>`;
+    if (v.clase === 'retrollamada') return `<retrollamada ${v.nombre}${v.vivo ? '' : ' · soltada'}>`;
+    const d = v.direccion();
+    return `<puntero 0x${d === null ? '?' : d.toString(16)}>`;
+  }
   if (v instanceof ObjNativa) return `<nativa ${v.nombre}>`;
   return String(v);
 }
@@ -2314,6 +3045,9 @@ function tipoDe(v) {
   if (v instanceof ObjFecha) return 'fecha';
   if (v instanceof ObjTabla) return 'tabla';
   if (v instanceof ObjArreglo) return 'arreglo';
+  if (v instanceof ObjGenerador) return v.clase;
+  if (v instanceof ObjPromesa) return 'promesa';
+  if (v instanceof ObjOpaco) return v.clase;
   return 'funcion';
 }
 const verdad = v => !(v === null || v === undefined || v === false || v === 0 || v === '' ||
@@ -2323,6 +3057,10 @@ const verdad = v => !(v === null || v === undefined || v === false || v === 0 ||
 // sí mismas hacen que la recursión no termine nunca.
 function iguales(a, b, enCurso) {
   if (a === b) return true;
+  // Dos punteros son iguales si apuntan al mismo sitio, aunque vengan de dos
+  // llamadas distintas (cada una crea su propio valor).
+  if (a instanceof ObjOpaco && b instanceof ObjOpaco && a.clase === 'puntero' && b.clase === 'puntero')
+    return a.direccion() === b.direccion();
   // Una fecha es un valor, no una identidad: dos objetos distintos que marcan
   // el mismo instante son iguales, como dos listas con los mismos elementos.
   if (a instanceof ObjFecha || b instanceof ObjFecha)
@@ -2348,6 +3086,9 @@ function iguales(a, b, enCurso) {
     }
     return true;
   }
+  // (4.1) Dos registros de tipos distintos no son iguales aunque
+  // tengan los mismos campos; un registro tampoco es igual a un diccionario.
+  if (a instanceof ObjDic && b instanceof ObjDic && (a.tipoReg || null) !== (b.tipoReg || null)) return false;
   const dosListas = a instanceof ObjLista && b instanceof ObjLista;
   const dosDics = a instanceof ObjDic && b instanceof ObjDic;
   if (!dosListas && !dosDics) return false;
@@ -2423,6 +3164,8 @@ class VM {
     this.stack = new Array(65536);
     this.sp = 0;
     this.frames = [];
+    this.pausa = null;         // (4.1) una corrutina pidió pausarse
+    this.corrutinas = [];      // las que están corriendo ahora, la de dentro al final
     this.globals = new Map();
     this.upAbiertas = [];
     this.monton = [];             // tabla de objetos vivos (la gestiona el GC)
@@ -2470,6 +3213,26 @@ class VM {
     return v;
   }
   exigeEnt(v, n, f) { return Math.trunc(this.exigeNum(v, n, f)); }
+  // Los argumentos de rango(…), validados. La comparten la nativa «rango» y el
+  // JIT, que compila «para i en rango(n)» sin construir la lista: los dos
+  // caminos tienen que rechazar lo mismo con el mismo mensaje, tope incluido.
+  prepararRango(a) {
+    let ini = 0, fin = 0, paso = 1;
+    if (a.length === 1) fin = this.exigeNum(a[0], 1, 'rango');
+    else if (a.length === 2) { ini = this.exigeNum(a[0], 1, 'rango'); fin = this.exigeNum(a[1], 2, 'rango'); }
+    else if (a.length === 3) { ini = this.exigeNum(a[0], 1, 'rango'); fin = this.exigeNum(a[1], 2, 'rango'); paso = this.exigeNum(a[2], 3, 'rango'); }
+    else this.error('«rango» acepta 1, 2 o 3 argumentos');
+    if (paso === 0) this.error('«rango»: el paso no puede ser 0');
+    // La cuenta se hace ANTES de construir nada. Estaba después, así que
+    // «rango(1000000000)» intentaba primero llenar la lista y salía por un
+    // error de JavaScript en crudo —«Invalid array length»— en vez de por el
+    // mensaje de Ñ que había justo debajo.
+    const cuantos = Math.max(0, Math.ceil((fin - ini) / paso));
+    if (cuantos > 5e6)
+      this.error(`«rango» generaría ${cuantos.toLocaleString('es')} elementos y el tope son 5 millones`,
+        'si solo quieres contar, usa «repetir n { … }», que no construye la lista');
+    return { ini, fin, paso, cuantos };
+  }
   exigeTexto(v, n, f) {
     if (typeof v !== 'string') this.error(`«${f}»: el argumento ${n} debe ser texto y es ${tipoDe(v)}`);
     return v;
@@ -2604,13 +3367,25 @@ class VM {
         for (const m of o.medios) marcar(m.estilo);
       }
       else if (o instanceof ObjCierre) for (const u of o.upvalues) marcar(u);
+      else if (o instanceof ObjGenerador) {
+        marcar(o.cierre); marcar(o.actual); marcar(o.promesa);
+        if (o.args) for (const x of o.args) marcar(x);
+        if (o.pila) for (const x of o.pila) marcar(x);
+        if (o.marcos) for (const m of o.marcos) marcar(m.cierre);
+      }
+      else if (o instanceof ObjPromesa) marcar(o.valor);
       else if (o instanceof ObjUpvalue) { if (o.cerrado) marcar(o.valor); else marcar(this.stack[o.slot]); }
     }
     let vivos = 0;
     const nuevo = [];
     for (const o of this.monton) {
       if (o.marca) { o.marca = false; nuevo.push(o); vivos++; }
-      else { this.stats.liberados++; }
+      else {
+        this.stats.liberados++;
+        // (4.1, S2) Un leerLineas que nadie terminó de recorrer (se cortó
+        // con «romper») cierra aquí su archivo, cuando ya no lo ve nadie.
+        if (o instanceof ObjGenerador && o.alAcabar && o.estado !== 'terminado') { o.estado = 'terminado'; try { o.alAcabar(); } catch (_) {} }
+      }
     }
     this.monton = nuevo;
     this.stats.gc++;
@@ -2679,8 +3454,24 @@ class VM {
   llamarValor(callee, nArgs) {
     if (callee instanceof ObjCierre) {
       const fn = callee.fn;
-      if (fn.aridad !== nArgs)
-        this.error(`«${fn.nombre}» espera ${fn.aridad} argumento(s) y recibió ${nArgs}`);
+      if (fn.corrutina) {
+        if (fn.aridad !== nArgs) {
+          if (fn.minimos !== undefined && nArgs >= fn.minimos && nArgs < fn.aridad) { while (nArgs < fn.aridad) { this.empujar(FALTANTE); nArgs++; } }
+          else this.error(`«${fn.nombre}» espera ${aridadTexto(fn)} argumento(s) y recibió ${nArgs}`);
+        }
+        const args = new Array(nArgs);
+        for (let i = 0; i < nArgs; i++) args[i] = this.stack[this.sp - nArgs + i];
+        this.sp -= nArgs + 1;
+        this.empujar(this.nuevaCorrutina(callee, args));
+        return;
+      }
+      if (fn.aridad !== nArgs) {
+        // (4.1) Los que faltan y tienen valor por defecto llegan como
+        // « faltante»; la propia función pone el defecto al empezar.
+        if (fn.minimos !== undefined && nArgs >= fn.minimos && nArgs < fn.aridad) {
+          while (nArgs < fn.aridad) { this.empujar(FALTANTE); nArgs++; }
+        } else this.error(`«${fn.nombre}» espera ${aridadTexto(fn)} argumento(s) y recibió ${nArgs}`);
+      }
       fn.llamadas++;
       if (this.jitActivo && fn.jit) {
         const args = new Array(nArgs);
@@ -2729,8 +3520,26 @@ class VM {
 
   // llamada desde código JIT o desde una nativa
   invocar(callee, args) {
+    // El camino caliente primero (mapear, filtrar, eventos…): una función con
+    // JIT y los argumentos justos. Una corrutina nunca tiene JIT, así que lo
+    // de abajo —rellenar defectos, crear corrutinas— no le cuesta nada a esto.
+    if (callee instanceof ObjCierre && callee.fn.jit && callee.fn.aridad === args.length) {
+      if (++this.profJS > MAX_FRAMES) { this.profJS--; this.error('desbordamiento de pila: demasiadas llamadas anidadas', 'suele indicar una recursión sin caso base'); }
+      const r = callee.fn.jit.apply(callee.upvalues, args);
+      this.profJS--;
+      return r;
+    }
+    if (callee instanceof ObjCierre && callee.fn.aridad !== args.length && callee.fn.minimos !== undefined &&
+        args.length >= callee.fn.minimos && args.length < callee.fn.aridad) {
+      args = args.slice();
+      while (args.length < callee.fn.aridad) args.push(FALTANTE);
+    }
+    if (callee instanceof ObjCierre && callee.fn.corrutina) {
+      if (callee.fn.aridad !== args.length) this.error(`«${callee.fn.nombre}» espera ${aridadTexto(callee.fn)} argumento(s) y recibió ${args.length}`);
+      return this.nuevaCorrutina(callee, args);
+    }
     if (callee instanceof ObjCierre && callee.fn.jit) {
-      if (callee.fn.aridad !== args.length) this.error(`«${callee.fn.nombre}» espera ${callee.fn.aridad} argumento(s) y recibió ${args.length}`);
+      if (callee.fn.aridad !== args.length) this.error(`«${callee.fn.nombre}» espera ${aridadTexto(callee.fn)} argumento(s) y recibió ${args.length}`);
       if (++this.profJS > MAX_FRAMES) { this.profJS--; this.error('desbordamiento de pila: demasiadas llamadas anidadas', 'suele indicar una recursión sin caso base'); }
       const r = callee.fn.jit.apply(callee.upvalues, args);
       this.profJS--;
@@ -2754,7 +3563,18 @@ class VM {
       this.sp = spGuardado;
       return r;
     }
-    const r = this.correr(framesGuardados);
+    let r;
+    try { r = this.correr(framesGuardados); }
+    catch (e) {
+      // (4.1) Un «lanzar» que nadie capturó dentro de la función llamada
+      // desde una nativa (mapear, filtrar, una retrollamada de C) sigue hacia
+      // fuera: el «intentar» que rodea a la nativa todavía puede capturarlo.
+      // En la 4.0 se quedaba «fatal» y no lo capturaba nadie.
+      if (e instanceof ErrorTiempoEjecucion && e.valorLanzado !== undefined) e.fatal = false;
+      this.frames.length = framesGuardados;
+      this.sp = spGuardado;
+      throw e;
+    }
     this.sp = spGuardado;
     return r;
   }
@@ -2782,7 +3602,8 @@ class VM {
         return this.despachar(frameBase);
       } catch (e) {
         if (!(e instanceof ErrorTiempoEjecucion) || e.fatal) throw e;
-        const valor = this.nuevoError(e.tipo || 'motor', e.message, e.linea || this.lineaActual);
+        const valor = e.valorLanzado !== undefined ? e.valorLanzado
+          : this.nuevoError(e.tipo || 'motor', e.message, e.linea || this.lineaActual);
         if (!this.desenrollar(valor, frameBase)) throw e;
       }
     }
@@ -2916,6 +3737,8 @@ class VM {
         case 32 /*CALL*/: {
           const n = code[f.ip++];
           this.llamarValor(this.stack[this.sp - n - 1], n);
+          // (4.1) « producir» o « esperar» pidieron pausar la corrutina.
+          if (this.pausa !== null) return SUSPENDIDO;
           recargar(); break;
         }
         case 33 /*CLOSURE*/: {
@@ -2980,12 +3803,14 @@ class VM {
             v instanceof ObjError ? v.mensaje : `error sin capturar: ${repr(v, 1)}`);
           e.fatal = true;            // ya se desenrolló; no volver a buscarle sitio
           e.linea = this.lineaActual;
+          e.valorLanzado = v;        // (4.1) por si cruza el borde de una corrutina
           throw e;
         }
 
         case 42 /*LEN*/: {
           const o = this.sacar();
-          this.empujar(this.longitud(o)); break;
+          // Solo lo emite «para … en»: con un generador, la longitud es el marcador.
+          this.empujar(o instanceof ObjGenerador ? new ObjLongitudGen(this, o) : this.longitud(o)); break;
         }
         default: this.error(`instrucción desconocida ${op}`);
       }
@@ -3305,6 +4130,7 @@ class VM {
     // número. Una fecha con un número NO, aunque por dentro sea un número:
     // dejarlo pasar es justo el error que el tipo viene a quitar.
     const ok = (typeof a === 'number' && typeof b === 'number') ||
+               (typeof a === 'number' && b instanceof ObjLongitudGen) ||
                (typeof a === 'string' && typeof b === 'string') ||
                (a instanceof ObjFecha && b instanceof ObjFecha);
     if (!ok) this.error(`no se pueden comparar ${tipoDe(a)} y ${tipoDe(b)} con «${op}»`,
@@ -3320,9 +4146,173 @@ class VM {
     // De una tabla, sus FILAS. Es lo que alguien pregunta al escribir
     // longitud(t), y para las columnas está «columnas(t)».
     if (o instanceof ObjTabla) return o.filas;
+    if (o instanceof ObjGenerador)
+      this.error('un generador no tiene longitud: sus valores salen de uno en uno',
+        'recórrelo con «para x en g», o pásalo a lista con recoger(g)');
+    // De un arreglo, lo que mide su PRIMER eje — como len() de NumPy. Es lo que
+    // hace que «para x en a» y «a[i]» cuadren: se recorre el primer eje.
+    if (o instanceof ObjArreglo) {
+      if (o.forma.length === 0) this.error('un arreglo de 0 dimensiones no tiene longitud', 'es un solo número: sácalo con elemento(a)');
+      return o.forma[0];
+    }
     this.error(`no se puede recorrer ni medir un valor de tipo ${tipoDe(o)}`);
   }
+  // ── (4.1) corrutinas ──────────────────────────────────────────────
+  nuevaCorrutina(cierre, args) {
+    const asinc = cierre.fn.corrutina === 'asincrona';
+    const g = this.registrar(new ObjGenerador(cierre, args, asinc));
+    if (!asinc) return g;
+    // Una asíncrona empieza YA, en este turno, y corre hasta su primer
+    // «esperar». Lo que devuelve quien la llama es su promesa.
+    g.promesa = this.registrar(new ObjPromesa());
+    this.conducir(g, null, false, true);
+    return g.promesa;
+  }
+  // Corre la corrutina hasta su siguiente pausa o hasta que acabe.
+  // Devuelve { fin, valor }. «lanzar» hace que la pausa en la que estaba
+  // termine con un error en vez de con un valor (una promesa que falló).
+  reanudar(g, enviado, lanzar) {
+    if (g.estado === 'terminado') return { fin: true, valor: null };
+    // (4.1, S2) Un generador hecho en la biblioteca (leerLineas): no hay
+    // pila que guardar, solo una función que da el siguiente valor.
+    if (g.nativo) {
+      const x = g.nativo();
+      if (x === undefined) { g.estado = 'terminado'; if (g.alAcabar) g.alAcabar(); return { fin: true, valor: null }; }
+      g.estado = 'suspendido';
+      return { fin: false, valor: x };
+    }
+    if (g.estado === 'corriendo')
+      this.error(`«${g.cierre.fn.nombre}» ya está corriendo: una corrutina no puede pedirse a sí misma el siguiente valor`);
+    const baseMarcos = this.frames.length, base = this.sp;
+    if (g.estado === 'nuevo') {
+      this.empujar(g.cierre);
+      for (const a of g.args) this.empujar(a);
+      this.frames.push({ cierre: g.cierre, ip: 0, base, manejadores: [] });
+      g.args = null;
+    } else {
+      for (const v of g.pila) this.empujar(v);
+      this.stack[this.sp - 1] = enviado === undefined ? null : enviado;   // lo que vale el «producir»/«esperar»
+      for (const m of g.marcos)
+        this.frames.push({ cierre: m.cierre, ip: m.ip, base: base + m.base,
+          manejadores: m.manejadores.map(h => ({ destino: h.destino, sp: base + h.sp })) });
+      g.pila = g.marcos = null;
+    }
+    g.estado = 'corriendo';
+    this.corrutinas.push(g);
+    let r;
+    try {
+      if (lanzar) {
+        // El «esperar» falla: se busca un «capturar» dentro de la corrutina.
+        this.sp--;
+        if (!this.desenrollar(enviado, baseMarcos))
+          this.error(enviado instanceof ObjError ? enviado.mensaje : `lo esperado falló: ${repr(enviado, 0)}`);
+      }
+      r = this.correr(baseMarcos);
+    } catch (e) {
+      g.estado = 'terminado';
+      this.frames.length = baseMarcos; this.sp = base;
+      this.pausa = null;
+      // Un «lanzar» que nadie capturó DENTRO de la corrutina sigue hacia
+      // fuera: quien la recorre (o la espera) todavía puede capturarlo.
+      if (e instanceof ErrorTiempoEjecucion && e.valorLanzado !== undefined) e.fatal = false;
+      throw e;
+    } finally { this.corrutinas.pop(); }
+    if (r === SUSPENDIDO) {
+      const valor = this.pausa.valor;
+      this.pausa = null;
+      this.cerrarUpvalues(base);
+      g.pila = this.stack.slice(base, this.sp);
+      g.marcos = this.frames.slice(baseMarcos).map(f => ({ cierre: f.cierre, ip: f.ip, base: f.base - base,
+        manejadores: f.manejadores.map(h => ({ destino: h.destino, sp: h.sp - base })) }));
+      this.frames.length = baseMarcos; this.sp = base;
+      g.estado = 'suspendido';
+      return { fin: false, valor };
+    }
+    g.estado = 'terminado';
+    return { fin: true, valor: r };
+  }
+  // Un paso de un generador para «para … en» y «siguiente».
+  genAvanzar(g) {
+    if (g.asincrono) this.error('una tarea asíncrona no se recorre: se espera con «esperar»');
+    const r = this.reanudar(g, null, false);
+    if (r.fin) { g.actual = null; return false; }
+    g.actual = r.valor;
+    return true;
+  }
+  // El motor de una asíncrona: la reanuda, y cuando se pausa en un «esperar»
+  // de una promesa pendiente, se apunta a esa promesa para seguir después.
+  conducir(g, valor, fallo, inicial) {
+    for (;;) {
+      let r;
+      try { r = this.reanudar(g, valor, fallo); }
+      catch (e) {
+        if (e instanceof ErrorTiempoEjecucion && !e.fatal) {
+          this.cumplir(g.promesa, e.valorLanzado !== undefined ? e.valorLanzado
+            : this.nuevoError(e.tipo || 'motor', e.message, e.linea || this.lineaActual), false);
+          // Nadie la espera: que se vea. En el primer tramo (aún dentro de la
+          // llamada) todavía no ha podido nadie tomar la promesa, así que se
+          // guarda el fallo para quien la espere.
+          if (!g.promesa.vista && !inicial) throw e;
+          return;
+        }
+        throw e;
+      }
+      if (r.fin) { this.cumplir(g.promesa, r.valor, true); return; }
+      const p = r.valor;
+      if (p instanceof ObjPromesa) {
+        p.vista = true;
+        if (p.estado === 'pendiente') { p.esperando.push((ok, v) => this.conducir(g, v, !ok)); return; }
+        valor = p.valor; fallo = p.estado === 'fallida';
+      } else { valor = p; fallo = false; }
+    }
+  }
+  cumplir(p, valor, ok) {
+    if (p.estado !== 'pendiente') return;
+    p.estado = ok ? 'cumplida' : 'fallida';
+    p.valor = valor;
+    const cola = p.esperando; p.esperando = [];
+    for (const f of cola) f(ok, valor);
+  }
+
+  // (4.1) «p.distancia» sin llamar: una función que ya lleva su «yo».
+  // Se crea al pedirla; «p.distancia(q)» la crea y la llama en el acto.
+  metodoAtado(o, nombre, m) {
+    const ar = m instanceof ObjCierre ? m.fn.aridad - 1 : -1;
+    return new ObjNativa(o.tipoReg.nombre + '.' + nombre, ar, (args, vm) => vm.invocar(m, [o, ...args]));
+  }
+  // ── a[i] sobre un arreglo (4.1) ──────────────────────────────────
+  // Hasta ahora un arreglo solo se leía con elemento(a, i, j) y se escribía con
+  // ponerElemento(a, i, j, v). a[i] hace lo mismo con la sintaxis de una lista:
+  //   · 1 dimensión  → el número de esa posición (lo mismo que elemento)
+  //   · N dimensiones → una VISTA de la fila i: misma memoria, un eje menos.
+  //     a[i][j] funciona solo, y escribir en la vista escribe en el original,
+  //     como en NumPy y como ya hacen trozo() y las demás vistas.
+  // Los negativos cuentan desde el final, igual que en una lista.
+  arrIndice(o, i, quien) {
+    if (typeof i !== 'number' || !Number.isInteger(i))
+      this.error(`el índice de un arreglo debe ser un entero y es ${typeof i === 'number' ? i : tipoDe(i)}`);
+    if (o.tipo === 'complejo')
+      this.error('a[i] todavía no sabe trabajar con arreglos complejos',
+        'pasa a reales primero con parteReal, parteImaginaria o absoluto');
+    if (o.forma.length === 0) this.error('un arreglo de 0 dimensiones no se indexa', 'es un solo número: sácalo con elemento(a)');
+    const n = o.forma[0];
+    const k = i < 0 ? n + i : i;
+    if (k < 0 || k >= n)
+      this.error(`índice ${i} fuera de rango (el eje 0 del arreglo mide ${n})`,
+        n ? `los índices válidos van de 0 a ${n - 1}, o de -1 a -${n}` : 'el arreglo está vacío');
+    return k;
+  }
+  arrFila(o, k) {
+    return this.nuevoArreglo(o._d, o.forma.slice(1), o.tipo, o.zancadas.slice(1),
+      o.desp + k * o.zancadas[0], o.base || o);
+  }
   indiceObtener(o, i) {
+    if (o instanceof ObjGenerador) return o.actual;
+    if (o instanceof ObjArreglo) {
+      const k = this.arrIndice(o, i);
+      if (o.forma.length === 1) return o.datos[o.desp + k * o.zancadas[0]];
+      return this.arrFila(o, k);
+    }
     if (o instanceof ObjError) {
       const v = o.campo(String(i));
       if (v === undefined) this.error(`un error no tiene «${i}»`, 'sus campos son tipo, mensaje y linea');
@@ -3341,6 +4331,14 @@ class VM {
       if (typeof i !== 'number' || k < 0 || k >= o.length) this.error(`índice ${i} fuera del texto (longitud ${o.length})`);
       return o[k];
     }
+    if (o instanceof ObjDic && o.tipoReg) {
+      // (4.1) Un registro: un campo, o un método ya atado a este registro.
+      if (o.mapa.has(i)) return o.mapa.get(i);
+      const m = o.tipoReg.metodos.get(i);
+      if (m) return this.metodoAtado(o, i, m);
+      this.error(`«${o.tipoReg.nombre}» no tiene «${repr(i, 0)}»`,
+        `tiene: ${o.tipoReg.campos.concat([...o.tipoReg.metodos.keys()]).join(', ')}`);
+    }
     if (o instanceof ObjDic) {
       if (!o.mapa.has(i)) this.error(`la clave ${repr(i, 1)} no existe en el diccionario`,
         o.mapa.size ? `claves disponibles: ${[...o.mapa.keys()].slice(0, 6).map(k => repr(k, 1)).join(', ')}` : 'el diccionario está vacío');
@@ -3349,11 +4347,27 @@ class VM {
     this.error(`no se puede indexar un valor de tipo ${tipoDe(o)}`);
   }
   indiceAsignar(o, i, v) {
+    if (o instanceof ObjArreglo) {
+      const k = this.arrIndice(o, i);
+      if (o.forma.length !== 1)
+        this.error(`a[${i}] = … solo vale en un arreglo de 1 dimensión y este tiene ${o.forma.length}`,
+          'baja hasta el número: a[i][j] = v');
+      // Mismo control que ponerElemento: en un arreglo solo entran números.
+      const x = (typeof v === 'boolean' && o.tipo === 'bool') ? (v ? 1 : 0) : this.exigeNum(v, 2, 'a[i] =');
+      o.datos[o.desp + k * o.zancadas[0]] = x;
+      return;
+    }
     if (o instanceof ObjLista) {
       if (typeof i !== 'number') this.error(`el índice de una lista debe ser un número y es ${tipoDe(i)}`);
       let k = i < 0 ? o.items.length + i : i;
       if (k < 0 || k >= o.items.length) this.error(`índice ${i} fuera de rango (longitud ${o.items.length})`);
       o.items[k] = v; return;
+    }
+    if (o instanceof ObjDic && o.tipoReg && !o.mapa.has(i)) {
+      // Un registro tiene los campos que dice su «tipo», ni uno más: escribir
+      // un campo que no existe es casi siempre un nombre mal escrito.
+      this.error(`«${o.tipoReg.nombre}» no tiene el campo «${repr(i, 0)}»`,
+        `sus campos son: ${o.tipoReg.campos.join(', ')}`);
     }
     if (o instanceof ObjDic) { o.mapa.set(i, v); return; }
     this.error(`no se puede asignar por índice en un valor de tipo ${tipoDe(o)}`);
@@ -3387,9 +4401,11 @@ class VM {
       // mapa de globales ni despacho por llamada.
       // eslint-disable-next-line no-new-func
       const cie = (typeof gen === 'string' ? null : gen.cierres) || [];
-      const factoria = new Function('rt', 'nt', 'pr', 'cf', '"use strict";return ' + src);
+      // «LI» es la clase ObjLista: el código generado la usa para el camino
+      // rápido de a[i] y de «para x en lista» sin pasar por rt (4.1).
+      const factoria = new Function('rt', 'nt', 'pr', 'cf', 'LI', '"use strict";return ' + src);
       fn.jit = factoria(rt, nat.map(x => x.nat.fn), (typeof gen === 'string' ? null : gen.protos) || [],
-                        cie.map(x => x.cl));
+                        cie.map(x => x.cl), ObjLista);
       if (nat.length || cie.length) {
         if (this.atados === null) { this.atados = new Set(); this.compiladas = new Set(); }
         for (const x of nat) this.atados.add(x.nombre);
@@ -3469,6 +4485,10 @@ function crearRT(vm) {
     // «call» y argumentos sueltos cuesta mucho menos, porque no se asigna el
     // array y V8 puede meter la llamada en línea. La nativa atada, que es una
     // llamada directa de toda la vida, cuesta 1,25 ns: ese es el suelo.
+    // (4.1) Para la autollamada directa: el tope y el error, sin pasar
+    // por yaN. Es el mismo mensaje que da yaN.
+    MAX: MAX_FRAMES,
+    desborde() { vm.profJS--; vm.error('desbordamiento de pila: demasiadas llamadas anidadas', 'suele indicar una recursión sin caso base'); },
     ya0(c) {
       if (++vm.profJS > MAX_FRAMES) { vm.profJS--; vm.error('desbordamiento de pila: demasiadas llamadas anidadas', 'suele indicar una recursión sin caso base'); }
       const r = c.fn.jit.call(c.upvalues);
@@ -3546,7 +4566,7 @@ function crearRT(vm) {
     dic(pares) { const d = vm.nuevoDic(); for (const [k, v] of pares) d.mapa.set(k, v); return d; },
     idxg(o, i) { return vm.indiceObtener(o, i); },
     idxs(o, i, v) { vm.indiceAsignar(o, i, v); return v; },
-    len(o) { return vm.longitud(o); },
+    len(o) { return o instanceof ObjGenerador ? new ObjLongitudGen(vm, o) : vm.longitud(o); },
     cat(p) { return p.map(x => typeof x === 'string' ? x : repr(x, 1)).join(''); },
     txt(x) { return typeof x === 'string' ? x : repr(x, 1); },
   };
@@ -3559,6 +4579,9 @@ function generarJS(fn, vm) {
   // acabar en «new Function». Se comprueba de las dos maneras —por la bandera
   // y por la ausencia de AST— para que quitar una sin querer no abra la puerta.
   if (fn.deDisco) { fn.jitEstado = 'rechazada'; return null; }
+  // (4.1) Una corrutina se pausa a mitad, y una función de JavaScript
+  // no: se queda en el intérprete, que sí sabe guardar dónde iba.
+  if (fn.corrutina) { fn.jitEstado = 'rechazada'; return null; }
   const ast = fn.ast;
   if (!ast) return null;
   // Una función que captura variables de fuera SÍ se compila: sus capturas
@@ -3592,6 +4615,11 @@ function generarJS(fn, vm) {
   // nombre aparece aquí igual. Una local capturada se compila como una CAJA
   // —un ObjUpvalue cerrado— para que la función y el cierre compartan la misma
   // variable y no dos copias: si el cierre le escribe, el de fuera lo ve.
+  // El nombre de la función de JavaScript que se está generando (4.1:
+  // lo usa la autollamada directa).
+  // Lleva prefijo propio: un parámetro o una local del programa nunca empieza
+  // por «_yo$», así que no puede taparlo.
+  const yo = '_yo$' + jsNom(fn.nombre === '<anónima>' ? 'anon' : fn.nombre);
   const cajas = new Set();
   (function buscarCapturas(nodo) {
     if (!nodo || typeof nodo !== 'object') return;
@@ -3672,7 +4700,7 @@ function generarJS(fn, vm) {
     if (!(g instanceof ObjCierre)) return -1;
     // Sin AST no se compila nunca (bytecode de disco), así que atarlo no
     // ahorraría nada y sí añadiría un global a la lista de invalidación.
-    if (!g.fn || !g.fn.ast || g.fn.deDisco) return -1;
+    if (!g.fn || !g.fn.ast || g.fn.deDisco || g.fn.corrutina) return -1;
     // La aridad se comprueba AQUÍ, una vez, y por eso el camino rápido puede
     // saltarse la comprobación por llamada. Si no cuadra, no se ata y el
     // camino normal da el error de siempre.
@@ -3685,6 +4713,21 @@ function generarJS(fn, vm) {
   }
   const nativas = [];
   const iNativa = new Map();
+  // (4.1) Una nativa de la biblioteca que el JIT conoce por dentro
+  // —«rango», «agregar»— y para la que emite código propio en vez de llamarla.
+  // Se ata igual que las demás aunque su aridad sea variable, por dos razones:
+  // queda en la lista de invalidación (si alguien redefine el nombre, se tira
+  // lo compilado) y sirve de camino lento cuando el atajo no aplica.
+  function conocida(nombre, cual) {
+    if (!vm) return -1;
+    const g = vm.globals.get(nombre);
+    if (!(g instanceof ObjNativa) || g.puro !== cual) return -1;
+    if (iNativa.has(nombre)) return iNativa.get(nombre);
+    const i = nativas.length;
+    nativas.push({ nombre, nat: g });
+    iNativa.set(nombre, i);
+    return i;
+  }
   function atar(nombre, nArgs) {
     if (!vm) return -1;
     const g = vm.globals.get(nombre);
@@ -3737,6 +4780,30 @@ function generarJS(fn, vm) {
       }
       case 'Para': {
         const it = '_it$' + (nTmp++), i = '_i$' + (nTmp++);
+        // (4.1) «para i en rango(…)» sin construir la lista. Antes,
+        // rango(2000000) llenaba dos millones de casillas para recorrerlas una
+        // vez. Los argumentos se validan con la misma función que usa la
+        // nativa, así que los errores —y el tope de 5 millones— son los mismos.
+        const itn = n.iterable;
+        if (itn.tipo === 'Llamada' && itn.callee.tipo === 'Variable' && !declarada(itn.callee.nombre) &&
+            itn.args.length >= 1 && itn.args.length <= 3 && conocida(gl(itn.callee.nombre), 'rango') >= 0) {
+          const R = '_R$' + (nTmp++), v = '_v$$' + (nTmp++), lim = '_f$' + (nTmp++), p = '_p$' + (nTmp++),
+                up = '_s$' + (nTmp++), c = '_c$' + (nTmp++);
+          const args = itn.args.map(ex);
+          locales.push(new Set([n.nombre]));
+          const cuerpo = n.cuerpo.cuerpo.map(x => sent(x, ind + 2)).join('\n');
+          locales.pop();
+          return `${t}const ${R} = rt.vm.prepararRango([${args.join(',')}]);\n` +
+                 `${t}let ${c} = 0;\n` +
+                 // Con 1 o 2 argumentos el paso es 1 y se sabe al compilar: el
+                 // bucle queda como un «for» de JavaScript de toda la vida, que
+                 // es lo que V8 optimiza mejor. Con paso hay que mirar el signo.
+                 (itn.args.length < 3
+                   ? `${t}for (let ${v} = ${R}.ini, ${lim} = ${R}.fin; ${v} < ${lim}; ${v}++) {\n`
+                   : `${t}for (let ${v} = ${R}.ini, ${lim} = ${R}.fin, ${p} = ${R}.paso, ${up} = ${p} > 0; ${up} ? ${v} < ${lim} : ${v} > ${lim}; ${v} += ${p}) {\n`) +
+                 `${t}  if ((${c} = ${c} + 1 | 0) > 1023) { ${c} = 0; rt.tic(1024); }\n` +
+                 `${t}  let ${jsNom(n.nombre)} = ${envolver(n.nombre, v)};\n${cuerpo}\n${t}}`;
+        }
         locales.push(new Set([n.nombre]));
         const cuerpo = n.cuerpo.cuerpo.map(x => sent(x, ind + 2)).join('\n');
         locales.pop();
@@ -3744,7 +4811,7 @@ function generarJS(fn, vm) {
         return `${t}let ${it} = ${ex(n.iterable)}, ${c} = 0;\n` +
                `${t}for (let ${i} = 0, _l = rt.len(${it}); ${i} < _l; ${i}++) {\n` +
                `${t}  if ((${c} = ${c} + 1 | 0) > 1023) { ${c} = 0; rt.tic(1024); }\n` +
-               `${t}  let ${jsNom(n.nombre)} = ${envolver(n.nombre, `rt.idxg(${it}, ${i})`)};\n${cuerpo}\n${t}}`;
+               `${t}  let ${jsNom(n.nombre)} = ${envolver(n.nombre, `((${it} instanceof LI && ${i} < ${it}.items.length) ? ${it}.items[${i}] : rt.idxg(${it}, ${i}))`)};\n${cuerpo}\n${t}}`;
       }
       case 'Romper': return `${t}break;`;
       case 'Continuar': return `${t}continue;`;
@@ -3789,13 +4856,22 @@ function generarJS(fn, vm) {
         }
         const d = n.destino;
         if (d.tipo === 'Variable') return escribirVar(d.nombre, ex(n.valor));
-        if (d.tipo === 'Indice') return `rt.idxs(${ex(d.obj)}, ${ex(d.indice)}, ${ex(n.valor)})`;
+        if (d.tipo === 'Indice') {
+          // (4.1) El mismo camino rápido para escribir. El orden de
+          // evaluación no cambia: objeto, índice, valor.
+          const x = tmp(), y = tmp(), z = tmp();
+          return `((${x}=${ex(d.obj)}, ${y}=${ex(d.indice)}, ${z}=${ex(n.valor)}, ${x} instanceof LI && typeof ${y} === 'number' && ${y} >= 0 && ${y} < ${x}.items.length && (${y} | 0) === ${y})` +
+                 ` ? (${x}.items[${y}] = ${z}) : rt.idxs(${x}, ${y}, ${z}))`;
+        }
         if (d.tipo === 'Propiedad') return `rt.idxs(${ex(d.obj)}, ${JSON.stringify(d.nombre)}, ${ex(n.valor)})`;
         return rendirse();
       }
       case 'Unario': return n.op === '-' ? `rt.neg(${ex(n.expr)})` : `(!rt.verdad(${ex(n.expr)}))`;
+      // (4.1) las tres formas nuevas de expresión
+      case 'SiExpr': return `(${verdadJS(ex(n.cond))} ? ${ex(n.entonces)} : ${ex(n.sino)})`;
       case 'Binario': {
         const a = () => ex(n.izq), b = () => ex(n.der);
+        if (n.op === '??') { const t = tmp(); return `((${t}=${a()}) === null ? ${b()} : ${t})`; }
         if (n.op === 'y') { const t = tmp(); return `(rt.verdad(${t}=${a()}) ? ${b()} : ${t})`; }
         if (n.op === 'o') { const t = tmp(); return `(rt.verdad(${t}=${a()}) ? ${t} : ${b()})`; }
         // Camino rápido: si los dos operandos son números, se opera en JavaScript
@@ -3833,6 +4909,10 @@ function generarJS(fn, vm) {
         }
       }
       case 'Llamada': {
+        if (n.callee.tipo === 'Propiedad' && n.callee.opcional) {
+          const t = tmp();
+          return `((${t}=${ex(n.callee.obj)}) === null ? null : rt.call(rt.idxg(${t}, ${JSON.stringify(n.callee.nombre)}), [${n.args.map(ex).join(',')}]))`;
+        }
         // Si el destino es un global que AL COMPILAR es una nativa de aridad
         // fija, se llama derecho. Es la diferencia entre 34 ms y 2,7 por dos
         // millones de llamadas, y lo caro que se evita no es crear el array de
@@ -3848,6 +4928,15 @@ function generarJS(fn, vm) {
                  ` ? rt.ya${n.args.length}(${v}${as.length ? ',' + as.join(',') : ''})` +
                  ` : rt.call(${v}, [${as.join(',')}]))`;
         }
+        if (n.callee.tipo === 'Variable' && !declarada(n.callee.nombre) && n.args.length === 2) {
+          // (4.1) agregar(lista, x): un push. Si el primero no es una
+          // lista, la nativa de siempre da el error de siempre.
+          const k = conocida(gl(n.callee.nombre), 'agregar');
+          if (k >= 0) {
+            const x = tmp(), y = tmp();
+            return `((${x}=${ex(n.args[0])}, ${y}=${ex(n.args[1])}, ${x} instanceof LI) ? (${x}.items.push(${y}), ${x}) : nt[${k}]([${x}, ${y}], rt.vm))`;
+          }
+        }
         if (n.callee.tipo === 'Variable' && !declarada(n.callee.nombre)) {
           const i = atar(gl(n.callee.nombre), n.args.length);
           if (i >= 0) return `nt[${i}]([${n.args.map(ex).join(',')}], rt.vm)`;
@@ -3858,6 +4947,20 @@ function generarJS(fn, vm) {
           // dos cosas se arreglan solas: mientras no haya código se va por el
           // camino de siempre, y en cuanto lo hay se va derecho.
           const j = n.args.length <= 4 ? atarCierre(gl(n.callee.nombre), n.args.length) : -1;
+          // (4.1) La función se llama a sí misma por su nombre —fib(n-1)—:
+          // el código que se está generando ES el destino, así que se llama
+          // derecho a sí mismo, sin guardia de «jit» ni yaN. Lo que no se salta
+          // es el control de profundidad. Si el nombre se reasigna después, el
+          // atado de arriba tira esta compilación igual que antes.
+          // Solo sin capturas: con capturas, el cierre del global podría ser
+          // OTRA instancia del mismo prototipo, con otras variables, y «this»
+          // sería el equivocado.
+          if (j >= 0 && cierres[j].cl.fn === fn && fn.nUpvalues === 0) {
+            const as = n.args.map(ex);
+            const r = tmp();
+            const vm_ = 'rt.vm';
+            return `((++${vm_}.profJS > rt.MAX ? rt.desborde() : 0), ${r} = ${yo}.call(this${as.length ? ',' + as.join(',') : ''}), ${vm_}.profJS--, ${r})`;
+          }
           if (j >= 0) {
             // Los argumentos aparecen dos veces en el TEXTO y una sola en la
             // ejecución: de un condicional solo se evalúa la rama que se toma.
@@ -3870,8 +4973,17 @@ function generarJS(fn, vm) {
         }
         return `rt.call(${ex(n.callee)}, [${n.args.map(ex).join(',')}])`;
       }
-      case 'Indice': return `rt.idxg(${ex(n.obj)}, ${ex(n.indice)})`;
+      case 'Indice': {
+        // (4.1) Camino rápido de a[i] para una lista con un índice entero
+        // dentro de rango, que es casi siempre. Todo lo demás —negativos,
+        // textos, diccionarios, arreglos, errores— sigue yendo a idxg, que es
+        // el mismo código del intérprete.
+        const x = tmp(), y = tmp();
+        return `((${x}=${ex(n.obj)}, ${y}=${ex(n.indice)}, ${x} instanceof LI && typeof ${y} === 'number' && ${y} >= 0 && ${y} < ${x}.items.length && (${y} | 0) === ${y})` +
+               ` ? ${x}.items[${y}] : rt.idxg(${x}, ${y}))`;
+      }
       case 'Propiedad': {
+        if (n.opcional) { const t = tmp(); return `((${t}=${ex(n.obj)}) === null ? null : rt.idxg(${t}, ${JSON.stringify(n.nombre)}))`; }
         // «m.algo» con m alias de módulo es un global, igual que en el bytecode.
         const g = (n.obj.tipo === 'Variable' && !declarada(n.obj.nombre))
           ? miembroDeEnlace(enl, n.obj.nombre, n.nombre) : null;
@@ -3926,7 +5038,7 @@ function generarJS(fn, vm) {
     .map(p => `  ${jsNom(p.nombre)} = rt.caja(${jsNom(p.nombre)});\n`).join('');
   const decl = temps.length ? `  let ${temps.join(', ')};\n` : '';
   return { nativas, protos, cierres,
-    src: `(function ${jsNom(fn.nombre === '<anónima>' ? 'anon' : fn.nombre)}(${params}) {\n${encajar}${decl}${cuerpo}\n  return null;\n})` };
+    src: `(function ${yo}(${params}) {\n${encajar}${decl}${cuerpo}\n  return null;\n})` };
 }
 
 
@@ -3936,6 +5048,15 @@ function generarJS(fn, vm) {
 // ============================================================================
 
 function instalarBiblioteca(vm, host) {
+  let cuerpoCorrutinas = null;     // (4.1) se llena abajo; se instala como eDSL
+  let cuerpoNativo = null;         // (4.1, S1) ídem, el eDSL «nativo»
+  let cuerpoSistema = null;        // (4.1, S2) ídem, el eDSL «sistema»
+  // (4.1, S1) Lo que llega de fuera cuando ya no corre nada —una llamada
+  // nativa en segundo plano que acaba, una retrollamada registrada que C
+  // dispara— es un turno nuevo, como un clic. Si falla, el anfitrión decide
+  // cómo enseñarlo (la consola lo imprime); si no dice nada, se lanza.
+  const errorDeTurno = e => { if (host.errorEnTurno) host.errorEnTurno(e); else throw e; };
+  const enTurno = f => { vm.nuevoTurno(); try { f(); } catch (e) { errorDeTurno(e); } };
   host = host || {};
   vm.edsls = new Map();          // nombre del eDSL → { nombre, clave, exporta }
   vm.edslPorClave = new Map();   // clave          → el mismo registro
@@ -3973,23 +5094,95 @@ function instalarBiblioteca(vm, host) {
     vm.error(`«real»: no se puede convertir ${tipoDe(v)}`);
   }, 'convierte a número con decimales');
   def('bool', 'cualquiera -> bool', (a) => verdad(a[0]), 'convierte a verdadero/falso');
-  def('tipo', 'cualquiera -> texto', (a) => tipoDe(a[0]), 'devuelve el nombre del tipo');
+  def('tipo', 'cualquiera -> texto', (a) => (a[0] instanceof ObjDic && a[0].tipoReg ? a[0].tipoReg.nombre : tipoDe(a[0])), 'devuelve el nombre del tipo');
+  // Lleva firma como toda nativa (la prueba «ninguna nativa sin firma»).
+  if (!FALTANTE.firma) { FALTANTE.firma = firma('-> nulo'); FALTANTE.firmaTxt = '-> nulo'; }
+  vm.globals.set(' faltante', FALTANTE);
+
+  // (4.1) corrutinas. « producir» y « esperar» los emite el compilador.
+  const corrutinaActual = () => vm.corrutinas.length ? vm.corrutinas[vm.corrutinas.length - 1] : null;
+  def(' producir', 'cualquiera -> nulo', a => {
+    const g = corrutinaActual();
+    if (!g || g.asincrono) vm.error('«producir» solo funciona dentro de un generador que alguien esté recorriendo');
+    vm.pausa = { valor: a[0] };
+    return null;
+  });
+  def(' esperar', 'cualquiera -> cualquiera', a => {
+    const g = corrutinaActual();
+    if (!g || !g.asincrono) vm.error('«esperar» solo funciona dentro de una función asíncrona');
+    vm.pausa = { valor: a[0] };
+    return null;
+  });
+  // Los ayudantes van en un eDSL, «usar siguiente, recoger de "corrutinas"»,
+  // y no en el ámbito global: un nombre global nuevo rompe a quien ya tenía
+  // una función con ese nombre (pasó: «todas» en 20-contador-palabras.txt y
+  // «siguiente» en 28-dias-habiles.txt). Solo «pedir» sin función es global.
+  cuerpoCorrutinas = def => {
+  const gen = (v, n, f) => { if (!(v instanceof ObjGenerador) || v.asincrono) vm.error(`«${f}»: el argumento ${n} debe ser un generador y es ${tipoDe(v)}`); return v; };
+  def('siguiente', '... -> cualquiera', a => {
+    if (a.length < 1 || a.length > 2) vm.error('«siguiente» acepta el generador y, si quieres, el valor para cuando se acabe');
+    const g = gen(a[0], 1, 'siguiente');
+    return vm.genAvanzar(g) ? g.actual : (a.length > 1 ? a[1] : null);
+  }, 'siguiente(g, siSeAcaba?) — el próximo valor del generador; si ya no hay, siSeAcaba (o nulo)');
+  def('terminado', 'cualquiera -> bool', a => {
+    const v = a[0];
+    if (v instanceof ObjGenerador) return v.estado === 'terminado';
+    if (v instanceof ObjPromesa) return v.estado !== 'pendiente';
+    vm.error(`«terminado»: necesita un generador o una promesa y recibió ${tipoDe(v)}`);
+  }, 'terminado(g) — si el generador ya no da más, o si la promesa ya está lista');
+  def('recoger', 'cualquiera -> lista', a => {
+    const g = gen(a[0], 1, 'recoger');
+    const out = [];
+    while (vm.genAvanzar(g)) { out.push(g.actual); vm.cobrar(1); }
+    return L(out);
+  }, 'recoger(g) — todos los valores que queden en el generador, en una lista');
+  def('dormir', 'real -> cualquiera', a => {
+    if (!host.tiempo) vm.error('«dormir» necesita un anfitrión con reloj', 'está en el IDE y en las aplicaciones exportadas');
+    const ms = vm.exigeNum(a[0], 1, 'dormir');
+    const p = vm.registrar(new ObjPromesa());
+    host.tiempo.luego(ms, new ObjNativa(' despertar', 0, () => { vm.cumplir(p, null, true); return null; }), vm);
+    return p;
+  }, 'dormir(ms) — una promesa que se cumple pasado ese tiempo: «esperar dormir(500)»');
+  def('todas', 'lista -> cualquiera', a => {
+    const ps = lst(a[0], 1, 'todas').items;
+    const p = vm.registrar(new ObjPromesa());
+    const res = new Array(ps.length);
+    let faltan = ps.length;
+    if (!faltan) { vm.cumplir(p, L([]), true); return p; }
+    ps.forEach((x, i) => {
+      const listo = (ok, v) => {
+        if (p.estado !== 'pendiente') return;
+        if (!ok) { vm.cumplir(p, v, false); return; }
+        res[i] = v;
+        if (--faltan === 0) vm.cumplir(p, L(res), true);
+      };
+      if (x instanceof ObjPromesa) { x.vista = true; if (x.estado === 'pendiente') x.esperando.push(listo); else listo(x.estado === 'cumplida', x.valor); }
+      else listo(true, x);
+    });
+    return p;
+  }, 'todas(promesas) — una promesa con la lista de resultados, cuando estén todas');
+  };
+  // (4.1) Lo que hay detrás de «tipo Punto { x, y }». La llama el
+  // compilador, no el programa: el nombre lleva un espacio y no se puede
+  // escribir. Devuelve el constructor, que queda como el global «Punto».
+  def(' registro', 'texto, lista, dic -> cualquiera', a => {
+    const desc = { nombre: a[0], campos: a[1].items.slice(), metodos: new Map(a[2].mapa) };
+    const n = desc.campos.length;
+    const ctor = new ObjNativa(desc.nombre, n, (args) => {
+      const d = vm.nuevoDic();
+      d.tipoReg = desc;
+      for (let i = 0; i < n; i++) d.mapa.set(desc.campos[i], args[i]);
+      return d;
+    }, `${desc.nombre}(${desc.campos.join(', ')}) — crea un ${desc.nombre}`);
+    ctor.registro = desc;
+    return ctor;
+  });
   def('longitud', 'cualquiera -> entero', (a) => vm.longitud(a[0]), 'longitud de un texto, lista o diccionario');
   def('rango', '... -> lista<entero>', (a) => {
-    let ini = 0, fin = 0, paso = 1;
-    if (a.length === 1) fin = num(a[0], 1, 'rango');
-    else if (a.length === 2) { ini = num(a[0], 1, 'rango'); fin = num(a[1], 2, 'rango'); }
-    else if (a.length === 3) { ini = num(a[0], 1, 'rango'); fin = num(a[1], 2, 'rango'); paso = num(a[2], 3, 'rango'); }
-    else vm.error('«rango» acepta 1, 2 o 3 argumentos');
-    if (paso === 0) vm.error('«rango»: el paso no puede ser 0');
-    // La cuenta se hace ANTES de construir nada. Estaba después, así que
-    // «rango(1000000000)» intentaba primero llenar la lista y salía por un
-    // error de JavaScript en crudo —«Invalid array length»— en vez de por el
-    // mensaje de Ñ que había justo debajo.
-    const cuantos = Math.max(0, Math.ceil((fin - ini) / paso));
-    if (cuantos > 5e6)
-      vm.error(`«rango» generaría ${cuantos.toLocaleString('es')} elementos y el tope son 5 millones`,
-        'si solo quieres contar, usa «repetir n { … }», que no construye la lista');
+    // La validación vive en la VM (vm.prepararRango) porque el JIT la necesita
+    // igual: «para i en rango(n)» compilado no construye la lista, pero tiene
+    // que dar exactamente los mismos errores que si la construyera.
+    const { ini, fin, paso, cuantos } = vm.prepararRango(a);
     const out = new Array(cuantos);
     let n = 0;
     if (paso > 0) for (let i = ini; i < fin; i += paso) out[n++] = i;
@@ -3997,6 +5190,10 @@ function instalarBiblioteca(vm, host) {
     out.length = n;
     return L(out);
   }, 'rango(n) · rango(ini,fin) · rango(ini,fin,paso)');
+  // Marcas para el JIT (4.1): son ESTAS funciones y no otras con el
+  // mismo nombre. Si un programa las tapa con su propio «fn», la marca no está
+  // y el JIT no toma el atajo.
+  vm.globals.get('rango').puro = 'rango';
   def('afirmar', '... -> nulo', (a) => {
     if (!verdad(a[0])) vm.error(a.length > 1 ? repr(a[1], 0) : 'la afirmación resultó falsa');
     return null;
@@ -4070,6 +5267,7 @@ function instalarBiblioteca(vm, host) {
   // ----------------------------------------------------------------- listas
   seccion('listas');
   def('agregar', '... -> lista', a => { const l = lst(a[0], 1, 'agregar'); for (let i = 1; i < a.length; i++) l.items.push(a[i]); return l; });
+  vm.globals.get('agregar').puro = 'agregar';
   def('quitar', 'lista, cualquiera -> lista', a => {
     const l = lst(a[0], 1, 'quitar');
     const i = l.items.findIndex(x => iguales(x, a[1]));
@@ -4084,7 +5282,7 @@ function instalarBiblioteca(vm, host) {
   def('copiar', 'cualquiera -> cualquiera', a => {
     const v = a[0];
     if (v instanceof ObjLista) return L(v.items.slice());
-    if (v instanceof ObjDic) { const d = D(); for (const [k, x] of v.mapa) d.mapa.set(k, x); return d; }
+    if (v instanceof ObjDic) { const d = D(); for (const [k, x] of v.mapa) d.mapa.set(k, x); if (v.tipoReg) d.tipoReg = v.tipoReg; return d; }
     return v;
   });
   def('ordenar', '... -> lista', a => {
@@ -4613,7 +5811,7 @@ function instalarBiblioteca(vm, host) {
   const red = host.red || null;
   const METODOS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']);
 
-  def('pedir', '... -> nulo', a => {
+  def('pedir', '... -> cualquiera', a => {
     if (!red) vm.error('«pedir» necesita un anfitrión con red',
       'está en el IDE, en una aplicación exportada y en el intérprete de Node; QuickJS no trae «fetch»');
     const url = txt(a[0], 1, 'pedir');
@@ -4626,8 +5824,13 @@ function instalarBiblioteca(vm, host) {
       if (x === null) continue;
       vm.error(`«pedir» no sabe qué hacer con ${tipoDe(x)} en la posición ${i + 1}`);
     }
-    if (!fn) vm.error('«pedir» necesita una función que reciba la respuesta',
-      'pedir("https://…", fn(r) { imprimir(r["cuerpo"]) })');
+    // (4.1) Sin función, «pedir» devuelve una promesa: dentro de una
+    // función asíncrona se escribe «var r = esperar pedir(url)».
+    let promesa = null;
+    if (!fn) {
+      promesa = vm.registrar(new ObjPromesa());
+      fn = new ObjNativa(' respuesta', 1, x => { vm.cumplir(promesa, x[0], true); return null; });
+    }
     const o = { metodo: 'GET', cuerpo: null, cabeceras: {} };
     if (op) for (const [k, v] of op.mapa) {
       const clave = String(k);
@@ -4652,8 +5855,8 @@ function instalarBiblioteca(vm, host) {
     }
     vm.cobrar(4);
     red.pedir(url, o, fn, vm);
-    return null;
-  }, 'pedir(url, opciones?, funcion) — trae datos de la red; la respuesta llega a la función, como un clic');
+    return promesa;
+  }, 'pedir(url, opciones?, funcion?) — trae datos de la red; la respuesta llega a la función, o con «esperar pedir(url)»');
 
   // JSON, que es en lo que habla casi todo lo que hay al otro lado de pedir().
   function aValor(v, prof) {
@@ -4811,6 +6014,226 @@ function instalarBiblioteca(vm, host) {
     return null;
   }, 'escribirArregloBinario(ruta, arreglo) — lo guarda como bytes crudos (float64 o int32), el formato de NumPy');
 
+  // ── (4.1, S2) el eDSL «sistema»: usar servir, leerLineas, unirRuta de "sistema"
+  // Nombres nuevos en un eDSL, no globales: lección de X4 («todas» y
+  // «siguiente» globales rompieron dos programas que ya existían).
+  cuerpoSistema = def => {
+    const rut = host.rutas || null;
+    const exigeArch = (q, k) => { if (!arch || (k && !arch[k])) faltaArch(q); };
+    // ── archivos
+    def('leerLineas', 'texto -> cualquiera', a => {
+      const r = txt(a[0], 1, 'leerLineas');
+      exigeArch('leerLineas', 'lineas');
+      const sig = conArchivo('leerLineas', r, () => arch.lineas(r));
+      const g = vm.registrar(new ObjGenerador(null, null, false));
+      g.nombreNativo = 'leerLineas';
+      g.nativo = () => { const l = conArchivo('leerLineas', r, sig); if (l !== undefined) vm.cobrar(1 + (l.length >> 6)); return l; };
+      g.alAcabar = () => sig.cerrar && sig.cerrar();
+      return g;
+    }, 'leerLineas(ruta) — un generador con las líneas del archivo, sin cargarlo entero: «para l en leerLineas("enorme.csv")»');
+    def('copiarArchivo', 'texto, texto -> nulo', a => {
+      const de = txt(a[0], 1, 'copiarArchivo'), aa = txt(a[1], 2, 'copiarArchivo');
+      exigeArch('copiarArchivo', 'copiar');
+      vm.cobrar(20);
+      conArchivo('copiarArchivo', de, () => arch.copiar(de, aa));
+      return null;
+    }, 'copiarArchivo(de, a) — copia un archivo (o una carpeta entera)');
+    def('moverArchivo', 'texto, texto -> nulo', a => {
+      const de = txt(a[0], 1, 'moverArchivo'), aa = txt(a[1], 2, 'moverArchivo');
+      exigeArch('moverArchivo', 'mover');
+      conArchivo('moverArchivo', de, () => arch.mover(de, aa));
+      return null;
+    }, 'moverArchivo(de, a) — lo mueve o le cambia el nombre');
+    def('infoArchivo', 'texto -> dic<texto,cualquiera>', a => {
+      const r = txt(a[0], 1, 'infoArchivo');
+      exigeArch('infoArchivo', 'info');
+      const i = conArchivo('infoArchivo', r, () => arch.info(r));
+      const d = D();
+      d.mapa.set('tamano', i.tamano);
+      d.mapa.set('modificado', vm.nuevaFecha(i.modificado));
+      d.mapa.set('creado', vm.nuevaFecha(i.creado));
+      d.mapa.set('esCarpeta', !!i.esCarpeta);
+      d.mapa.set('esArchivo', !!i.esArchivo);
+      return d;
+    }, 'infoArchivo(ruta) — {tamano, modificado, creado, esCarpeta, esArchivo}; las fechas son fechas de Ñ');
+    def('carpetaActual', ' -> texto', () => {
+      if (!sis || !sis.carpetaActual) faltaSis('carpetaActual');
+      return String(sis.carpetaActual());
+    }, 'carpetaActual() — la carpeta desde la que corre el programa');
+    def('cambiarCarpeta', 'texto -> nulo', a => {
+      if (!sis || !sis.cambiarCarpeta) faltaSis('cambiarCarpeta');
+      const r = txt(a[0], 1, 'cambiarCarpeta');
+      conSistema('cambiarCarpeta', () => sis.cambiarCarpeta(r));
+      return null;
+    }, 'cambiarCarpeta(ruta) — las rutas relativas pasan a contar desde ahí');
+    def('infoSistema', ' -> dic<texto,cualquiera>', () => {
+      if (!sis || !sis.info) faltaSis('infoSistema');
+      const i = sis.info(), d = D();
+      for (const k of Object.keys(i)) d.mapa.set(k, i[k]);
+      return d;
+    }, 'infoSistema() — so, arquitectura, procesadores, memoria, libre, usuario, personal, temporal, equipo, motor');
+    // ── procesos
+    def('ejecutarEnFondo', '... -> cualquiera', a => {
+      if (!sis || !sis.ejecutarFondo) faltaSis('ejecutarEnFondo');
+      if (a.length < 1 || a.length > 3) vm.error('«ejecutarEnFondo» es ejecutarEnFondo(orden, argumentos?, opciones?)');
+      const orden = txt(a[0], 1, 'ejecutarEnFondo');
+      const args = a.length > 1 && a[1] !== null ? lst(a[1], 2, 'ejecutarEnFondo').items.map(x => repr(x, 0)) : [];
+      const op = opcionesProceso(a[2], 'ejecutarEnFondo');
+      const p = vm.registrar(new ObjPromesa());
+      vm.cobrar(50);
+      conSistema('ejecutarEnFondo', () => sis.ejecutarFondo(orden, args, op, r => enTurno(() => vm.cumplir(p, resultadoProceso(r), true))));
+      return p;
+    }, 'ejecutarEnFondo(orden, argumentos?, opciones?) — como ejecutar, sin parar el programa: «fijo r = esperar ejecutarEnFondo("git", ["status"])»');
+    // ── el servidor
+    const srv = host.servidor || null;
+    const faltaSrv = q => vm.error(`«${q}» necesita un anfitrión que pueda abrir puertos`,
+      'esto corre en la consola: node motor/util/n-node.js programa.esl');
+    // Lo que devuelve el manejador, convertido en una respuesta HTTP. Un texto
+    // es texto (o HTML si empieza por «<»), una lista o un dic es JSON —
+    // siempre: un dic de datos que tenga una clave «estado» o «cuerpo» no se
+    // confunde con una respuesta—, nulo es 204, y para el estado o las
+    // cabeceras está respuesta(estado, cuerpo, opciones?).
+    const MARCA_RESP = Symbol('respuesta');
+    const json = v => ({ estado: 200, tipo: 'application/json; charset=utf-8', cuerpo: JSON.stringify(deValor(v, 0)) });
+    const tipoTexto = t => (/^\s*</.test(t) ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8');
+    function respuesta(v) {
+      if (v === null || v === undefined) return { estado: 204, tipo: 'text/plain; charset=utf-8', cuerpo: '' };
+      if (typeof v === 'string') return { estado: 200, tipo: tipoTexto(v), cuerpo: v };
+      if (v instanceof ObjDic && v[MARCA_RESP]) return v[MARCA_RESP];
+      if (v instanceof ObjLista || v instanceof ObjDic) return json(v);
+      return { estado: 200, tipo: 'text/plain; charset=utf-8', cuerpo: repr(v, 0) };
+    }
+    def('respuesta', '... -> dic<texto,cualquiera>', a => {
+      if (a.length < 2 || a.length > 3) vm.error('«respuesta» es respuesta(estado, cuerpo) o respuesta(estado, cuerpo, {"tipo": …, "cabeceras": {…}})');
+      const estado = vm.exigeEnt(a[0], 1, 'respuesta');
+      if (estado < 100 || estado > 599) vm.error(`«respuesta»: ${estado} no es un estado HTTP (van de 100 a 599)`);
+      const base = respuesta(a[1]);
+      const r = { estado, tipo: base.tipo, cuerpo: estado === 204 ? '' : base.cuerpo, cabeceras: {} };
+      if (a.length > 2 && a[2] !== null) {
+        const o = a[2];
+        if (!(o instanceof ObjDic)) vm.error('«respuesta»: las opciones van en un diccionario');
+        for (const [k, x] of o.mapa) {
+          if (k === 'tipo') r.tipo = txt(x, 3, 'respuesta');
+          else if (k === 'cabeceras') {
+            if (!(x instanceof ObjDic)) vm.error('«respuesta»: «cabeceras» es un diccionario {Nombre: valor}');
+            for (const [ck, cv] of x.mapa) {
+              const n = String(ck), val = repr(cv, 0);
+              if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(n)) vm.error(`«respuesta»: «${n}» no es un nombre de cabecera válido`);
+              if (/[\r\n]/.test(val)) vm.error(`«respuesta»: el valor de «${n}» lleva un salto de línea`);
+              r.cabeceras[n] = val;
+            }
+          } else vm.error(`«respuesta»: no conozco la opción «${k}»`, 'las opciones son tipo y cabeceras');
+        }
+      }
+      // Es un dic normal para el programa (se puede imprimir y mirar), con la
+      // respuesta ya comprobada guardada aparte.
+      const d = D();
+      d.mapa.set('estado', estado); d.mapa.set('cuerpo', a[1]);
+      d[MARCA_RESP] = r;
+      return d;
+    }, 'respuesta(estado, cuerpo, opciones?) — para «servir»: respuesta(404, "no está"), respuesta(201, datos, {"cabeceras": {"X-Algo": "sí"}})');
+    // A quien pidió no se le cuenta qué falló por dentro (podría ser cualquiera
+    // en la red): eso va a la consola, entero, con su línea.
+    const error500 = () => ({ estado: 500, tipo: 'text/plain; charset=utf-8', cuerpo: 'error interno del servidor' });
+    def('servir', '... -> cualquiera', a => {
+      if (!srv) faltaSrv('servir');
+      if (a.length < 2 || a.length > 3) vm.error('«servir» es servir(puerto, funcion) o servir(puerto, funcion, {"anfitrion": "0.0.0.0"})');
+      const puerto = vm.exigeEnt(a[0], 1, 'servir');
+      if (puerto < 0 || puerto > 65535) vm.error(`«servir»: ${puerto} no es un puerto (van de 0 a 65535; 0 elige uno libre)`);
+      const fn = a[1];
+      if (!esFn(fn)) vm.error(`«servir»: el argumento 2 debe ser una función y es ${tipoDe(fn)}`);
+      // Por defecto solo escucha en este equipo: abrirlo a la red es una
+      // decisión, y se escribe.
+      let ip = '127.0.0.1';
+      if (a.length > 2 && a[2] !== null) {
+        const o = a[2];
+        if (!(o instanceof ObjDic)) vm.error('«servir»: las opciones van en un diccionario');
+        for (const [k, x] of o.mapa) {
+          if (k === 'anfitrion') ip = txt(x, 3, 'servir');
+          else vm.error(`«servir»: no conozco la opción «${k}»`, 'la opción es anfitrion ("0.0.0.0" para abrirlo a la red)');
+        }
+      }
+      const p = vm.registrar(new ObjPromesa());
+      const d = D();
+      const id = conSistema('servir', () => srv.escuchar(puerto, ip, (pet, responder) => {
+        enTurno(() => {
+          const q = D();
+          for (const k of Object.keys(pet.consulta)) q.mapa.set(k, pet.consulta[k]);
+          const c = D();
+          for (const k of Object.keys(pet.cabeceras)) c.mapa.set(k, String(pet.cabeceras[k]));
+          const pd = D();
+          pd.mapa.set('metodo', pet.metodo); pd.mapa.set('ruta', pet.ruta); pd.mapa.set('consulta', q);
+          pd.mapa.set('cabeceras', c); pd.mapa.set('cuerpo', pet.cuerpo); pd.mapa.set('ip', pet.ip);
+          let r;
+          try { r = vm.invocar(fn, [pd]); }
+          catch (e) { responder(error500(e)); throw e; }
+          // Un manejador asíncrono devuelve una promesa: se responde cuando esté.
+          if (r instanceof ObjPromesa) {
+            r.vista = true;
+            const listo = (ok, v) => {
+              if (!ok) { responder(error500({ message: v instanceof ObjError ? v.mensaje : repr(v, 0) })); errorDeTurno(new ErrorTiempoEjecucion(`una petición a ${pet.ruta} falló: ${v instanceof ObjError ? v.mensaje : repr(v, 0)}`)); return; }
+              try { responder(respuesta(v)); } catch (e) { responder(error500(e)); errorDeTurno(e); }
+            };
+            if (r.estado === 'pendiente') r.esperando.push(listo); else listo(r.estado === 'cumplida', r.valor);
+            return;
+          }
+          try { responder(respuesta(r)); } catch (e) { responder(error500(e)); throw e; }
+        });
+      }, (err, puertoReal) => enTurno(() => {
+        if (err) { vm.cumplir(p, vm.nuevoError('sistema', `«servir»: ${err}`, vm.lineaActual), false); return; }
+        d.mapa.set('puerto', puertoReal);
+        vm.cumplir(p, d, true);
+      })));
+      d.mapa.set('id', id); d.mapa.set('puerto', puerto); d.mapa.set('listo', p);
+      return d;
+    }, 'servir(puerto, funcion) — un servidor HTTP: la función recibe {metodo, ruta, consulta, cabeceras, cuerpo, ip} y devuelve texto, un dic (JSON) o {estado, cuerpo, tipo, cabeceras}; puede ser asíncrona');
+    def('detenerServidor', 'cualquiera -> bool', a => {
+      if (!srv) faltaSrv('detenerServidor');
+      const s = a[0];
+      if (!(s instanceof ObjDic) || !s.mapa.has('id')) vm.error('«detenerServidor»: necesita lo que devolvió servir()');
+      return !!srv.cerrar(s.mapa.get('id'));
+    }, 'detenerServidor(s) — deja de escuchar; el programa puede acabar');
+    // ── rutas: con las del sistema operativo si el anfitrión las da; si no
+    // (el navegador), con «/», que es lo que entiende una URL.
+    const pos = {
+      unir: ps => pos.normalizar(ps.filter(x => x !== '').join('/')),
+      normalizar: r => {
+        const abs = r.startsWith('/'), out = [];
+        for (const t of r.split('/')) { if (t === '' || t === '.') continue; if (t === '..' && out.length && out[out.length - 1] !== '..') out.pop(); else if (t !== '..' || !abs) out.push(t); }
+        return (abs ? '/' : '') + out.join('/') || (abs ? '/' : '.');
+      },
+      nombre: r => r.replace(/\/+$/, '').split('/').pop(),
+      extension: r => { const n = pos.nombre(r), i = n.lastIndexOf('.'); return i > 0 ? n.slice(i) : ''; },
+      carpeta: r => { const t = r.replace(/\/+$/, ''), i = t.lastIndexOf('/'); return i < 0 ? '.' : i === 0 ? '/' : t.slice(0, i); },
+      esAbsoluta: r => r.startsWith('/'),
+    };
+    const R = rut || pos;
+    def('unirRuta', '... -> texto', a => {
+      if (!a.length) vm.error('«unirRuta» necesita al menos un trozo');
+      return R.unir(a.map((x, i) => txt(x, i + 1, 'unirRuta')));
+    }, 'unirRuta("datos", "2026", "ventas.csv") — con el separador de este sistema, y sin barras dobles');
+    def('nombreArchivo', 'texto -> texto', a => R.nombre(txt(a[0], 1, 'nombreArchivo')),
+      'nombreArchivo("a/b/ventas.csv") — "ventas.csv"');
+    def('extension', 'texto -> texto', a => R.extension(txt(a[0], 1, 'extension')),
+      'extension("ventas.csv") — ".csv" (vacío si no tiene)');
+    def('sinExtension', 'texto -> texto', a => { const r = txt(a[0], 1, 'sinExtension'), e = R.extension(r); return e ? r.slice(0, -e.length) : r; },
+      'sinExtension("a/ventas.csv") — "a/ventas"');
+    def('carpetaDe', 'texto -> texto', a => R.carpeta(txt(a[0], 1, 'carpetaDe')),
+      'carpetaDe("a/b/ventas.csv") — "a/b"');
+    def('esRutaAbsoluta', 'texto -> bool', a => !!R.esAbsoluta(txt(a[0], 1, 'esRutaAbsoluta')),
+      'esRutaAbsoluta(ruta) — si empieza desde la raíz (o desde una unidad, en Windows)');
+    def('normalizarRuta', 'texto -> texto', a => R.normalizar(txt(a[0], 1, 'normalizarRuta')),
+      'normalizarRuta("a/./b/../c") — "a/c"');
+    def('rutaAbsoluta', 'texto -> texto', a => {
+      if (!rut) faltaSis('rutaAbsoluta');
+      return rut.absoluta(txt(a[0], 1, 'rutaAbsoluta'));
+    }, 'rutaAbsoluta(ruta) — la ruta completa, contando desde la carpeta actual');
+    def('rutaRelativa', 'texto, texto -> texto', a => {
+      if (!rut) faltaSis('rutaRelativa');
+      return rut.relativa(txt(a[0], 1, 'rutaRelativa'), txt(a[1], 2, 'rutaRelativa'));
+    }, 'rutaRelativa(desde, hasta) — cómo llegar de una carpeta a otra ruta');
+  };
+
   def('argumentos', ' -> lista<texto>', () => {
     if (!sis) faltaSis('argumentos');
     return L(sis.argumentos().map(String));
@@ -4829,17 +6252,44 @@ function instalarBiblioteca(vm, host) {
       const l = lst(a[1], 2, 'ejecutar');
       args = l.items.map(x => repr(x, 0));
     }
+    const op = opcionesProceso(a[2], 'ejecutar');
+    if (op && sis.ejecutar.length < 3)
+      vm.error('«ejecutar»: este anfitrión no entiende opciones (entrada, carpeta, entorno, espera)',
+        'están en el intérprete de Node: node motor/util/n-node.js', false, 'sistema');
     vm.cobrar(50);
-    const r = conSistema('ejecutar', () => sis.ejecutar(orden, args));
+    const r = conSistema('ejecutar', () => sis.ejecutar(orden, args, op));
+    return resultadoProceso(r);
+  }, 'ejecutar(orden, argumentos?, opciones?) — lanza un programa y espera; devuelve {codigo, salida, error}. Opciones: entrada, carpeta, entorno, espera (ms)');
+  // (4.1, S2) Las opciones de un proceso, comprobadas aquí: un nombre mal
+  // escrito («carpta») se diría como error y no se ignoraría en silencio.
+  function opcionesProceso(v, quien) {
+    if (v === undefined || v === null) return null;
+    if (!(v instanceof ObjDic)) vm.error(`«${quien}»: las opciones van en un diccionario y es ${tipoDe(v)}`);
+    const o = {};
+    for (const [k, x] of v.mapa) {
+      if (k === 'entrada') o.entrada = txt(x, 3, quien);
+      else if (k === 'carpeta') o.carpeta = txt(x, 3, quien);
+      else if (k === 'espera') { o.espera = vm.exigeEnt(x, 3, quien); if (o.espera <= 0) vm.error(`«${quien}»: «espera» son milisegundos, más de cero`); }
+      else if (k === 'entorno') {
+        if (!(x instanceof ObjDic)) vm.error(`«${quien}»: «entorno» es un diccionario {NOMBRE: valor}`);
+        o.entorno = {};
+        for (const [ek, ev] of x.mapa) o.entorno[String(ek)] = repr(ev, 0);
+      } else vm.error(`«${quien}»: no conozco la opción «${k}»`, 'las opciones son entrada, carpeta, entorno y espera');
+    }
+    return o;
+  }
+  function resultadoProceso(r) {
     const d = D();
     d.mapa.set('codigo', r.codigo | 0);
     d.mapa.set('salida', String(r.salida || ''));
     d.mapa.set('error', String(r.error || ''));
     return d;
-  }, 'ejecutar(orden, argumentos?) — lanza un programa y espera; devuelve {codigo, salida, error}');
+  }
   def('leerLinea', '... -> cualquiera', a => {
     if (!sis) faltaSis('leerLinea');
-    if (a.length && a[0] !== null) vm.salida(repr(a[0], 0));
+    // (4.1, S2) Si el anfitrión sabe escribir sin salto de línea, la
+    // pregunta queda en la misma línea que la respuesta, como en cualquier consola.
+    if (a.length && a[0] !== null) { if (sis.indicar) sis.indicar(repr(a[0], 0)); else vm.salida(repr(a[0], 0)); }
     const l = sis.leerLinea();
     return l === null || l === undefined ? null : String(l);
   }, 'leerLinea(pista?) — lee una línea de la entrada; nulo cuando se acaba');
@@ -4964,10 +6414,149 @@ function instalarBiblioteca(vm, host) {
     return n;
   }, 'estructuraNativa(nombre, {campo: tipo, …}) — declara una estructura de C; devuelve su nombre para usarlo como tipo');
 
+  // ── (4.1, S1) la llamada, con lo que el anfitrión sabe de cada parámetro
+  // Si el anfitrión describe los parámetros (koffi lo hace), la conversión los
+  // mira: un arreglo solo va a un puntero de SU tipo de número, un parámetro de
+  // salida no se pasa y se devuelve, y una función de Ñ que va a un puntero a
+  // función se envuelve como retrollamada. Sin descripción, lo de siempre.
+  const pilaNativa = [];      // las llamadas nativas en curso (una retrollamada puede anidar otra)
+  const esFuncionN = v => v instanceof ObjCierre || v instanceof ObjNativa;
+  const defectoDe = d => (!d ? null : d.clase === 'numero' ? 0 : d.clase === 'bool' ? false : null);
+  function deNativo(r, d, quien) {
+    if (d && d.clase === 'puntero') return r === null || r === undefined ? null : new ObjOpaco('puntero', r);
+    return deCrudo(r, quien);
+  }
+  function aNativo(v, d, ctx, quien, i) {
+    if (!d) return aCrudo(v, quien, i);
+    if (v === null || v === undefined) return null;
+    if (d.clase === 'retrollamada') {
+      if (v instanceof ObjOpaco && v.clase === 'retrollamada') {
+        if (!v.vivo) vm.error(`«${quien}»: el argumento ${i} es una retrollamada ya soltada`, null, false, 'nativo');
+        return v.crudo;
+      }
+      if (!esFuncionN(v))
+        vm.error(`«${quien}»: el argumento ${i} es un puntero a función (${d.c}) y recibió ${tipoDe(v)}`, null, false, 'nativo');
+      if (ctx.enFondo)
+        vm.error(`«${quien}»: una llamada en segundo plano no puede llevar retrollamadas`,
+          'C la llamaría desde otro hilo, y Ñ corre en uno solo: hazla normal, sin «enFondo»', false, 'nativo');
+      return retro(v, d.resultado, ctx);
+    }
+    if (v instanceof ObjArreglo) {
+      if (d.clase !== 'puntero')
+        vm.error(`«${quien}»: el argumento ${i} es un arreglo y C espera ${d.c}`, 'un arreglo va a un puntero: «double *» o «int *»', false, 'nativo');
+      const elemN = v.tipo === 'entero' ? 'entero' : 'real';
+      const cDe = v.tipo === 'entero' ? 'int (int32_t)' : 'double';
+      if (d.apunta === 'numero' && (d.elem !== elemN || (elemN === 'entero' && d.ancho !== 4)))
+        vm.error(`«${quien}»: el argumento ${i} es un arreglo ${v.tipo}, de ${cDe}, y C espera ${d.c}`,
+          'C leería esos bytes como si fueran de otro tipo; convierte el arreglo o corrige la firma', false, 'nativo');
+      if (d.apunta === 'estructura')
+        vm.error(`«${quien}»: el argumento ${i} es un arreglo y C espera ${d.c}, un puntero a estructura`, null, false, 'nativo');
+      // Seguida desde donde empiece (una fila de una matriz lo está, aunque no
+      // empiece en 0): basta con que las zancadas sean las de su forma.
+      const z = zancadasDe(v.forma);
+      let contigua = true;
+      for (let q = 0; q < z.length; q++) if (v.forma[q] > 1 && z[q] !== v.zancadas[q]) contigua = false;
+      if (!contigua)
+        vm.error(`«${quien}»: el argumento ${i} es una vista con huecos de un arreglo, y C necesita los números seguidos`,
+          'pásale copia(a), de "numerico": una copia seguida (y lo que C escriba irá a la copia)', false, 'nativo');
+      const dt = v.datos;   // «datos» trae la copia buena si vivía en la GPU
+      return dt.subarray(v.desp * (v.tipo === 'complejo' ? 2 : 1), (v.desp + v.tamano) * (v.tipo === 'complejo' ? 2 : 1));
+    }
+    if (v instanceof ObjOpaco) {
+      if (!v.vivo) vm.error(`«${quien}»: el argumento ${i} es ${repr(v, 0)}`, null, false, 'nativo');
+      if (v.clase === 'retrollamada') vm.error(`«${quien}»: el argumento ${i} es una retrollamada y C espera ${d.c}`, null, false, 'nativo');
+      if (d.clase === 'numero') {   // la forma vieja: «puntero» es un entero (uintptr_t)
+        const dir = v.clase === 'memoria' ? nat.direccion(v.crudo) : v.direccion();
+        return Number(dir);
+      }
+      if (d.clase !== 'puntero' && d.clase !== 'texto')
+        vm.error(`«${quien}»: el argumento ${i} es un ${v.clase} y C espera ${d.c}`, null, false, 'nativo');
+      return v.crudo;
+    }
+    return aCrudo(v, quien, i);
+  }
+  // Una función de Ñ que C va a llamar. Nada puede cruzar los marcos de C
+  // lanzado —un error de JavaScript a través de C es un proceso roto—, así que
+  // el error se guarda, la retrollamada devuelve un valor neutro, y la llamada
+  // nativa, al volver, lo lanza como error de Ñ normal y capturable.
+  function retro(f, dres, ctx) {
+    return (...xs) => {
+      if (ctx.error) return defectoDe(dres);
+      try {
+        const r = vm.invocar(f, xs.map(x => (typeof x === 'bigint' && (x > 9007199254740991n || x < -9007199254740991n))
+          ? new ObjOpaco('puntero', x) : deCrudo(x, f.nombre || 'retrollamada')));
+        if (!dres || dres.clase === 'nulo') return undefined;
+        if (dres.clase === 'numero' && typeof r !== 'number' && typeof r !== 'boolean')
+          vm.error(`la retrollamada tenía que devolver un número (${dres.c}) y devolvió ${tipoDe(r)}`, null, false, 'nativo');
+        return aNativo(r, dres, ctx, 'retrollamada', 0);
+      } catch (e) { ctx.error = e; return defectoDe(dres); }
+    };
+  }
+  // Prepara los argumentos de Ñ y devuelve los crudos y las cajas de salida.
+  function prepararNativa(llamar, args, quien, enFondo) {
+    const ps = llamar.parametros || null;
+    const ctx = { error: null, enFondo };
+    if (!ps) return { ctx, crudos: args.map((x, i) => aCrudo(x, quien, i + 1)), cajas: null };
+    const crudos = new Array(ps.length), cajas = [];
+    let k = 0;
+    for (let j = 0; j < ps.length; j++) {
+      const d = ps[j];
+      if (d.dir === 'sale') { const c = [null]; crudos[j] = c; cajas.push({ c, d }); continue; }
+      const v = aNativo(args[k], d, ctx, quien, k + 1);
+      k++;
+      if (d.dir === 'entra y sale') { const c = [v]; crudos[j] = c; cajas.push({ c, d }); }
+      else crudos[j] = v;
+    }
+    return { ctx, crudos, cajas };
+  }
+  // Y lo que vuelve: el resultado y, detrás, lo que dejaron los de salida.
+  // Uno solo va tal cual; varios, en una lista: «fijo [q, r] = dividir(17, 5)».
+  function terminarNativa(llamar, r, cajas, quien) {
+    if (!cajas || !cajas.length) return deNativo(r, llamar.resultado, quien);
+    const vals = [];
+    if (!llamar.resultado || llamar.resultado.clase !== 'nulo') vals.push(deNativo(r, llamar.resultado, quien));
+    for (const { c, d } of cajas) vals.push(deNativo(c[0], d.apunta === 'opaco' ? { clase: 'puntero' } : null, quien));
+    return vals.length === 1 ? vals[0] : L(vals);
+  }
+  function hacerNativa(llamar, sim, bib, aridad, doc) {
+    const n = new ObjNativa(sim, aridad, (args) => {
+      vm.cobrar(20 + aridad * 2);
+      const { ctx, crudos, cajas } = prepararNativa(llamar, args, sim, false);
+      let r;
+      pilaNativa.push(ctx);
+      try { r = llamar(crudos); }
+      catch (e) {
+        if (e instanceof ErrorTiempoEjecucion) throw e;
+        vm.error(`«${sim}»: ${String((e && e.message) || e)}`, null, false, 'nativo');
+      }
+      finally { pilaNativa.pop(); }
+      if (ctx.error) throw ctx.error;      // lo que falló dentro de una retrollamada
+      return terminarNativa(llamar, r, cajas, sim);
+    }, doc);
+    n.llamarNativo = llamar;               // para «enFondo»
+    return n;
+  }
+  const contarEntradas = llamar => llamar.parametros ? llamar.parametros.filter(d => d.dir !== 'sale').length : null;
+
   def('nativa', '... -> funcion', a => {
     if (!nat) faltaNat('nativa');
+    // (S1) La forma corta: nativa(biblioteca, "double cos(double)").
+    if (a.length === 2) {
+      const bib = txt(a[0], 1, 'nativa');
+      const proto = txt(a[1], 2, 'nativa');
+      if (!nat.funcionC) vm.error('«nativa» con una firma de C necesita un anfitrión más nuevo', null, false, 'nativo');
+      if (++nDeclaradas > MAX_NATIVAS)
+        vm.error(`«nativa»: no se declaran más de ${MAX_NATIVAS} funciones nativas en una ejecución`,
+          'declárala una vez y guarda el resultado en una variable, no dentro de un bucle', false, 'nativo');
+      vm.cobrar(100);
+      const llamar = conNativo('nativa', () => nat.funcionC(bib, proto));
+      const ar = contarEntradas(llamar);
+      if (ar > MAX_ARGS_NAT)
+        vm.error(`«nativa»: no se declaran más de ${MAX_ARGS_NAT} argumentos y se declararon ${ar}`, null, false, 'nativo');
+      return hacerNativa(llamar, llamar.nombre, bib, ar, `${proto} — de ${bib}`);
+    }
     if (a.length < 3 || a.length > 4)
-      vm.error('«nativa» acepta 3 o 4 argumentos: nativa(biblioteca, simbolo, devuelve, argumentos?)');
+      vm.error('«nativa» acepta 2, 3 o 4 argumentos: nativa(biblioteca, "double cos(double)") o nativa(biblioteca, simbolo, devuelve, argumentos?)');
     const bib = txt(a[0], 1, 'nativa');
     const sim = txt(a[1], 2, 'nativa');
     const dev = txt(a[2], 3, 'nativa');
@@ -4992,19 +6581,128 @@ function instalarBiblioteca(vm, host) {
     const llamar = conNativo('nativa', () => nat.funcion(bib, sim, dev, tipos));
     // La aridad va en el propio valor, así que el número de argumentos lo
     // comprueba la máquina con su mensaje de siempre antes de que nada cruce.
-    return new ObjNativa(sim, tipos.length, (args) => {
-      vm.cobrar(20 + tipos.length * 2);
-      const crudos = new Array(args.length);
-      for (let i = 0; i < args.length; i++) crudos[i] = aCrudo(args[i], sim, i + 1);
-      let r;
-      try { r = llamar(crudos); }
-      catch (e) {
-        if (e instanceof ErrorTiempoEjecucion) throw e;
-        vm.error(`«${sim}»: ${String((e && e.message) || e)}`, null, false, 'nativo');
-      }
-      return deCrudo(r, sim);
-    }, `${sim}() de ${bib} — declarada con nativa()`);
-  }, 'nativa(biblioteca, simbolo, devuelve, argumentos?) — declara una función compilada y la devuelve como función de Ñ');
+    return hacerNativa(llamar, sim, bib, tipos.length, `${sim}() de ${bib} — declarada con nativa()`);
+  }, 'nativa(biblioteca, "double cos(double)") o nativa(biblioteca, simbolo, devuelve, argumentos?) — declara una función compilada y la devuelve como función de Ñ');
+
+  // (4.1, S1) Lo demás del FFI va en el eDSL «nativo»: usar retrollamada,
+  // memoria, leerMemoria de "nativo". No son globales para no quitarle nombres a nadie.
+  cuerpoNativo = def => {
+    const exigeNat = q => { if (!nat || !nat.tipoC) faltaNat(q); };
+    def('tipoNativo', 'texto -> texto', a => {
+      exigeNat('tipoNativo');
+      return conNativo('tipoNativo', () => nat.tipoC(txt(a[0], 1, 'tipoNativo')));
+    }, 'tipoNativo("int Comparar(const void *, const void *)") — un tipo de función para retrollamadas; tipoNativo("FILE") — un tipo opaco');
+    def('retrollamada', 'cualquiera, texto -> cualquiera', a => {
+      exigeNat('retrollamada');
+      if (!esFuncionN(a[0])) vm.error(`«retrollamada»: el argumento 1 debe ser una función y es ${tipoDe(a[0])}`);
+      const nombre = txt(a[1], 2, 'retrollamada');
+      // Una registrada vive más que la llamada: sus errores no tienen llamada
+      // a la que volver, así que salen como error del turno.
+      const ctx = { error: null };
+      const f = retro(a[0], null, ctx);
+      // Si C la dispara dentro de una llamada nativa de Ñ, el error es de esa
+      // llamada. Si la dispara él solo (un temporizador de C, otro hilo), es un
+      // turno aparte, y el error se enseña sin lanzarlo: lanzar a través de C
+      // es romper el proceso.
+      const envuelta = (...xs) => {
+        const dentro = pilaNativa.length ? pilaNativa[pilaNativa.length - 1] : null;
+        if (!dentro) vm.nuevoTurno();
+        const r = f(...xs);
+        if (ctx.error) {
+          const e = ctx.error; ctx.error = null;
+          if (dentro) { if (!dentro.error) dentro.error = e; }
+          else if (host.errorEnTurno) host.errorEnTurno(e);
+          else vm.salida(e.formato ? e.formato() : String(e.message || e));
+        }
+        return r;
+      };
+      const h = conNativo('retrollamada', () => nat.registrar(envuelta, nombre));
+      return new ObjOpaco('retrollamada', h, { nombre, fn: a[0] });
+    }, 'retrollamada(funcion, "Tipo") — una retrollamada que C puede guardar y llamar más tarde; suéltala con soltarRetrollamada');
+    def('soltarRetrollamada', 'cualquiera -> nulo', a => {
+      exigeNat('soltarRetrollamada');
+      const r = a[0];
+      if (!(r instanceof ObjOpaco) || r.clase !== 'retrollamada') vm.error(`«soltarRetrollamada»: necesita una retrollamada y recibió ${tipoDe(r)}`);
+      if (r.vivo) { conNativo('soltarRetrollamada', () => nat.desregistrar(r.crudo)); r.vivo = false; }
+      return null;
+    }, 'soltarRetrollamada(r) — C ya no la va a llamar; llamarla después sería un fallo');
+    def('reservarMemoria', 'entero -> cualquiera', a => {
+      exigeNat('reservarMemoria');
+      const n = vm.exigeEnt(a[0], 1, 'reservarMemoria');
+      if (n < 1 || n > 256 * 1024 * 1024) vm.error('«reservarMemoria»: entre 1 byte y 256 MB');
+      vm.cobrar(4 + (n >> 10));
+      return new ObjOpaco('memoria', nat.memoria(n), { bytes: n });
+    }, 'reservarMemoria(bytes) — un bloque de bytes a cero, para pasarlo donde C pide char * o void *; se libera solo');
+    const ptr = (v, i, q) => {
+      if (v instanceof ObjOpaco && (v.clase === 'puntero' || v.clase === 'memoria') && v.vivo) return v.crudo;
+      if (typeof v === 'number' && v > 0) return v;
+      vm.error(`«${q}»: el argumento ${i} debe ser un puntero o una memoria y es ${v === null ? 'nulo' : tipoDe(v)}`,
+        v === null ? 'leer de un puntero nulo tumbaría el proceso; compruébalo antes' : null, false, 'nativo');
+    };
+    def('leerMemoria', '... -> cualquiera', a => {
+      exigeNat('leerMemoria');
+      if (a.length < 2 || a.length > 3) vm.error('«leerMemoria» es leerMemoria(p, tipo) o leerMemoria(p, tipo, cuantos)');
+      const p = ptr(a[0], 1, 'leerMemoria'), t = txt(a[1], 2, 'leerMemoria');
+      const n = a.length > 2 ? vm.exigeEnt(a[2], 3, 'leerMemoria') : null;
+      if (a[0] instanceof ObjOpaco && a[0].clase === 'memoria' && n !== null && n * nat.tamano(t === 'texto' ? 'entero8' : t) > a[0].bytes)
+        vm.error(`«leerMemoria»: ${n} de ${t} no caben en ${a[0].bytes} bytes`, null, false, 'nativo');
+      const r = conNativo('leerMemoria', () => nat.leer(p, t, n));
+      if (ArrayBuffer.isView(r) || Array.isArray(r)) return L(Array.from(r, x => deCrudo(x, 'leerMemoria')));
+      return deCrudo(r, 'leerMemoria');
+    }, 'leerMemoria(p, tipo, cuantos?) — lee de un puntero: un número, una lista de cuantos, o "texto" hasta el cero');
+    def('escribirMemoria', 'cualquiera, texto, cualquiera -> nulo', a => {
+      exigeNat('escribirMemoria');
+      const p = ptr(a[0], 1, 'escribirMemoria'), t = txt(a[1], 2, 'escribirMemoria');
+      const v = a[2] instanceof ObjLista ? a[2].items.map(x => aCrudo(x, 'escribirMemoria', 3)) : aCrudo(a[2], 'escribirMemoria', 3);
+      const n = Array.isArray(v) ? v.length : null;
+      if (a[0] instanceof ObjOpaco && a[0].clase === 'memoria' && (n || 1) * nat.tamano(t) > a[0].bytes)
+        vm.error(`«escribirMemoria»: eso no cabe en ${a[0].bytes} bytes`, null, false, 'nativo');
+      conNativo('escribirMemoria', () => nat.escribir(p, t, v, n));
+      return null;
+    }, 'escribirMemoria(p, tipo, valor) — escribe un número (o una lista) en esa dirección');
+    def('textoDeMemoria', 'cualquiera -> texto', a => {
+      const m = a[0];
+      if (!(m instanceof ObjOpaco) || m.clase !== 'memoria') vm.error(`«textoDeMemoria»: necesita una memoria y recibió ${tipoDe(m)}`);
+      const b = m.crudo, fin = b.indexOf(0);
+      return b.toString('utf8', 0, fin < 0 ? b.length : fin);
+    }, 'textoDeMemoria(m) — el texto que C dejó en una memoria, hasta el primer cero');
+    def('tamanoNativo', 'texto -> entero', a => {
+      exigeNat('tamanoNativo');
+      return conNativo('tamanoNativo', () => nat.tamano(txt(a[0], 1, 'tamanoNativo')));
+    }, 'tamanoNativo(tipo) — cuántos bytes ocupa: "real", "int", o una estructura declarada');
+    def('direccion', 'cualquiera -> entero', a => {
+      exigeNat('direccion');
+      const v = a[0];
+      if (!(v instanceof ObjOpaco) || v.clase === 'retrollamada') vm.error(`«direccion»: necesita un puntero o una memoria y recibió ${tipoDe(v)}`);
+      return Number(v.clase === 'memoria' ? nat.direccion(v.crudo) : v.direccion());
+    }, 'direccion(p) — la dirección como entero, para imprimirla o compararla');
+    def('errorC', ' -> entero', () => { exigeNat('errorC'); return nat.errno(); },
+      'errorC() — el errno de la última llamada a C (0 si no hubo error)');
+    def('enFondo', '... -> cualquiera', a => {
+      exigeNat('enFondo');
+      const f = a[0];
+      if (!(f instanceof ObjNativa) || !f.llamarNativo || !f.llamarNativo.enFondo)
+        vm.error(`«enFondo»: el argumento 1 debe ser una función declarada con nativa() y es ${tipoDe(f)}`,
+          'en segundo plano solo corre código de C: lo de Ñ ya es de un solo hilo');
+      const args = a.slice(1);
+      if (f.aridad >= 0 && args.length !== f.aridad)
+        vm.error(`«${f.nombre}» espera ${f.aridad} argumento(s) y recibió ${args.length}`);
+      const llamar = f.llamarNativo;
+      const { crudos, cajas } = prepararNativa(llamar, args, f.nombre, true);
+      const p = vm.registrar(new ObjPromesa());
+      vm.cobrar(50);
+      conNativo('enFondo', () => llamar.enFondo(crudos, (err, r) => enTurno(() => {
+        if (err) vm.cumplir(p, vm.nuevoError('nativo', `«${f.nombre}»: ${String((err && err.message) || err)}`, vm.lineaActual), false);
+        else {
+          let v, ok = true;
+          try { v = terminarNativa(llamar, r, cajas, f.nombre); }
+          catch (e) { if (!(e instanceof ErrorTiempoEjecucion)) throw e; ok = false; v = vm.nuevoError('nativo', e.message, vm.lineaActual); }
+          vm.cumplir(p, v, ok);
+        }
+      })));
+      return p;
+    }, 'enFondo(f, args…) — llama a una función nativa en otro hilo y devuelve una promesa: «esperar enFondo(f, x)»');
+  };
 
   // ------------------------------------------------------------- excepciones
   seccion('excepciones');
@@ -5085,6 +6783,9 @@ function instalarBiblioteca(vm, host) {
   // «datos» no lleva «enClasico»: ninguno de sus nombres estuvo en el ámbito
   // global, así que nada viejo los espera ahí.
   instalarEdsl(vm, 'datos', instalarDatos(vm));
+  instalarEdsl(vm, 'corrutinas', cuerpoCorrutinas);     // (4.1) fase X4
+  instalarEdsl(vm, 'nativo', cuerpoNativo);             // (4.1) fase S1
+  instalarEdsl(vm, 'sistema', cuerpoSistema);           // (4.1) fase S2
   // De «estilo» sí eran globales 22 nombres. «pares» es el único que NO se
   // reexporta en «clasico»: su sitio en el ámbito global ya está ocupado por el
   // «pares» de los diccionarios, que es quien debía tenerlo desde el principio.
@@ -5670,6 +7371,14 @@ function leerFn(r, prof) {
     }
   }
 
+  // (4.1) La marca de los parámetros con valor por defecto.
+  for (const c of fn.chunk.consts) {
+    if (typeof c === 'string' && c.startsWith(' minimos:')) {
+      const m = +c.slice(9);
+      if (Number.isInteger(m) && m >= 0 && m < fn.aridad) fn.minimos = m;
+    }
+    if (c === ' corrutina:generador' || c === ' corrutina:asincrona') fn.corrutina = c.slice(11);
+  }
   const nCode = r.cuenta('código');
   for (let i = 0; i < nCode; i++) fn.chunk.code.push(r.varint());
   const nLineas = r.cuenta('tabla de líneas');
@@ -5892,8 +7601,19 @@ function exportacionesDe(ast) {
   const ex = new Map();
   for (const s of ast.cuerpo) {
     if (!s.publico) continue;
-    if (s.tipo === 'DeclFuncion')
-      ex.set(s.nombre, T.fn(s.params.map(p => p.anotacion || T.cualquiera), s.retorno || T.cualquiera));
+    if (s.tipo === 'DeclFuncion') {
+      const t = tipoDeFuncion(s);
+      // (4.1) El constructor de un «publico tipo» lleva la forma del
+      // registro —campos y métodos— para que el archivo que lo importa pueda
+      // comprobar «p.x» igual que el que lo declara.
+      if (s.esConstructor) {
+        const dt = ast.cuerpo.find(x => x.tipo === 'DeclTipo' && x.nombre === s.nombre);
+        const metodos = new Map();
+        for (const f of ast.cuerpo) if (f.tipo === 'DeclFuncion' && f.metodo && f.metodo.tipo === s.nombre) metodos.set(f.metodo.nombre, tipoDeFuncion(f, true));
+        t.ret = Object.assign(T.registro(s.nombre), { forma: { nombre: s.nombre, campos: dt.campos.map(c => ({ nombre: c.nombre, tipo: c.anotacion || T.cualquiera })), metodos } });
+      }
+      ex.set(s.nombre, t);
+    }
     else if (s.tipo === 'DeclVar')
       ex.set(s.nombre, s.anotacion || (s.valor && s.valor.tipoLit) || T.cualquiera);
   }
@@ -5976,8 +7696,11 @@ function enlazar(ast, clave, mods, errores, avisos, globalesTipos) {
   // principal resolviera contra el directorio de trabajo: funcionaba mientras se
   // lanzara desde la carpeta del programa y fallaba en cuanto no.
   const desde = clave || mods.claveRaiz || null;
-  for (const s of ast.cuerpo)
+  for (const s of ast.cuerpo) {
     if (s.tipo === 'DeclVar' || s.tipo === 'DeclFuncion') enl.propias.add(s.nombre);
+    // Un registro deja su fábrica interna como global del archivo.
+    if (s.tipo === 'DeclTipo') enl.propias.add(' hacer ' + s.nombre);
+  }
 
   const ocupado = n => enl.propias.has(n) || enl.nombres.has(n) || enl.alias.has(n);
   const avisarSiTapa = (nodo, n) => {
@@ -20349,6 +22072,6 @@ global.EspanolLike = { crearMotor, lexer, parser, compilar, verificarTipos, dese
   tiposGlobales, ErrorFuente, firma, textoATipo, aridadDe, instalarEdsl, instalarClasico,
   serializar, deserializar, verificarBytecode: verificar, aTexto, deTexto, ErrorBytecode,
   Modulos, enlazar, exportacionesDe, SEP_MODULO, nombreGlobalModulo, CLAVE_EDSL, claveEdsl,
-  version: '4.0', perfil: typeof C1EN_ABIERTOS !== 'undefined' ? 'C1EÑ' : 'Ñ',
+  version: '4.1', perfil: typeof C1EN_ABIERTOS !== 'undefined' ? 'C1EÑ' : 'Ñ',
   abiertos: typeof C1EN_ABIERTOS !== 'undefined' ? C1EN_ABIERTOS : [] };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -4,6 +4,14 @@ Un lenguaje de programación en español, con verificador de tipos, máquina
 virtual de bytecode y un JIT que traduce a JavaScript. Antes se llamaba
 Español-Like; el motor y los archivos conservan ese nombre en algunos sitios.
 
+**Versión 4.1** (LTS, 17-oct-2026): registros con métodos, `si … entonces … sino`
+como expresión, `??` y `?.`, desestructurar, `segun`, parámetros por defecto y con
+nombre, genéricos, generadores y asíncronas, una página que se reconcilia en vez
+de reconstruirse, FFI con firmas de C y retrollamadas, y en la consola reloj,
+servidor HTTP, rutas y entrada interactiva. Qué cambió y qué puede notar un
+programa de la 4.0: [`docs/CAMBIOS-4.1.md`](docs/CAMBIOS-4.1.md). Los `.elb` de la
+4.0 siguen valiendo.
+
 ## Para usarlo ahora mismo
 
 Abre **`espanol-like-v4.html`** en el navegador. Es un solo archivo, sin
@@ -73,7 +81,7 @@ funcionan. Dos suites piden extras y lo dicen: `aislado` necesita Playwright
 
 ## Los eDSL
 
-La biblioteca no está toda en el ámbito global. Siete grupos de funciones viven
+La biblioteca no está toda en el ámbito global. Diez grupos de funciones viven
 en módulos que trae el motor dentro, y hay que pedirlos:
 
 ```
@@ -91,6 +99,9 @@ usar tema, color, enFila de "estilo"
 | `datos`    | el tipo `tabla`, leer CSV, agrupar y sumar, y el formato `.ñdatos` |
 | `estilo`   | CSS como valores, anidamiento y tokens de diseño |
 | `probar`   | Ñ probándose con Ñ |
+| `corrutinas` | generadores y asíncronas: `siguiente`, `recoger`, `dormir`, `todas` (4.1) |
+| `nativo`   | lo fino del FFI: tipos de C, retrollamadas, memoria, llamadas en otro hilo (4.1) |
+| `sistema`  | servidor HTTP, archivos línea a línea, rutas, procesos en fondo (4.1) |
 
 La razón es la de siempre en este proyecto: si haces cuentas no tienes por qué
 saber el vocabulario de la web, ni al contrario. Un eDSL se gana el sitio cuando
@@ -115,7 +126,7 @@ node motor/util/mudar.js --escribir   # lo escribe · córrelo hasta que diga 0
 espanol-like-v4.html     el entorno completo, listo para abrir
 c1en.html                el mismo entorno con numerico y nen abiertos (perfil C1EÑ)
 c1en/                    el cuaderno de Kaggle para correr C1EÑ en las T4
-referencia-stdlib.html   el libro: las 452 entradas de la biblioteca, cada una con su
+referencia-stdlib.html   el libro: las 793 entradas de la biblioteca, cada una con su
                          firma y la salida REAL de su ejemplo · se regenera
 auditoria-motor.html     la auditoría del motor y su plan de trabajo
 auditoria-web.html       la auditoría de la parte web y su plan por fases
@@ -124,7 +135,10 @@ ejemplos/                programas de ejemplo (.esl), incluido uno de consola
 ejemplos/ventas.esl      una aplicación pequeña y completa: pega un CSV y sale
                          el total por ciudad · también está en el selector del IDE
 ejemplos/lib/            los módulos que usa ejemplos/resumen.esl
-motor/                   el código
+ejemplos/sistema/        un servidor de tareas y un orden hecho en C (4.1, consola)
+motor/                   el código (el LTS, 4.1)
+motor-exp/               el clon experimental: lo que viene se prueba allí primero
+docs/CAMBIOS-4.1.md      qué cambió de la 4.0 a la 4.1
 ```
 
 Dentro de `motor/`:
@@ -132,7 +146,7 @@ Dentro de `motor/`:
 ```
 rutas.js         de dónde sale cada ruta; todo se resuelve desde aquí
 bundle.js        las trece fuentes empaquetadas  (se genera)
-inventario.ñdatos la línea base: los 452 nombres con su firma, en el formato
+inventario.ñdatos la línea base: los 793 nombres con su firma, en el formato
                  del eDSL «datos» · SE GUARDA, no se regenera solo
 publicar-*.html  las versiones sin esqueleto, para publicar  (se generan)
 
@@ -200,14 +214,14 @@ archivo/         cosas de la auditoría; pueden no correr con el árbol de hoy
 node motor/util/construir.js        # empaqueta las fuentes
 node motor/util/construir-ide.js    # arma el entorno
 node motor/util/referencia.js       # regenera el libro y dice qué cambió
-node motor/pruebas/todas.js         # 1.152 pruebas, 13 suites
+node motor/pruebas/todas.js         # unas 2.300 pruebas, 25 suites (4.1)
 ```
 
 ### El libro y su línea base
 
 `referencia-stdlib.html` se regenera en cada construcción y se sobrescribe, así
 que él solo no puede decir qué había antes. Al lado va **`motor/inventario.ñdatos`**,
-que sí se guarda: los 452 nombres con su ámbito, su clase y su firma, en el
+que sí se guarda: los 793 nombres con su ámbito, su clase y su firma, en el
 formato del eDSL `datos` —JSON con esquema y por columnas—. Así que no es solo un
 archivo de control: se abre con `deDatos` y se consulta desde un programa en Ñ.
 
@@ -444,6 +458,7 @@ en Windows.
 ```
 fijo cos = nativa("libm.so.6", "cos", "real", ["real"])
 imprimir(cos(0.0))                      # 1
+fijo seno = nativa("libm.so.6", "double sin(double)")   # 4.1: la firma tal como está en el .h
 ```
 
 Se abre una biblioteca compilada por su nombre, se declara la firma de una
@@ -500,8 +515,10 @@ voz alta en vez de fallar en silencio:
 |---|---|---|---|
 | página, estilo, eventos | sí | no | no |
 | lienzo | sí | no | no |
-| memoria y temporizadores | sí | no | no |
+| memoria | sí | no | no |
+| temporizadores, `dormir`, asíncronas | sí | **sí** (4.1) | no |
 | red (`pedir`) | sí | **sí** | no |
+| servidor (`servir`) | no | **sí** (4.1) | no |
 | archivos, procesos, módulos | no | sí | sí |
 | código nativo (FFI) | no | sí, con koffi | no |
 
@@ -511,22 +528,21 @@ lo que necesita anfitrión es pintarlos.
 
 ## Lo que falta
 
-Una forma de llamar a C, hilos, y sockets en vez de solo peticiones HTTP. Eso es
-lo que separa a Ñ de poder escribir un servicio, y es el camino hacia la idea de
-usarlo como userland.
+Desde la 4.1 Ñ ya llama a C con firmas de verdad y retrollamadas, sirve HTTP y
+tiene reloj en la consola: puede escribir un servicio pequeño
+(`ejemplos/sistema/servidor-tareas.esl`). Faltan hilos de Ñ (`enFondo` solo manda
+una llamada de C a otro hilo), sockets crudos, el puente a npm y FFI en QuickJS.
 
 De los módulos falta lo de grado: no hay forma de renombrar lo que se importa
 (`… como otro nombre` por nombre suelto), ni de importar solo por su efecto. Un
 programa de varios archivos ya se guarda como un solo `.elb` (`util/elb.js`); el
 empaquetador todavía lleva los módulos como texto, y `n.js` (QuickJS) aún no
-carga paquetes. Del FFI faltan los manejadores: que C pueda llamar a una
-función de Ñ; raylib no los necesita porque se pregunta por el ratón y el teclado
-en cada cuadro, pero una interfaz nativa de Windows sí.
+carga paquetes. Del FFI faltan las funciones variádicas (`printf`), que se
+rechazan diciendo por qué.
 
 Dentro del navegador ya no falta lo básico: hay eventos, controles con estilo,
 memoria entre ejecuciones y temporizadores. Lo que queda es de grado, no de
-existencia: el repintado sigue siendo completo —se reconstruye toda la página y
-luego se repone el foco, lo tecleado y el desplazamiento— y eso aguanta bien
-hasta unos cuantos miles de nodos. La identidad de nodo (`{"clave": …}`) ya está
-puesta, que es lo que haría falta para reconciliar en vez de reconstruir si
-alguna vez hace falta.
+existencia. Desde la 4.1 el repintado se reconcilia: solo cambia lo distinto, un
+repintado sin cambios no toca el DOM, y lo escrito en un control que desaparece
+vuelve con él. Lo que sigue en el motor experimental (`motor-exp/EXPERIMENTAL.md`):
+`a[i]` de arreglo dentro del JIT, `bytes`/`conjunto`/`patron`, PWA e instalador.

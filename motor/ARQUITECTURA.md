@@ -378,6 +378,11 @@ cosas, y las cuatro se resolvieron sin tocar la frontera.
 
 ### El repintado no borra lo que el usuario hizo
 
+> **Desde la 4.1 esto se hace de otra forma**: ya no se guarda y se repone, se
+> reconcilia (ver «4.1 · la página se reconcilia», más abajo). Lo que sigue es
+> la historia de la 3.x–4.0, y las reglas de quién gobierna el control siguen
+> valiendo igual.
+
 `limpiarPagina()` + `pintar()` reconstruye la página entera. Con eso se va el
 foco, el texto a medio escribir, el cursor y el desplazamiento: escribir en una
 caja que filtra una lista era imposible, porque la segunda tecla ya no
@@ -857,6 +862,10 @@ declaradas por ejecución —declarar dentro de un bucle es el error fácil—.
 
 ### Lo que no se ha hecho
 
+> **La 4.1 hizo casi todo esto** (ver «4.1 · FFI con firmas de C» más abajo):
+> retrollamadas, salidas `_Out_`, memoria cruda y arreglos sin copiar. Lo de
+> QuickJS sigue igual. El texto queda como estaba en la 4.0.
+
 No hay manejadores: no se puede pasar una función de Ñ para que C la llame. No
 hay arreglos ni punteros de salida más allá de pasar la dirección a mano. No hay
 forma de leer memoria cruda si no es pidiéndosela a otra función de C —el truco
@@ -958,6 +967,68 @@ permiso, al contrario que en el navegador: en la consola el programa es uno que
 el usuario decidió ejecutar y que ya puede leer sus archivos y lanzar procesos.
 Pedir permiso para una petición HTTP cuando `ejecutar` no lo pide sería teatro.
 QuickJS sigue sin red, por lo mismo que sigue sin FFI: no lo trae.
+
+## 4.1 · lo que entró del motor experimental
+
+La 4.1 es `motor-exp/` ascendido. Lo que cambia la forma del motor —no la lista
+de funciones, que está en `docs/CAMBIOS-4.1.md`— es esto. Una regla atraviesa
+todas las fases: **ningún opcode nuevo**, para que la huella del `.elb` no
+cambie y lo compilado con la 4.0 siga cargando (está probado).
+
+### Registros: un diccionario con su tipo colgado
+
+`tipo Punto { … }` no es un objeto nuevo en la VM. El parser lo convierte en un
+constructor y unos métodos llamados `Punto.distancia` con `yo` delante; el
+verificador conoce los campos y para `p.nombr` antes de correr; en la VM un
+registro es un diccionario que lleva su tipo, y eso basta para `==`, `copiar`,
+`repr` y para negarse a crear un campo que el `tipo` no declara. `tipo` compila
+a una nativa interna (` registro`, con espacio delante: ningún programa puede
+escribir ese nombre). Las marcas que necesita el `.elb` —cuántos argumentos son
+obligatorios, si una función es generador o asíncrona— viajan igual, como
+constantes que empiezan por espacio.
+
+### Corrutinas: la VM guarda un trozo de pila
+
+`producir` y `esperar` pausan la corrutina guardando su trozo de pila y sus
+marcos con las bases relativas, y los vuelven a poner al reanudar. El JIT no
+compila el cuerpo de una corrutina, pero sí el código que la recorre. Una
+asíncrona corre hasta su primer `esperar` en la misma llamada y lo demás llega
+como un turno del anfitrión, igual que un clic: por eso la página se repinta
+sola. Los errores cruzan la frontera en los dos sentidos. El mismo arreglo en
+`invocar` hizo que un `lanzar` dentro de `mapear` se pudiera capturar, que en la
+4.0 no se podía.
+
+### La página se reconcilia
+
+`abrir`, `texto` y `control` ya no crean nodos: describen un modelo. Al acabar
+el turno el anfitrión (`ide/anfitrion.js`, `volcar`) compara el modelo con el
+DOM y cambia solo lo distinto; un elemento que sigue ahí es el mismo y conserva
+foco, cursor y desplazamiento sin tener que reponerlos. La identidad de un
+control es qué es y cómo se llama (`entrada:Nombre#0`) dentro del ancestro con
+clave más cercano, no su posición, y lo escrito en uno que desaparece se guarda
+(hasta 500) por si vuelve. Las listas con clave se reordenan moviendo lo mínimo
+(subsecuencia creciente más larga). **El motor no cambió para esto**: es todo
+del anfitrión, que es donde vive el DOM.
+
+### FFI con firmas de C
+
+`util/nativo-koffi.js` lee la firma tal como está en el `.h` y la convierte en
+una descripción de parámetros que la VM comprueba **antes** de cruzar: un
+arreglo solo va a un puntero de su mismo tipo de número, una vista con huecos se
+rechaza, una variádica se rechaza. Los punteros son un `ObjOpaco` (se guardan,
+se comparan, no se suman). Un error dentro de una retrollamada no se lanza a
+través de C —eso tumba el proceso—: se guarda y se lanza como error de Ñ cuando
+la llamada nativa vuelve. Todo sigue siendo del anfitrión de Node; el navegador
+no ve nada.
+
+### La consola tiene reloj
+
+`util/n-node.js` deja de terminar cuando acaba el programa principal: espera a
+que no queden temporizadores, servidores ni promesas, como Node. Un error dentro
+de un temporizador se dice y el proceso acaba con código 1. `servir` escucha en
+`127.0.0.1` salvo que se pida otra cosa, y un error del manejador es un 500 sin
+detalles para quien pidió. `leerLinea` lee línea a línea, así que un programa
+que pregunta contesta en una terminal sin esperar al Ctrl+D.
 
 ## Ensamblado
 
