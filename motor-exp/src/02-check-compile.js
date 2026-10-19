@@ -130,6 +130,21 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
     if (f && !registros.has(f.nombre)) registros.set(f.nombre, f);
   }
   const tipoReg = nombre => registros.get(nombre) || null;
+  // (motor-exp N1) ¿«arreglo» es el de numerico (o NEÑ), y no uno del programa?
+  function esArregloDeNumerico(amb) {
+    const v = amb.buscar('arreglo');
+    if (!v) return false;
+    const imp = enlace && enlace.nombres.get('arreglo');
+    if (imp) return v === raiz.vars.get('arreglo') &&
+      (imp.global === nombreGlobalModulo(claveEdsl('numerico'), 'arreglo') || imp.global === nombreGlobalModulo(claveEdsl('nen'), 'arreglo'));
+    return v === raiz.vars.get('arreglo') && Object.prototype.hasOwnProperty.call(globalesTipos, 'arreglo');
+  }
+  function llevaLiteralReal(n) {
+    if (n.tipo === 'Literal') return n.tipoLit === T.real;
+    if (n.tipo === 'Unario' && n.op === '-') return llevaLiteralReal(n.expr);
+    if (n.tipo === 'ListaLit') return n.items.some(llevaLiteralReal);
+    return false;
+  }
   function campoDe(r, nombre) { return r.campos.find(c => c.nombre === nombre) || null; }
   function sinCampo(n, r, nombre) {
     const lista = r.campos.map(c => c.nombre).concat([...r.metodos.keys()]);
@@ -369,6 +384,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         // «-a» sobre un arreglo le cambia el signo a todos sus números.
         if (n.op === '-') {
           if (t.k === 'arreglo') return T.arreglo;
+          if (t.k === 'grande') return T.grande;
           if (!esNum(t)) err(n, `«-» necesita un número y recibió ${tipoATexto(t)}`);
           return t;
         }
@@ -392,7 +408,10 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           // sea un tipo. La VM lo vuelve a comprobar para lo que llegue como
           // «cualquiera», y las dos reglas tienen que decir lo mismo.
           const dosFechas = a.k === 'fecha' && b.k === 'fecha';
-          if (!(dosFechas || (esNum(a) && esNum(b)) || (a.k === 'texto' && b.k === 'texto') ||
+          // (motor-exp N1) un grande se compara con otro grande o con un número
+          const conGrande = (a.k === 'grande' || b.k === 'grande') &&
+            (a.k === 'grande' || esNum(a)) && (b.k === 'grande' || esNum(b));
+          if (!(dosFechas || conGrande || (esNum(a) && esNum(b)) || (a.k === 'texto' && b.k === 'texto') ||
                 a.k === 'cualquiera' || b.k === 'cualquiera'))
             err(n, `no se pueden comparar ${tipoATexto(a)} y ${tipoATexto(b)} con «${op}»`,
               // La misma pista que da la VM. Si las dos reglas dicen cosas
@@ -407,6 +426,14 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         // Un arreglo se opera con otro arreglo o con un número, y el resultado
         // es un arreglo. Esto es lo que deja escribir «a * 2 + b» en vez de un
         // bucle, y que el verificador lo tipe sin ejecutar nada.
+        // (motor-exp N1) un grande con otro grande o con un número es un grande
+        if ((a.k === 'grande' || b.k === 'grande') && ['+', '-', '*', '/', '//', '%', '**'].includes(op)) {
+          const otro = a.k === 'grande' ? b : a;
+          if (otro.k === 'grande' || esNum(otro)) return T.grande;
+          err(n, `«${op}»: un grande se opera con otro grande o con un número, y llegó ${tipoATexto(otro)}`,
+            'para pasar un texto a grande: grande("3.14159")');
+          return T.grande;
+        }
         if (a.k === 'arreglo' || b.k === 'arreglo') {
           if (['+', '-', '*', '/', '//', '%', '**'].includes(op)) {
             const otro = a.k === 'arreglo' ? b : a;
@@ -440,6 +467,13 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       }
       case 'Llamada': {
         const ft = expr(n.callee, amb);
+        // (motor-exp N1) «arreglo([1.0, 2.0])»: el «.0» se pierde al ejecutar
+        // (1.0 y 1 son el mismo número), así que el arreglo salía de enteros. El
+        // verificador sí lo ve en el texto: si la lista literal lleva un real
+        // escrito con punto o exponente, se le pasa «"real"» como tipo.
+        if (n.callee.tipo === 'Variable' && n.callee.nombre === 'arreglo' && n.args.length === 1 &&
+            n.args[0].tipo === 'ListaLit' && esArregloDeNumerico(amb) && llevaLiteralReal(n.args[0]))
+          n.args.push({ tipo: 'Literal', valor: 'real', tipoLit: T.texto, linea: n.linea, col: n.col });
         const nom = n.callee.tipo === 'Variable' ? `«${n.callee.nombre}»`
           : n.callee.tipo === 'Propiedad' ? `«${n.callee.nombre}»` : 'la función';
         // (motor-exp) Argumentos con nombre y valores por defecto. Se resuelven

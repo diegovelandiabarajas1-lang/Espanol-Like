@@ -655,6 +655,122 @@ que llevó al tope de 1e-14 de arriba.
 - Lo que hay que saber al usar `errorC` en Windows: solo sirve con funciones de la biblioteca de C que comparte koffi;
   una DLL compilada con otra (por ejemplo, con `msvcrt`) tiene su propio `errno` y `errorC` no lo ve.
 
+## Fase N1 · NEÑ: precisión y tipos, amplitud, volumen, y numerico + datos dentro (19-oct-2026)
+
+Pedido de Diego: «Mejora NEÑ en Precisión y tipos, Amplitud de Funciones Gradualmente, Rendimiento en Volumen, y dame
+el Notebook para medir la Velocidad de C1EÑ en GPU, y de paso integra todas las Funciones de Numérico y Datos a NEÑ».
+
+### 1. numerico y datos dentro de «nen»
+
+`usar … de "nen"` trae ahora **los 190 nombres de numerico y los 51 de datos**, además de los suyos: un programa
+científico necesita un solo `usar`. No son copias: `reexportarEnNen` (18-nen-precision.js) registra **el mismo objeto**
+con el nombre de nen, así que `usar media de "numerico"` y `usar suma de "nen"` en el mismo programa no chocan, y la
+referencia documenta cada función una sola vez, donde nació (`util/referencia.js` salta los alias y no los cuenta dos
+veces en la portada).
+
+Tres nombres existen en los dos (`fila`, `donde`, `apilar`). En nen eligen por el tipo del primer argumento (`despacha`):
+con una tabla hacen lo de datos, con un arreglo lo de numerico. `abrirEdsls` (el perfil C1EÑ, que abre numerico y nen
+sin `usar`) ya no se queja de «ya lo trae abierto numerico» cuando es el mismo objeto, y deja la versión que despacha.
+
+### 2. Precisión y tipos: el tipo `grande` y los enteros exactos (src/18-nen-precision.js, nuevo)
+
+- **`grande`** es un decimal de precisión arbitraria (mantisa BigInt × 10^e). De un entero o de un texto sin coma es
+  **exacto** (nunca se redondea al sumar, restar o multiplicar); de una división o una función, lleva sus cifras (50 por
+  defecto, `cifrasGrande(n)` lo cambia para lo que se cree después). `+ − * /` y `raizGrande` con **redondeo correcto**
+  (al par); exp, ln, sen, cos, tan, arcos y potencias con 12 cifras de guarda; π por Chudnovsky.
+- Es un tipo del lenguaje, no una función más: está en el verificador (`T.grande`; `grande + real → grande`,
+  comparaciones, `-g`), la VM (`+ − * / ** //`, `== < <= > >=` también en el JIT, verdad, repr, `real(g)`, `entero(g)`)
+  y `probar` (comparar grandes). `grande("0.1") + grande("0.2") == grande("0.3")` es `cierto`. Con un real se mezcla
+  por su decimal más corto (0.1 es «0.1»); `grandeExactoDe(0.1)` enseña el binario de verdad.
+- 27 funciones: `grande, cifrasGrande, cifrasDe, esExacto, grandeExactoDe, redondearGrande, decimalesGrande, aReal,
+  raizGrande, expGrande, logGrande, senoGrande, cosenoGrande, tangenteGrande, arcotangenteGrande, arcosenoGrande,
+  arcocosenoGrande, potenciaGrande, piGrande, eGrande, factorialExacto, potenciaExacta, combinacionesExactas,
+  fibonacciExacto, mcdExacto, esPrimoExacto, cifrasExactas`.
+- `numerico.factorial(171)` dice ahora «no cabe en un número real (el más grande que cabe es 170!)» con la pista
+  `factorialExacto`. `lleno` y los arreglos enteros miran que el valor quepa en 32 bits.
+- **Cambio a propósito:** `arreglo([1.0, 2.0])` era «de entero» (1.0 es entero por su valor y el tipo se deducía de los
+  valores); ahora un literal real escrito con punto hace el arreglo real, como se escribió.
+
+### 3. Amplitud, primera tanda (src/19-nen-amplitud.js, nuevo)
+
+43 funciones: especiales (`lambertW` con las dos ramas, `integralExponencial`, `integralExponencialE1`, `integralSeno`,
+`integralCoseno`, `fresnelS`, `fresnelC`, `elipticaK`, `elipticaE`, `dilogaritmo`, `hipergeometrica` ₂F₁, `besselI`,
+`trigamma`, `poligamma`, `sinc`); densidades y acumuladas (gamma, beta, Weibull, lognormal, Cauchy, logística,
+exponencial, t, χ², F, geométrica, binomial negativa, hipergeométrica); muestreo (`azarExponencial, azarGamma`
+Marsaglia–Tsang, `azarBeta, azarChiCuadrado, azarTStudent, azarPoisson` Knuth/PTRS, `azarBinomial` inversión/BTRS,
+`azarLogNormal, azarWeibull, azarCauchy`), todas con `semilla`.
+
+### 4. Rendimiento en volumen
+
+- `senoA`, `expA` y las demás unarias trabajan sobre los datos del arreglo (subarray) y escriben en uno nuevo, sin
+  listas de paso.
+- `suma, media, varianza, desviacion` de un arreglo seguido leen sus datos sin copiarlos a una lista. La suma va en el
+  mismo orden (de izquierda a derecha desde 0): **el resultado es idéntico al de antes**, al bit (la suite lo exige).
+- La aritmética de arreglos (`x * 2`, `x + y`) usa una copia de la función por cada combinación de tipos
+  (`opMonomorfa`): una sola función para Float64Array e Int32Array era 2× más lenta en V8. Respeta la CSP (sin
+  `new Function` si la página no lo deja).
+- `por` (matrices) en la CPU usa un núcleo nuevo, **`nen_matmul_filas`**: bloques de 4 filas × 8 columnas y trozos de
+  K de 256. En la GPU sigue `nen_matmul` (una celda por hilo). Los dos suman cada celda en el mismo orden de k: **dan el
+  mismo número** (comprobado en `pruebas/nen-nucleos.js`: C contra JS y los dos núcleos entre sí, con m y p que no son
+  múltiplos del bloque y K > 256). `multMatriz` y `por` de numerico usan este camino.
+- `C1EN_OPT` (variable de entorno) cambia el `-O2` de gcc para el dispositivo nativo (p. ej. `C1EN_OPT="-O3
+  -march=native"`), separado por espacios.
+
+Medido en la nube (2 vCPU), mejor de 7, LTS → motor-exp:
+
+| prueba | jit | nativo |
+|---|---|---|
+| `x * 2 + 1` (1 M) | 9,1 → 9,7 ms | 9,5 → 9,9 ms (igual: ya era rápido) |
+| `senoA` (1 M) | 14,5 → 8,9 ms | 12,6 → 6,5 ms |
+| `expA` (1 M) | 31,0 → 22,9 ms | 7,8 → 4,5 ms |
+| `suma` (1 M) | 45,9 → **1,3 ms** | 45,3 → **1,4 ms** |
+| `media` / `varianza` / `desviacion` (1 M) | 44 / 56 / 57 → 1,3 / 2,6 / 2,5 ms | igual |
+| `por` 300×300 | 46,0 → 23,8 ms | 53,8 → **8,8 ms** |
+| `por` 1000×1000 | 1.435 → 1.001 ms | 1.559 → **339 ms** (≈ 5,9 GFLOP/s; NumPy con BLAS ≈ 17 ms) |
+
+### 5. El cuaderno de velocidad en GPU
+
+- `c1en/velocidad-c1en.esl` — el programa de medida: núcleos de `paralelo` (saxpy, π, mandelbrot, n-cuerpos,
+  histograma con `sumarAtomico`), NEÑ en volumen (`senoA, expA, softmax, sumaEje, por, fourier`) y aritmética de la VM.
+  `DISPOSITIVO ESCALA [REPETICIONES] [PRESUPUESTO_MS]`; mide aparte la primera vez (compilar) y salta los tamaños
+  mayores si una prueba se pasa del presupuesto. Corre igual en el LTS y en motor-exp.
+- `c1en/kaggle-c1en-velocidad.ipynb` — en Kaggle (T4 ×2): jit · nativo · gpu de uno o los dos motores, ECOSIM-G v3.1
+  en ms por tick y por mundo (restando una corrida de 60 ticks a una de 600, para no contar la compilación), NumPy y
+  CuPy con los mismos tamaños (CuPy con y sin copia a la GPU), tabla, comprobación de la huella (las pruebas sin
+  trascendentes tienen que dar lo mismo en los tres dispositivos), gráficas y tres archivos para descargar.
+- Probado aquí con la GPU **simulada** y escala `chica`, los dos motores, de punta a punta: todas las huellas iguales
+  en jit, nativo y gpu-sim. Los tiempos de la T4 de verdad solo los da Kaggle.
+
+### Qué se probó
+
+- **Suite nueva `pruebas/exp-nen.js` (35):** la unión (cada nombre de numerico y datos está en nen y es el mismo
+  objeto; las tres que despachan); **34 valores de `grande` contra mpmath** cifra a cifra
+  (`pruebas/datos-nen/precision-mpmath.json`); operadores, comparaciones, checker, `cifrasGrande`, errores; enteros
+  exactos contra BigInt (200!, 2^1000, C(300,150), F(1500)), Miller–Rabin; **257 valores de 34 funciones contra SciPy a
+  1e-11** (`pruebas/datos-nen/amplitud-scipy.json`; el peor 3e-13); 11 distribuciones con media y varianza de la
+  teoría y reproducibles con semilla; reducciones y `por` iguales al bit que antes; con y sin JIT iguales.
+- `pruebas/nen-nucleos.js`: 4 casos de `nen_matmul_filas` y la comparación cruzada con `nen_matmul` (51 casos, 0 fallan).
+- Ejemplos para el libro de las 74 funciones nuevas (`util/ejemplos-nen-precision.js`); la referencia se genera
+  (867 entradas = 96 globales + 771 en 11 eDSL).
+- **Batería completa: 22 de 23 en verde**; la roja es la de siempre, `apps` → `ecosim5.esl` («ventas.csv» no es un
+  número: `util/correr-ejemplos.js` le pasa un nombre de archivo a un programa que espera un número; también en el
+  LTS, no es de esta fase).
+
+### Qué se rompió o cambió por el camino
+
+- `util/ejemplos-biblioteca.js` y `util/referencia.js` de motor-exp se habían quedado atrás del LTS 4.1 (sin los
+  ejemplos de corrutinas, nativo y sistema, ni su anfitrión de mentira): la referencia de motor-exp no se generaba. Se
+  tomaron los del LTS y se les añadió lo de N1.
+- `arreglo([1.0, 2.0])` es ahora real (arriba). Un programa que dependiera de que saliera entero cambia.
+
+### Lo que viene en NEÑ (tandas siguientes)
+
+- Amplitud 2: Bessel Y/K y de orden real, Airy, zeta de Hurwitz, funciones de Struve, distribuciones multivariantes
+  (normal multivariante, Dirichlet, multinomial), cuasi-azar (Sobol, Halton).
+- Precisión 2: `complejoGrande`, intervalos (`intervalo(a, b)` con redondeo hacia afuera), racionales exactos.
+- Volumen 2: `x * 2 + 1` sin temporales (fusionar las operaciones de una expresión en un solo bucle o núcleo de
+  C1EÑ), FFT de radix 4 en la CPU, y lo que diga el cuaderno de la T4.
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -671,5 +787,6 @@ que llevó al tope de 1e-14 de arriba.
 | S3 | puente a npm (`usar x de "npm:paquete"`), FFI en QuickJS, variádicas | anfitrión | pendiente |
 | P2–P5 | PWA, servidor desplegable, ventana web de escritorio, instalador | anfitrión | pendiente |
 | W1 | Windows: C1EÑ nativo enlaza (sin `-z nodelete`), sonda del compilador, rutas en `fuera`, tolerancia y limpieza de NEÑ, `errorC` con `ucrtbase.dll` | anfitrión de Node, pruebas | **hecha** (`errorC` por confirmar en Windows) |
+| N1 | NEÑ: numerico y datos dentro, tipo `grande` y enteros exactos, 43 funciones de amplitud, volumen (reducciones, `por` por bloques), cuaderno de velocidad en GPU | verificador, VM, JIT, NEÑ, C1EÑ | **hecha** (tiempos de la T4 por medir en Kaggle) |
 
 Cada fase deja su sección en este archivo: qué se tocó, qué se probó, qué se rompió.

@@ -1,0 +1,225 @@
+# ============================================================================
+#  velocidad-c1en.esl — cuánto corre C1EÑ en cada dispositivo
+#
+#  Uso:  node motor-exp/util/n-node.js c1en/velocidad-c1en.esl DISPOSITIVO ESCALA [REPETICIONES] [PRESUPUESTO_MS]
+#        DISPOSITIVO: jit | nativo | gpu
+#        ESCALA:      chica (para probar que corre, segundos) | normal (una T4) | grande
+#
+#  Mide tres familias de trabajo:
+#    · nucleos  — funciones de Ñ lanzadas con paralelo(): saxpy, π por Monte
+#                 Carlo, mandelbrot, n-cuerpos e histograma con sumarAtomico.
+#    · nen      — operaciones de NEÑ en volumen sobre arreglos (seno, exp,
+#                 softmax, sumas por eje, multiplicar matrices, Fourier). Pasan
+#                 por C1EÑ cuando el trabajo llega a 32 768 elementos, así que en
+#                 «gpu» incluyen copiar los datos a la GPU y de vuelta.
+#    · vm       — aritmética de arreglos que hace el propio motor (x * 2 + 1,
+#                 suma): no cambia con el dispositivo; sirve de referencia.
+#
+#  Cada prueba se calienta una vez (compila el núcleo con gcc o NVRTC: ese
+#  tiempo sale aparte, en «primera») y luego se queda con la mejor de
+#  REPETICIONES medidas (3 si no se dice). Una prueba que pasa de
+#  PRESUPUESTO_MS (30 000 si no se dice) se repite menos y sus tamaños mayores
+#  se saltan. Imprime una línea por prueba:
+#
+#    RES|familia|prueba|tamaño|dispositivo|ms|unidades|huella|primera|veces|nota
+#
+#  «unidades» es el trabajo útil (elementos, operaciones de coma flotante o
+#  iteraciones) para sacar el rendimiento por segundo; «huella» es un resumen
+#  del resultado (una suma) para comparar los dispositivos entre sí: en los
+#  núcleos sin funciones trascendentes tiene que salir IGUAL en los tres.
+# ============================================================================
+usar paralelo, usarDispositivo, dispositivo, azarHilo, sumarAtomico de "nen"
+usar senoA, expA, softmax, sumaEje de "nen"
+usar ceros, suma, reparto, azarArreglo, semilla, por, fourier, parteReal, raiz de "numerico"
+
+# ── los núcleos ─────────────────────────────────────────────────────────────
+fn saxpy(i, a, x, y, z) {
+    z[i] = a * x[i] + y[i]
+}
+fn piHilo(i, muestras, semillaPi, dentro) {
+    var c = 0
+    para j en rango(muestras) {
+        var x = azarHilo(semillaPi, i * muestras + j, 0)
+        var y = azarHilo(semillaPi, i * muestras + j, 1)
+        si x * x + y * y < 1.0 { c = c + 1 }
+    }
+    dentro[i] = c
+}
+fn mandel(i, ancho, alto, iter, r) {
+    var cx = -2.0 + 3.0 * (i % ancho) / ancho
+    var cy = -1.2 + 2.4 * (i // ancho) / alto
+    var zx = 0.0
+    var zy = 0.0
+    var k = 0
+    mientras k < iter y zx * zx + zy * zy < 4.0 {
+        var t = zx * zx - zy * zy + cx
+        zy = 2.0 * zx * zy + cy
+        zx = t
+        k = k + 1
+    }
+    r[i] = k
+}
+fn cuerpos(i, x, y, ax, ay) {
+    var sx = 0.0
+    var sy = 0.0
+    para j en rango(longitud(x)) {
+        var dx = x[j] - x[i]
+        var dy = y[j] - y[i]
+        var d2 = dx * dx + dy * dy + 0.01
+        var inv = 1.0 / (d2 * raiz(d2))
+        sx = sx + dx * inv
+        sy = sy + dy * inv
+    }
+    ax[i] = sx
+    ay[i] = sy
+}
+fn llenarCuerpos(i, x, y) {
+    x[i] = azarHilo(5, i, 0) * 10.0
+    y[i] = azarHilo(5, i, 1) * 10.0
+}
+fn histo(i, cajas, h) {
+    var v = azarHilo(11, i, 0)
+    var c = entero(v * cajas)
+    si c >= cajas { c = cajas - 1 }
+    sumarAtomico(h, c, 1)
+}
+
+# ── medir ───────────────────────────────────────────────────────────────────
+fijo a = argumentos()
+var DISP = "jit"
+var ESCALA = "chica"
+var REP = 3
+si longitud(a) > 0 { DISP = a[0] }
+si longitud(a) > 1 { ESCALA = a[1] }
+var PRESUPUESTO = 30000.0
+si longitud(a) > 2 { REP = entero(a[2]) }
+si longitud(a) > 3 { PRESUPUESTO = real(a[3]) }
+usarDispositivo(DISP)
+
+# f() hace el trabajo y devuelve la huella. La primera vez se mide aparte
+# (compila el núcleo: gcc o NVRTC) y después se queda la mejor de REP. Si una
+# prueba pasa de PRESUPUESTO ms, se repite menos, y los tamaños mayores de esa
+# misma prueba se saltan (en jit, un π de mil millones de muestras tarda minutos).
+var saltadas = []
+fn medir(familia: texto, prueba: texto, tam: texto, unidades: real, f) {
+    si contiene(saltadas, prueba) {
+        imprimir("RES|" + familia + "|" + prueba + "|" + tam + "|" + DISP + "|||||saltada")
+        devolver nulo
+    }
+    var t0 = reloj()
+    var huella = f()
+    var primera = reloj() - t0
+    var mejor = primera
+    var cuantas = 0
+    mientras cuantas < REP y (cuantas == 0 o mejor * (cuantas + 1) < PRESUPUESTO) {
+        t0 = reloj()
+        huella = f()
+        var t = reloj() - t0
+        si cuantas == 0 o t < mejor { mejor = t }
+        cuantas = cuantas + 1
+        si primera > PRESUPUESTO { romper }
+    }
+    si mejor > PRESUPUESTO / 3 { saltadas = saltadas + [prueba] }
+    imprimir("RES|" + familia + "|" + prueba + "|" + tam + "|" + DISP + "|" + texto(mejor) + "|" + texto(unidades) + "|" +
+             texto(huella) + "|" + texto(primera) + "|" + texto(cuantas) + "|")
+}
+
+# Los tamaños de cada escala. «chica» es para comprobar que todo corre (en el
+# simulador de GPU o en jit tarda segundos); «normal» es la de la T4.
+fn tamanos(chica, normal, grande) {
+    si ESCALA == "grande" { devolver grande }
+    si ESCALA == "normal" { devolver normal }
+    devolver chica
+}
+
+imprimir("# dispositivo: " + dispositivo() + " · escala " + ESCALA + " · mejor de " + texto(REP))
+
+# ── nucleos ─────────────────────────────────────────────────────────────────
+para n en tamanos([65536], [1048576, 16777216], [1048576, 16777216, 40000000]) {
+    semilla(1)
+    fijo x = azarArreglo([n])
+    fijo y = azarArreglo([n])
+    fijo z = ceros(n)
+    medir("nucleos", "saxpy", texto(n), 2.0 * n, fn() {
+        paralelo(n, saxpy, 2.5, x, y, z)
+        devolver suma(z)
+    })
+}
+para hilos en tamanos([4096], [65536, 1048576], [1048576, 4194304]) {
+    fijo muestras = 1000
+    fijo dentro = ceros(hilos, "entero")
+    medir("nucleos", "pi", texto(hilos) + "x" + texto(muestras), 1.0 * hilos * muestras, fn() {
+        paralelo(hilos, piHilo, muestras, 2026, dentro)
+        devolver suma(dentro)
+    })
+}
+para lado en tamanos([200], [1200, 4000], [4000, 8000]) {
+    fijo ancho = lado
+    fijo alto = lado * 2 // 3
+    fijo r = ceros(ancho * alto, "entero")
+    medir("nucleos", "mandelbrot", texto(ancho) + "x" + texto(alto), 1.0 * ancho * alto, fn() {
+        paralelo(ancho * alto, mandel, ancho, alto, 500, r)
+        devolver suma(r)
+    })
+}
+para nc en tamanos([1024], [8192, 32768], [32768, 65536]) {
+    fijo x = ceros(nc)
+    fijo y = ceros(nc)
+    paralelo(nc, llenarCuerpos, x, y)
+    fijo ax = ceros(nc)
+    fijo ay = ceros(nc)
+    # 20 operaciones de coma flotante por pareja (la cuenta habitual)
+    medir("nucleos", "n-cuerpos", texto(nc), 20.0 * nc * nc, fn() {
+        paralelo(nc, cuerpos, x, y, ax, ay)
+        devolver suma(ax) + suma(ay)
+    })
+}
+para n en tamanos([65536], [4194304], [16777216]) {
+    fijo h = ceros(256, "entero")
+    medir("nucleos", "histograma", texto(n), 1.0 * n, fn() {
+        para c en rango(256) { h[c] = 0 }
+        paralelo(n, histo, 256, h)
+        devolver suma(h)
+    })
+}
+
+# ── nen ─────────────────────────────────────────────────────────────────────
+para n en tamanos([65536], [1048576, 16777216], [16777216, 40000000]) {
+    fijo x = reparto(0.0, 1.0, n)
+    medir("nen", "senoA", texto(n), 1.0 * n, fn() { devolver suma(senoA(x)) })
+    medir("nen", "expA", texto(n), 1.0 * n, fn() { devolver suma(expA(x)) })
+}
+para filas en tamanos([256], [4096], [16384]) {
+    semilla(2)
+    fijo m = azarArreglo([filas, 1024])
+    medir("nen", "softmax", texto(filas) + "x1024", 1.0 * filas * 1024, fn() { devolver suma(softmax(m)) })
+    medir("nen", "sumaEje", texto(filas) + "x1024", 1.0 * filas * 1024, fn() { devolver suma(sumaEje(m, 1)) })
+}
+para lado en tamanos([128, 256], [256, 512, 1024, 2048], [1024, 2048, 4096]) {
+    semilla(3)
+    fijo A = azarArreglo([lado, lado])
+    fijo B = azarArreglo([lado, lado])
+    medir("nen", "por", texto(lado) + "x" + texto(lado), 2.0 * lado * lado * lado, fn() { devolver suma(por(A, B)) })
+}
+para n en tamanos([16384], [1048576, 4194304], [4194304, 16777216]) {
+    fijo x = reparto(0.0, 1.0, n)
+    # 5 n log2 n, la cuenta habitual de una FFT compleja
+    var lg = 0
+    var k = n
+    mientras k > 1 {
+        k = k // 2
+        lg = lg + 1
+    }
+    medir("nen", "fourier", texto(n), 5.0 * n * lg, fn() {
+        fijo f = parteReal(fourier(x))
+        devolver suma(f * f)
+    })
+}
+
+# ── vm ──────────────────────────────────────────────────────────────────────
+para n en tamanos([65536], [4194304], [16777216]) {
+    fijo x = reparto(0.0, 1.0, n)
+    medir("vm", "x*2+1", texto(n), 2.0 * n, fn() { devolver suma(x * 2 + 1) })
+    medir("vm", "suma", texto(n), 1.0 * n, fn() { devolver suma(x) })
+}
+imprimir("# fin")

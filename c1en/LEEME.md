@@ -4,6 +4,14 @@
 NVIDIA T4 de Kaggle: la suite comparando GPU, jit y nativo **al bit**, un
 benchmark en tabla y el reparto entre las dos GPU con un proceso por GPU.
 
+`kaggle-c1en-velocidad.ipynb` (fase N1) **mide** la velocidad: el programa
+`velocidad-c1en.esl` en jit, nativo y gpu (núcleos de `paralelo`, NEÑ en
+volumen, aritmética de la VM), ECOSIM-G v3.1 en ms por tick y por mundo, y NumPy
+y CuPy con los mismos tamaños. Deja `c1en-velocidad.csv`, el resumen y las
+gráficas. Se sube igual que el de abajo; con `MOTORES = ['motor-exp', 'motor']`
+compara también el LTS. El programa solo, sin cuaderno:
+`node motor-exp/util/n-node.js c1en/velocidad-c1en.esl gpu normal`.
+
 ## Subirlo y correrlo
 
 1. En Kaggle: **Create → New Notebook → File → Import Notebook** y elige

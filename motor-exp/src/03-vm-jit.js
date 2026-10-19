@@ -303,6 +303,24 @@ const aridadTexto = fn => (fn.minimos !== undefined && fn.minimos < fn.aridad ? 
 // «switch» dentro del bucle, V8 no puede especializar la operación y se queda a
 // la mitad de velocidad. Son seis líneas repetidas seis veces, y se midió que
 // vale la pena.
+// (motor-exp N1) Una copia de aplicarOp/aplicarOpEsc por cada combinación de
+// tipos (Float64Array o Int32Array en el destino y en los operandos). Con una
+// sola función, V8 ve los dos tipos en el mismo bucle y lo compila genérico:
+// la mitad de rápido (5,2 ms contra 2,6 por millón, medido). Cada copia es una
+// función nueva con su propia información de tipos. Si el entorno no deja
+// compilar en caliente (CSP), se usa la de siempre.
+const _copiasOp = new Map();
+function opMonomorfa(fn, d, x, y) {
+  if (!jitPermitido()) return fn;
+  const t = v => (v instanceof Float64Array ? 'F' : v instanceof Int32Array ? 'I' : 'O');
+  const clave = fn.name + t(d) + t(x) + (y && typeof y === 'object' ? t(y) : 'n');
+  let f = _copiasOp.get(clave);
+  if (!f) {
+    try { f = new Function('unaOp', 'return ' + fn.toString())(unaOp); } catch (e) { f = fn; }
+    _copiasOp.set(clave, f);
+  }
+  return f;
+}
 function aplicarOp(d, x, y, n, op, vm) {
   switch (op) {
     case '+': for (let i = 0; i < n; i++) d[i] = x[i] + y[i]; return;
@@ -493,6 +511,7 @@ function repr(v, prof) {
   if (v instanceof ObjTabla)
     return `<tabla ${v.filas}×${v.cols.length}: ${v.cols.map(c => c.nombre).join(', ')}>`;
   if (v instanceof ObjArreglo) return reprArreglo(v, prof);
+  if (v instanceof ObjGrande) return grATexto(v);
   if (v instanceof ObjNodo) {
     if (v.forma === 'texto') return `<nodo texto ${JSON.stringify(String(v.valor).slice(0, 24))}>`;
     if (v.forma === 'elemento') return `<nodo ${v.etiqueta}${v.hijos.length ? ' · ' + v.hijos.length + ' hijo' + (v.hijos.length > 1 ? 's' : '') : ''}>`;
@@ -528,13 +547,15 @@ function tipoDe(v) {
   if (v instanceof ObjFecha) return 'fecha';
   if (v instanceof ObjTabla) return 'tabla';
   if (v instanceof ObjArreglo) return 'arreglo';
+  if (v instanceof ObjGrande) return 'grande';
   if (v instanceof ObjGenerador) return v.clase;
   if (v instanceof ObjPromesa) return 'promesa';
   if (v instanceof ObjOpaco) return v.clase;
   return 'funcion';
 }
 const verdad = v => !(v === null || v === undefined || v === false || v === 0 || v === '' ||
-                      (v instanceof ObjLista && v.items.length === 0));
+                      (v instanceof ObjLista && v.items.length === 0) ||
+                      (v instanceof ObjGrande && v.m === 0n));
 // Compara en profundidad. El tercer parámetro lleva los pares que ya se están
 // comparando más arriba en la recursión: sin él, dos listas que se contienen a
 // sí mismas hacen que la recursión no termine nunca.
@@ -548,6 +569,8 @@ function iguales(a, b, enCurso) {
   // el mismo instante son iguales, como dos listas con los mismos elementos.
   if (a instanceof ObjFecha || b instanceof ObjFecha)
     return a instanceof ObjFecha && b instanceof ObjFecha && a.ms === b.ms;
+  // (motor-exp N1) un grande es igual a otro grande o a un número del mismo valor
+  if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeIgual(a, b);
   if (a instanceof ObjArreglo || b instanceof ObjArreglo) {
     if (!(a instanceof ObjArreglo) || !(b instanceof ObjArreglo)) return false;
     if (a.forma.length !== b.forma.length) return false;
@@ -1200,6 +1223,7 @@ class VM {
         case 20 /*NEG*/: {
           const a = this.sacar();
           if (a instanceof ObjArreglo) { this.empujar(this.arrArit(a, -1, '*')); break; }
+          if (a instanceof ObjGrande) { this.empujar(grNeg(a)); break; }
           if (typeof a !== 'number') this.error(`«-» necesita un número y recibió ${tipoDe(a)}`);
           this.empujar(-a); break;
         }
@@ -1207,10 +1231,10 @@ class VM {
 
         case 22 /*EQ*/: { const b = this.sacar(), a = this.sacar(); this.empujar(iguales(a, b)); break; }
         case 23 /*NEQ*/: { const b = this.sacar(), a = this.sacar(); this.empujar(!iguales(a, b)); break; }
-        case 24 /*LT*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '<'); this.empujar(a < b); break; }
-        case 25 /*LE*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '<='); this.empujar(a <= b); break; }
-        case 26 /*GT*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '>'); this.empujar(a > b); break; }
-        case 27 /*GE*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '>='); this.empujar(a >= b); break; }
+        case 24 /*LT*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '<') ? grandeCmp(this, a, b, '<') < 0 : a < b); break; }
+        case 25 /*LE*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '<=') ? grandeCmp(this, a, b, '<=') <= 0 : a <= b); break; }
+        case 26 /*GT*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '>') ? grandeCmp(this, a, b, '>') > 0 : a > b); break; }
+        case 27 /*GE*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '>=') ? grandeCmp(this, a, b, '>=') >= 0 : a >= b); break; }
 
         case 28 /*JMP*/: f.ip += code[f.ip] + 1; break;
         case 29 /*JMP_FALSE*/: { const off = code[f.ip++]; if (!verdad(this.mirar(0))) f.ip += off; break; }
@@ -1305,6 +1329,7 @@ class VM {
   // alguno es otra cosa. Así añadir arreglos no cuesta un microsegundo en el
   // 99% de los programas, que no los usan.
   aritOtro(a, b, op) {
+    if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeArit(this, a, b, op);
     if (a instanceof ObjArreglo || b instanceof ObjArreglo) return this.arrArit(a, b, op);
     if (op === '+') return this.sumar(a, b);
     this.error(`«${op}» necesita dos números y recibió ${tipoDe(a)} y ${tipoDe(b)}`);
@@ -1348,11 +1373,11 @@ class VM {
       a.forma.length === b.forma.length && a.forma.every((x, i) => x === b.forma[i]);
     if (mismaForma) {
       const x = a.datos, y = b.datos;
-      aplicarOp(d, x, y, n, op, this);
+      opMonomorfa(aplicarOp, d, x, y)(d, x, y, n, op, this);
       return out;
     }
-    if (esA && !esB && a.seguida) { aplicarOpEsc(d, a.datos, b, n, op, false, this); return out; }
-    if (esB && !esA && b.seguida) { aplicarOpEsc(d, b.datos, a, n, op, true, this); return out; }
+    if (esA && !esB && a.seguida) { const x = a.datos; opMonomorfa(aplicarOpEsc, d, x, null)(d, x, b, n, op, false, this); return out; }
+    if (esB && !esA && b.seguida) { const x = b.datos; opMonomorfa(aplicarOpEsc, d, x, null)(d, x, a, n, op, true, this); return out; }
 
     // El camino general: vistas, transpuestas y difusión de verdad. Recorre por
     // zancadas, que es lo único que vale para cualquier forma.
@@ -1543,10 +1568,22 @@ class VM {
   // puente que usan las reducciones que ya existían para listas.
   arrValores(x) {
     this.nadaDeComplejos(x, null);
-    const out = new Array(x.tamano);
-    let i = 0;
-    for (const p of x.posiciones()) out[i++] = x.datos[p];
-    this.cobrar(x.tamano);
+    const n = x.tamano, out = new Array(n), d = x.datos;
+    this.cobrar(n);
+    if (n === 0) return out;
+    // (motor-exp N1) seguido: un bucle; si no, un odómetro sobre las zancadas.
+    // El generador «posiciones» costaba 40 ns por número: suma() de un millón
+    // tardaba 43 ms.
+    if (x.seguida) { const o = x.desp || 0; for (let i = 0; i < n; i++) out[i] = d[o + i]; return out; }
+    const f = x.forma, z = x.zancadas, nd = f.length, ix = new Array(nd).fill(0);
+    let p = x.desp;
+    for (let k = 0; k < n; k++) {
+      out[k] = d[p];
+      for (let q = nd - 1; q >= 0; q--) {
+        if (++ix[q] < f[q]) { p += z[q]; break; }
+        p -= (f[q] - 1) * z[q]; ix[q] = 0;
+      }
+    }
     return out;
   }
 
@@ -1599,6 +1636,7 @@ class VM {
     if (typeof a === 'string' && typeof b === 'string') return a + b;
     if (a instanceof ObjLista && b instanceof ObjLista) return this.nuevaLista(a.items.concat(b.items));
     if (a instanceof ObjArreglo || b instanceof ObjArreglo) return this.arrArit(a, b, '+');
+    if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeArit(this, a, b, '+');
     if (typeof a === 'string' || typeof b === 'string')
       this.error(`no se puede sumar ${tipoDe(a)} y ${tipoDe(b)}`,
         `convierte con texto(...): por ejemplo "total: " + texto(${repr(typeof a === 'string' ? b : a, 1)})`);
@@ -1608,7 +1646,14 @@ class VM {
     if (typeof a !== 'number' || typeof b !== 'number')
       this.error(`«${op}» necesita dos números y recibió ${tipoDe(a)} y ${tipoDe(b)}`);
   }
+  // Devuelve cierto si es una comparación con un grande (la hace quien llama con
+  // grandeCmp); si no, valida y devuelve falso, y la hace JavaScript.
   cmp(a, b, op) {
+    if (a instanceof ObjGrande || b instanceof ObjGrande) {
+      const ok = x => x instanceof ObjGrande || typeof x === 'number';
+      if (!ok(a) || !ok(b)) this.error(`no se pueden comparar ${tipoDe(a)} y ${tipoDe(b)} con «${op}»`);
+      return true;
+    }
     // Dos fechas sí: es la razón de que «fecha» sea un tipo y no un texto ni un
     // número. Una fecha con un número NO, aunque por dentro sea un número:
     // dejarlo pasar es justo el error que el tipo viene a quitar.
@@ -2026,11 +2071,12 @@ function crearRT(vm) {
     pow(a, b) { if (typeof a === 'number' && typeof b === 'number') return Math.pow(a, b);
                 return vm.aritOtro(a, b, '**'); },
     neg(a) { if (a instanceof ObjArreglo) return vm.arrArit(a, -1, '*');
+             if (a instanceof ObjGrande) return grNeg(a);
              if (typeof a !== 'number') vm.error(`«-» necesita un número y recibió ${tipoDe(a)}`); return -a; },
-    lt(a, b) { vm.cmp(a, b, '<'); return a < b; },
-    le(a, b) { vm.cmp(a, b, '<='); return a <= b; },
-    gt(a, b) { vm.cmp(a, b, '>'); return a > b; },
-    ge(a, b) { vm.cmp(a, b, '>='); return a >= b; },
+    lt(a, b) { return vm.cmp(a, b, '<') ? grandeCmp(vm, a, b, '<') < 0 : a < b; },
+    le(a, b) { return vm.cmp(a, b, '<=') ? grandeCmp(vm, a, b, '<=') <= 0 : a <= b; },
+    gt(a, b) { return vm.cmp(a, b, '>') ? grandeCmp(vm, a, b, '>') > 0 : a > b; },
+    ge(a, b) { return vm.cmp(a, b, '>=') ? grandeCmp(vm, a, b, '>=') >= 0 : a >= b; },
     // La red contra bucles infinitos, dentro del código traducido. El JS que
     // genera el JIT no pasa por el bucle de despacho, así que no contaba nada:
     // «mientras cierto» dentro de una función se colgaba para siempre, y una

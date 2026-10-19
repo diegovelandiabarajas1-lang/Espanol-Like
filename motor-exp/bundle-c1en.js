@@ -78,7 +78,7 @@ const PISTA_PALABRA = Object.assign(Object.create(null), {
 // comunes del idioma habría roto cualquier programa que las use de nombre.
 // «var y = 1» compila.
 
-const TIPOS_BASE = new Set(['entero', 'real', 'texto', 'bool', 'nulo', 'lista', 'dic', 'funcion', 'nodo', 'estilo', 'error', 'fecha', 'tabla', 'arreglo', 'cualquiera']);
+const TIPOS_BASE = new Set(['entero', 'real', 'texto', 'bool', 'nulo', 'lista', 'dic', 'funcion', 'nodo', 'estilo', 'error', 'fecha', 'tabla', 'arreglo', 'grande', 'cualquiera']);
 
 function lexer(fuente) {
   const toks = [];
@@ -258,6 +258,8 @@ const T = {
   // después de guardarla y volverla a leer.
   tabla: { k: 'tabla' },
   arreglo: { k: 'arreglo' },
+  // (motor-exp N1) Un decimal de precisión arbitraria, de NEÑ (18-nen-precision.js).
+  grande: { k: 'grande' },
   // (motor-exp) Un registro declarado con «tipo Nombre { … }». Lo que lleva
   // —campos y métodos— lo sabe el verificador; aquí solo viaja el nombre.
   registro: (nombre) => ({ k: 'registro', nombre }),
@@ -302,7 +304,7 @@ function tipoATexto(t) {
 // Falla al instalar la biblioteca, no al llamar a la función: una firma mal
 // escrita revienta la creación del motor y por tanto la primera prueba que
 // corra, en vez de dejar un nombre mal tipado suelto.
-const BASICOS = ['entero', 'real', 'texto', 'bool', 'nulo', 'cualquiera', 'nodo', 'error', 'estilo', 'fecha', 'tabla', 'arreglo'];
+const BASICOS = ['entero', 'real', 'texto', 'bool', 'nulo', 'cualquiera', 'nodo', 'error', 'estilo', 'fecha', 'tabla', 'arreglo', 'grande'];
 
 // Parte por comas de primer nivel: 'lista<real>, dic<texto,real>' → dos trozos.
 function partirNivel(s) {
@@ -1385,6 +1387,21 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
     if (f && !registros.has(f.nombre)) registros.set(f.nombre, f);
   }
   const tipoReg = nombre => registros.get(nombre) || null;
+  // (motor-exp N1) ¿«arreglo» es el de numerico (o NEÑ), y no uno del programa?
+  function esArregloDeNumerico(amb) {
+    const v = amb.buscar('arreglo');
+    if (!v) return false;
+    const imp = enlace && enlace.nombres.get('arreglo');
+    if (imp) return v === raiz.vars.get('arreglo') &&
+      (imp.global === nombreGlobalModulo(claveEdsl('numerico'), 'arreglo') || imp.global === nombreGlobalModulo(claveEdsl('nen'), 'arreglo'));
+    return v === raiz.vars.get('arreglo') && Object.prototype.hasOwnProperty.call(globalesTipos, 'arreglo');
+  }
+  function llevaLiteralReal(n) {
+    if (n.tipo === 'Literal') return n.tipoLit === T.real;
+    if (n.tipo === 'Unario' && n.op === '-') return llevaLiteralReal(n.expr);
+    if (n.tipo === 'ListaLit') return n.items.some(llevaLiteralReal);
+    return false;
+  }
   function campoDe(r, nombre) { return r.campos.find(c => c.nombre === nombre) || null; }
   function sinCampo(n, r, nombre) {
     const lista = r.campos.map(c => c.nombre).concat([...r.metodos.keys()]);
@@ -1624,6 +1641,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         // «-a» sobre un arreglo le cambia el signo a todos sus números.
         if (n.op === '-') {
           if (t.k === 'arreglo') return T.arreglo;
+          if (t.k === 'grande') return T.grande;
           if (!esNum(t)) err(n, `«-» necesita un número y recibió ${tipoATexto(t)}`);
           return t;
         }
@@ -1647,7 +1665,10 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           // sea un tipo. La VM lo vuelve a comprobar para lo que llegue como
           // «cualquiera», y las dos reglas tienen que decir lo mismo.
           const dosFechas = a.k === 'fecha' && b.k === 'fecha';
-          if (!(dosFechas || (esNum(a) && esNum(b)) || (a.k === 'texto' && b.k === 'texto') ||
+          // (motor-exp N1) un grande se compara con otro grande o con un número
+          const conGrande = (a.k === 'grande' || b.k === 'grande') &&
+            (a.k === 'grande' || esNum(a)) && (b.k === 'grande' || esNum(b));
+          if (!(dosFechas || conGrande || (esNum(a) && esNum(b)) || (a.k === 'texto' && b.k === 'texto') ||
                 a.k === 'cualquiera' || b.k === 'cualquiera'))
             err(n, `no se pueden comparar ${tipoATexto(a)} y ${tipoATexto(b)} con «${op}»`,
               // La misma pista que da la VM. Si las dos reglas dicen cosas
@@ -1662,6 +1683,14 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         // Un arreglo se opera con otro arreglo o con un número, y el resultado
         // es un arreglo. Esto es lo que deja escribir «a * 2 + b» en vez de un
         // bucle, y que el verificador lo tipe sin ejecutar nada.
+        // (motor-exp N1) un grande con otro grande o con un número es un grande
+        if ((a.k === 'grande' || b.k === 'grande') && ['+', '-', '*', '/', '//', '%', '**'].includes(op)) {
+          const otro = a.k === 'grande' ? b : a;
+          if (otro.k === 'grande' || esNum(otro)) return T.grande;
+          err(n, `«${op}»: un grande se opera con otro grande o con un número, y llegó ${tipoATexto(otro)}`,
+            'para pasar un texto a grande: grande("3.14159")');
+          return T.grande;
+        }
         if (a.k === 'arreglo' || b.k === 'arreglo') {
           if (['+', '-', '*', '/', '//', '%', '**'].includes(op)) {
             const otro = a.k === 'arreglo' ? b : a;
@@ -1695,6 +1724,13 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       }
       case 'Llamada': {
         const ft = expr(n.callee, amb);
+        // (motor-exp N1) «arreglo([1.0, 2.0])»: el «.0» se pierde al ejecutar
+        // (1.0 y 1 son el mismo número), así que el arreglo salía de enteros. El
+        // verificador sí lo ve en el texto: si la lista literal lleva un real
+        // escrito con punto o exponente, se le pasa «"real"» como tipo.
+        if (n.callee.tipo === 'Variable' && n.callee.nombre === 'arreglo' && n.args.length === 1 &&
+            n.args[0].tipo === 'ListaLit' && esArregloDeNumerico(amb) && llevaLiteralReal(n.args[0]))
+          n.args.push({ tipo: 'Literal', valor: 'real', tipoLit: T.texto, linea: n.linea, col: n.col });
         const nom = n.callee.tipo === 'Variable' ? `«${n.callee.nombre}»`
           : n.callee.tipo === 'Propiedad' ? `«${n.callee.nombre}»` : 'la función';
         // (motor-exp) Argumentos con nombre y valores por defecto. Se resuelven
@@ -2820,6 +2856,24 @@ const aridadTexto = fn => (fn.minimos !== undefined && fn.minimos < fn.aridad ? 
 // «switch» dentro del bucle, V8 no puede especializar la operación y se queda a
 // la mitad de velocidad. Son seis líneas repetidas seis veces, y se midió que
 // vale la pena.
+// (motor-exp N1) Una copia de aplicarOp/aplicarOpEsc por cada combinación de
+// tipos (Float64Array o Int32Array en el destino y en los operandos). Con una
+// sola función, V8 ve los dos tipos en el mismo bucle y lo compila genérico:
+// la mitad de rápido (5,2 ms contra 2,6 por millón, medido). Cada copia es una
+// función nueva con su propia información de tipos. Si el entorno no deja
+// compilar en caliente (CSP), se usa la de siempre.
+const _copiasOp = new Map();
+function opMonomorfa(fn, d, x, y) {
+  if (!jitPermitido()) return fn;
+  const t = v => (v instanceof Float64Array ? 'F' : v instanceof Int32Array ? 'I' : 'O');
+  const clave = fn.name + t(d) + t(x) + (y && typeof y === 'object' ? t(y) : 'n');
+  let f = _copiasOp.get(clave);
+  if (!f) {
+    try { f = new Function('unaOp', 'return ' + fn.toString())(unaOp); } catch (e) { f = fn; }
+    _copiasOp.set(clave, f);
+  }
+  return f;
+}
 function aplicarOp(d, x, y, n, op, vm) {
   switch (op) {
     case '+': for (let i = 0; i < n; i++) d[i] = x[i] + y[i]; return;
@@ -3010,6 +3064,7 @@ function repr(v, prof) {
   if (v instanceof ObjTabla)
     return `<tabla ${v.filas}×${v.cols.length}: ${v.cols.map(c => c.nombre).join(', ')}>`;
   if (v instanceof ObjArreglo) return reprArreglo(v, prof);
+  if (v instanceof ObjGrande) return grATexto(v);
   if (v instanceof ObjNodo) {
     if (v.forma === 'texto') return `<nodo texto ${JSON.stringify(String(v.valor).slice(0, 24))}>`;
     if (v.forma === 'elemento') return `<nodo ${v.etiqueta}${v.hijos.length ? ' · ' + v.hijos.length + ' hijo' + (v.hijos.length > 1 ? 's' : '') : ''}>`;
@@ -3045,13 +3100,15 @@ function tipoDe(v) {
   if (v instanceof ObjFecha) return 'fecha';
   if (v instanceof ObjTabla) return 'tabla';
   if (v instanceof ObjArreglo) return 'arreglo';
+  if (v instanceof ObjGrande) return 'grande';
   if (v instanceof ObjGenerador) return v.clase;
   if (v instanceof ObjPromesa) return 'promesa';
   if (v instanceof ObjOpaco) return v.clase;
   return 'funcion';
 }
 const verdad = v => !(v === null || v === undefined || v === false || v === 0 || v === '' ||
-                      (v instanceof ObjLista && v.items.length === 0));
+                      (v instanceof ObjLista && v.items.length === 0) ||
+                      (v instanceof ObjGrande && v.m === 0n));
 // Compara en profundidad. El tercer parámetro lleva los pares que ya se están
 // comparando más arriba en la recursión: sin él, dos listas que se contienen a
 // sí mismas hacen que la recursión no termine nunca.
@@ -3065,6 +3122,8 @@ function iguales(a, b, enCurso) {
   // el mismo instante son iguales, como dos listas con los mismos elementos.
   if (a instanceof ObjFecha || b instanceof ObjFecha)
     return a instanceof ObjFecha && b instanceof ObjFecha && a.ms === b.ms;
+  // (motor-exp N1) un grande es igual a otro grande o a un número del mismo valor
+  if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeIgual(a, b);
   if (a instanceof ObjArreglo || b instanceof ObjArreglo) {
     if (!(a instanceof ObjArreglo) || !(b instanceof ObjArreglo)) return false;
     if (a.forma.length !== b.forma.length) return false;
@@ -3717,6 +3776,7 @@ class VM {
         case 20 /*NEG*/: {
           const a = this.sacar();
           if (a instanceof ObjArreglo) { this.empujar(this.arrArit(a, -1, '*')); break; }
+          if (a instanceof ObjGrande) { this.empujar(grNeg(a)); break; }
           if (typeof a !== 'number') this.error(`«-» necesita un número y recibió ${tipoDe(a)}`);
           this.empujar(-a); break;
         }
@@ -3724,10 +3784,10 @@ class VM {
 
         case 22 /*EQ*/: { const b = this.sacar(), a = this.sacar(); this.empujar(iguales(a, b)); break; }
         case 23 /*NEQ*/: { const b = this.sacar(), a = this.sacar(); this.empujar(!iguales(a, b)); break; }
-        case 24 /*LT*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '<'); this.empujar(a < b); break; }
-        case 25 /*LE*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '<='); this.empujar(a <= b); break; }
-        case 26 /*GT*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '>'); this.empujar(a > b); break; }
-        case 27 /*GE*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '>='); this.empujar(a >= b); break; }
+        case 24 /*LT*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '<') ? grandeCmp(this, a, b, '<') < 0 : a < b); break; }
+        case 25 /*LE*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '<=') ? grandeCmp(this, a, b, '<=') <= 0 : a <= b); break; }
+        case 26 /*GT*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '>') ? grandeCmp(this, a, b, '>') > 0 : a > b); break; }
+        case 27 /*GE*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '>=') ? grandeCmp(this, a, b, '>=') >= 0 : a >= b); break; }
 
         case 28 /*JMP*/: f.ip += code[f.ip] + 1; break;
         case 29 /*JMP_FALSE*/: { const off = code[f.ip++]; if (!verdad(this.mirar(0))) f.ip += off; break; }
@@ -3822,6 +3882,7 @@ class VM {
   // alguno es otra cosa. Así añadir arreglos no cuesta un microsegundo en el
   // 99% de los programas, que no los usan.
   aritOtro(a, b, op) {
+    if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeArit(this, a, b, op);
     if (a instanceof ObjArreglo || b instanceof ObjArreglo) return this.arrArit(a, b, op);
     if (op === '+') return this.sumar(a, b);
     this.error(`«${op}» necesita dos números y recibió ${tipoDe(a)} y ${tipoDe(b)}`);
@@ -3865,11 +3926,11 @@ class VM {
       a.forma.length === b.forma.length && a.forma.every((x, i) => x === b.forma[i]);
     if (mismaForma) {
       const x = a.datos, y = b.datos;
-      aplicarOp(d, x, y, n, op, this);
+      opMonomorfa(aplicarOp, d, x, y)(d, x, y, n, op, this);
       return out;
     }
-    if (esA && !esB && a.seguida) { aplicarOpEsc(d, a.datos, b, n, op, false, this); return out; }
-    if (esB && !esA && b.seguida) { aplicarOpEsc(d, b.datos, a, n, op, true, this); return out; }
+    if (esA && !esB && a.seguida) { const x = a.datos; opMonomorfa(aplicarOpEsc, d, x, null)(d, x, b, n, op, false, this); return out; }
+    if (esB && !esA && b.seguida) { const x = b.datos; opMonomorfa(aplicarOpEsc, d, x, null)(d, x, a, n, op, true, this); return out; }
 
     // El camino general: vistas, transpuestas y difusión de verdad. Recorre por
     // zancadas, que es lo único que vale para cualquier forma.
@@ -4060,10 +4121,22 @@ class VM {
   // puente que usan las reducciones que ya existían para listas.
   arrValores(x) {
     this.nadaDeComplejos(x, null);
-    const out = new Array(x.tamano);
-    let i = 0;
-    for (const p of x.posiciones()) out[i++] = x.datos[p];
-    this.cobrar(x.tamano);
+    const n = x.tamano, out = new Array(n), d = x.datos;
+    this.cobrar(n);
+    if (n === 0) return out;
+    // (motor-exp N1) seguido: un bucle; si no, un odómetro sobre las zancadas.
+    // El generador «posiciones» costaba 40 ns por número: suma() de un millón
+    // tardaba 43 ms.
+    if (x.seguida) { const o = x.desp || 0; for (let i = 0; i < n; i++) out[i] = d[o + i]; return out; }
+    const f = x.forma, z = x.zancadas, nd = f.length, ix = new Array(nd).fill(0);
+    let p = x.desp;
+    for (let k = 0; k < n; k++) {
+      out[k] = d[p];
+      for (let q = nd - 1; q >= 0; q--) {
+        if (++ix[q] < f[q]) { p += z[q]; break; }
+        p -= (f[q] - 1) * z[q]; ix[q] = 0;
+      }
+    }
     return out;
   }
 
@@ -4116,6 +4189,7 @@ class VM {
     if (typeof a === 'string' && typeof b === 'string') return a + b;
     if (a instanceof ObjLista && b instanceof ObjLista) return this.nuevaLista(a.items.concat(b.items));
     if (a instanceof ObjArreglo || b instanceof ObjArreglo) return this.arrArit(a, b, '+');
+    if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeArit(this, a, b, '+');
     if (typeof a === 'string' || typeof b === 'string')
       this.error(`no se puede sumar ${tipoDe(a)} y ${tipoDe(b)}`,
         `convierte con texto(...): por ejemplo "total: " + texto(${repr(typeof a === 'string' ? b : a, 1)})`);
@@ -4125,7 +4199,14 @@ class VM {
     if (typeof a !== 'number' || typeof b !== 'number')
       this.error(`«${op}» necesita dos números y recibió ${tipoDe(a)} y ${tipoDe(b)}`);
   }
+  // Devuelve cierto si es una comparación con un grande (la hace quien llama con
+  // grandeCmp); si no, valida y devuelve falso, y la hace JavaScript.
   cmp(a, b, op) {
+    if (a instanceof ObjGrande || b instanceof ObjGrande) {
+      const ok = x => x instanceof ObjGrande || typeof x === 'number';
+      if (!ok(a) || !ok(b)) this.error(`no se pueden comparar ${tipoDe(a)} y ${tipoDe(b)} con «${op}»`);
+      return true;
+    }
     // Dos fechas sí: es la razón de que «fecha» sea un tipo y no un texto ni un
     // número. Una fecha con un número NO, aunque por dentro sea un número:
     // dejarlo pasar es justo el error que el tipo viene a quitar.
@@ -4543,11 +4624,12 @@ function crearRT(vm) {
     pow(a, b) { if (typeof a === 'number' && typeof b === 'number') return Math.pow(a, b);
                 return vm.aritOtro(a, b, '**'); },
     neg(a) { if (a instanceof ObjArreglo) return vm.arrArit(a, -1, '*');
+             if (a instanceof ObjGrande) return grNeg(a);
              if (typeof a !== 'number') vm.error(`«-» necesita un número y recibió ${tipoDe(a)}`); return -a; },
-    lt(a, b) { vm.cmp(a, b, '<'); return a < b; },
-    le(a, b) { vm.cmp(a, b, '<='); return a <= b; },
-    gt(a, b) { vm.cmp(a, b, '>'); return a > b; },
-    ge(a, b) { vm.cmp(a, b, '>='); return a >= b; },
+    lt(a, b) { return vm.cmp(a, b, '<') ? grandeCmp(vm, a, b, '<') < 0 : a < b; },
+    le(a, b) { return vm.cmp(a, b, '<=') ? grandeCmp(vm, a, b, '<=') <= 0 : a <= b; },
+    gt(a, b) { return vm.cmp(a, b, '>') ? grandeCmp(vm, a, b, '>') > 0 : a > b; },
+    ge(a, b) { return vm.cmp(a, b, '>=') ? grandeCmp(vm, a, b, '>=') >= 0 : a >= b; },
     // La red contra bucles infinitos, dentro del código traducido. El JS que
     // genera el JIT no pasa por el bucle de despacho, así que no contaba nada:
     // «mientras cierto» dentro de una función se colgaba para siempre, y una
@@ -5084,6 +5166,13 @@ function instalarBiblioteca(vm, host) {
     if (typeof v === 'number') return Math.trunc(v);
     if (typeof v === 'boolean') return v ? 1 : 0;
     if (typeof v === 'string') { const n = parseInt(v.trim(), 10); if (Number.isNaN(n)) vm.error(`«entero»: «${v}» no es un número`); return n; }
+    // (motor-exp N1) de un grande: la parte entera, si cabe en un entero de Ñ
+    if (v instanceof ObjGrande) {
+      const n = Number(grAEnteroBig(v));
+      if (!Number.isSafeInteger(n)) vm.error(`«entero»: ${grATexto(v, 20)} no cabe en un entero (el máximo exacto es 2^53)`,
+        'déjalo como grande, o sácalo como texto con cifrasExactas(g)');
+      return n;
+    }
     vm.error(`«entero»: no se puede convertir ${tipoDe(v)}`);
   }, 'convierte a número entero');
   def('real', 'cualquiera -> real', (a) => {
@@ -5091,6 +5180,7 @@ function instalarBiblioteca(vm, host) {
     if (typeof v === 'number') return v;
     if (typeof v === 'boolean') return v ? 1 : 0;
     if (typeof v === 'string') { const n = parseFloat(v.trim()); if (Number.isNaN(n)) vm.error(`«real»: «${v}» no es un número`); return n; }
+    if (v instanceof ObjGrande) return grAReal(v);          // (motor-exp N1) el real más cercano
     vm.error(`«real»: no se puede convertir ${tipoDe(v)}`);
   }, 'convierte a número con decimales');
   def('bool', 'cualquiera -> bool', (a) => verdad(a[0]), 'convierte a verdadero/falso');
@@ -6801,12 +6891,16 @@ function instalarBiblioteca(vm, host) {
   // orden a propósito: C1EÑ primero, porque crea «vm.c1en» y las otras partes
   // registran núcleos en él al instalarse (si no existiera se quedarían con su
   // respaldo en JavaScript). Luego cálculo, fórmulas y tensores.
-  instalarEdsl(vm, 'nen', def => {
+  const regNen = instalarEdsl(vm, 'nen', def => {
     instalarNenC1en(vm, def);
     instalarNenCalculo(vm, def);
     instalarNenFormulas(vm, def);
     instalarNenTensores(vm, def);
+    instalarNenPrecision(vm, def);      // (motor-exp N1) el tipo «grande» y los enteros exactos
+    instalarNenAmplitud(vm, def);       // (motor-exp N1) especiales, distribuciones y muestreo (1.ª tanda)
+    instalarNenUnion(vm, def);          // (motor-exp N1) fila, donde y apilar para arreglos Y tablas
   });
+  reexportarEnNen(vm, regNen);          // (motor-exp N1) todo numerico y todo datos, también desde «nen»
   // El interruptor va al final: es la unión de los de arriba.
   instalarClasico(vm);
   // Y los eDSL que este motor trae ABIERTOS: en el ámbito global, sin «usar».
@@ -6839,6 +6933,14 @@ function abrirEdsls(vm, nombres) {
     for (const [corto] of r.exporta) {
       const largo = nombreGlobalModulo(r.clave, corto);
       const obj = vm.globals.get(largo);
+      // (motor-exp N1) «nen» reexporta numerico y datos con EL MISMO objeto: si
+      // ya lo abrió otro eDSL, es el mismo nombre para lo mismo, no un choque.
+      if (origen.has(corto) && vm.globals.get(corto) === obj) continue;
+      // Y las tres de NEÑ que valen para arreglos y tablas (fila, donde, apilar)
+      // pueden ocupar el sitio de la de numerico o datos: hacen lo mismo y más.
+      if (origen.has(corto) && obj && obj.despacha && obj.despacha.includes(vm.globals.get(corto))) {
+        vm.globals.set(corto, obj); origen.set(corto, nombre); continue;
+      }
       if (vm.globals.has(corto)) {
         const quien = origen.get(corto);
         throw new Error(quien
@@ -8664,8 +8766,10 @@ function instalarProbar(vm) {
     }, 'debeSerCerca(a, b, tolerancia?) — para números con decimales');
     const comparar = (nombre, ok, texto) => def(nombre, 'cualquiera, cualquiera -> nulo', a => {
       cuenta();
-      vm.cmp(a[0], a[1], nombre);
-      if (!ok(a[0], a[1])) falla(`${v(a[0])} no es ${texto} ${v(a[1])}`);
+      // (motor-exp N1) con un grande, la comparación la hace grandeCmp
+      const conGrande = vm.cmp(a[0], a[1], nombre);
+      const s = conGrande ? grandeCmp(vm, a[0], a[1], nombre) : 0;
+      if (!(conGrande ? ok(s, 0) : ok(a[0], a[1]))) falla(`${v(a[0])} no es ${texto} ${v(a[1])}`);
       return null;
     }, `que el primero sea ${texto} el segundo · también vale para fechas`);
     comparar('debeSerMayor', (x, y) => x > y, 'mayor que');
@@ -9232,6 +9336,16 @@ function instalarNumerico(vm) {
   const num = (v, n, f) => vm.exigeNum(v, n, f);
   const lst = (v, n, f) => vm.exigeLista(v, n, f);
   const nums = (v, n, f) => vm.exigeNums(v, n, f);
+  // (motor-exp N1) Los números para REDUCIR (suma, media, varianza…): de un
+  // arreglo seguido, sus propios datos, sin copiarlos a una lista (suma() de un
+  // millón bajó de 43 a ~1 ms). Las sumas van en el mismo orden, de izquierda a
+  // derecha y desde 0, así que dan exactamente lo mismo que antes.
+  const numsPlanos = (v, n, f) => {
+    if (v instanceof ObjArreglo && v.seguida && v.tipo !== 'complejo') { vm.cobrar(v.tamano); return v.datos.subarray(0, v.tamano); }
+    return nums(v, n, f);
+  };
+  const sumaDe = xs => { let s = 0; for (let i = 0; i < xs.length; i++) s += xs[i]; return s; };
+  const sumaCuad = (xs, m) => { let s = 0; for (let i = 0; i < xs.length; i++) { const d = xs[i] - m; s += d * d; } return s; };
   const ent = (v, n, f) => vm.exigeEnt(v, n, f);
 
   // ── el azar ────────────────────────────────────────────────────────────────
@@ -9335,7 +9449,9 @@ function instalarNumerico(vm) {
     })(l, 0);
     return { forma, plano };
   }
-  const todoEntero = xs => xs.every(x => Number.isInteger(x));
+  // (motor-exp N1) entero solo si cabe en 32 bits: arreglo([3e200, 4e200]) daba
+  // ceros sin avisar porque 3e200 es «entero» para JavaScript
+  const todoEntero = xs => xs.every(x => Number.isInteger(x) && x >= -2147483648 && x <= 2147483647);
   const tamanoDeF = f => f.reduce((a, b) => a * b, 1);
 
   // ── la transformada de Fourier ─────────────────────────────────────────────
@@ -9774,14 +9890,14 @@ function instalarNumerico(vm) {
       if (x instanceof ObjArreglo && a.length > 1)
         return vm.arrReducir(x, ent(a[1], 2, 'suma'), 0, (acc, v) => acc + v, null,
           x.tipo === 'entero' ? 'entero' : 'real');
-      return nums(x, 1, 'suma').reduce((p, c) => p + c, 0);
+      return sumaDe(numsPlanos(x, 1, 'suma'));
     }, 'suma(lista) · suma(arreglo) · suma(arreglo, eje) — con eje da un arreglo');
-    const media = xs => xs.reduce((p, c) => p + c, 0) / xs.length;
+    const media = xs => sumaDe(xs) / xs.length;
     def('media', '... -> cualquiera', a => {
       const x = a[0];
       if (x instanceof ObjArreglo && a.length > 1)
         return vm.arrReducir(x, ent(a[1], 2, 'media'), 0, (acc, v) => acc + v, (acc, n) => acc / n, 'real');
-      const v = nums(x, 1, 'media');
+      const v = numsPlanos(x, 1, 'media');
       if (!v.length) vm.error('«media» de una lista vacía');
       return media(v);
     }, 'media(lista) · media(arreglo) · media(arreglo, eje)');
@@ -9797,8 +9913,8 @@ function instalarNumerico(vm) {
       for (const v of x) { const k = (c.get(v) || 0) + 1; c.set(v, k); if (k > mc) { mc = k; mejor = v; } }
       return mejor;
     });
-    def('varianza', 'lista<real>|arreglo -> real', a => { const x = nums(a[0], 1, 'varianza'); if (x.length < 2) vm.error('«varianza» necesita al menos 2 datos'); const m = media(x); return x.reduce((p, c) => p + (c - m) * (c - m), 0) / (x.length - 1); }, 'varianza muestral');
-    def('desviacion', 'lista<real>|arreglo -> real', a => { const x = nums(a[0], 1, 'desviacion'); if (x.length < 2) vm.error('«desviacion» necesita al menos 2 datos'); const m = media(x); return Math.sqrt(x.reduce((p, c) => p + (c - m) * (c - m), 0) / (x.length - 1)); });
+    def('varianza', 'lista<real>|arreglo -> real', a => { const x = numsPlanos(a[0], 1, 'varianza'); if (x.length < 2) vm.error('«varianza» necesita al menos 2 datos'); const m = media(x); return sumaCuad(x, m) / (x.length - 1); }, 'varianza muestral');
+    def('desviacion', 'lista<real>|arreglo -> real', a => { const x = numsPlanos(a[0], 1, 'desviacion'); if (x.length < 2) vm.error('«desviacion» necesita al menos 2 datos'); const m = media(x); return Math.sqrt(sumaCuad(x, m) / (x.length - 1)); });
     def('percentil', 'lista<real>|arreglo, real -> real', a => {
       const x = nums(a[0], 1, 'percentil').slice().sort((p, q) => p - q);
       const p = num(a[1], 2, 'percentil');
@@ -9874,6 +9990,17 @@ function instalarNumerico(vm) {
       // multiplica. Sacarlas fuera y acumular la fila en un Float64Array —sin
       // números en caja— pasó 400×400 de 228 ms a 108 ms. La misma cuenta, el
       // mismo orden ikj; solo dónde están las cargas.
+      // (motor-exp N1) con NEÑ instalado, el producto de NEÑ: en C con OpenMP o en
+      // la GPU si es grande (y si no, el mismo bucle i-k-j en JavaScript)
+      if (vm.nenMatmul) {
+        const pa = new Float64Array(nf * nm), pb = new Float64Array(nm * nc);
+        for (let i = 0; i < nf; i++) { const r = A[i]; for (let k = 0; k < nm; k++) pa[i * nm + k] = r[k]; }
+        for (let k = 0; k < nm; k++) { const r = B[k]; for (let j = 0; j < nc; j++) pb[k * nc + j] = r[j]; }
+        const c = vm.nenMatmul(pa, pb, nf, nm, nc);
+        const out = new Array(nf);
+        for (let i = 0; i < nf; i++) out[i] = L(Array.from(c.subarray(i * nc, i * nc + nc)));
+        return L(out);
+      }
       const out = new Array(nf);
       for (let i = 0; i < nf; i++) {
         const Ai = A[i];
@@ -10187,11 +10314,14 @@ function instalarNumerico(vm) {
       const n = ent(a[0], 1, 'factorial');
       if (n < 0) vm.error('«factorial» de un negativo no existe');
       // Más de 170 y el resultado es infinito: se dice en vez de devolverlo.
-      if (n > 170) vm.error(`«factorial»: ${n}! no cabe en un número`, 'el máximo exacto es 170!');
+      // (motor-exp N1) el mensaje decía «el máximo exacto es 170!», y 170! no es
+      // exacto en un real: lo exacto llega hasta 22!. Ahora lo dice, y dónde está lo exacto.
+      if (n > 170) vm.error(`«factorial»: ${n}! no cabe en un número real (el más grande que cabe es 170!)`,
+        'para el número exacto, con todas sus cifras: factorialExacto(n) de "nen"');
       let r = 1;
       for (let i = 2; i <= n; i++) r *= i;
       return r;
-    }, 'factorial(5) → 120 · hasta 170');
+    }, 'factorial(5) → 120 · exacto hasta 22!, aproximado hasta 170! (para más, factorialExacto de "nen")');
     def('combinaciones', 'entero, entero -> real', a => {
       const n = ent(a[0], 1, 'combinaciones'), k = ent(a[1], 2, 'combinaciones');
       if (n < 0 || k < 0) vm.error('«combinaciones» no admite negativos');
@@ -10305,7 +10435,7 @@ function instalarNumerico(vm) {
     }, 'unos(forma, tipo?)');
     def('lleno', '... -> arreglo', a => {
       const v = num(a[1], 2, 'lleno');
-      const x = vm.arrNuevo(formaDe(a[0], 'lleno'), a.length > 2 ? tipoArg(a[2], 'lleno') : (Number.isInteger(v) ? 'entero' : 'real'));
+      const x = vm.arrNuevo(formaDe(a[0], 'lleno'), a.length > 2 ? tipoArg(a[2], 'lleno') : (todoEntero([v]) ? 'entero' : 'real'));
       x.datos.fill(v);
       return x;
     }, 'lleno(forma, valor, tipo?) — todo el arreglo con el mismo valor');
@@ -10940,6 +11070,12 @@ function instalarNumerico(vm) {
       const nf = A.forma[0], nm = A.forma[1], nc = B.forma[1];
       vm.cobrar(nf * nm * nc);
       const out = vm.arrNuevo([nf, nc], 'real');
+      // (motor-exp N1) con NEÑ instalado, el producto de NEÑ (C, GPU o JS, mismos bits)
+      if (vm.nenMatmul) {
+        const plano = x => (x.seguida && x.tipo === 'real') ? x.datos.subarray(0, x.tamano) : Float64Array.from(vm.arrValores(x));
+        out.datos.set(vm.nenMatmul(plano(A), plano(B), nf, nm, nc));
+        return out;
+      }
       const va = vm.arrValores(A), vb = vm.arrValores(B);
       const fila2 = new Float64Array(nc);
       for (let i = 0; i < nf; i++) {
@@ -20188,6 +20324,7 @@ for (const k of [
     // No es el algoritmo más rápido de GPU (sin memoria compartida), pero da
     // EXACTAMENTE lo mismo que la CPU, que aquí pesa más.
     nombre: 'nen_matmul',
+    // (motor-exp N1) ver «nen_matmul_filas» para la CPU
     params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
     cuerpo: 'long long mp = m * p; long long l = i / mp; long long r = i % mp; long long f = r / p; long long col = r % p; ' +
       'long long oa = l * m * K + f * K; long long ob = l * K * p + col; double s = 0.0; ' +
@@ -20200,6 +20337,61 @@ for (const k of [
         let s = 0.0;
         for (let k = 0; k < K; k++) s += a[oa + k] * b[ob + k * p];
         c[i] = s;
+      }
+    },
+  },
+  {
+    // (motor-exp N1) El mismo producto para la CPU, con un micronúcleo de 4×8:
+    // el hilo i hace un grupo de 4 filas de UN lote, y va por trozos de 256 en k
+    // y de 8 en j guardando las 32 sumas en variables (registros) en vez de leer
+    // y escribir c en cada paso. Cada casilla se sigue sumando en el mismo orden
+    // que en nen_matmul (k de 0 a K−1, empezando en 0): el resultado es idéntico
+    // al bit. n = lotes × ⌈m/4⌉.
+    nombre: 'nen_matmul_filas',
+    params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
+    cuerpo:
+      'long long gpl = (m + 3) / 4; long long l = i / gpl; long long r0 = l * m + (i % gpl) * 4; long long r1 = r0 + 4; ' +
+      'if (r1 > l * m + m) r1 = l * m + m; const double * bl = b + l * K * p; ' +
+      'for (long long r = r0; r < r1; r++) for (long long j = 0; j < p; j++) c[r * p + j] = 0.0; ' +
+      'for (long long kb = 0; kb < K; kb += 256) { long long ke = kb + 256; if (ke > K) ke = K; ' +
+      '  long long jb = 0; ' +
+      '  if (r1 - r0 == 4) { const double * A0 = a + r0 * K; const double * A1 = A0 + K; const double * A2 = A1 + K; const double * A3 = A2 + K; ' +
+      '    for (; jb + 8 <= p; jb += 8) { double s0[8], s1[8], s2[8], s3[8]; ' +
+      '      for (int q = 0; q < 8; q++) { s0[q] = c[r0 * p + jb + q]; s1[q] = c[(r0 + 1) * p + jb + q]; s2[q] = c[(r0 + 2) * p + jb + q]; s3[q] = c[(r0 + 3) * p + jb + q]; } ' +
+      '      for (long long k = kb; k < ke; k++) { const double * bk = bl + k * p + jb; double x0 = A0[k], x1 = A1[k], x2 = A2[k], x3 = A3[k]; ' +
+      '        for (int q = 0; q < 8; q++) { double bv = bk[q]; s0[q] = s0[q] + x0 * bv; s1[q] = s1[q] + x1 * bv; s2[q] = s2[q] + x2 * bv; s3[q] = s3[q] + x3 * bv; } } ' +
+      '      for (int q = 0; q < 8; q++) { c[r0 * p + jb + q] = s0[q]; c[(r0 + 1) * p + jb + q] = s1[q]; c[(r0 + 2) * p + jb + q] = s2[q]; c[(r0 + 3) * p + jb + q] = s3[q]; } } } ' +
+      '  for (long long r = r0; r < r1; r++) { const double * ar = a + r * K; for (long long k = kb; k < ke; k++) { double aik = ar[k]; const double * bk = bl + k * p; ' +
+      '    for (long long j = jb; j < p; j++) c[r * p + j] = c[r * p + j] + aik * bk[j]; } } ' +
+      '}',
+    js: (n, m, K, p, a, b, c) => {
+      const s0 = new Float64Array(8), s1 = new Float64Array(8), s2 = new Float64Array(8), s3 = new Float64Array(8);
+      const gpl = Math.floor((m + 3) / 4);
+      for (let i = 0; i < n; i++) {
+        const l = Math.floor(i / gpl), r0 = l * m + (i % gpl) * 4, r1 = Math.min(r0 + 4, l * m + m), bl = l * K * p;
+        for (let r = r0; r < r1; r++) for (let j = 0; j < p; j++) c[r * p + j] = 0.0;
+        for (let kb = 0; kb < K; kb += 256) {
+          const ke = Math.min(kb + 256, K);
+          let jb = 0;
+          if (r1 - r0 === 4) {
+            const A0 = r0 * K, A1 = A0 + K, A2 = A1 + K, A3 = A2 + K;
+            for (; jb + 8 <= p; jb += 8) {
+              for (let q = 0; q < 8; q++) { s0[q] = c[r0 * p + jb + q]; s1[q] = c[(r0 + 1) * p + jb + q]; s2[q] = c[(r0 + 2) * p + jb + q]; s3[q] = c[(r0 + 3) * p + jb + q]; }
+              for (let k = kb; k < ke; k++) {
+                const bk = bl + k * p + jb, x0 = a[A0 + k], x1 = a[A1 + k], x2 = a[A2 + k], x3 = a[A3 + k];
+                for (let q = 0; q < 8; q++) { const bv = b[bk + q]; s0[q] = s0[q] + x0 * bv; s1[q] = s1[q] + x1 * bv; s2[q] = s2[q] + x2 * bv; s3[q] = s3[q] + x3 * bv; }
+              }
+              for (let q = 0; q < 8; q++) { c[r0 * p + jb + q] = s0[q]; c[(r0 + 1) * p + jb + q] = s1[q]; c[(r0 + 2) * p + jb + q] = s2[q]; c[(r0 + 3) * p + jb + q] = s3[q]; }
+            }
+          }
+          for (let r = r0; r < r1; r++) {
+            const ar = r * K;
+            for (let k = kb; k < ke; k++) {
+              const aik = a[ar + k], bk = bl + k * p;
+              for (let j = jb; j < p; j++) c[r * p + j] = c[r * p + j] + aik * b[bk + j];
+            }
+          }
+        }
       }
     },
   },
@@ -20393,12 +20585,22 @@ function instalarNenTensores(vm, def) {
 
   // ── el producto de matrices, por el núcleo ────────────────────────────────
   // (lotes × m × K) · (lotes × K × p) → (lotes × m × p), todo plano.
+  // (motor-exp N1) En la GPU, un hilo por casilla (nen_matmul: las lecturas de
+  // b van seguidas entre hilos vecinos). En la CPU, un hilo por FILA con el
+  // orden i-k-j (nen_matmul_filas), que recorre b y c de seguido y no a saltos
+  // de p: 300×300 bajó de 51 a unos pocos ms. Las dos suman cada casilla en el
+  // mismo orden (k de 0 a K−1, empezando en 0), así que dan los mismos bits.
   function mm(a, b, m, K, p, lotes) {
     lotes = lotes || 1;
     const c = new Float64Array(lotes * m * p);
-    correr('nen_matmul', lotes * m * K * p, lotes * m * p, m, K, p, a, b, c);
+    const trabajo = lotes * m * K * p;
+    const enGpu = trabajo >= NEN_T_UMBRAL && vm.c1en && typeof vm.c1en.describir === 'function' && /^gpu/.test(vm.c1en.describir());
+    if (enGpu) correr('nen_matmul', trabajo, lotes * m * p, m, K, p, a, b, c);
+    else correr('nen_matmul_filas', trabajo, lotes * Math.ceil(m / 4), m, K, p, a, b, c);
     return c;
   }
+  // numerico (por, multMatriz) multiplica con esto mismo
+  vm.nenMatmul = (a, b, m, K, p) => mm(a, b, m, K, p, 1);
   const identidadP = n => { const I = new Float64Array(n * n); for (let i = 0; i < n; i++) I[i * n + i] = 1; return I; };
   const norma1 = (A, n) => { let mx = 0; for (let j = 0; j < n; j++) { let s = 0; for (let i = 0; i < n; i++) s += Math.abs(A[i * n + j]); if (s > mx) mx = s; } return mx; };
   const normaF = A => { let s = 0; for (let i = 0; i < A.length; i++) s += A[i] * A[i]; return Math.sqrt(s); };
@@ -20562,13 +20764,15 @@ function instalarNenTensores(vm, def) {
         if (!fc) vm.error(`«${nombre}» no está definida para complejos`, 'usa parteReal, parteImaginaria o absoluto primero');
         return vm.arrComplejoA(x, fc);
       }
-      const d = planoDe(x), n = d.length;
+      // (motor-exp N1) un arreglo real seguido entra tal cual y la salida se
+      // escribe directamente en el arreglo nuevo: dos copias de menos
+      const d = (x.seguida && x.tipo === 'real') ? x.datos.subarray(0, x.tamano) : planoDe(x), n = d.length;
       if (DOMINIO[nombre]) for (let i = 0; i < n; i++) if (DOMINIO[nombre](d[i]))
         vm.error(`«${nombre}»: hay un valor negativo (${d[i]}, en la posición ${i}) y su resultado no es un número real`,
           'pásalo a complejo con complejo(a) si quieres los resultados complejos');
-      const y = new Float64Array(n);
-      correr(nucleo, n, n, d, y);
-      return deReales(x.forma, y);
+      const o = vm.arrNuevo(x.forma.slice(), 'real');
+      correr(nucleo, n, n, d, o.datos);
+      return o;
     }, doc);
   }
   unaria('senoA', 'nen_seno', 'senoA(a) — el seno de cada número · también de complejos y de listas · en la GPU si el arreglo es grande');
@@ -22063,6 +22267,1440 @@ function instalarNenTensores(vm, def) {
     for (let i = 0; i < n; i++) out[i] = Math.hypot(d[2 * i], d[2 * i + 1]);
     return deReales([n], out);
   }, 'envolvente(x) — el contorno de una señal que oscila: el módulo de su señal analítica · el volumen de un sonido, la amplitud de una vibración');
+}
+
+
+// ============================================================================
+//  Ñ v4 — NEÑ: precisión arbitraria, enteros exactos y la unión con numerico
+//  y datos. Parte 18 (motor-exp, fase N1).
+//
+//  EL TIPO «grande». Un número decimal con tantas cifras como se pidan:
+//
+//      fijo r = raizGrande(grande(2), 1000)      # √2 con mil cifras
+//      fijo x = grande("0.1") + grande("0.2")    # 0.3, exacto
+//      imprimir(factorialExacto(100))            # las 158 cifras de 100!
+//
+//  Por dentro es m × 10^e con m un BigInt y una precisión p (cifras
+//  significativas). Se opera con los operadores de siempre (+ − * / // % **,
+//  < <= > >= == !=, el menos de delante) contra otro grande o contra un número,
+//  y el verificador lo tipa: «grande op número» es grande.
+//
+//  REDONDEO. Cada resultado se redondea a p cifras, al par más cercano (como
+//  Python con «decimal» y como decimal.js por defecto en su modo 6). Al operar
+//  dos grandes manda la mayor de sus precisiones. + − * / y la raíz salen con
+//  redondeo correcto; exp, log, seno y compañía se calculan con 12 cifras de
+//  guarda y luego se redondean (error de menos de una unidad en la última
+//  cifra salvo casos rarísimos).
+//
+//  EXACTOS. Un grande que viene de un entero (o de factorialExacto, o de un
+//  texto sin coma) es EXACTO: sumarlo, restarlo, multiplicarlo o elevarlo a un
+//  entero no redondea nunca, por grande que salga. Dividir dos exactos da un
+//  exacto si la división es justa; si no, un grande con la precisión por
+//  defecto. Mezclar un exacto con uno que no lo es da uno que no lo es.
+//
+//  DE UN REAL. grande(0.1) es 0.1, no 0.1000000000000000055511…: se toma la
+//  escritura más corta del real, que es lo que el programa escribió. El valor
+//  binario exacto está en grandeExactoDe(0.1).
+//
+//  LA UNIÓN. «usar … de "nen"» trae también TODO numerico y TODO datos: es el
+//  mismo objeto registrado con otro nombre, no una copia (ver reexportarEnNen).
+//  Tres nombres existían en los dos —fila, donde y apilar— y en NEÑ miran el
+//  primer argumento: con una tabla hacen lo de datos; si no, lo de numerico.
+// ============================================================================
+
+// ─────────────────────────────────────────────── el valor
+class ObjGrande {
+  constructor(m, e, p, exacto) {
+    this.clase = 'grande';
+    this.m = m;            // BigInt con signo
+    this.e = e;            // exponente de 10 (entero de JavaScript)
+    this.p = p;            // cifras significativas
+    this.exacto = !!exacto;
+  }
+}
+
+const GR_DEFECTO = 50;          // cifras por defecto
+// las cifras por defecto de ESTA vm (las que fija cifrasGrande): se usan cuando
+// el resultado de dos exactos (o de un exacto y un número) hay que redondearlo
+const grDef = vm => (vm && vm.cifrasGrande) || GR_DEFECTO;
+const GR_MAX = 1000000;         // un millón de cifras como mucho
+const GR_GUARDA = 12;           // cifras de guarda en las trascendentes
+const GR_10 = 10n;
+
+const grPot10 = (() => {
+  const cache = new Map();
+  return k => {
+    if (k < 0) throw new Error('grPot10 negativo');
+    if (k < 400) {
+      let v = cache.get(k);
+      if (v === undefined) { v = GR_10 ** BigInt(k); cache.set(k, v); }
+      return v;
+    }
+    return GR_10 ** BigInt(k);
+  };
+})();
+const grAbs = x => (x < 0n ? -x : x);
+function grCifras(x) {
+  // cuántas cifras tiene |x| (0 tiene 1)
+  x = grAbs(x);
+  if (x < 10n) return 1;
+  // estimación por bits y corrección
+  const bits = x.toString(2).length;
+  let d = Math.floor((bits - 1) * 0.30102999566398120) + 1;
+  if (x >= grPot10(d)) d++;
+  else if (d > 1 && x < grPot10(d - 1)) d--;
+  return d;
+}
+
+// Redondea m × 10^e a p cifras (al par más cercano). «pegajoso» dice si a la
+// derecha de m había algo distinto de cero que ya se perdió (para que 2,5000…1
+// no se redondee como 2,5 justo).
+function grRedondear(m, e, p, pegajoso) {
+  if (m === 0n) return { m: 0n, e: 0 };
+  const d = grCifras(m);
+  if (d <= p) return { m, e };
+  const quita = d - p;
+  const div = grPot10(quita);
+  let q = m / div;                      // trunca hacia cero
+  const r = grAbs(m - q * div);
+  const mitad = div / 2n;
+  const signo = m < 0n ? -1n : 1n;
+  let sube = false;
+  if (r > mitad) sube = true;
+  else if (r === mitad && div % 2n === 0n) sube = pegajoso ? true : (grAbs(q) % 2n === 1n);
+  else if (r === mitad) sube = true;
+  if (sube) q += signo;
+  e += quita;
+  // 9,99… redondeado puede ganar una cifra: 99 → 100
+  if (grCifras(q) > p) { q /= GR_10; e += 1; }
+  return { m: q, e };
+}
+
+function grNuevo(m, e, p, exacto) {
+  if (exacto) return new ObjGrande(m, e, p, true);
+  const r = grRedondear(m, e, p, false);
+  return new ObjGrande(r.m, r.e, p, false);
+}
+
+// Quita los ceros de la derecha (para comparar y escribir).
+function grNormal(m, e) {
+  if (m === 0n) return { m: 0n, e: 0 };
+  const s = grAbs(m).toString();
+  let z = 0;
+  while (z < s.length - 1 && s.charCodeAt(s.length - 1 - z) === 48) z++;
+  if (z) { m /= grPot10(z); e += z; }
+  return { m, e };
+}
+
+// ─────────────────────────────────────────────── entrar
+function grDeTexto(s, p, quien) {
+  const t = String(s).trim().replace(/_/g, '');
+  const mt = t.match(/^([+-]?)(\d*)(?:[.,](\d*))?(?:[eE]([+-]?\d+))?$/);
+  if (!mt || (mt[2] === '' && (mt[3] === undefined || mt[3] === '')))
+    return { error: `«${quien}»: «${s}» no es un número` };
+  const ent = mt[2] || '', frac = mt[3] || '';
+  let m = BigInt((ent + frac) || '0');
+  if (mt[1] === '-') m = -m;
+  const e = -frac.length + (mt[4] ? parseInt(mt[4], 10) : 0);
+  const exacto = frac.length === 0 && !mt[4];
+  if (exacto) return { v: new ObjGrande(m, 0, Math.max(p, grCifras(m)), true) };
+  return { v: grNuevo(m, e, p, false) };
+}
+function grDeNumero(x, p, quien) {
+  if (!Number.isFinite(x)) return { error: `«${quien}»: ${x} no se puede pasar a grande` };
+  if (Number.isInteger(x) && Math.abs(x) <= Number.MAX_SAFE_INTEGER) {
+    const m = BigInt(x);
+    return { v: new ObjGrande(m, 0, Math.max(p, grCifras(m)), true) };
+  }
+  // la escritura más corta: lo que el programa escribió
+  return grDeTexto(String(x), p, quien);
+}
+// El valor binario exacto de un real de 64 bits, en decimal.
+function grExactoDeReal(x) {
+  if (x === 0) return new ObjGrande(0n, 0, 1, true);
+  const buf = new DataView(new ArrayBuffer(8));
+  buf.setFloat64(0, x);
+  const hi = buf.getUint32(0), lo = buf.getUint32(4);
+  const signo = hi >>> 31 ? -1n : 1n;
+  const expo = (hi >>> 20) & 0x7ff;
+  let mant = (BigInt(hi & 0xfffff) << 32n) | BigInt(lo);
+  let e2;
+  if (expo === 0) e2 = -1074; else { mant |= 1n << 52n; e2 = expo - 1075; }
+  if (e2 >= 0) return new ObjGrande(signo * (mant << BigInt(e2)), 0, 0, true);
+  // mant × 2^e2 = mant × 5^(−e2) × 10^e2
+  const m = signo * mant * (5n ** BigInt(-e2));
+  const r = grNormal(m, e2);
+  return new ObjGrande(r.m, r.e, grCifras(r.m), false);
+}
+
+// ─────────────────────────────────────────────── salir
+function grATexto(g, cifras) {
+  if (g.m === 0n) return '0';
+  let { m, e } = grNormal(g.m, g.e);
+  if (cifras !== undefined && cifras < grCifras(m)) {
+    const r = grRedondear(m, e, cifras, false);
+    ({ m, e } = grNormal(r.m, r.e));
+  }
+  const neg = m < 0n;
+  const s = grAbs(m).toString();
+  const n = s.length;
+  const exp10 = n - 1 + e;                  // exponente científico
+  let out;
+  // un exacto se escribe entero siempre; uno que no lo es, con exponente si
+  // los ceros de la derecha no son cifras de verdad (como un real: 1e+21)
+  if (e >= 0 && (g.exacto || exp10 < 21)) out = s + '0'.repeat(e);
+  else if (exp10 >= -7 && e < 0) {
+    if (exp10 >= 0) out = s.slice(0, n + e) + '.' + s.slice(n + e);
+    else out = '0.' + '0'.repeat(-exp10 - 1) + s;
+  } else {
+    out = s[0] + (n > 1 ? '.' + s.slice(1) : '') + 'e' + (exp10 >= 0 ? '+' : '') + exp10;
+  }
+  return (neg ? '-' : '') + out;
+}
+function grAReal(g) { return Number(grATexto(g, 20)); }
+
+// ─────────────────────────────────────────────── aritmética
+function grPrec(a, b) {
+  // la precisión del resultado: la mayor de las que no son exactas; si los dos
+  // son exactos, la por defecto (solo importa si hay que redondear)
+  if (!a.exacto && !b.exacto) return Math.max(a.p, b.p);
+  if (!a.exacto) return a.p;
+  if (!b.exacto) return b.p;
+  return Math.max(GR_DEFECTO, a.p, b.p);
+}
+function grMagn(g) { return g.m === 0n ? -Infinity : grCifras(g.m) + g.e; }
+
+function grSumar(a, b, restar) {
+  const mb0 = restar ? -b.m : b.m;
+  if (a.m === 0n) return b.exacto && a.exacto ? new ObjGrande(mb0, b.e, b.p, true) : grNuevo(mb0, b.e, grPrec(a, b), false);
+  if (b.m === 0n) return a.exacto && b.exacto ? new ObjGrande(a.m, a.e, a.p, true) : grNuevo(a.m, a.e, grPrec(a, b), false);
+  const exacto = a.exacto && b.exacto;
+  const p = grPrec(a, b);
+  if (!exacto) {
+    // si uno es despreciable frente al otro, no hace falta alinear un millón
+    // de ceros: basta con dejar una marca a la derecha
+    const ma = grMagn(a), mb = grMagn(b);
+    if (ma - mb > p + 3) return grSumarMarca(a.m, a.e, mb0 < 0n ? -1n : 1n, p);
+    if (mb - ma > p + 3) return grSumarMarca(mb0, b.e, a.m < 0n ? -1n : 1n, p);
+  }
+  let m, e;
+  if (a.e === b.e) { m = a.m + mb0; e = a.e; }
+  else if (a.e > b.e) { m = a.m * grPot10(a.e - b.e) + mb0; e = b.e; }
+  else { m = a.m + mb0 * grPot10(b.e - a.e); e = a.e; }
+  if (exacto) return new ObjGrande(m, e, Math.max(a.p, b.p, grCifras(m)), true);
+  return grNuevo(m, e, p, false);
+}
+// x + algo diminuto con signo s: se baja x a p+3 cifras y se suma una unidad
+// de la última cifra de guarda, que decide el redondeo como debe.
+function grSumarMarca(m, e, s, p) {
+  const d = grCifras(m);
+  const extra = p + 3 - d;
+  if (extra > 0) { m *= grPot10(extra); e -= extra; }
+  return grNuevo(m * 10n + s, e - 1, p, false);
+}
+function grMult(a, b) {
+  const exacto = a.exacto && b.exacto;
+  const m = a.m * b.m, e = a.e + b.e;
+  if (exacto) return new ObjGrande(m, e, Math.max(a.p, b.p, grCifras(m)), true);
+  return grNuevo(m, e, grPrec(a, b), false);
+}
+// a / b redondeado a p cifras, con redondeo correcto
+function grDividirP(am, ae, bm, be, p) {
+  if (am === 0n) return { m: 0n, e: 0 };
+  const neg = (am < 0n) !== (bm < 0n);
+  am = grAbs(am); bm = grAbs(bm);
+  let k = p + grCifras(bm) - grCifras(am);
+  if (k < 0) k = 0;
+  let num = am * grPot10(k);
+  let q = num / bm;
+  if (grCifras(q) < p) { k += 1; num *= GR_10; q = num / bm; }
+  let r = num - q * bm;
+  let e = ae - be - k;
+  // q tiene p o p+1 cifras; si tiene p+1, se redondea con el resto como marca
+  if (grCifras(q) > p) {
+    const rr = grRedondear(neg ? -q : q, e, p, r !== 0n);
+    return rr;
+  }
+  const dos = 2n * r;
+  if (dos > bm || (dos === bm && q % 2n === 1n)) q += 1n;
+  const out = grRedondear(neg ? -q : q, e, p, false);
+  return out;
+}
+function grDividir(vm, a, b, quien) {
+  if (b.m === 0n) vm.error(`«${quien}»: división entre cero`);
+  if (a.exacto && b.exacto && a.e >= 0 && b.e >= 0) {
+    const na = a.m * grPot10(a.e), nb = b.m * grPot10(b.e);
+    if (na % nb === 0n) { const q = na / nb; return new ObjGrande(q, 0, Math.max(GR_DEFECTO, grCifras(q)), true); }
+  }
+  const p = (a.exacto && b.exacto) ? grDef(vm) : grPrec(a, b);
+  const r = grDividirP(a.m, a.e, b.m, b.e, p);
+  return new ObjGrande(r.m, r.e, p, false);
+}
+// la parte entera hacia −infinito de a/b, como «//» en Ñ
+function grPisoDiv(vm, a, b) {
+  if (b.m === 0n) vm.error('«//»: división entre cero');
+  // a/b = (am·10^ae)/(bm·10^be)
+  let na = a.m, nb = b.m;
+  if (a.e > b.e) na *= grPot10(a.e - b.e); else if (b.e > a.e) nb *= grPot10(b.e - a.e);
+  let q = na / nb;
+  if ((na % nb !== 0n) && ((na < 0n) !== (nb < 0n))) q -= 1n;
+  return new ObjGrande(q, 0, Math.max(grPrec(a, b), grCifras(q)), true);      // la parte entera siempre es exacta
+}
+function grResto(vm, a, b) {
+  if (b.m === 0n) vm.error('«%»: módulo entre cero');
+  let na = a.m, nb = b.m, e = Math.min(a.e, b.e);
+  if (a.e > e) na *= grPot10(a.e - e);
+  if (b.e > e) nb *= grPot10(b.e - e);
+  let r = ((na % nb) + nb) % nb;
+  if (nb < 0n && r > 0n) r += nb;
+  const exacto = a.exacto && b.exacto;
+  return exacto ? new ObjGrande(r, e, Math.max(a.p, b.p), true) : grNuevo(r, e, grPrec(a, b), false);
+}
+function grComparar(a, b) {
+  if (a.m === 0n && b.m === 0n) return 0;
+  const sa = a.m < 0n ? -1 : (a.m > 0n ? 1 : 0), sb = b.m < 0n ? -1 : (b.m > 0n ? 1 : 0);
+  if (sa !== sb) return sa < sb ? -1 : 1;
+  // mismo signo: por magnitud primero (barato)
+  const ma = grMagn(a), mb = grMagn(b);
+  if (ma !== mb) return (ma < mb ? -1 : 1) * sa;
+  let na = a.m, nb = b.m;
+  if (a.e > b.e) na *= grPot10(a.e - b.e); else if (b.e > a.e) nb *= grPot10(b.e - a.e);
+  return na < nb ? -1 : (na > nb ? 1 : 0);
+}
+function grNeg(g) { return new ObjGrande(-g.m, g.e, g.p, g.exacto); }
+
+// ─────────────────────────────────────────────── punto fijo para las trascendentes
+// Un número en punto fijo es un BigInt X que vale X / 10^w.
+function grAFijo(g, w) {
+  const s = g.e + w;
+  if (s >= 0) return g.m * grPot10(s);
+  return g.m / grPot10(-s);
+}
+function grDeFijo(X, w, p) { return grNuevo(X, -w, p, false); }
+function grRaizEntera(n) {
+  if (n < 0n) throw new Error('raíz entera de un negativo');
+  if (n < 2n) return n;
+  // primera aproximación con un real
+  // se empieza por ENCIMA de la raíz: Newton baja sin pasarse
+  const bits = n.toString(2).length;
+  let x = 1n << BigInt(Math.ceil(bits / 2));
+  for (;;) {
+    const y = (x + n / x) >> 1n;
+    if (y >= x) break;
+    x = y;
+  }
+  while (x * x > n) x -= 1n;
+  while ((x + 1n) * (x + 1n) <= n) x += 1n;
+  return x;
+}
+
+// π por Chudnovsky con partición binaria: unas 14 cifras por término.
+const grCachePi = { w: 0, X: 0n };
+function grPiFijo(w) {
+  if (grCachePi.w >= w) return grCachePi.X / grPot10(grCachePi.w - w);
+  const C = 640320n, C3_24 = C * C * C / 24n;
+  const n = Math.floor(w / 14) + 2;
+  function bs(a, b) {
+    if (b - a === 1) {
+      let Pab, Qab;
+      if (a === 0) { Pab = 1n; Qab = 1n; }
+      else {
+        const A = BigInt(a);
+        Pab = (6n * A - 5n) * (2n * A - 1n) * (6n * A - 1n);
+        Qab = A * A * A * C3_24;
+      }
+      let Tab = Pab * (13591409n + 545140134n * BigInt(a));
+      if (a & 1) Tab = -Tab;
+      return [Pab, Qab, Tab];
+    }
+    const m = (a + b) >> 1;
+    const [P1, Q1, T1] = bs(a, m), [P2, Q2, T2] = bs(m, b);
+    return [P1 * P2, Q1 * Q2, Q2 * T1 + P1 * T2];
+  }
+  const [, Q, T] = bs(0, n);
+  const raiz = grRaizEntera(10005n * grPot10(2 * w));
+  const X = (Q * 426880n * raiz) / T;
+  grCachePi.w = w; grCachePi.X = X;
+  return X;
+}
+// atanh(1/k) en punto fijo: 1/k + 1/(3k³) + …
+function grAtanhInv(k, w) {
+  const S = grPot10(w);
+  const K = BigInt(k), K2 = K * K;
+  let pot = S / K, suma = pot, n = 1n;
+  for (;;) {
+    pot /= K2; n += 2n;
+    const t = pot / n;
+    if (t === 0n) break;
+    suma += t;
+  }
+  return suma;
+}
+const grCacheLn2 = { w: 0, X: 0n }, grCacheLn10 = { w: 0, X: 0n };
+function grLn2Fijo(w) {
+  if (grCacheLn2.w >= w) return grCacheLn2.X / grPot10(grCacheLn2.w - w);
+  // ln 2 = 2·atanh(1/3)
+  const X = 2n * grAtanhInv(3, w + 5) / grPot10(5);
+  grCacheLn2.w = w; grCacheLn2.X = X;
+  return X;
+}
+function grLn10Fijo(w) {
+  if (grCacheLn10.w >= w) return grCacheLn10.X / grPot10(grCacheLn10.w - w);
+  // ln 10 = 3·ln 2 + ln(5/4), y ln(5/4) = 2·atanh(1/9)
+  const X = (3n * grLn2Fijo(w + 5) + 2n * grAtanhInv(9, w + 5)) / grPot10(5);
+  grCacheLn10.w = w; grCacheLn10.X = X;
+  return X;
+}
+// exp de un punto fijo X (|x| razonable). Devuelve punto fijo.
+function grExpFijo(X, w) {
+  const S = grPot10(w);
+  // reducción: x = n·ln2 + r, |r| ≤ ln2/2
+  const L = grLn2Fijo(w + 10) / grPot10(10);
+  let n = X / L;
+  let r = X - n * L;
+  if (r * 2n > L) { r -= L; n += 1n; } else if (r * 2n < -L) { r += L; n -= 1n; }
+  // y luego r / 2^k, para que la serie sea corta
+  const k = Math.max(4, Math.floor(Math.sqrt(w)));
+  const ww = w + k + 10;
+  const SS = grPot10(ww);
+  let rr = r * grPot10(ww - w) / (1n << BigInt(k));
+  let t = SS, suma = SS, i = 1n;
+  for (;;) {
+    t = t * rr / SS / i;
+    if (t === 0n) break;
+    suma += t; i += 1n;
+  }
+  for (let j = 0; j < k; j++) suma = suma * suma / SS;
+  // × 2^n
+  if (n >= 0n) suma <<= n; else suma >>= -n;
+  return suma / grPot10(ww - w);
+}
+// exp(X / 10^w) como grande de p cifras: x = q·ln 10 + r con r en [0, ln 10),
+// así exp(x) = exp(r)·10^q y el exponente enorme va al exponente decimal.
+function grExpGrande(vm, X, w, p, quien) {
+  const L10 = grLn10Fijo(w + 5) / grPot10(5);
+  let q = X / L10;
+  let r = X - q * L10;
+  if (r < 0n) { r += L10; q -= 1n; }
+  if (q > 1000000000000000n || q < -1000000000000000n) vm.error(`«${quien}»: el resultado no cabe ni en un grande`);
+  const E = grExpFijo(r, w);
+  return grNuevo(E, -w + Number(q), p, false);
+}
+// ln de un grande positivo, en punto fijo de w cifras
+function grLnFijo(g, w) {
+  // g = m·10^e = y·10^E con y en [1, 10)
+  const d = grCifras(g.m);
+  const E = d - 1 + g.e;
+  const ww = w + 15;
+  const SS = grPot10(ww);
+  let Y = g.m * grPot10(ww) / grPot10(d - 1);       // y en punto fijo, en [1, 10)
+  // y = y'·2^k con y' en [0.75, 1.5)
+  let k = 0;
+  const tres4 = SS * 3n / 4n, tres2 = SS * 3n / 2n;
+  while (Y >= tres2) { Y >>= 1n; k++; }
+  while (Y < tres4) { Y <<= 1n; k--; }
+  // unas cuantas raíces cuadradas para acercar y' a 1: ln y' = 2^j · ln y'^(1/2^j)
+  const j = Math.min(24, Math.max(2, Math.floor(Math.sqrt(ww) / 3)));
+  for (let i = 0; i < j; i++) Y = grRaizEntera(Y * SS);
+  // ln y = 2·atanh(z), z = (y−1)/(y+1)
+  const Z = (Y - SS) * SS / (Y + SS);
+  const Z2 = Z * Z / SS;
+  let pot = Z, suma = Z, n = 1n;
+  for (;;) {
+    pot = pot * Z2 / SS; n += 2n;
+    const t = pot / n;
+    if (t === 0n) break;
+    suma += t;
+  }
+  let ln = 2n * suma * (1n << BigInt(j));
+  ln += BigInt(k) * grLn2Fijo(ww) + BigInt(E) * grLn10Fijo(ww);
+  return ln / grPot10(ww - w);
+}
+// seno y coseno de un punto fijo X
+function grSenCosFijo(X, w) {
+  const ww = w + 15;
+  const SS = grPot10(ww);
+  let x = X * grPot10(ww - w);
+  // reducir módulo 2π (con π de más cifras si x es grande)
+  const extra = Math.max(0, x.toString().length - ww) + 5;
+  const PI = grPiFijo(ww + extra) / grPot10(extra);
+  const DOS_PI = 2n * PI;
+  x = x % DOS_PI;
+  if (x > PI) x -= DOS_PI; else if (x < -PI) x += DOS_PI;
+  // ahora |x| ≤ π: se divide entre 2^k y se duplica después
+  const k = Math.max(4, Math.floor(Math.sqrt(ww) / 2));
+  const SK = grPot10(ww + k);
+  let r = x * grPot10(k) / (1n << BigInt(k));     // en punto fijo de ww+k
+  const R2 = r * r / SK;
+  // seno y coseno de r por Taylor
+  let s = r, c = SK, ts = r, tc = SK, i = 1n;
+  for (;;) {
+    ts = -ts * R2 / SK / ((2n * i) * (2n * i + 1n));
+    tc = -tc * R2 / SK / ((2n * i - 1n) * (2n * i));
+    if (ts === 0n && tc === 0n) break;
+    s += ts; c += tc; i += 1n;
+  }
+  for (let j = 0; j < k; j++) { const s2 = 2n * s * c / SK; c = (c * c - s * s) / SK; s = s2; }
+  const div = grPot10(ww + k - w);
+  return [s / div, c / div];
+}
+// arcotangente de un punto fijo X
+function grAtanFijo(X, w) {
+  const ww = w + 15;
+  const SS = grPot10(ww);
+  let x = X * grPot10(ww - w);
+  let neg = false;
+  if (x < 0n) { neg = true; x = -x; }
+  let inv = false;
+  if (x > SS) { x = SS * SS / x; inv = true; }
+  // atan(x) = 2·atan(x / (1 + √(1 + x²))), j veces
+  const j = Math.max(3, Math.floor(Math.sqrt(ww) / 2));
+  for (let i = 0; i < j; i++) {
+    const raiz = grRaizEntera(SS * SS + x * x);
+    x = x * SS / (SS + raiz);
+  }
+  const X2 = x * x / SS;
+  let pot = x, suma = x, n = 1n, signo = -1n;
+  for (;;) {
+    pot = pot * X2 / SS; n += 2n;
+    const t = pot / n;
+    if (t === 0n) break;
+    suma += signo * t; signo = -signo;
+  }
+  let a = suma * (1n << BigInt(j));
+  if (inv) a = grPiFijo(ww) / 2n - a;
+  if (neg) a = -a;
+  return a / grPot10(ww - w);
+}
+
+// ─────────────────────────────────────────────── las operaciones que llama la VM
+// aritOtro, sumar, neg y las comparaciones de 03-vm-jit.js vienen aquí cuando
+// alguno de los dos es un grande.
+function grDeOperando(vm, x, op) {
+  if (x instanceof ObjGrande) return x;
+  if (typeof x === 'number') {
+    const r = grDeNumero(x, grDef(vm), op);
+    if (r.error) vm.error(r.error);
+    return r.v;
+  }
+  vm.error(`«${op}»: un grande se opera con otro grande o con un número, y llegó ${tipoDe(x)}`,
+    'para pasar un texto a grande: grande("3.14159…")');
+}
+function grandeArit(vm, a, b, op) {
+  const x = grDeOperando(vm, a, op), y = grDeOperando(vm, b, op);
+  switch (op) {
+    case '+': return grSumar(x, y, false);
+    case '-': return grSumar(x, y, true);
+    case '*': return grMult(x, y);
+    case '/': return grDividir(vm, x, y, '/');
+    case '//': return grPisoDiv(vm, x, y);
+    case '%': return grResto(vm, x, y);
+    case '**': return grPotencia(vm, x, y, '**');
+  }
+  vm.error(`«${op}» no se aplica a un grande`);
+}
+function grandeCmp(vm, a, b, op) {
+  const x = grDeOperando(vm, a, op), y = grDeOperando(vm, b, op);
+  return grComparar(x, y);
+}
+function grandeIgual(a, b) {
+  const x = a instanceof ObjGrande ? a : (typeof a === 'number' && Number.isFinite(a) ? grDeNumero(a, GR_DEFECTO, '==').v : null);
+  const y = b instanceof ObjGrande ? b : (typeof b === 'number' && Number.isFinite(b) ? grDeNumero(b, GR_DEFECTO, '==').v : null);
+  if (!x || !y) return false;
+  return grComparar(x, y) === 0;
+}
+
+// ─────────────────────────────────────────────── potencia y trascendentes
+function grEsEntero(g) {
+  if (g.e >= 0) return true;
+  return g.m % grPot10(-g.e) === 0n;
+}
+function grAEnteroBig(g) {
+  if (g.e >= 0) return g.m * grPot10(g.e);
+  return g.m / grPot10(-g.e);
+}
+function grPotencia(vm, b, x, quien, pForzada) {
+  if (grEsEntero(x)) {
+    const n = grAEnteroBig(x);
+    if (b.exacto && n >= 0n && !pForzada) {
+      if (n > 100000000n) vm.error(`«${quien}»: el exponente ${n} es demasiado grande para un resultado exacto`);
+      const m = (b.m * grPot10(Math.max(0, b.e))) ** n;
+      return new ObjGrande(m, 0, Math.max(b.p, grCifras(m)), true);
+    }
+    const p = pForzada || (b.exacto ? (x.exacto ? grDef(vm) : x.p) : b.p);
+    if (n === 0n) return new ObjGrande(1n, 0, p, false);
+    if (b.m === 0n) {
+      if (n < 0n) vm.error(`«${quien}»: 0 elevado a un negativo`);
+      return new ObjGrande(0n, 0, p, false);
+    }
+    // por cuadrados, con guarda
+    let k = n < 0n ? -n : n;
+    const guarda = p + 10 + k.toString(2).length;
+    let base = { m: b.m, e: b.e }, acc = { m: 1n, e: 0 };
+    while (k > 0n) {
+      if (k & 1n) { const r = grRedondear(acc.m * base.m, acc.e + base.e, guarda, false); acc = r; }
+      k >>= 1n;
+      if (k > 0n) { const r = grRedondear(base.m * base.m, base.e + base.e, guarda, false); base = r; }
+    }
+    if (n < 0n) {
+      const r = grDividirP(1n, 0, acc.m, acc.e, p);
+      return new ObjGrande(r.m, r.e, p, false);
+    }
+    return grNuevo(acc.m, acc.e, p, false);
+  }
+  if (b.m <= 0n) vm.error(`«${quien}»: una base negativa o cero con un exponente que no es entero no da un real`);
+  const p = pForzada || Math.max(b.exacto ? grDef(vm) : b.p, x.exacto ? grDef(vm) : x.p);
+  // b^x = exp(x·ln b), con cifras de más por lo que crece el exponente
+  const w = p + GR_GUARDA + Math.max(0, grMagn(x)) + 2;
+  const L = grLnFijo(b, w);
+  const xf = grAFijo(x, w);
+  return grExpGrande(vm, xf * L / grPot10(w), w, p, quien);
+}
+
+function grCifrasArg(vm, v, quien, k) {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1)
+    vm.error(`«${quien}»: las cifras (argumento ${k}) deben ser un entero positivo y son ${repr(v, 1)}`);
+  if (v > GR_MAX) vm.error(`«${quien}»: ${v} cifras es demasiado; el máximo es ${GR_MAX}`);
+  return v;
+}
+
+// ─────────────────────────────────────────────── la unión con numerico y datos
+function instalarNenUnion(vm, def) {
+  const de = (edsl, n) => vm.globals.get(nombreGlobalModulo(claveEdsl(edsl), n));
+  const esTabla = v => v instanceof ObjTabla;
+  // cada una dice a quiénes despacha: así abrir NEÑ junto a numerico no choca
+  const marcar = n => { const o = vm.globals.get(nombreGlobalModulo(claveEdsl('nen'), n)); o.despacha = [de('numerico', n), de('datos', n)]; };
+  def('fila', 'tabla|arreglo, entero -> dic|arreglo', a =>
+    (esTabla(a[0]) ? de('datos', 'fila') : de('numerico', 'fila')).fn(a, vm),
+    'fila(t, 0) — con una tabla, un diccionario con esa fila (como en datos); con un arreglo, la vista de la fila i (como en numerico)');
+  def('donde', '... -> cualquiera', a =>
+    (esTabla(a[0]) ? de('datos', 'donde') : de('numerico', 'donde')).fn(a, vm),
+    'donde(t, fn(f) {…}) — con una tabla, las filas que cumplen (datos); donde(cond, a, b) — con arreglos, el «si» elemento a elemento (numerico)');
+  def('apilar', '... -> cualquiera', a => {
+    const primero = a[0] instanceof ObjLista ? a[0].items[0] : a[0];
+    return (esTabla(primero) ? de('datos', 'apilar') : de('numerico', 'apilar')).fn(a, vm);
+  }, 'apilar(t1, t2) — con tablas, una debajo de la otra (datos); con arreglos, en un eje nuevo (numerico)');
+  for (const n of ['fila', 'donde', 'apilar']) marcar(n);
+}
+// Después de instalar «nen»: cada nombre de numerico y de datos que NEÑ no
+// define queda registrado también bajo la clave de NEÑ, apuntando al MISMO
+// objeto. «usar media de "nen"» y «usar media de "numerico"» llaman a la misma
+// función, con la misma firma y el mismo JIT.
+function reexportarEnNen(vm, reg) {
+  const propios = new Set(reg.exporta.keys());
+  reg.reexporta = new Map();          // nombre → eDSL de donde viene
+  for (const origen of ['numerico', 'datos']) {
+    const r = vm.edsls.get(origen);
+    if (!r) continue;
+    for (const [n, firmaT] of r.exporta) {
+      if (propios.has(n) || reg.exporta.has(n)) continue;
+      const obj = vm.globals.get(nombreGlobalModulo(r.clave, n));
+      vm.globals.set(nombreGlobalModulo(reg.clave, n), obj);
+      reg.exporta.set(n, firmaT);
+      reg.reexporta.set(n, origen);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────── las funciones de NEÑ
+function instalarNenPrecision(vm, def) {
+  if (vm.cifrasGrande === undefined) vm.cifrasGrande = GR_DEFECTO;
+  const P = () => vm.cifrasGrande;
+  const aGrande = (v, k, quien, p) => {
+    if (v instanceof ObjGrande) return v;
+    let r;
+    if (typeof v === 'number') r = grDeNumero(v, p || P(), quien);
+    else if (typeof v === 'string') r = grDeTexto(v, p || P(), quien);
+    else vm.error(`«${quien}»: el argumento ${k} debe ser un número, un texto o un grande y es ${tipoDe(v)}`);
+    if (r.error) vm.error(r.error);
+    return r.v;
+  };
+  // con la precisión pedida (o la de x, o la por defecto)
+  const precisionPara = (x, c) => c || (x.exacto ? P() : x.p);
+  const entN = (v, k, quien) => {
+    if (typeof v !== 'number' || !Number.isInteger(v)) vm.error(`«${quien}»: el argumento ${k} debe ser un entero y es ${repr(v, 1)}`);
+    return v;
+  };
+
+  def('grande', '... -> grande', a => {
+    const c = grCifrasArg(vm, a[1], 'grande', 2);
+    if (a[0] instanceof ObjGrande) return c ? grNuevo(a[0].m, a[0].e, c, false) : a[0];
+    return aGrande(a[0], 1, 'grande', c);
+  }, 'grande(2), grande("0.1"), grande(|PI, 30) — un número decimal de precisión arbitraria; de un entero o de un texto sin coma, EXACTO');
+  def('cifrasGrande', '... -> entero', a => {
+    const antes = P();
+    if (a.length) vm.cifrasGrande = grCifrasArg(vm, a[0], 'cifrasGrande', 1);
+    return antes;
+  }, 'cifrasGrande(100) — las cifras de los grandes que se creen desde ahora (por defecto 50); devuelve las que había');
+  def('cifrasDe', 'grande -> entero', a => {
+    const g = aGrande(a[0], 1, 'cifrasDe');
+    return g.exacto ? grCifras(g.m * grPot10(Math.max(0, g.e))) : g.p;
+  }, 'cifrasDe(g) — con cuántas cifras significativas va g (en un exacto, las que tiene)');
+  def('esExacto', 'grande -> bool', a => aGrande(a[0], 1, 'esExacto').exacto,
+    'esExacto(factorialExacto(30)) — cierto si g es un entero exacto (nunca se redondea al sumar, restar o multiplicar)');
+  def('grandeExactoDe', 'real -> grande', a => {
+    if (typeof a[0] !== 'number' || !Number.isFinite(a[0])) vm.error('«grandeExactoDe»: necesita un real finito');
+    return grExactoDeReal(a[0]);
+  }, 'grandeExactoDe(0.1) — el valor binario EXACTO de un real de 64 bits: 0.1000000000000000055511151231257827…');
+  def('redondearGrande', 'grande, entero -> grande', a => {
+    const g = aGrande(a[0], 1, 'redondearGrande');
+    const c = grCifrasArg(vm, a[1], 'redondearGrande', 2);
+    return grNuevo(g.m, g.e, c, false);
+  }, 'redondearGrande(g, 10) — g con 10 cifras significativas');
+  def('decimalesGrande', 'grande, entero -> texto', a => {
+    const g = aGrande(a[0], 1, 'decimalesGrande');
+    const d = entN(a[1], 2, 'decimalesGrande');
+    if (d < 0) vm.error('«decimalesGrande»: los decimales no pueden ser negativos');
+    // redondear a d decimales: al par
+    const e0 = -d;
+    let m = g.m, e = g.e;
+    if (e < e0) {
+      const div = grPot10(e0 - e);
+      let q = m / div; const r = grAbs(m - q * div); const mitad = div / 2n;
+      if (r > mitad || (r === mitad && grAbs(q) % 2n === 1n)) q += (m < 0n ? -1n : 1n);
+      m = q; e = e0;
+    } else if (e > e0) { m = m * grPot10(e - e0); e = e0; }
+    const neg = m < 0n;
+    let s = grAbs(m).toString();
+    if (d > 0) { s = s.padStart(d + 1, '0'); s = s.slice(0, s.length - d) + '.' + s.slice(s.length - d); }
+    return (neg ? '-' : '') + s;
+  }, 'decimalesGrande(piGrande(30), 5) — «3.14159»: el texto con ese número de decimales, redondeado');
+  def('aReal', 'grande -> real', a => grAReal(aGrande(a[0], 1, 'aReal')),
+    'aReal(g) — el real de 64 bits más cercano (también vale real(g))');
+
+  // raíces, exponenciales, logaritmos
+  def('raizGrande', '... -> grande', a => {
+    const c = grCifrasArg(vm, a[1], 'raizGrande', 2);
+    const g = aGrande(a[0], 1, 'raizGrande', c);
+    if (g.m < 0n) vm.error('«raizGrande»: no hay raíz real de un negativo', 'para complejos está «raiz» de numerico');
+    const p = precisionPara(g, c);
+    if (g.m === 0n) return new ObjGrande(0n, 0, p, false);
+    // N = m·10^s con (e − s) par y unas 2(p+2) cifras
+    let s = 2 * (p + 2) - grCifras(g.m);
+    if ((g.e - s) % 2 !== 0) s += 1;
+    const N = s >= 0 ? g.m * grPot10(s) : g.m / grPot10(-s);
+    const r = grRaizEntera(N);
+    const exacta = s >= 0 && r * r === N;
+    const R = grRedondear(r, (g.e - s) / 2, p, !exacta);
+    return new ObjGrande(R.m, R.e, p, false);
+  }, 'raizGrande(2, 1000) — √2 con mil cifras (redondeo correcto)');
+  def('expGrande', '... -> grande', a => {
+    const c = grCifrasArg(vm, a[1], 'expGrande', 2);
+    const g = aGrande(a[0], 1, 'expGrande', c);
+    const p = precisionPara(g, c);
+    const w = p + GR_GUARDA + Math.max(0, grMagn(g));
+    return grExpGrande(vm, grAFijo(g, w), w, p, 'expGrande');
+  }, 'expGrande(1, 100) — e con cien cifras; expGrande(x) — e elevado a x');
+  def('logGrande', '... -> grande', a => {
+    const c = grCifrasArg(vm, typeof a[1] === 'number' && a.length === 2 ? a[1] : a[2], 'logGrande', a.length === 2 ? 2 : 3);
+    const g = aGrande(a[0], 1, 'logGrande', c);
+    if (g.m <= 0n) vm.error('«logGrande»: el logaritmo solo existe para positivos');
+    const p = precisionPara(g, c);
+    const w = p + GR_GUARDA;
+    let L = grLnFijo(g, w);
+    if (a.length === 3) {
+      const b = aGrande(a[1], 2, 'logGrande');
+      if (b.m <= 0n || grComparar(b, new ObjGrande(1n, 0, 1, true)) === 0) vm.error('«logGrande»: la base debe ser positiva y distinta de 1');
+      L = L * grPot10(w) / grLnFijo(b, w);
+    }
+    return grDeFijo(L, w, p);
+  }, 'logGrande(2, 100) — ln 2 con cien cifras; logGrande(x, base, cifras) — en otra base');
+  // trigonometría
+  const trig = (nombre, f, doc) => def(nombre, '... -> grande', a => {
+    const c = grCifrasArg(vm, a[1], nombre, 2);
+    const g = aGrande(a[0], 1, nombre, c);
+    const p = precisionPara(g, c);
+    const w = p + GR_GUARDA;
+    return grDeFijo(f(grAFijo(g, w), w, g), w, p);
+  }, doc);
+  trig('senoGrande', (X, w) => grSenCosFijo(X, w)[0], 'senoGrande(1, 60) — sen 1 con 60 cifras (en radianes)');
+  trig('cosenoGrande', (X, w) => grSenCosFijo(X, w)[1], 'cosenoGrande(1, 60) — cos 1 con 60 cifras');
+  trig('tangenteGrande', (X, w) => {
+    const [s, c] = grSenCosFijo(X, w);
+    if (c === 0n) vm.error('«tangenteGrande»: la tangente no existe ahí');
+    return s * grPot10(w) / c;
+  }, 'tangenteGrande(1, 60) — tan 1 con 60 cifras');
+  trig('arcotangenteGrande', (X, w) => grAtanFijo(X, w), 'arcotangenteGrande(1, 100) — π/4 con cien cifras');
+  trig('arcosenoGrande', (X, w) => {
+    const S = grPot10(w);
+    if (grAbs(X) > S) vm.error('«arcosenoGrande»: el argumento debe estar entre −1 y 1');
+    if (grAbs(X) === S) return X > 0n ? grPiFijo(w) / 2n : -grPiFijo(w) / 2n;
+    const raiz = grRaizEntera(S * S - X * X);
+    return grAtanFijo(X * S / raiz, w);
+  }, 'arcosenoGrande(0.5, 50) — π/6 con 50 cifras');
+  trig('arcocosenoGrande', (X, w) => {
+    const S = grPot10(w);
+    if (grAbs(X) > S) vm.error('«arcocosenoGrande»: el argumento debe estar entre −1 y 1');
+    let as;
+    if (grAbs(X) === S) as = X > 0n ? grPiFijo(w) / 2n : -grPiFijo(w) / 2n;
+    else as = grAtanFijo(X * S / grRaizEntera(S * S - X * X), w);
+    return grPiFijo(w) / 2n - as;
+  }, 'arcocosenoGrande(0, 50) — π/2 con 50 cifras');
+  def('potenciaGrande', '... -> grande', a => {
+    const c = grCifrasArg(vm, a[2], 'potenciaGrande', 3);
+    const b = aGrande(a[0], 1, 'potenciaGrande', c), x = aGrande(a[1], 2, 'potenciaGrande', c);
+    return grPotencia(vm, b, x, 'potenciaGrande', c);
+  }, 'potenciaGrande(2, "0.5", 40) — 2^0,5 con 40 cifras; con base exacta y exponente entero, exacto');
+  def('piGrande', 'entero -> grande', a => {
+    const p = grCifrasArg(vm, a[0], 'piGrande', 1);
+    const w = p + GR_GUARDA;
+    return grDeFijo(grPiFijo(w), w, p);
+  }, 'piGrande(1000) — π con mil cifras (Chudnovsky)');
+  def('eGrande', 'entero -> grande', a => {
+    const p = grCifrasArg(vm, a[0], 'eGrande', 1);
+    const w = p + GR_GUARDA;
+    return grExpGrande(vm, grPot10(w), w, p, 'eGrande');
+  }, 'eGrande(100) — el número e con cien cifras');
+
+  // enteros exactos
+  const natural = (v, k, quien, max) => {
+    if (typeof v === 'number') {
+      if (!Number.isInteger(v) || v < 0) vm.error(`«${quien}»: el argumento ${k} debe ser un entero no negativo y es ${repr(v, 1)}`);
+      if (max && v > max) vm.error(`«${quien}»: ${v} es demasiado; el máximo es ${max}`);
+      return BigInt(v);
+    }
+    if (v instanceof ObjGrande && grEsEntero(v) && v.m >= 0n) return grAEnteroBig(v);
+    vm.error(`«${quien}»: el argumento ${k} debe ser un entero no negativo y es ${tipoDe(v)}`);
+  };
+  const exacto = m => new ObjGrande(m, 0, grCifras(m), true);
+  def('factorialExacto', 'entero -> grande', a => {
+    const n = Number(natural(a[0], 1, 'factorialExacto', 200000));
+    // producto por mitades: mucho más rápido que de uno en uno
+    const prod = (lo, hi) => {
+      if (hi - lo < 16) { let r = 1n; for (let i = lo; i <= hi; i++) r *= BigInt(i); return r; }
+      const m = (lo + hi) >> 1;
+      return prod(lo, m) * prod(m + 1, hi);
+    };
+    return exacto(n < 2 ? 1n : prod(2, n));
+  }, 'factorialExacto(100) — 100! con sus 158 cifras, exacto');
+  def('potenciaExacta', 'entero|grande, entero -> grande', a => {
+    const b = a[0] instanceof ObjGrande ? a[0] : aGrande(entN(a[0], 1, 'potenciaExacta'), 1, 'potenciaExacta');
+    if (!b.exacto) vm.error('«potenciaExacta»: la base debe ser un entero exacto', 'para potencias con decimales: potenciaGrande');
+    const n = entN(a[1], 2, 'potenciaExacta');
+    if (n < 0) vm.error('«potenciaExacta»: el exponente no puede ser negativo');
+    if (n > 10000000) vm.error('«potenciaExacta»: el exponente es demasiado grande');
+    return exacto(grAEnteroBig(b) ** BigInt(n));
+  }, 'potenciaExacta(2, 1000) — 2^1000 con sus 302 cifras');
+  def('combinacionesExactas', 'entero, entero -> grande', a => {
+    const n = natural(a[0], 1, 'combinacionesExactas', 1000000), k0 = natural(a[1], 2, 'combinacionesExactas');
+    if (k0 > n) return exacto(0n);
+    const k = k0 > n - k0 ? n - k0 : k0;
+    let r = 1n;
+    for (let i = 1n; i <= k; i++) r = r * (n - k + i) / i;
+    return exacto(r);
+  }, 'combinacionesExactas(100, 50) — 100 sobre 50, exacto (29 cifras)');
+  def('fibonacciExacto', 'entero -> grande', a => {
+    const n = Number(natural(a[0], 1, 'fibonacciExacto', 10000000));
+    // duplicación: F(2k) = F(k)(2F(k+1) − F(k)), F(2k+1) = F(k)² + F(k+1)²
+    const fib = n => {
+      if (n === 0) return [0n, 1n];
+      const [x, y] = fib(n >> 1);
+      const c = x * (2n * y - x), d = x * x + y * y;
+      return n & 1 ? [d, c + d] : [c, d];
+    };
+    return exacto(fib(n)[0]);
+  }, 'fibonacciExacto(1000) — el término mil de Fibonacci, exacto (209 cifras)');
+  def('mcdExacto', 'entero|grande, entero|grande -> grande', a => {
+    let x = natural(a[0] instanceof ObjGrande ? a[0] : Math.abs(entN(a[0], 1, 'mcdExacto')), 1, 'mcdExacto');
+    let y = natural(a[1] instanceof ObjGrande ? a[1] : Math.abs(entN(a[1], 2, 'mcdExacto')), 2, 'mcdExacto');
+    while (y) { [x, y] = [y, x % y]; }
+    return exacto(x);
+  }, 'mcdExacto(factorialExacto(30), potenciaExacta(2, 40)) — el máximo común divisor de dos enteros exactos');
+  def('esPrimoExacto', 'entero|grande -> bool', a => {
+    const n = natural(a[0], 1, 'esPrimoExacto');
+    if (n < 2n) return false;
+    for (const p of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n]) { if (n === p) return true; if (n % p === 0n) return false; }
+    // Miller–Rabin con las 12 primeras bases: determinista hasta 3,3·10^24 y
+    // con probabilidad de error menor que 4^-12 más allá
+    let d = n - 1n, s = 0;
+    while ((d & 1n) === 0n) { d >>= 1n; s++; }
+    const potMod = (b, e, m) => { let r = 1n; b %= m; while (e > 0n) { if (e & 1n) r = r * b % m; e >>= 1n; b = b * b % m; } return r; };
+    for (const b of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n]) {
+      let x = potMod(b, d, n);
+      if (x === 1n || x === n - 1n) continue;
+      let compuesto = true;
+      for (let r = 1; r < s; r++) { x = x * x % n; if (x === n - 1n) { compuesto = false; break; } }
+      if (compuesto) return false;
+    }
+    return true;
+  }, 'esPrimoExacto(potenciaExacta(2, 127) - 1) — si un entero (de cualquier tamaño) es primo (Miller–Rabin)');
+  def('cifrasExactas', 'grande -> texto', a => {
+    const g = aGrande(a[0], 1, 'cifrasExactas');
+    if (!grEsEntero(g)) vm.error('«cifrasExactas»: necesita un entero', 'para decimales: decimalesGrande(g, n)');
+    return grAEnteroBig(g).toString();
+  }, 'cifrasExactas(factorialExacto(25)) — «15511210043330985984000000»: todas las cifras como texto');
+}
+
+
+// ============================================================================
+//  Ñ v4 — NEÑ: más funciones (motor-exp, fase N1, primera tanda)
+//  Parte 19.
+//
+//  La comparativa con NumPy/SciPy y mpmath dejó a NEÑ corto en funciones
+//  especiales, distribuciones y muestreo. Esta es la PRIMERA tanda; cada
+//  función está comprobada contra SciPy 1.18 en una rejilla de valores
+//  (pruebas/exp-nen.js) y lleva su ejemplo en la referencia.
+//
+//  ESPECIALES   lambertW, integralExponencial (Ei), integralExponencialE1 (E₁),
+//               integralSeno (Si), integralCoseno (Ci), fresnelS, fresnelC,
+//               elipticaK, elipticaE, dilogaritmo (Li₂), hipergeometrica (₂F₁),
+//               besselI, trigamma, poligamma, sinc
+//  DISTRIBUC.   densidad y acumulada de gamma, beta, Weibull, lognormal,
+//               Cauchy y logística; densidad de la exponencial, la t, la χ² y
+//               la F; probabilidad geométrica, binomial negativa e
+//               hipergeométrica
+//  MUESTREO     azarExponencial, azarGamma, azarBeta, azarChiCuadrado,
+//               azarTStudent, azarPoisson, azarBinomial, azarLogNormal,
+//               azarWeibull, azarCauchy — con el azar SEMBRADO de numerico
+//               (semilla(7) los repite), y con cantidad devuelven una lista.
+//
+//  Las siguientes tandas (pendientes, en EXPERIMENTAL.md): Bessel Y y K y de
+//  orden real, Airy, funciones de Struve y de Kelvin, la ₁F₁, polilogaritmos de
+//  orden s, zeta de Hurwitz, más distribuciones (Pareto, Gumbel, Rayleigh,
+//  von Mises, multinomial, Dirichlet), y versiones «…A» sobre arreglos.
+// ============================================================================
+
+const NA_EULER = 0.57721566490153286061;
+const NA_EPS = 2.220446049250313e-16;
+
+function instalarNenAmplitud(vm, def) {
+  const de = (edsl, n) => vm.globals.get(nombreGlobalModulo(claveEdsl(edsl), n));
+  const llamar = (edsl, n, args) => de(edsl, n).fn(args, vm);
+  const lnGamma = x => llamar('nen', 'lnGamma', [x]);
+  const gammaP = (a, x) => llamar('nen', 'gammaIncompleta', [a, x]);
+  const betaI = (a, b, x) => llamar('nen', 'betaIncompleta', [a, b, x]);
+  const erfc = x => llamar('nen', 'erfc', [x]);
+  const digamma = x => llamar('nen', 'digamma', [x]);
+  const uniforme = () => llamar('numerico', 'azar', []);
+  const normalE = () => llamar('numerico', 'azarNormal', [0, 1]);
+
+  const num = (v, k, quien) => {
+    if (typeof v !== 'number') vm.error(`«${quien}»: el argumento ${k} debe ser un número y es ${tipoDe(v)}`);
+    return v;
+  };
+  const ent = (v, k, quien) => {
+    if (typeof v !== 'number' || !Number.isInteger(v)) vm.error(`«${quien}»: el argumento ${k} debe ser un entero y es ${repr(v, 1)}`);
+    return v;
+  };
+  const positivo = (v, k, quien, nombre) => {
+    num(v, k, quien);
+    if (!(v > 0)) vm.error(`«${quien}»: ${nombre || 'el argumento ' + k} debe ser positivo y es ${repr(v, 1)}`);
+    return v;
+  };
+  const prob = (v, k, quien) => {
+    num(v, k, quien);
+    if (!(v >= 0 && v <= 1)) vm.error(`«${quien}»: la probabilidad debe estar entre 0 y 1 y es ${repr(v, 1)}`);
+    return v;
+  };
+  const real1 = (nombre, fn, doc) => def(nombre, 'real -> real', a => fn(num(a[0], 1, nombre)), doc);
+
+  // ─────────────────────────────────────────────── funciones especiales
+  // W de Lambert: la w con w·eʷ = x. Rama 0 (principal, w ≥ −1) o −1 (w ≤ −1).
+  def('lambertW', '... -> real', a => {
+    const x = num(a[0], 1, 'lambertW');
+    const rama = a.length > 1 ? ent(a[1], 2, 'lambertW') : 0;
+    if (rama !== 0 && rama !== -1) vm.error('«lambertW»: la rama es 0 (la principal) o −1');
+    const minimo = -1 / Math.E;
+    if (x < minimo - 1e-15) vm.error(`«lambertW»: W(x) solo es real para x ≥ −1/e (−0,3679…), y llegó ${repr(x, 1)}`);
+    if (rama === -1 && x >= 0) vm.error('«lambertW»: la rama −1 solo existe para −1/e ≤ x < 0');
+    if (Math.abs(x - minimo) < 1e-15) return -1;
+    if (x === 0) return 0;
+    let w;
+    if (rama === 0) {
+      if (x < -0.3) { const p = Math.sqrt(2 * (Math.E * x + 1)); w = -1 + p - p * p / 3 + 11 * p * p * p / 72; }
+      else if (x < 3) w = Math.log1p(x) * 0.8;
+      else { const L1 = Math.log(x), L2 = Math.log(L1); w = L1 - L2 + L2 / L1; }
+    } else {
+      if (x < -0.3) { const p = -Math.sqrt(2 * (Math.E * x + 1)); w = -1 + p - p * p / 3 + 11 * p * p * p / 72; }
+      else { const L1 = Math.log(-x), L2 = Math.log(-L1); w = L1 - L2 + L2 / L1; }
+    }
+    for (let i = 0; i < 100; i++) {
+      const ew = Math.exp(w), f = w * ew - x;
+      const d = ew * (w + 1) - (w + 2) * f / (2 * w + 2);
+      const dw = f / d;
+      w -= dw;
+      if (Math.abs(dw) <= 1e-15 * (1 + Math.abs(w))) break;
+    }
+    return w;
+  }, 'lambertW(x, rama?) — la w con w·eʷ = x · rama 0 (principal) o −1 · lambertW(1) = 0,5671… (la omega)');
+
+  // E₁(x) = ∫ₓ^∞ e^(−t)/t dt, x > 0
+  const E1 = x => {
+    if (x <= 0) return NaN;
+    if (x <= 1) {
+      let s = 0, t = 1;
+      for (let k = 1; k < 200; k++) { t *= -x / k; const d = t / k; s += d; if (Math.abs(d) < NA_EPS * Math.abs(s)) break; }
+      return -NA_EULER - Math.log(x) - s;
+    }
+    // fracción continua (Lentz)
+    let b = x + 1, c = 1 / 1e-300, d = 1 / b, h = d;
+    for (let i = 1; i < 500; i++) {
+      const an = -i * i; b += 2;
+      d = 1 / (an * d + b); c = b + an / c;
+      const del = c * d; h *= del;
+      if (Math.abs(del - 1) < NA_EPS) break;
+    }
+    return h * Math.exp(-x);
+  };
+  // Ei(x) = −PV∫₋ₓ^∞ e^(−t)/t dt
+  const Ei = x => {
+    if (x === 0) return -Infinity;
+    if (x < 0) return -E1(-x);
+    if (x < 40) {
+      let s = 0, t = 1;
+      for (let k = 1; k < 500; k++) { t *= x / k; const d = t / k; s += d; if (d < NA_EPS * s) break; }
+      return NA_EULER + Math.log(x) + s;
+    }
+    let s = 1, t = 1;
+    for (let k = 1; k < 40; k++) { const t2 = t * k / x; if (t2 > t) break; t = t2; s += t; if (t < NA_EPS) break; }
+    return Math.exp(x) / x * s;
+  };
+  real1('integralExponencial', Ei, 'integralExponencial(x) — Ei(x) = −VP ∫₋ₓ^∞ e^(−t)/t dt · Ei(1) = 1,8951…');
+  def('integralExponencialE1', 'real -> real', a => {
+    const x = num(a[0], 1, 'integralExponencialE1');
+    if (!(x > 0)) vm.error('«integralExponencialE1»: E₁(x) se define para x > 0');
+    return E1(x);
+  }, 'integralExponencialE1(x) — E₁(x) = ∫ₓ^∞ e^(−t)/t dt, para x > 0 · la caída de una fuente en un pozo, la teoría de Theis');
+
+  // Si y Ci (Numerical Recipes, «cisi»)
+  const cisi = x => {
+    const t = Math.abs(x);
+    if (t === 0) return [0, -Infinity];
+    let si, ci;
+    if (t > 2) {
+      // fracción continua compleja para E₁(it)
+      let br = 1, bi = t, cr = 1 / 1e-300, ci2 = 0;
+      let dr, di; { const m = br * br + bi * bi; dr = br / m; di = -bi / m; }
+      let hr = dr, hi = di;
+      for (let i = 2; i < 200; i++) {
+        const a = -(i - 1) * (i - 1);
+        br += 2;
+        // d = 1/(a·d + b)
+        let xr = a * dr + br, xi = a * di + bi;
+        { const m = xr * xr + xi * xi; dr = xr / m; di = -xi / m; }
+        // c = b + a/c
+        { const m = cr * cr + ci2 * ci2; const qr = a * cr / m, qi = -a * ci2 / m; cr = br + qr; ci2 = bi + qi; }
+        const delr = cr * dr - ci2 * di, deli = cr * di + ci2 * dr;
+        const nr = hr * delr - hi * deli, ni = hr * deli + hi * delr;
+        hr = nr; hi = ni;
+        if (Math.abs(delr - 1) + Math.abs(deli) < NA_EPS) break;
+      }
+      // h · (cos t − i sen t)
+      const co = Math.cos(t), se = Math.sin(t);
+      const rr = co * hr + se * hi, ri = co * hi - se * hr;
+      ci = -rr;
+      si = Math.PI / 2 + ri;
+    } else {
+      // series: uₖ = tᵏ/k!; las impares van a Si y las pares a Ci, con signo alterno
+      let u = 1, sumS = 0, sumC = 0;
+      for (let k = 1; k < 200; k++) {
+        u *= t / k;
+        const term = u / k;
+        if (k % 2 === 1) sumS += ((k - 1) / 2 % 2 === 0 ? 1 : -1) * term;
+        else sumC += (k / 2 % 2 === 0 ? 1 : -1) * term;
+        if (term < NA_EPS * 1e-2 * Math.max(Math.abs(sumS), 1e-300)) break;
+      }
+      si = sumS; ci = NA_EULER + Math.log(t) + sumC;
+    }
+    if (x < 0) si = -si;
+    return [si, ci];
+  };
+  real1('integralSeno', x => cisi(x)[0], 'integralSeno(x) — Si(x) = ∫₀ˣ sen(t)/t dt · Si(∞) = π/2');
+  def('integralCoseno', 'real -> real', a => {
+    const x = num(a[0], 1, 'integralCoseno');
+    if (!(x > 0)) vm.error('«integralCoseno»: Ci(x) se define para x > 0');
+    return cisi(x)[1];
+  }, 'integralCoseno(x) — Ci(x) = γ + ln x + ∫₀ˣ (cos t − 1)/t dt, para x > 0');
+
+  // Fresnel, con la convención de SciPy: S(x) = ∫₀ˣ sen(πt²/2) dt
+  const fresnel = x => {
+    const ax = Math.abs(x);
+    let s, c;
+    if (ax < 1e-150) return [x, x];
+    if (ax < 1.5) {
+      // series: uₖ = x·(πx²/2)ᵏ/k!; las pares van a C y las impares a S
+      const w = Math.PI * ax * ax / 2;
+      let u = ax, sumS = 0, sumC = ax;
+      for (let k = 1; k < 200; k++) {
+        u *= w / k;
+        const term = u / (2 * k + 1);
+        if (k % 2 === 1) sumS += ((k - 1) / 2 % 2 === 0 ? 1 : -1) * term;
+        else sumC += (k / 2 % 2 === 0 ? 1 : -1) * term;
+        if (term < NA_EPS * 1e-2 * Math.max(Math.abs(sumS), Math.abs(sumC))) break;
+      }
+      s = sumS; c = sumC;
+    } else {
+      // fracción continua compleja (NR «frenel»)
+      const pix2 = Math.PI * ax * ax;
+      let br = 1, bi = -pix2, cr = 1 / 1e-300, ci = 0;
+      let dr, di, hr, hi;
+      { const m = br * br + bi * bi; dr = br / m; di = -bi / m; hr = dr; hi = di; }
+      let n = -1;
+      for (let k = 2; k < 200; k++) {
+        n += 2;
+        const a = -n * (n + 1);
+        br += 4;
+        let xr = a * dr + br, xi = a * di + bi;
+        { const m = xr * xr + xi * xi; dr = xr / m; di = -xi / m; }
+        { const m = cr * cr + ci * ci; const qr = a * cr / m, qi = -a * ci / m; cr = br + qr; ci = bi + qi; }
+        const delr = cr * dr - ci * di, deli = cr * di + ci * dr;
+        const nr = hr * delr - hi * deli, ni = hr * deli + hi * delr;
+        hr = nr; hi = ni;
+        if (Math.abs(delr - 1) + Math.abs(deli) < NA_EPS) break;
+      }
+      // h · (ax − i·ax) → h' = h·(ax, −ax)
+      let h2r = hr * ax + hi * ax, h2i = hi * ax - hr * ax;
+      const co = Math.cos(0.5 * pix2), se = Math.sin(0.5 * pix2);
+      // cs = (1+i)/2 · (1 − (cos + i sen)·h')
+      const pr = co * h2r - se * h2i, pi = co * h2i + se * h2r;
+      const ur = 1 - pr, ui = -pi;
+      c = 0.5 * (ur - ui);
+      s = 0.5 * (ur + ui);
+    }
+    if (x < 0) { s = -s; c = -c; }
+    return [s, c];
+  };
+  real1('fresnelS', x => fresnel(x)[0], 'fresnelS(x) — S(x) = ∫₀ˣ sen(πt²/2) dt, la integral de Fresnel (la clotoide de las carreteras)');
+  real1('fresnelC', x => fresnel(x)[1], 'fresnelC(x) — C(x) = ∫₀ˣ cos(πt²/2) dt');
+
+  // elípticas completas, con el parámetro m = k² (como SciPy)
+  const agm = m => {
+    let a = 1, b = Math.sqrt(1 - m), c = Math.sqrt(m), suma = m / 2, pot = 0.5;
+    for (let i = 0; i < 60; i++) {
+      const a1 = (a + b) / 2, b1 = Math.sqrt(a * b), c1 = (a - b) / 2;
+      pot *= 2;
+      suma += pot * c1 * c1;
+      a = a1; b = b1; c = c1;
+      if (Math.abs(c) < 1e-17 * a) break;
+    }
+    return [Math.PI / (2 * a), suma];
+  };
+  def('elipticaK', 'real -> real', a => {
+    const m = num(a[0], 1, 'elipticaK');
+    if (m > 1) vm.error('«elipticaK»: el parámetro m = k² debe ser como mucho 1');
+    if (m === 1) return Infinity;
+    return agm(m)[0];
+  }, 'elipticaK(m) — la integral elíptica completa de primera especie K(m), m = k² · el periodo del péndulo grande');
+  def('elipticaE', 'real -> real', a => {
+    const m = num(a[0], 1, 'elipticaE');
+    if (m > 1) vm.error('«elipticaE»: el parámetro m = k² debe ser como mucho 1');
+    if (m === 1) return 1;
+    const [K, s] = agm(m);
+    return K * (1 - s);
+  }, 'elipticaE(m) — la integral elíptica completa de segunda especie E(m) · el perímetro de una elipse es 4a·E(e²)');
+
+  // dilogaritmo real, Li₂(x) = −∫₀ˣ ln(1−t)/t dt, x ≤ 1
+  const li2 = x => {
+    if (x === 0) return 0;
+    if (x === 1) return Math.PI * Math.PI / 6;
+    if (x < 0) { const l = Math.log1p(-x); return -li2(x / (x - 1)) - 0.5 * l * l; }
+    if (x > 0.5) return Math.PI * Math.PI / 6 - Math.log(x) * Math.log1p(-x) - li2(1 - x);
+    let s = 0, p = x;
+    for (let k = 1; k < 200; k++) { const t = p / (k * k); s += t; if (t < NA_EPS * s) break; p *= x; }
+    return s;
+  };
+  def('dilogaritmo', 'real -> real', a => {
+    const x = num(a[0], 1, 'dilogaritmo');
+    if (x > 1) vm.error('«dilogaritmo»: para x > 1 el dilogaritmo es complejo');
+    return li2(x);
+  }, 'dilogaritmo(x) — Li₂(x) = Σ xᵏ/k², para x ≤ 1 · dilogaritmo(1) = π²/6');
+
+  // ₂F₁(a, b; c; z), z < 1
+  const f21serie = (a, b, c, z) => {
+    let s = 1, t = 1;
+    for (let k = 0; k < 200000; k++) {
+      t *= (a + k) * (b + k) / ((c + k) * (k + 1)) * z;
+      s += t;
+      if (Math.abs(t) < NA_EPS * Math.abs(s)) break;
+      if (t === 0) break;
+    }
+    return s;
+  };
+  def('hipergeometrica', 'real, real, real, real -> real', a => {
+    const A = num(a[0], 1, 'hipergeometrica'), B = num(a[1], 2, 'hipergeometrica'), C = num(a[2], 3, 'hipergeometrica'), z = num(a[3], 4, 'hipergeometrica');
+    if (C <= 0 && Number.isInteger(C)) vm.error('«hipergeometrica»: c no puede ser 0 ni un entero negativo');
+    if (z === 1) {
+      if (C - A - B <= 0) vm.error('«hipergeometrica»: en z = 1 la serie converge solo si c − a − b > 0');
+      return Math.exp(lnGamma(C) + lnGamma(C - A - B) - lnGamma(C - A) - lnGamma(C - B));
+    }
+    if (z > 1) vm.error('«hipergeometrica»: para z > 1 el resultado es complejo (está definida para z < 1)');
+    if (z < 0) return Math.pow(1 - z, -A) * f21serie(A, C - B, C, z / (z - 1));     // Pfaff
+    return f21serie(A, B, C, z);
+  }, 'hipergeometrica(a, b, c, z) — la ₂F₁ de Gauss, para z < 1 · hipergeometrica(1, 1, 2, z) = −ln(1−z)/z');
+
+  // Bessel I de orden entero
+  def('besselI', 'entero, real -> real', a => {
+    const n = Math.abs(ent(a[0], 1, 'besselI')), x = num(a[1], 2, 'besselI');
+    const ax = Math.abs(x);
+    let r;
+    if (ax <= 30 + n) {
+      const h = ax / 2;
+      let t = Math.exp(n * Math.log(h || 1e-300) - lnGamma(n + 1));
+      if (ax === 0) return n === 0 ? 1 : 0;
+      let s = t;
+      for (let k = 1; k < 1000; k++) { t *= h * h / (k * (k + n)); s += t; if (t < NA_EPS * s) break; }
+      r = s;
+    } else {
+      const mu = 4 * n * n;
+      let s = 1, t = 1;
+      for (let k = 1; k < 30; k++) {
+        const t2 = -t * (mu - (2 * k - 1) * (2 * k - 1)) / (k * 8 * ax);
+        if (Math.abs(t2) > Math.abs(t)) break;
+        t = t2; s += t;
+        if (Math.abs(t) < NA_EPS * Math.abs(s)) break;
+      }
+      r = Math.exp(ax) / Math.sqrt(2 * Math.PI * ax) * s;
+    }
+    return (x < 0 && n % 2 === 1) ? -r : r;
+  }, 'besselI(n, x) — la Bessel modificada de primera especie Iₙ(x), de orden entero · la distribución de von Mises, el calor en un cilindro');
+
+  // poligamma ψ⁽ⁿ⁾(x), x > 0
+  const B2k = [1 / 6, -1 / 30, 1 / 42, -1 / 30, 5 / 66, -691 / 2730, 7 / 6, -3617 / 510, 43867 / 798, -174611 / 330];
+  const fact = n => { let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; };
+  const poligamma = (n, x) => {
+    if (n === 0) return digamma(x);
+    let acc = 0;
+    const sg = (n % 2 === 1) ? 1 : -1;            // (−1)^(n+1)
+    const nf = fact(n);
+    while (x < 15) { acc += sg * nf / Math.pow(x, n + 1); x += 1; }
+    let s = fact(n - 1) / Math.pow(x, n) + nf / (2 * Math.pow(x, n + 1));
+    for (let k = 1; k <= B2k.length; k++) {
+      const t = B2k[k - 1] * fact(2 * k + n - 1) / (fact(2 * k) * Math.pow(x, 2 * k + n));
+      s += t;
+      if (Math.abs(t) < NA_EPS * Math.abs(s)) break;
+    }
+    return acc + sg * s;
+  };
+  def('trigamma', 'real -> real', a => {
+    const x = num(a[0], 1, 'trigamma');
+    if (!(x > 0)) vm.error('«trigamma»: está implementada para x > 0');
+    return poligamma(1, x);
+  }, 'trigamma(x) — ψ′(x), la derivada de digamma · trigamma(1) = π²/6');
+  def('poligamma', 'entero, real -> real', a => {
+    const n = ent(a[0], 1, 'poligamma'), x = num(a[1], 2, 'poligamma');
+    if (n < 0) vm.error('«poligamma»: el orden debe ser 0 o más');
+    if (n > 20) vm.error('«poligamma»: el orden máximo es 20');
+    if (!(x > 0)) vm.error('«poligamma»: está implementada para x > 0');
+    return poligamma(n, x);
+  }, 'poligamma(n, x) — ψ⁽ⁿ⁾(x), la n-ésima derivada de digamma (n = 0 es digamma)');
+  real1('sinc', x => x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x),
+    'sinc(x) — sen(πx)/(πx), la normalizada (como NumPy) · la respuesta de un filtro ideal');
+
+  // ─────────────────────────────────────────────── distribuciones
+  const lnBeta = (p, q) => lnGamma(p) + lnGamma(q) - lnGamma(p + q);
+  const d3 = (nombre, doc, f) => def(nombre, 'real, real, real -> real', a => f(...a.map((v, i) => num(v, i + 1, nombre))), doc);
+  d3('gammaDensidad', 'gammaDensidad(x, forma, escala) — la densidad de una gamma(k, θ) · media kθ', (x, k, th) => {
+    positivo(k, 2, 'gammaDensidad', 'la forma'); positivo(th, 3, 'gammaDensidad', 'la escala');
+    if (x < 0) return 0;
+    if (x === 0) return k < 1 ? Infinity : (k === 1 ? 1 / th : 0);
+    return Math.exp((k - 1) * Math.log(x) - x / th - lnGamma(k) - k * Math.log(th));
+  });
+  d3('gammaAcumulada', 'gammaAcumulada(x, forma, escala) — P(X ≤ x) de una gamma(k, θ)', (x, k, th) => {
+    positivo(k, 2, 'gammaAcumulada', 'la forma'); positivo(th, 3, 'gammaAcumulada', 'la escala');
+    return x <= 0 ? 0 : gammaP(k, x / th);
+  });
+  d3('betaDensidad', 'betaDensidad(x, a, b) — la densidad de una beta(a, b) en [0, 1] · una proporción incierta', (x, p, q) => {
+    positivo(p, 2, 'betaDensidad', 'a'); positivo(q, 3, 'betaDensidad', 'b');
+    if (x < 0 || x > 1) return 0;
+    if (x === 0) return p < 1 ? Infinity : (p === 1 ? Math.exp(-lnBeta(p, q)) : 0);
+    if (x === 1) return q < 1 ? Infinity : (q === 1 ? Math.exp(-lnBeta(p, q)) : 0);
+    return Math.exp((p - 1) * Math.log(x) + (q - 1) * Math.log1p(-x) - lnBeta(p, q));
+  });
+  d3('betaAcumulada', 'betaAcumulada(x, a, b) — P(X ≤ x) de una beta(a, b)', (x, p, q) => {
+    positivo(p, 2, 'betaAcumulada', 'a'); positivo(q, 3, 'betaAcumulada', 'b');
+    if (x <= 0) return 0; if (x >= 1) return 1;
+    return betaI(p, q, x);
+  });
+  d3('weibullDensidad', 'weibullDensidad(x, forma, escala) — la densidad de una Weibull(k, λ) · la vida de una pieza', (x, k, l) => {
+    positivo(k, 2, 'weibullDensidad', 'la forma'); positivo(l, 3, 'weibullDensidad', 'la escala');
+    if (x < 0) return 0;
+    const z = x / l;
+    return k / l * Math.pow(z, k - 1) * Math.exp(-Math.pow(z, k));
+  });
+  d3('weibullAcumulada', 'weibullAcumulada(x, forma, escala) — P(X ≤ x) = 1 − e^(−(x/λ)ᵏ)', (x, k, l) => {
+    positivo(k, 2, 'weibullAcumulada', 'la forma'); positivo(l, 3, 'weibullAcumulada', 'la escala');
+    return x <= 0 ? 0 : -Math.expm1(-Math.pow(x / l, k));
+  });
+  d3('lognormalDensidad', 'lognormalDensidad(x, mu, sigma) — la densidad de una lognormal (ln X es normal(μ, σ)) · ingresos, tamaños', (x, mu, s) => {
+    positivo(s, 3, 'lognormalDensidad', 'sigma');
+    if (x <= 0) return 0;
+    const z = (Math.log(x) - mu) / s;
+    return Math.exp(-0.5 * z * z) / (x * s * Math.sqrt(2 * Math.PI));
+  });
+  d3('lognormalAcumulada', 'lognormalAcumulada(x, mu, sigma) — P(X ≤ x) de una lognormal', (x, mu, s) => {
+    positivo(s, 3, 'lognormalAcumulada', 'sigma');
+    if (x <= 0) return 0;
+    return 0.5 * erfc(-(Math.log(x) - mu) / (s * Math.SQRT2));
+  });
+  d3('cauchyDensidad', 'cauchyDensidad(x, x0, gamma) — la densidad de Cauchy (sin media ni varianza) · una resonancia', (x, x0, g) => {
+    positivo(g, 3, 'cauchyDensidad', 'gamma');
+    const z = (x - x0) / g;
+    return 1 / (Math.PI * g * (1 + z * z));
+  });
+  d3('cauchyAcumulada', 'cauchyAcumulada(x, x0, gamma) — P(X ≤ x) = 1/2 + arctan((x − x0)/γ)/π', (x, x0, g) => {
+    positivo(g, 3, 'cauchyAcumulada', 'gamma');
+    return 0.5 + Math.atan((x - x0) / g) / Math.PI;
+  });
+  d3('logisticaDensidad', 'logisticaDensidad(x, mu, s) — la densidad logística · el crecimiento con techo', (x, mu, s) => {
+    positivo(s, 3, 'logisticaDensidad', 's');
+    const z = -Math.abs(x - mu) / s, e = Math.exp(z);
+    return e / (s * (1 + e) * (1 + e));
+  });
+  d3('logisticaAcumulada', 'logisticaAcumulada(x, mu, s) — P(X ≤ x) = 1/(1 + e^(−(x−μ)/s))', (x, mu, s) => {
+    positivo(s, 3, 'logisticaAcumulada', 's');
+    const z = (x - mu) / s;
+    return z >= 0 ? 1 / (1 + Math.exp(-z)) : Math.exp(z) / (1 + Math.exp(z));
+  });
+  def('exponencialDensidad', 'real, real -> real', a => {
+    const x = num(a[0], 1, 'exponencialDensidad'), l = positivo(a[1], 2, 'exponencialDensidad', 'lambda');
+    return x < 0 ? 0 : l * Math.exp(-l * x);
+  }, 'exponencialDensidad(x, lambda) — λe^(−λx) · el tiempo entre llegadas');
+  def('tStudentDensidad', 'real, real -> real', a => {
+    const t = num(a[0], 1, 'tStudentDensidad'), v = positivo(a[1], 2, 'tStudentDensidad', 'los grados de libertad');
+    return Math.exp(lnGamma((v + 1) / 2) - lnGamma(v / 2) - 0.5 * Math.log(v * Math.PI) - (v + 1) / 2 * Math.log1p(t * t / v));
+  }, 'tStudentDensidad(t, gl) — la densidad de la t de Student');
+  def('chiCuadradoDensidad', 'real, real -> real', a => {
+    const x = num(a[0], 1, 'chiCuadradoDensidad'), k = positivo(a[1], 2, 'chiCuadradoDensidad', 'los grados de libertad');
+    if (x < 0) return 0;
+    if (x === 0) return k < 2 ? Infinity : (k === 2 ? 0.5 : 0);
+    return Math.exp((k / 2 - 1) * Math.log(x) - x / 2 - lnGamma(k / 2) - (k / 2) * Math.LN2);
+  }, 'chiCuadradoDensidad(x, gl) — la densidad de la χ²');
+  d3('fisherDensidad', 'fisherDensidad(x, gl1, gl2) — la densidad de la F de Fisher–Snedecor', (x, d1, d2) => {
+    positivo(d1, 2, 'fisherDensidad', 'gl1'); positivo(d2, 3, 'fisherDensidad', 'gl2');
+    if (x < 0) return 0;
+    if (x === 0) return d1 < 2 ? Infinity : (d1 === 2 ? 1 : 0);
+    return Math.exp(0.5 * (d1 * Math.log(d1 * x) + d2 * Math.log(d2) - (d1 + d2) * Math.log(d1 * x + d2)) - Math.log(x) - lnBeta(d1 / 2, d2 / 2));
+  });
+  def('geometricaProb', 'entero, real -> real', a => {
+    const k = ent(a[0], 1, 'geometricaProb'), p = prob(a[1], 2, 'geometricaProb');
+    if (k < 1) return 0;
+    return Math.exp((k - 1) * Math.log1p(-p) + Math.log(p));
+  }, 'geometricaProb(k, p) — P(el primer éxito llega en el intento k), k ≥ 1');
+  def('binomialNegativaProb', 'entero, real, real -> real', a => {
+    const k = ent(a[0], 1, 'binomialNegativaProb'), r = positivo(a[1], 2, 'binomialNegativaProb', 'r'), p = prob(a[2], 3, 'binomialNegativaProb');
+    if (k < 0) return 0;
+    return Math.exp(lnGamma(k + r) - lnGamma(r) - lnGamma(k + 1) + r * Math.log(p) + k * Math.log1p(-p));
+  }, 'binomialNegativaProb(k, r, p) — P(k fracasos antes del éxito número r) · conteos con más dispersión que una Poisson');
+  def('hipergeometricaProb', 'entero, entero, entero, entero -> real', a => {
+    const k = ent(a[0], 1, 'hipergeometricaProb'), N = ent(a[1], 2, 'hipergeometricaProb'), K = ent(a[2], 3, 'hipergeometricaProb'), n = ent(a[3], 4, 'hipergeometricaProb');
+    if (N < 0 || K < 0 || n < 0 || K > N || n > N) vm.error('«hipergeometricaProb»: hace falta 0 ≤ K ≤ N y 0 ≤ n ≤ N');
+    if (k < Math.max(0, n + K - N) || k > Math.min(n, K)) return 0;
+    const lc = (m, j) => lnGamma(m + 1) - lnGamma(j + 1) - lnGamma(m - j + 1);
+    return Math.exp(lc(K, k) + lc(N - K, n - k) - lc(N, n));
+  }, 'hipergeometricaProb(k, N, K, n) — P(k aciertos al sacar n sin devolver, de N con K buenos) · el control de calidad por lotes');
+
+  // ─────────────────────────────────────────────── muestreo con el azar sembrado de numerico
+  const muestra = (nombre, firmaN, doc, generar) => def(nombre, '... -> cualquiera', a => {
+    const params = a.slice(0, firmaN);
+    if (params.length < firmaN) vm.error(`«${nombre}» necesita ${firmaN} parámetro(s)`);
+    const g = generar(params);
+    if (a.length > firmaN) {
+      const n = ent(a[firmaN], firmaN + 1, nombre);
+      if (n < 0) vm.error(`«${nombre}»: la cantidad no puede ser negativa`);
+      vm.cobrar(n);
+      const out = [];
+      for (let i = 0; i < n; i++) out.push(g());
+      return vm.nuevaLista(out);
+    }
+    return g();
+  }, doc);
+  const gammaMT = k => {
+    if (k < 1) { const u = uniforme(); return gammaMT(k + 1) * Math.pow(u || 1e-300, 1 / k); }
+    const d = k - 1 / 3, c = 1 / Math.sqrt(9 * d);
+    for (;;) {
+      let x, v;
+      do { x = normalE(); v = 1 + c * x; } while (v <= 0);
+      v = v * v * v;
+      const u = uniforme();
+      if (u < 1 - 0.0331 * x * x * x * x) return d * v;
+      if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
+    }
+  };
+  muestra('azarExponencial', 1, 'azarExponencial(lambda, cantidad?) — un tiempo de espera de media 1/λ · con cantidad, una lista', ([l]) => {
+    positivo(l, 1, 'azarExponencial', 'lambda');
+    return () => -Math.log1p(-uniforme()) / l;
+  });
+  muestra('azarGamma', 2, 'azarGamma(forma, escala, cantidad?) — una gamma(k, θ) (Marsaglia–Tsang)', ([k, th]) => {
+    positivo(k, 1, 'azarGamma', 'la forma'); positivo(th, 2, 'azarGamma', 'la escala');
+    return () => gammaMT(k) * th;
+  });
+  muestra('azarBeta', 2, 'azarBeta(a, b, cantidad?) — una beta(a, b): una proporción al azar', ([p, q]) => {
+    positivo(p, 1, 'azarBeta', 'a'); positivo(q, 2, 'azarBeta', 'b');
+    return () => { const x = gammaMT(p), y = gammaMT(q); return x / (x + y); };
+  });
+  muestra('azarChiCuadrado', 1, 'azarChiCuadrado(gl, cantidad?) — una χ² con gl grados de libertad', ([k]) => {
+    positivo(k, 1, 'azarChiCuadrado', 'los grados de libertad');
+    return () => 2 * gammaMT(k / 2);
+  });
+  muestra('azarTStudent', 1, 'azarTStudent(gl, cantidad?) — una t de Student', ([v]) => {
+    positivo(v, 1, 'azarTStudent', 'los grados de libertad');
+    return () => normalE() / Math.sqrt(2 * gammaMT(v / 2) / v);
+  });
+  muestra('azarPoisson', 1, 'azarPoisson(lambda, cantidad?) — cuántas llegadas en un intervalo de media λ (Knuth hasta 30; PTRS después)', ([l]) => {
+    num(l, 1, 'azarPoisson');
+    if (l < 0) vm.error('«azarPoisson»: lambda no puede ser negativa');
+    if (l === 0) return () => 0;
+    if (l < 30) {
+      const L = Math.exp(-l);
+      return () => { let k = 0, p = 1; for (;;) { p *= uniforme(); if (p <= L) return k; k++; } };
+    }
+    // PTRS (Hörmann 1993)
+    const slam = Math.sqrt(l), loglam = Math.log(l);
+    const b = 0.931 + 2.53 * slam, aa = -0.059 + 0.02483 * b, invalpha = 1.1239 + 1.1328 / (b - 3.4), vr = 0.9277 - 3.6224 / (b - 2);
+    return () => {
+      for (;;) {
+        const U = uniforme() - 0.5, V = uniforme(), us = 0.5 - Math.abs(U);
+        const k = Math.floor((2 * aa / us + b) * U + l + 0.43);
+        if (us >= 0.07 && V <= vr) return k;
+        if (k < 0 || (us < 0.013 && V > us)) continue;
+        if (Math.log(V) + Math.log(invalpha) - Math.log(aa / (us * us) + b) <= -l + k * loglam - lnGamma(k + 1)) return k;
+      }
+    };
+  });
+  muestra('azarBinomial', 2, 'azarBinomial(n, p, cantidad?) — cuántos éxitos en n intentos (inversión o BTRS)', ([n, p]) => {
+    ent(n, 1, 'azarBinomial'); prob(p, 2, 'azarBinomial');
+    if (n < 0) vm.error('«azarBinomial»: n no puede ser negativo');
+    const voltear = p > 0.5, pp = voltear ? 1 - p : p;
+    const ajustar = k => voltear ? n - k : k;
+    if (pp === 0) return () => ajustar(0);
+    if (n * pp < 10) {
+      // inversión: recorre la probabilidad acumulada
+      const q = 1 - pp, s = pp / q, a0 = (n + 1) * s, r0 = Math.pow(q, n);
+      return () => {
+        let r = r0, u = uniforme(), x = 0;
+        while (u > r) { u -= r; x++; if (x > n) { x = n; break; } r *= (a0 / x - s); }
+        return ajustar(x);
+      };
+    }
+    // BTRS (Hörmann 1993)
+    const q = 1 - pp, spq = Math.sqrt(n * pp * q);
+    const b = 1.15 + 2.53 * spq, aa = -0.0873 + 0.0248 * b + 0.01 * pp, c = n * pp + 0.5, vr = 0.92 - 4.2 / b;
+    const alpha = (2.83 + 5.1 / b) * spq, lpq = Math.log(pp / q), m = Math.floor((n + 1) * pp);
+    const h = lnGamma(m + 1) + lnGamma(n - m + 1);
+    return () => {
+      for (;;) {
+        const u = uniforme() - 0.5, v0 = uniforme(), us = 0.5 - Math.abs(u);
+        const k = Math.floor((2 * aa / us + b) * u + c);
+        if (k < 0 || k > n) continue;
+        if (us >= 0.07 && v0 <= vr) return ajustar(k);
+        const v = Math.log(v0 * alpha / (aa / (us * us) + b));
+        if (v <= h - lnGamma(k + 1) - lnGamma(n - k + 1) + (k - m) * lpq) return ajustar(k);
+      }
+    };
+  });
+  muestra('azarLogNormal', 2, 'azarLogNormal(mu, sigma, cantidad?) — e^(μ + σZ)', ([mu, s]) => {
+    num(mu, 1, 'azarLogNormal'); positivo(s, 2, 'azarLogNormal', 'sigma');
+    return () => Math.exp(mu + s * normalE());
+  });
+  muestra('azarWeibull', 2, 'azarWeibull(forma, escala, cantidad?) — una Weibull(k, λ)', ([k, l]) => {
+    positivo(k, 1, 'azarWeibull', 'la forma'); positivo(l, 2, 'azarWeibull', 'la escala');
+    return () => l * Math.pow(-Math.log1p(-uniforme()), 1 / k);
+  });
+  muestra('azarCauchy', 2, 'azarCauchy(x0, gamma, cantidad?) — una Cauchy (colas pesadas: la media no converge)', ([x0, g]) => {
+    num(x0, 1, 'azarCauchy'); positivo(g, 2, 'azarCauchy', 'gamma');
+    return () => x0 + g * Math.tan(Math.PI * (uniforme() - 0.5));
+  });
 }
 
 

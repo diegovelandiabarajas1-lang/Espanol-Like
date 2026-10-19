@@ -228,6 +228,7 @@ for (const k of [
     // No es el algoritmo más rápido de GPU (sin memoria compartida), pero da
     // EXACTAMENTE lo mismo que la CPU, que aquí pesa más.
     nombre: 'nen_matmul',
+    // (motor-exp N1) ver «nen_matmul_filas» para la CPU
     params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
     cuerpo: 'long long mp = m * p; long long l = i / mp; long long r = i % mp; long long f = r / p; long long col = r % p; ' +
       'long long oa = l * m * K + f * K; long long ob = l * K * p + col; double s = 0.0; ' +
@@ -240,6 +241,61 @@ for (const k of [
         let s = 0.0;
         for (let k = 0; k < K; k++) s += a[oa + k] * b[ob + k * p];
         c[i] = s;
+      }
+    },
+  },
+  {
+    // (motor-exp N1) El mismo producto para la CPU, con un micronúcleo de 4×8:
+    // el hilo i hace un grupo de 4 filas de UN lote, y va por trozos de 256 en k
+    // y de 8 en j guardando las 32 sumas en variables (registros) en vez de leer
+    // y escribir c en cada paso. Cada casilla se sigue sumando en el mismo orden
+    // que en nen_matmul (k de 0 a K−1, empezando en 0): el resultado es idéntico
+    // al bit. n = lotes × ⌈m/4⌉.
+    nombre: 'nen_matmul_filas',
+    params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
+    cuerpo:
+      'long long gpl = (m + 3) / 4; long long l = i / gpl; long long r0 = l * m + (i % gpl) * 4; long long r1 = r0 + 4; ' +
+      'if (r1 > l * m + m) r1 = l * m + m; const double * bl = b + l * K * p; ' +
+      'for (long long r = r0; r < r1; r++) for (long long j = 0; j < p; j++) c[r * p + j] = 0.0; ' +
+      'for (long long kb = 0; kb < K; kb += 256) { long long ke = kb + 256; if (ke > K) ke = K; ' +
+      '  long long jb = 0; ' +
+      '  if (r1 - r0 == 4) { const double * A0 = a + r0 * K; const double * A1 = A0 + K; const double * A2 = A1 + K; const double * A3 = A2 + K; ' +
+      '    for (; jb + 8 <= p; jb += 8) { double s0[8], s1[8], s2[8], s3[8]; ' +
+      '      for (int q = 0; q < 8; q++) { s0[q] = c[r0 * p + jb + q]; s1[q] = c[(r0 + 1) * p + jb + q]; s2[q] = c[(r0 + 2) * p + jb + q]; s3[q] = c[(r0 + 3) * p + jb + q]; } ' +
+      '      for (long long k = kb; k < ke; k++) { const double * bk = bl + k * p + jb; double x0 = A0[k], x1 = A1[k], x2 = A2[k], x3 = A3[k]; ' +
+      '        for (int q = 0; q < 8; q++) { double bv = bk[q]; s0[q] = s0[q] + x0 * bv; s1[q] = s1[q] + x1 * bv; s2[q] = s2[q] + x2 * bv; s3[q] = s3[q] + x3 * bv; } } ' +
+      '      for (int q = 0; q < 8; q++) { c[r0 * p + jb + q] = s0[q]; c[(r0 + 1) * p + jb + q] = s1[q]; c[(r0 + 2) * p + jb + q] = s2[q]; c[(r0 + 3) * p + jb + q] = s3[q]; } } } ' +
+      '  for (long long r = r0; r < r1; r++) { const double * ar = a + r * K; for (long long k = kb; k < ke; k++) { double aik = ar[k]; const double * bk = bl + k * p; ' +
+      '    for (long long j = jb; j < p; j++) c[r * p + j] = c[r * p + j] + aik * bk[j]; } } ' +
+      '}',
+    js: (n, m, K, p, a, b, c) => {
+      const s0 = new Float64Array(8), s1 = new Float64Array(8), s2 = new Float64Array(8), s3 = new Float64Array(8);
+      const gpl = Math.floor((m + 3) / 4);
+      for (let i = 0; i < n; i++) {
+        const l = Math.floor(i / gpl), r0 = l * m + (i % gpl) * 4, r1 = Math.min(r0 + 4, l * m + m), bl = l * K * p;
+        for (let r = r0; r < r1; r++) for (let j = 0; j < p; j++) c[r * p + j] = 0.0;
+        for (let kb = 0; kb < K; kb += 256) {
+          const ke = Math.min(kb + 256, K);
+          let jb = 0;
+          if (r1 - r0 === 4) {
+            const A0 = r0 * K, A1 = A0 + K, A2 = A1 + K, A3 = A2 + K;
+            for (; jb + 8 <= p; jb += 8) {
+              for (let q = 0; q < 8; q++) { s0[q] = c[r0 * p + jb + q]; s1[q] = c[(r0 + 1) * p + jb + q]; s2[q] = c[(r0 + 2) * p + jb + q]; s3[q] = c[(r0 + 3) * p + jb + q]; }
+              for (let k = kb; k < ke; k++) {
+                const bk = bl + k * p + jb, x0 = a[A0 + k], x1 = a[A1 + k], x2 = a[A2 + k], x3 = a[A3 + k];
+                for (let q = 0; q < 8; q++) { const bv = b[bk + q]; s0[q] = s0[q] + x0 * bv; s1[q] = s1[q] + x1 * bv; s2[q] = s2[q] + x2 * bv; s3[q] = s3[q] + x3 * bv; }
+              }
+              for (let q = 0; q < 8; q++) { c[r0 * p + jb + q] = s0[q]; c[(r0 + 1) * p + jb + q] = s1[q]; c[(r0 + 2) * p + jb + q] = s2[q]; c[(r0 + 3) * p + jb + q] = s3[q]; }
+            }
+          }
+          for (let r = r0; r < r1; r++) {
+            const ar = r * K;
+            for (let k = kb; k < ke; k++) {
+              const aik = a[ar + k], bk = bl + k * p;
+              for (let j = jb; j < p; j++) c[r * p + j] = c[r * p + j] + aik * b[bk + j];
+            }
+          }
+        }
       }
     },
   },
@@ -433,12 +489,22 @@ function instalarNenTensores(vm, def) {
 
   // ── el producto de matrices, por el núcleo ────────────────────────────────
   // (lotes × m × K) · (lotes × K × p) → (lotes × m × p), todo plano.
+  // (motor-exp N1) En la GPU, un hilo por casilla (nen_matmul: las lecturas de
+  // b van seguidas entre hilos vecinos). En la CPU, un hilo por FILA con el
+  // orden i-k-j (nen_matmul_filas), que recorre b y c de seguido y no a saltos
+  // de p: 300×300 bajó de 51 a unos pocos ms. Las dos suman cada casilla en el
+  // mismo orden (k de 0 a K−1, empezando en 0), así que dan los mismos bits.
   function mm(a, b, m, K, p, lotes) {
     lotes = lotes || 1;
     const c = new Float64Array(lotes * m * p);
-    correr('nen_matmul', lotes * m * K * p, lotes * m * p, m, K, p, a, b, c);
+    const trabajo = lotes * m * K * p;
+    const enGpu = trabajo >= NEN_T_UMBRAL && vm.c1en && typeof vm.c1en.describir === 'function' && /^gpu/.test(vm.c1en.describir());
+    if (enGpu) correr('nen_matmul', trabajo, lotes * m * p, m, K, p, a, b, c);
+    else correr('nen_matmul_filas', trabajo, lotes * Math.ceil(m / 4), m, K, p, a, b, c);
     return c;
   }
+  // numerico (por, multMatriz) multiplica con esto mismo
+  vm.nenMatmul = (a, b, m, K, p) => mm(a, b, m, K, p, 1);
   const identidadP = n => { const I = new Float64Array(n * n); for (let i = 0; i < n; i++) I[i * n + i] = 1; return I; };
   const norma1 = (A, n) => { let mx = 0; for (let j = 0; j < n; j++) { let s = 0; for (let i = 0; i < n; i++) s += Math.abs(A[i * n + j]); if (s > mx) mx = s; } return mx; };
   const normaF = A => { let s = 0; for (let i = 0; i < A.length; i++) s += A[i] * A[i]; return Math.sqrt(s); };
@@ -602,13 +668,15 @@ function instalarNenTensores(vm, def) {
         if (!fc) vm.error(`«${nombre}» no está definida para complejos`, 'usa parteReal, parteImaginaria o absoluto primero');
         return vm.arrComplejoA(x, fc);
       }
-      const d = planoDe(x), n = d.length;
+      // (motor-exp N1) un arreglo real seguido entra tal cual y la salida se
+      // escribe directamente en el arreglo nuevo: dos copias de menos
+      const d = (x.seguida && x.tipo === 'real') ? x.datos.subarray(0, x.tamano) : planoDe(x), n = d.length;
       if (DOMINIO[nombre]) for (let i = 0; i < n; i++) if (DOMINIO[nombre](d[i]))
         vm.error(`«${nombre}»: hay un valor negativo (${d[i]}, en la posición ${i}) y su resultado no es un número real`,
           'pásalo a complejo con complejo(a) si quieres los resultados complejos');
-      const y = new Float64Array(n);
-      correr(nucleo, n, n, d, y);
-      return deReales(x.forma, y);
+      const o = vm.arrNuevo(x.forma.slice(), 'real');
+      correr(nucleo, n, n, d, o.datos);
+      return o;
     }, doc);
   }
   unaria('senoA', 'nen_seno', 'senoA(a) — el seno de cada número · también de complejos y de listas · en la GPU si el arreglo es grande');

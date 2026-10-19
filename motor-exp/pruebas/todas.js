@@ -29,6 +29,7 @@ const SUITES = [
   ['exp: expres.', 'exp-expresividad.js', 'motor-exp X1: registros con métodos, si-expresión, ??, ?., desestructurar, segun'],
   ['exp: expres.2', 'exp-expresividad2.js', 'motor-exp X2–X4: defectos, con nombre, publico tipo, a?.m(), genéricos, generadores, asíncronas'],
   ['exp: sistema', 'exp-sistema.js', 'motor-exp S1–S2: FFI con firmas de C, arreglos sin copiar, retrollamadas, servidor, reloj, procesos, entrada'],
+  ['exp: NEÑ',    'exp-nen.js',     'motor-exp N1: grande contra mpmath, enteros exactos, amplitud contra SciPy, numerico y datos en nen, volumen'],
 ];
 
 let fallan = 0, saltadas = 0;

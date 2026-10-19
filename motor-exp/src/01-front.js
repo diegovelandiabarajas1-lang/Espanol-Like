@@ -76,7 +76,7 @@ const PISTA_PALABRA = Object.assign(Object.create(null), {
 // comunes del idioma habría roto cualquier programa que las use de nombre.
 // «var y = 1» compila.
 
-const TIPOS_BASE = new Set(['entero', 'real', 'texto', 'bool', 'nulo', 'lista', 'dic', 'funcion', 'nodo', 'estilo', 'error', 'fecha', 'tabla', 'arreglo', 'cualquiera']);
+const TIPOS_BASE = new Set(['entero', 'real', 'texto', 'bool', 'nulo', 'lista', 'dic', 'funcion', 'nodo', 'estilo', 'error', 'fecha', 'tabla', 'arreglo', 'grande', 'cualquiera']);
 
 function lexer(fuente) {
   const toks = [];
@@ -256,6 +256,8 @@ const T = {
   // después de guardarla y volverla a leer.
   tabla: { k: 'tabla' },
   arreglo: { k: 'arreglo' },
+  // (motor-exp N1) Un decimal de precisión arbitraria, de NEÑ (18-nen-precision.js).
+  grande: { k: 'grande' },
   // (motor-exp) Un registro declarado con «tipo Nombre { … }». Lo que lleva
   // —campos y métodos— lo sabe el verificador; aquí solo viaja el nombre.
   registro: (nombre) => ({ k: 'registro', nombre }),
@@ -300,7 +302,7 @@ function tipoATexto(t) {
 // Falla al instalar la biblioteca, no al llamar a la función: una firma mal
 // escrita revienta la creación del motor y por tanto la primera prueba que
 // corra, en vez de dejar un nombre mal tipado suelto.
-const BASICOS = ['entero', 'real', 'texto', 'bool', 'nulo', 'cualquiera', 'nodo', 'error', 'estilo', 'fecha', 'tabla', 'arreglo'];
+const BASICOS = ['entero', 'real', 'texto', 'bool', 'nulo', 'cualquiera', 'nodo', 'error', 'estilo', 'fecha', 'tabla', 'arreglo', 'grande'];
 
 // Parte por comas de primer nivel: 'lista<real>, dic<texto,real>' → dos trozos.
 function partirNivel(s) {

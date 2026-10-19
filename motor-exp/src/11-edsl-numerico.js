@@ -32,6 +32,16 @@ function instalarNumerico(vm) {
   const num = (v, n, f) => vm.exigeNum(v, n, f);
   const lst = (v, n, f) => vm.exigeLista(v, n, f);
   const nums = (v, n, f) => vm.exigeNums(v, n, f);
+  // (motor-exp N1) Los números para REDUCIR (suma, media, varianza…): de un
+  // arreglo seguido, sus propios datos, sin copiarlos a una lista (suma() de un
+  // millón bajó de 43 a ~1 ms). Las sumas van en el mismo orden, de izquierda a
+  // derecha y desde 0, así que dan exactamente lo mismo que antes.
+  const numsPlanos = (v, n, f) => {
+    if (v instanceof ObjArreglo && v.seguida && v.tipo !== 'complejo') { vm.cobrar(v.tamano); return v.datos.subarray(0, v.tamano); }
+    return nums(v, n, f);
+  };
+  const sumaDe = xs => { let s = 0; for (let i = 0; i < xs.length; i++) s += xs[i]; return s; };
+  const sumaCuad = (xs, m) => { let s = 0; for (let i = 0; i < xs.length; i++) { const d = xs[i] - m; s += d * d; } return s; };
   const ent = (v, n, f) => vm.exigeEnt(v, n, f);
 
   // ── el azar ────────────────────────────────────────────────────────────────
@@ -135,7 +145,9 @@ function instalarNumerico(vm) {
     })(l, 0);
     return { forma, plano };
   }
-  const todoEntero = xs => xs.every(x => Number.isInteger(x));
+  // (motor-exp N1) entero solo si cabe en 32 bits: arreglo([3e200, 4e200]) daba
+  // ceros sin avisar porque 3e200 es «entero» para JavaScript
+  const todoEntero = xs => xs.every(x => Number.isInteger(x) && x >= -2147483648 && x <= 2147483647);
   const tamanoDeF = f => f.reduce((a, b) => a * b, 1);
 
   // ── la transformada de Fourier ─────────────────────────────────────────────
@@ -574,14 +586,14 @@ function instalarNumerico(vm) {
       if (x instanceof ObjArreglo && a.length > 1)
         return vm.arrReducir(x, ent(a[1], 2, 'suma'), 0, (acc, v) => acc + v, null,
           x.tipo === 'entero' ? 'entero' : 'real');
-      return nums(x, 1, 'suma').reduce((p, c) => p + c, 0);
+      return sumaDe(numsPlanos(x, 1, 'suma'));
     }, 'suma(lista) · suma(arreglo) · suma(arreglo, eje) — con eje da un arreglo');
-    const media = xs => xs.reduce((p, c) => p + c, 0) / xs.length;
+    const media = xs => sumaDe(xs) / xs.length;
     def('media', '... -> cualquiera', a => {
       const x = a[0];
       if (x instanceof ObjArreglo && a.length > 1)
         return vm.arrReducir(x, ent(a[1], 2, 'media'), 0, (acc, v) => acc + v, (acc, n) => acc / n, 'real');
-      const v = nums(x, 1, 'media');
+      const v = numsPlanos(x, 1, 'media');
       if (!v.length) vm.error('«media» de una lista vacía');
       return media(v);
     }, 'media(lista) · media(arreglo) · media(arreglo, eje)');
@@ -597,8 +609,8 @@ function instalarNumerico(vm) {
       for (const v of x) { const k = (c.get(v) || 0) + 1; c.set(v, k); if (k > mc) { mc = k; mejor = v; } }
       return mejor;
     });
-    def('varianza', 'lista<real>|arreglo -> real', a => { const x = nums(a[0], 1, 'varianza'); if (x.length < 2) vm.error('«varianza» necesita al menos 2 datos'); const m = media(x); return x.reduce((p, c) => p + (c - m) * (c - m), 0) / (x.length - 1); }, 'varianza muestral');
-    def('desviacion', 'lista<real>|arreglo -> real', a => { const x = nums(a[0], 1, 'desviacion'); if (x.length < 2) vm.error('«desviacion» necesita al menos 2 datos'); const m = media(x); return Math.sqrt(x.reduce((p, c) => p + (c - m) * (c - m), 0) / (x.length - 1)); });
+    def('varianza', 'lista<real>|arreglo -> real', a => { const x = numsPlanos(a[0], 1, 'varianza'); if (x.length < 2) vm.error('«varianza» necesita al menos 2 datos'); const m = media(x); return sumaCuad(x, m) / (x.length - 1); }, 'varianza muestral');
+    def('desviacion', 'lista<real>|arreglo -> real', a => { const x = numsPlanos(a[0], 1, 'desviacion'); if (x.length < 2) vm.error('«desviacion» necesita al menos 2 datos'); const m = media(x); return Math.sqrt(sumaCuad(x, m) / (x.length - 1)); });
     def('percentil', 'lista<real>|arreglo, real -> real', a => {
       const x = nums(a[0], 1, 'percentil').slice().sort((p, q) => p - q);
       const p = num(a[1], 2, 'percentil');
@@ -674,6 +686,17 @@ function instalarNumerico(vm) {
       // multiplica. Sacarlas fuera y acumular la fila en un Float64Array —sin
       // números en caja— pasó 400×400 de 228 ms a 108 ms. La misma cuenta, el
       // mismo orden ikj; solo dónde están las cargas.
+      // (motor-exp N1) con NEÑ instalado, el producto de NEÑ: en C con OpenMP o en
+      // la GPU si es grande (y si no, el mismo bucle i-k-j en JavaScript)
+      if (vm.nenMatmul) {
+        const pa = new Float64Array(nf * nm), pb = new Float64Array(nm * nc);
+        for (let i = 0; i < nf; i++) { const r = A[i]; for (let k = 0; k < nm; k++) pa[i * nm + k] = r[k]; }
+        for (let k = 0; k < nm; k++) { const r = B[k]; for (let j = 0; j < nc; j++) pb[k * nc + j] = r[j]; }
+        const c = vm.nenMatmul(pa, pb, nf, nm, nc);
+        const out = new Array(nf);
+        for (let i = 0; i < nf; i++) out[i] = L(Array.from(c.subarray(i * nc, i * nc + nc)));
+        return L(out);
+      }
       const out = new Array(nf);
       for (let i = 0; i < nf; i++) {
         const Ai = A[i];
@@ -987,11 +1010,14 @@ function instalarNumerico(vm) {
       const n = ent(a[0], 1, 'factorial');
       if (n < 0) vm.error('«factorial» de un negativo no existe');
       // Más de 170 y el resultado es infinito: se dice en vez de devolverlo.
-      if (n > 170) vm.error(`«factorial»: ${n}! no cabe en un número`, 'el máximo exacto es 170!');
+      // (motor-exp N1) el mensaje decía «el máximo exacto es 170!», y 170! no es
+      // exacto en un real: lo exacto llega hasta 22!. Ahora lo dice, y dónde está lo exacto.
+      if (n > 170) vm.error(`«factorial»: ${n}! no cabe en un número real (el más grande que cabe es 170!)`,
+        'para el número exacto, con todas sus cifras: factorialExacto(n) de "nen"');
       let r = 1;
       for (let i = 2; i <= n; i++) r *= i;
       return r;
-    }, 'factorial(5) → 120 · hasta 170');
+    }, 'factorial(5) → 120 · exacto hasta 22!, aproximado hasta 170! (para más, factorialExacto de "nen")');
     def('combinaciones', 'entero, entero -> real', a => {
       const n = ent(a[0], 1, 'combinaciones'), k = ent(a[1], 2, 'combinaciones');
       if (n < 0 || k < 0) vm.error('«combinaciones» no admite negativos');
@@ -1105,7 +1131,7 @@ function instalarNumerico(vm) {
     }, 'unos(forma, tipo?)');
     def('lleno', '... -> arreglo', a => {
       const v = num(a[1], 2, 'lleno');
-      const x = vm.arrNuevo(formaDe(a[0], 'lleno'), a.length > 2 ? tipoArg(a[2], 'lleno') : (Number.isInteger(v) ? 'entero' : 'real'));
+      const x = vm.arrNuevo(formaDe(a[0], 'lleno'), a.length > 2 ? tipoArg(a[2], 'lleno') : (todoEntero([v]) ? 'entero' : 'real'));
       x.datos.fill(v);
       return x;
     }, 'lleno(forma, valor, tipo?) — todo el arreglo con el mismo valor');
@@ -1740,6 +1766,12 @@ function instalarNumerico(vm) {
       const nf = A.forma[0], nm = A.forma[1], nc = B.forma[1];
       vm.cobrar(nf * nm * nc);
       const out = vm.arrNuevo([nf, nc], 'real');
+      // (motor-exp N1) con NEÑ instalado, el producto de NEÑ (C, GPU o JS, mismos bits)
+      if (vm.nenMatmul) {
+        const plano = x => (x.seguida && x.tipo === 'real') ? x.datos.subarray(0, x.tamano) : Float64Array.from(vm.arrValores(x));
+        out.datos.set(vm.nenMatmul(plano(A), plano(B), nf, nm, nc));
+        return out;
+      }
       const va = vm.arrValores(A), vb = vm.arrValores(B);
       const fila2 = new Float64Array(nc);
       for (let i = 0; i < nf; i++) {

@@ -41,6 +41,13 @@ function instalarBiblioteca(vm, host) {
     if (typeof v === 'number') return Math.trunc(v);
     if (typeof v === 'boolean') return v ? 1 : 0;
     if (typeof v === 'string') { const n = parseInt(v.trim(), 10); if (Number.isNaN(n)) vm.error(`«entero»: «${v}» no es un número`); return n; }
+    // (motor-exp N1) de un grande: la parte entera, si cabe en un entero de Ñ
+    if (v instanceof ObjGrande) {
+      const n = Number(grAEnteroBig(v));
+      if (!Number.isSafeInteger(n)) vm.error(`«entero»: ${grATexto(v, 20)} no cabe en un entero (el máximo exacto es 2^53)`,
+        'déjalo como grande, o sácalo como texto con cifrasExactas(g)');
+      return n;
+    }
     vm.error(`«entero»: no se puede convertir ${tipoDe(v)}`);
   }, 'convierte a número entero');
   def('real', 'cualquiera -> real', (a) => {
@@ -48,6 +55,7 @@ function instalarBiblioteca(vm, host) {
     if (typeof v === 'number') return v;
     if (typeof v === 'boolean') return v ? 1 : 0;
     if (typeof v === 'string') { const n = parseFloat(v.trim()); if (Number.isNaN(n)) vm.error(`«real»: «${v}» no es un número`); return n; }
+    if (v instanceof ObjGrande) return grAReal(v);          // (motor-exp N1) el real más cercano
     vm.error(`«real»: no se puede convertir ${tipoDe(v)}`);
   }, 'convierte a número con decimales');
   def('bool', 'cualquiera -> bool', (a) => verdad(a[0]), 'convierte a verdadero/falso');
@@ -1758,12 +1766,16 @@ function instalarBiblioteca(vm, host) {
   // orden a propósito: C1EÑ primero, porque crea «vm.c1en» y las otras partes
   // registran núcleos en él al instalarse (si no existiera se quedarían con su
   // respaldo en JavaScript). Luego cálculo, fórmulas y tensores.
-  instalarEdsl(vm, 'nen', def => {
+  const regNen = instalarEdsl(vm, 'nen', def => {
     instalarNenC1en(vm, def);
     instalarNenCalculo(vm, def);
     instalarNenFormulas(vm, def);
     instalarNenTensores(vm, def);
+    instalarNenPrecision(vm, def);      // (motor-exp N1) el tipo «grande» y los enteros exactos
+    instalarNenAmplitud(vm, def);       // (motor-exp N1) especiales, distribuciones y muestreo (1.ª tanda)
+    instalarNenUnion(vm, def);          // (motor-exp N1) fila, donde y apilar para arreglos Y tablas
   });
+  reexportarEnNen(vm, regNen);          // (motor-exp N1) todo numerico y todo datos, también desde «nen»
   // El interruptor va al final: es la unión de los de arriba.
   instalarClasico(vm);
   // Y los eDSL que este motor trae ABIERTOS: en el ámbito global, sin «usar».
@@ -1796,6 +1808,14 @@ function abrirEdsls(vm, nombres) {
     for (const [corto] of r.exporta) {
       const largo = nombreGlobalModulo(r.clave, corto);
       const obj = vm.globals.get(largo);
+      // (motor-exp N1) «nen» reexporta numerico y datos con EL MISMO objeto: si
+      // ya lo abrió otro eDSL, es el mismo nombre para lo mismo, no un choque.
+      if (origen.has(corto) && vm.globals.get(corto) === obj) continue;
+      // Y las tres de NEÑ que valen para arreglos y tablas (fila, donde, apilar)
+      // pueden ocupar el sitio de la de numerico o datos: hacen lo mismo y más.
+      if (origen.has(corto) && obj && obj.despacha && obj.despacha.includes(vm.globals.get(corto))) {
+        vm.globals.set(corto, obj); origen.set(corto, nombre); continue;
+      }
       if (vm.globals.has(corto)) {
         const quien = origen.get(corto);
         throw new Error(quien

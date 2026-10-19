@@ -26,6 +26,9 @@ const inventario = [];
     // corto, que es el que se escribe, y la clave solo sirve para saber de qué
     // eDSL son y con qué «usar» se traen.
     if (v instanceof ObjNativa && v.edsl) {
+      // (motor-exp N1) «nen» reexporta numerico y datos con el MISMO objeto: el
+      // alias no es otra función, y se documenta una sola vez, donde nació.
+      if (nombre !== EL.nombreGlobalModulo(EL.claveEdsl(v.edsl), v.nombreCorto)) continue;
       const e = { nombre: v.nombreCorto, edsl: v.edsl, seccion: v.edsl,
         doc: v.doc || null, aridad: v.aridad, firma: tipoATexto(v.firma) };
       inventario.push(e);
@@ -120,7 +123,8 @@ const corridos = {};
   // parte se escribió y se probó por separado; aquí se juntan en una sola tabla.
   const ejemplos = Object.assign({}, require('./ejemplos-biblioteca.js'),
     require('./ejemplos-nen-c1en.js'), require('./ejemplos-nen-calculo.js'),
-    require('./ejemplos-nen-formulas.js'), require('./ejemplos-nen-tensores.js'));
+    require('./ejemplos-nen-formulas.js'), require('./ejemplos-nen-tensores.js'),
+    require('./ejemplos-nen-precision.js'));   // (motor-exp N1) grande, exactos, amplitud y unión
   const clave = e => (e.edsl ? e.edsl + '.' + e.nombre : e.nombre);
   const faltan = inventario.filter(e => !(clave(e) in ejemplos)).map(clave);
   if (faltan.length) throw new Error('sin ejemplo: ' + faltan.join(', '));
@@ -179,7 +183,60 @@ const corridos = {};
       estructura: () => {},
       funcion: (bib, sim) => { abiertasF.add(bib); const f = tablaC[sim] || (() => 0); return a => f(...a); },
     };
-    const m = crearMotor({ salida: x => out.push(x), host: { grafico: espia, web: espia, almacen, tiempo, red: redFalsa, archivos, sistema, nativo: nativoFalso }, limiteInstr: 5e7 });
+    // (4.1) Lo nuevo de «sistema» y «nativo», de mentira por la misma razón: el
+    // libro enseña la forma de la API y lo que sale; lo que comprueba que sale
+    // de verdad (el disco, el puerto, la memoria de C) es «pruebas/sistema.js».
+    archivos.lineas = r => {
+      if (!disco2.has(r)) throw new Error('no se pudo abrir ' + r);
+      const ls = String(disco2.get(r)).split('\n'); if (ls[ls.length - 1] === '') ls.pop();
+      let i = 0; const sig = () => (i < ls.length ? ls[i++] : undefined); sig.cerrar = () => {}; return sig;
+    };
+    archivos.copiar = (a, b) => { if (!disco2.has(a)) throw new Error('no existe ' + a); disco2.set(b, disco2.get(a)); };
+    archivos.mover = (a, b) => { if (!disco2.has(a)) throw new Error('no existe ' + a); disco2.set(b, disco2.get(a)); disco2.delete(a); };
+    archivos.info = r => {
+      if (!disco2.has(r)) throw new Error('no existe ' + r);
+      const v = disco2.get(r);
+      return { tamano: typeof v === 'string' ? Buffer.byteLength(v) : v.byteLength, modificado: Date.UTC(2026, 9, 17, 15, 30),
+               creado: Date.UTC(2026, 9, 1, 9, 0), esCarpeta: false, esArchivo: true };
+    };
+    const pp = require('path').posix;
+    let cwd = '/home/diego/proyecto';
+    sistema.carpetaActual = () => cwd;
+    sistema.cambiarCarpeta = r => { cwd = pp.resolve(cwd, r); };
+    sistema.info = () => ({ so: 'windows', arquitectura: 'x64', procesadores: 8, memoria: 16 * 1024 ** 3, libre: 9 * 1024 ** 3,
+      usuario: 'diego', personal: '/home/diego', temporal: '/tmp', equipo: 'mi-pc', motor: 'node v24' });
+    sistema.ejecutarFondo = () => {};          // en el libro no termina nunca: se ve la promesa
+    const rutas = { unir: ps => pp.join(...ps), absoluta: r => pp.resolve(cwd, r), normalizar: r => pp.normalize(r),
+      nombre: r => pp.basename(r), extension: r => pp.extname(r), carpeta: r => pp.dirname(r),
+      esAbsoluta: r => pp.isAbsolute(r), relativa: (a, b) => pp.relative(a, b), separador: '/' };
+    let sigServ = 0;
+    const servidor = { escuchar: () => ++sigServ, cerrar: id => { const ok = id === sigServ && id > 0; if (ok) sigServ = -sigServ; return ok; } };
+    let sigRetro = 0;
+    const TAM = { entero8: 1, natural8: 1, char: 1, entero16: 2, natural16: 2, entero: 4, int: 4, natural: 4, real32: 4, float: 4,
+      real: 8, double: 8, entero64: 8, natural64: 8, puntero: 8 };
+    const rw = { entero8: ['Int8', 1], natural8: ['Uint8', 1], char: ['Int8', 1], entero16: ['Int16', 2], natural16: ['Uint16', 2],
+      entero: ['Int32', 4], int: ['Int32', 4], natural: ['Uint32', 4], real32: ['Float32', 4], float: ['Float32', 4],
+      real: ['Float64', 8], double: ['Float64', 8] };
+    Object.assign(nativoFalso, {
+      tipoC: d => { const m = /(\w+)\s*\(/.exec(d) || /(\w+)\s*$/.exec(d); return m ? m[1] : d; },
+      registrar: () => ++sigRetro, desregistrar: () => {},
+      memoria: n => Buffer.alloc(n),
+      tamano: t => TAM[t] || 8,
+      leer: (b, t, n) => {
+        const [k, sz] = rw[t] || rw.entero; const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+        const uno = i => dv['get' + k](i * sz, true);
+        return n === null || n === undefined ? uno(0) : Array.from({ length: n }, (_, i) => uno(i));
+      },
+      escribir: (b, t, v, n) => {
+        const [k, sz] = rw[t] || rw.entero; const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+        (Array.isArray(v) ? v : [v]).forEach((x, i) => dv['set' + k](i * sz, x, true));
+      },
+      direccion: () => 0x7ffd2a10,
+      errno: () => 0,
+    });
+    const funcionVieja = nativoFalso.funcion;
+    nativoFalso.funcion = (...xs) => { const f = funcionVieja(...xs); f.enFondo = () => {}; return f; };
+    const m = crearMotor({ salida: x => out.push(x), host: { grafico: espia, web: espia, almacen, tiempo, red: redFalsa, archivos, sistema, rutas, servidor, nativo: nativoFalso }, limiteInstr: 5e7 });
     const r = m.ejecutar(src);
     if (!r.ok) rotos.push(`${nombre}: ${r.errores.map(e => e.formato ? e.formato() : e.message).join(' | ')}`);
     corridos[nombre] = { src, out, ok: r.ok, hechos: [...new Set(tocado)] };
@@ -274,6 +331,12 @@ const SECCIONES = [
    'El calendario, con una decisión que gobierna el resto: una fecha de Ñ NO tiene zona horaria. Es un instante del calendario —como el TIMESTAMP WITHOUT TIME ZONE de SQL—, así que lo que se escribe es lo que se lee, en cualquier máquina, sin horario de verano ni desplazamientos; solo «hoy» y «ahora» miran el reloj local, una vez. Es un tipo de la máquina y no un texto, y eso es lo que hace que «<» y «==» funcionen solos y que el verificador pare el programa que compara una fecha con un texto: como texto, «10/02» es menor que «9/01», y ahí es donde se pierden los días. Las funciones «…Entre» miden tiempo transcurrido y truncan; para días de calendario se compone: diasEntre(inicioDia(a), inicioDia(b)).'],
   ['nen', 'nen — Numeric Extension for Ñ',
    'La matemática seria de Ñ, en un solo eDSL con cuatro partes que se usan juntas. CÁLCULO: derivar, integrar (Gauss–Kronrod adaptativo, con límites infinitos), raíces de ecuaciones y de polinomios (todas, complejas incluidas), optimización (Brent, Nelder–Mead, BFGS, Levenberg–Marquardt, símplex), ecuaciones diferenciales (Dormand–Prince), interpolación y splines, funciones especiales (gamma, erf, Bessel, zeta) y distribuciones. FÓRMULAS: un pequeño sistema de álgebra simbólica que lee fórmulas escritas como texto en notación natural —«3x^2 + seno(x)»—, las simplifica con aritmética racional exacta, deriva, integra por reglas, resuelve ecuaciones y sistemas de forma exacta cuando se puede, y las convierte en funciones de Ñ o en LaTeX. TENSORES: operaciones elemento a elemento y por eje, einstein (la notación de Einstein), autovalores generales, exponencial de matriz, Fourier en 2D, ventanas, espectrogramas, filtros y convolución 2D; lo que pesa corre en C1EÑ. C1EÑ —Cuda 1 Engine of Ñ— es el motor que ejecuta funciones de Ñ en paralelo: «paralelo(n, fn, …)» corre el cuerpo una vez por índice en el mejor dispositivo que haya —GPU por CUDA, CPU nativa compilada con gcc, o el JIT de JavaScript—, y los tres dan los mismos bits en la aritmética básica. Lo que ya estaba en «numerico» (arreglos, LU, QR, SVD, fourier) no se repite: NEÑ lo amplía.'],
+  ['corrutinas', 'corrutinas',
+   'Funciones que se pausan (4.1). Una función con «producir» es un GENERADOR: cada «producir v» entrega un valor y la función se queda en ese punto hasta que alguien pide el siguiente, así que puede producir una lista infinita sin que exista entera. «para x en contar(10)» la recorre con el bucle de siempre. Una función con «esperar» es ASÍNCRONA: empieza ya, y al llegar a «esperar» cede el turno; lo que devuelve es una promesa, y el resto llega más tarde como un turno más, igual que un clic. «producir» y «esperar» no son palabras reservadas, y estas ayudas viven aquí y no en el ámbito global para no quitarle nombres a ningún programa: la primera versión las puso globales y rompió dos ejemplos que ya usaban «todas» y «siguiente».'],
+  ['nativo', 'nativo',
+   'Lo que hace falta para hablar con C de verdad (4.1), además de «nativa»: tipos de función para que C llame a Ñ (retrollamadas), tipos opacos, memoria para lo que C escribe, y llamadas en otro hilo. Un puntero es un valor «puntero» y no un entero: se guarda, se compara y se devuelve a C, pero no se le suman números. Un error dentro de una retrollamada no se lanza a través de C —eso tumba el proceso—: se guarda y sale como error de Ñ al volver de la llamada nativa. En Windows, «errorC» solo ve el errno de la biblioteca de C que comparte koffi. Los ejemplos de esta sección corren con un anfitrión de mentira (enseñan la forma de la API); lo que llama a C de verdad lo prueba pruebas/sistema.js.'],
+  ['sistema', 'sistema',
+   'Archivos grandes, carpetas, rutas, procesos en segundo plano y un servidor HTTP (4.1). Solo existe en la consola, como «leerTexto»: una página no abre puertos ni lee el disco. «servir» escucha por defecto SOLO en este equipo (127.0.0.1); abrirlo a la red se escribe. Un error en el manejador es un 500 que no le cuenta a quien pidió qué falló, y en la consola sale entero. Las rutas usan el separador del sistema; sin anfitrión (en el IDE) funcionan igual con «/». Los ejemplos de esta sección corren con un disco y un sistema de mentira: lo que tocan de verdad lo prueba pruebas/sistema.js.'],
   ['probar', 'probar',
    'Para que Ñ se pruebe a sí mismo. Las suites del lenguaje estaban escritas en JavaScript, así que cada eDSL nuevo costaba sus cincuenta bloques de prueba en otro idioma; con esto se escriben en Ñ. Lo delicado es que una prueba que falla no se lleve el programa: una afirmación fallida es un error normal del motor, y el corredor lo recoge haciendo desde fuera el mismo desenrollado que hace «intentar» por dentro —recortar los marcos, bajar la pila, cerrar los upvalues—. Lo único que no recoge es el límite de instrucciones: si se pudiera, una prueba con un bucle infinito desactivaría la única red que hay.'],
 ];
@@ -323,7 +386,8 @@ const CIFRAS = (() => {
   let edsl = 0, enEdsl = 0, clasico = 0;
   for (const [, r] of m.vm.edsls) {
     if (r.globalDe) { clasico = r.exporta.size; continue; }
-    edsl++; enEdsl += r.exporta.size;
+    // (motor-exp N1) lo que «nen» reexporta de numerico y datos ya se cuenta allí
+    edsl++; enEdsl += r.exporta.size - (r.reexporta ? r.reexporta.size : 0);
   }
   // Con el mismo filtro que el inventario, o la portada dice 94 y la tabla 93:
   // « usar» lo emite el compilador y el léxico no puede escribirlo, así que no

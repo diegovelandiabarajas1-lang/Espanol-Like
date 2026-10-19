@@ -97,6 +97,10 @@ const CASOS = {
   nen_red_maximo: [red()], nen_red_minimo: [red()], nen_red_suma2: [red()], nen_red_sumaabs: [red()], nen_red_maxabs: [red()],
   nen_red_desv2: [red(true)],
   nen_matmul: [() => { const L = 3, m = 7, K = 13, p = 5; return [L * m * p, m, K, p, unif(L * m * K, -2, 2), unif(L * K * p, -2, 2), new Float64Array(L * m * p)]; }],
+  // (motor-exp N1) la versión por bloques de 4 filas × 8 columnas de la CPU:
+  // m y p que no son múltiplos del bloque, y K de más de 256 (los trozos de K).
+  nen_matmul_filas: [[3, 7, 13, 5], [2, 9, 300, 19], [1, 4, 257, 8], [1, 1, 1, 1]].map(([L, m, K, p]) => () =>
+    [L * Math.ceil(m / 4), m, K, p, unif(L * m * K, -2, 2), unif(L * K * p, -2, 2), new Float64Array(L * m * p)]),
   nen_fft_permutar: [() => { const N = 64, F = 3; return [F * N, N, bitrev(N), unif(F * 2 * N, -1, 1), new Float64Array(F * 2 * N)]; }],
   nen_fft_etapa: [1, -1].flatMap(conj => [2, 8, 64].map(largo => () => {
     const N = 64, F = 3, [re, im] = tabla(N);
@@ -161,6 +165,21 @@ for (const nombre of nombres) {
   if (mal) { fallos++; console.log(`  ✗ ${nombre}: ${mal}`); continue; }
   if (peor === 0n) { exactos++; console.log(`  ✓ ${nombre.padEnd(18)} bit a bit`); }
   else { conUlp++; console.log(`  ✓ ${nombre.padEnd(18)} a ${peor} ulp como mucho (usa la biblioteca matemática)`); }
+}
+// (motor-exp N1) Las dos multiplicaciones de matrices (una celda por hilo en la
+// GPU y bloques de 4×8 en la CPU) tienen que dar EL MISMO número: cada celda es
+// la suma de a·b en el orden de k de 0 a K−1 en las dos.
+if (NEN_T_NUCLEOS.nen_matmul && NEN_T_NUCLEOS.nen_matmul_filas) {
+  for (const [L, m, K, p] of [[3, 7, 13, 5], [2, 9, 300, 19], [1, 33, 520, 41]]) {
+    casos++;
+    const A = unif(L * m * K, -2, 2), B = unif(L * K * p, -2, 2);
+    const c1 = new Float64Array(L * m * p), c2 = new Float64Array(L * m * p);
+    NEN_T_NUCLEOS.nen_matmul.js(L * m * p, m, K, p, A, B, c1);
+    NEN_T_NUCLEOS.nen_matmul_filas.js(L * Math.ceil(m / 4), m, K, p, A, B, c2);
+    const i = c1.findIndex((x, j) => !Object.is(x, c2[j]));
+    if (i >= 0) { fallos++; console.log(`  ✗ nen_matmul y nen_matmul_filas no dan lo mismo (${L}×${m}×${K}×${p}, celda ${i})`); }
+    else console.log(`  ✓ matmul = matmul_filas ${L}×${m}×${K}×${p} bit a bit`);
+  }
 }
 // Primero se suelta la biblioteca: Windows no deja borrar una DLL cargada (la
 // prueba terminaba con EPERM al limpiar, fase W1). Y si aun así no se puede
