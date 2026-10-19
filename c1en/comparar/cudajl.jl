@@ -35,6 +35,8 @@ function pruebas(disp, a, sincronizar)          # a: convierte un Array al dispo
     medir("fft", string(NF), disp, () -> fft(xf), X -> sum(abs.(X)), sincronizar)
 end
 
+# con el cuaderno en paralelo, cada trabajo tiene sus núcleos: los de BLAS, los mismos
+haskey(ENV, "HILOS") && BLAS.set_num_threads(parse(Int, ENV["HILOS"]))
 println("# julia ", VERSION, " · hilos ", Threads.nthreads(), " · BLAS ", BLAS.get_num_threads())
 pruebas("cpu", identity, f -> f())
 if get(ENV, "SIN_GPU", "") != "1"

@@ -23,6 +23,15 @@ FFT, Σy² en softmax) se calcula fuera del tiempo medido. Salida de todos, una 
 
 `escala chica` (primer argumento `chica`) usa tamaños pequeños para comprobar que todo corre.
 
+## Las dos T4 a la vez
+
+El cuaderno trabaja en dos fases. **Fase 1:** instala y compila varios lenguajes a la vez (`INSTALAR_A_LA_VEZ`, 3 por
+defecto; `apt-get` de uno en uno). **Fase 2:** dos trabajadores sacan tareas de una cola, de la más larga a la más corta:
+el 1 con la T4 0 y la mitad de los núcleos físicos, el 2 con la T4 1 y la otra mitad (`CUDA_VISIBLE_DEVICES`, `taskset`
+y los hilos de OpenMP/MKL/OpenBLAS/Go/Rust/Julia/JVM limitados a su mitad). Así las medidas no se estorban y todos los
+lenguajes compiten en las mismas condiciones; el precio es que los tiempos de CPU son con media CPU. `MODO =
+'secuencial'` corre uno detrás de otro con la CPU entera y la T4 0.
+
 ## Los programas
 
 | archivo | lenguaje · biblioteca | dispositivos | notas |
