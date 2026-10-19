@@ -23,7 +23,10 @@ la GPU y `senoA+copia` subiéndolos y bajándolos, como CuPy con y sin copia.
 3. El proyecto, de una de dos maneras:
    - **A · dataset**: **Add Input → Upload → New Dataset** con la carpeta del
      proyecto (la que tiene `motor/` dentro; sin `node_modules`). El cuaderno la
-     busca sola en `/kaggle/input/…` y la copia a `/kaggle/working/n`.
+     busca sola en `/kaggle/input/…` y la copia a `/kaggle/temp/n`.
+     Todos los cuadernos instalan Node, koffi y el motor en `/kaggle/temp`, que
+     Kaggle no guarda: el Output (`/kaggle/working`) solo lleva los resultados
+     (CSV, JSON), y lo que versiones viejas dejaban allí se borra al empezar.
    - **B · GitHub**: **Settings → Internet → On**. Si no encuentra un dataset,
      el cuaderno hace `git clone` de
      `https://github.com/diegovelandiabarajas1-lang/Espanol-Like`.
@@ -49,8 +52,8 @@ paso; en resumen:
 
 ```python
 import sys, os
-os.environ['N_RAIZ'] = '/kaggle/working/n'        # la carpeta del proyecto
-sys.path.insert(0, '/kaggle/working/n/c1en')
+os.environ['N_RAIZ'] = '/kaggle/temp/n'        # la carpeta del proyecto
+sys.path.insert(0, '/kaggle/temp/n/c1en')
 import c1en, numpy as np
 
 # un programa de Ñ entero, en el perfil C1EÑ (sin «usar»)
