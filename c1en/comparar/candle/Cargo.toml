@@ -1,0 +1,16 @@
+# comparar/candle — las pruebas con Candle (Rust, de Hugging Face).
+#   cargo run --release -- [chica]                      solo CPU
+#   cargo run --release --features cuda -- [chica]      CPU y GPU (hace falta nvcc)
+[package]
+name = "comparar-candle"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+candle-core = "0.11"
+
+[features]
+cuda = ["candle-core/cuda"]
+
+[profile.release]
+opt-level = 3
