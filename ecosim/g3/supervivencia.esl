@@ -171,11 +171,15 @@ publico fn contagiar(h: entero, vivo, cuerpo, civil, censoT, clima, terrP, censo
   }
 }
 
-# ── [34] parentesco: la herencia. El que muere (vivo = 2) deja su dinero y su
-# despensa a la pareja, si no al primer hijo vivo, si no a un padre vivo; si no hay
-# nadie, al Estado de su territorio y la despensa se pierde. De paso borra su rastro
-# en los demás (hijos, pareja, deudores, vínculos), porque su plaza la puede ocupar
-# un recién nacido.
+# ── [34] parentesco: la herencia. El que muere (vivo = 2) deja su despensa a la
+# pareja, si no al primer hijo vivo, si no a un padre vivo. El DINERO (v3.1): el
+# Estado de su territorio cobra un 10 % y el resto se reparte: la mitad a la pareja
+# viva y la otra mitad, a partes iguales, entre los hijos vivos (sin hijos, todo a
+# quien hereda). Así las fortunas se dividen al pasar de una generación a otra. Si
+# no hay nadie, todo al Estado y la despensa se pierde. De paso borra su rastro en
+# los demás (hijos, pareja, deudores, vínculos), porque su plaza la puede ocupar un
+# recién nacido. Quién hereda su EMPRESA lo deja apuntado en pedido[10]
+# (heredarEmpresas, en progreso.esl).
 publico fn heredar(h: entero, vivo, saldo, cuerpo, civil, pedido, vinculo, peso, terrP, estado, destruido, cuenta, nAg: entero, nTerr: entero, nFac: entero, kv: entero) {
   si vivo[h] == 2 {
     fijo k = h // nAg
@@ -183,9 +187,36 @@ publico fn heredar(h: entero, vivo, saldo, cuerpo, civil, pedido, vinculo, peso,
     fijo p = h * 16
     var heredero = -1
     fijo pj = civil[p + 13]
+    var parejaViva = 0
     si pj >= 0 {
-      si vivo[pj] == 1 { heredero = pj }
+      si vivo[pj] == 1 {
+        heredero = pj
+        parejaViva = 1
+      }
       civil[pj * 16 + 13] = -1
+    }
+    # cuántos hijos vivos hay, para repartir
+    var nHijos = 0
+    para i en rango(nAg) {
+      fijo o = base + i
+      si o != h y vivo[o] == 1 {
+        si civil[o * 16 + 11] == h o civil[o * 16 + 12] == h { nHijos = nHijos + 1 }
+      }
+    }
+    fijo dinero = saldo[h]
+    saldo[h] = 0
+    fijo rT = (k * nFac + terrP[(k * nTerr + civil[p]) * 16]) * 24
+    var impuesto = 0
+    var paraHijo = 0
+    var paraPareja = 0
+    si parejaViva == 1 o nHijos > 0 {
+      impuesto = entero(dinero // 10)
+      fijo resto = dinero - impuesto
+      si nHijos > 0 {
+        si parejaViva == 1 { paraPareja = entero(resto // 2) }
+        paraHijo = entero((resto - paraPareja) // nHijos)
+        paraPareja = resto - paraHijo * nHijos
+      } sino { paraPareja = resto }
     }
     para i en rango(nAg) {
       fijo o = base + i
@@ -193,6 +224,7 @@ publico fn heredar(h: entero, vivo, saldo, cuerpo, civil, pedido, vinculo, peso,
         fijo po = o * 16
         si civil[po + 11] == h o civil[po + 12] == h {
           si heredero < 0 y vivo[o] == 1 { heredero = o }
+          si vivo[o] == 1 y paraHijo > 0 { sumarAtomico(saldo, o, paraHijo) }
           si civil[po + 11] == h { civil[po + 11] = -1 }
           si civil[po + 12] == h { civil[po + 12] = -1 }
         }
@@ -212,17 +244,22 @@ publico fn heredar(h: entero, vivo, saldo, cuerpo, civil, pedido, vinculo, peso,
     fijo ma = civil[p + 12]
     si heredero < 0 y ma >= 0 { si vivo[ma] == 1 { heredero = ma } }
     si heredero < 0 y pa >= 0 { si vivo[pa] == 1 { heredero = pa } }
-    fijo dinero = saldo[h]
-    saldo[h] = 0
+    pedido[p + 10] = heredero + 1                # v3.1: quién hereda la empresa (heredarEmpresas)
     fijo agua = cuerpo[p + 11]
     fijo comida = cuerpo[p + 12]
     si heredero >= 0 {
-      sumarAtomico(saldo, heredero, dinero)
+      # sin pareja ni hijos hereda un padre: todo, sin impuesto (paraPareja es 0)
+      si parejaViva == 0 y nHijos == 0 { paraPareja = dinero }
+      sumarAtomico(saldo, heredero, paraPareja)
+      si impuesto > 0 {
+        sumarAtomico(estado, rT, impuesto)
+        sumarAtomico(estado, rT + 17, impuesto)
+      }
       sumarAtomico(cuerpo, heredero * 16 + 11, agua)
       sumarAtomico(cuerpo, heredero * 16 + 12, comida)
       sumarAtomico(cuenta, k * 48 + 7, 1)
     } sino {
-      sumarAtomico(estado, (k * nFac + terrP[(k * nTerr + civil[p]) * 16]) * 24, dinero)
+      sumarAtomico(estado, rT, dinero)
       sumarAtomico(destruido, k, agua + comida)
     }
     cuerpo[p + 11] = 0

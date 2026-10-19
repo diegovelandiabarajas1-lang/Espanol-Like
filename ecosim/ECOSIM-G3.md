@@ -1,4 +1,7 @@
-# ECOSIM-G v3 — 100 mecánicas en C1EÑ
+# ECOSIM-G v3.1 — 100 mecánicas en C1EÑ
+
+> **La 3.1 (19-oct-2026)** arregla el estancamiento de la 3.0. Ver
+> [La 3.1: que la sociedad avance](#la-31-que-la-sociedad-avance).
 
 `ecosim/ecosim-g3.esl` más siete módulos en `ecosim/g3/`. La v2 (`ecosim-g.esl`)
 queda intacta.
@@ -17,6 +20,110 @@ participaciones. La v3 le pone una **sociedad** encima, con personas que:
 La lista que pidió Diego tenía 90 mecánicas. Las diez últimas (el mundo y la
 ecología) las añadí para llegar a 100, porque sin clima ni tierra la
 temperatura, la cosecha y las epidemias no tendrían de dónde salir.
+
+## La 3.1: que la sociedad avance
+
+Con la 3.0 los números decían que todo se quedaba quieto: la tecnología no pasaba
+de 115, casi nadie fundaba empresas, los ricos seguían ricos y los pobres pobres,
+la riqueza solo se heredaba y el comercio no se movía.
+
+### El diagnóstico
+
+Medí un mundo año por año (dinero de las personas, de las empresas y de los
+inversores, sueldos, ventas, tecnología):
+
+- **Todos cobraban lo mismo** (60 monedas al año) y eso era la vigésima parte de
+  lo que tenía ahorrado una persona normal. Ahorrando no se podía subir.
+- **Las empresas guardaban el 60 % de todo el dinero** en su caja y no lo
+  soltaban. El dinero de las personas bajó de 1,53 a 0,94 millones de monedas en
+  seis años; el de las empresas y los inversores subió.
+- **Las personas no podían ser dueñas de nada.** Solo fundaban los 100
+  inversores (que no son personas) y los clubes, y las plazas de las empresas
+  cerradas no se volvían a usar.
+- **La tecnología solo subía por la ciencia del Estado**, una o dos veces en seis
+  años, y no se contagiaba de un Estado a otro. Y la escritura se inventaba en el
+  primer año en todos los Estados.
+- Los préstamos de los bancos eran **cero**: nadie necesitaba crédito.
+
+### Lo que cambió (todo en el programa, el motor no se tocó)
+
+El dinero **se sigue conservando al centavo**, como quería Diego desde ECOSIM-5.
+La riqueza nueva sale de producir más con la misma gente (tecnología), de las
+casas, las máquinas y las empresas que se construyen, y del crédito de los bancos,
+que crea depósitos contra préstamos dentro de las invariantes.
+
+| qué | cómo |
+|---|---|
+| sueldo por empresa | cada empresa tiene su sueldo: sube del 1 % al 8 % al año según lo que gana por cada peso de nómina (si tiene más de 12 nóminas en caja), un 3 % si le sobran 40 nóminas, y baja un 4 % con pérdidas y poca caja |
+| sueldo por persona | cada uno cobra sueldo × rendimiento / 80; el rendimiento sale de la energía, la salud, el oficio y los estudios. Estudiar y aprender el oficio paga |
+| prima | la empresa con más de 30 nóminas en caja reparte cada año el 5 % de lo que le sobra entre su plantilla |
+| mercado de trabajo | el que busca trabajo prefiere la que paga más entre las que necesitan manos; el que trabaja se cambia si otra le paga un 10 % más |
+| emprendedores | una persona de 22 a 59 años, creativa o curiosa, con 20 sueldos ahorrados, funda su empresa en su territorio: pone la mitad de su dinero, y si no llega a 40 sueldos el banco le presta hasta el doble. Se lleva la mitad de la ganancia; la empresa la hereda su familia o se pierde si quiebra |
+| plazas | caben 90 empresas por mundo (eran 48) y las de las cerradas se reutilizan |
+| investigación | la empresa con caja de sobra paga cada año el 2 % de lo que le sobra a una tecnológica; con suerte (más si su Estado tiene ciencia) mejora un 12 % su productividad y le deja 2 puntos de tecnología al Estado |
+| difusión | cada Estado aprende cada año un 5 % de la ventaja del más avanzado (un 1 % si son enemigos) |
+| ciencia y escritura | la escritura necesita juntar 6.000 de ciencia y aun así sale un año de cada tres; la innovación del Estado crece con la ciencia |
+| herencia | el Estado cobra un 10 % y el resto se reparte: la mitad a la pareja, la otra mitad entre los hijos a partes iguales |
+| lujo | el que tiene más de 40 sueldos ahorrados compra lujo, más a menudo cuanto más tiene (un 5 % de su fortuna al año) |
+| riqueza | cuenta el dinero, lo que vale la empresa propia y la parte del club; con eso se miden el Hoover y los quintiles |
+| buscar | se compra y se busca trabajo entre las empresas abiertas del sector (una lista que se rehace cada año); antes se probaba al azar entre todas las plazas, también las vacías |
+
+Las mecánicas nuevas viven en `g3/progreso.esl`; los cambios en las de antes,
+marcados con «v3.1» en el código.
+
+### Antes y después (corrida por defecto, semilla 20261018, 10 mundos)
+
+| | 3.0 | 3.1 |
+|---|---|---|
+| población (6 años) | 1693 → 1706 | 1693 → **1774** |
+| muertes de hambre o sed por mundo | 44 | **1** |
+| desempleo | 2,4 % | **1,3 %** |
+| sueldo base al final | 60 (fijo) | **73** monedas al año; el que más cobra, 112 |
+| empresas fundadas por personas | 0 | **19,5** por mundo (17,2 con crédito) |
+| empresas abiertas | 31 | **45** |
+| quiebras | 0 | 6 por mundo |
+| tecnología media de los Estados | 105 (máx. 115) | **143** (máx. 168) |
+| innovaciones de empresas | — | 55 por mundo |
+| producción real (unidades vendidas) | sin medir | **+21 %** frente al segundo año, y más de un 10 % en los 10 mundos |
+| Estados con escritura | 30 de 30 (el primer año) | 15 de 30 |
+| de los que empezaron en el 20 % más pobre, salieron de ahí | — | **85 %** |
+| de los que empezaron en el 20 % más rico, dejaron de estar | — | **26 %** |
+| riqueza media de un dueño / del resto | — | 12.240 / 1.121 monedas |
+| Hoover | 45,8 % | 46,8 % |
+
+Los mundos ahora **se separan**: la producción real crece entre un 12 % y un 31 %
+según el mundo, la tecnología media de 128 a 154, la escritura llega a 0, 1 o 2
+de los 3 Estados, y las quiebras van de 2 a 9.
+
+### Lo que hay que saber
+
+- **La bolsa baja.** El índice de las empresas de los inversores acaba entre 29 y
+  63 (salida = 100) y el resumen marca «caída de bolsa ≥ 20 % en una hora» en 8 de
+  10 mundos. Es una bajada continua, no un pánico: los sueldos suben, aparecen
+  competidores y las empresas viejas valen menos. Las empresas de personas no
+  cuentan en el índice (no cotizan).
+- **Ninguna empresa de una persona quebró** en estas corridas: son pequeñas y la
+  demanda les sobra (la escasez es alta). Pueden quebrar como las demás.
+- **La escasez cuenta mucho más** (9,7 millones de veces frente a 0,8): ahora la
+  gente sí encuentra la tienda abierta y se queda sin nada en la lotería del
+  estante, cuando antes ni la encontraba. La demanda va por delante de la
+  producción.
+- El trueque y el fiado siguen casi a cero: casi nadie está tan desesperado.
+- Va un poco más lento: 3,6 ms por tick con los diez mundos (antes 3,9 con la
+  3.0, aunque en la 3.0 con 48 plazas iba a 2,5): hay el doble de plazas de
+  empresa que recorrer.
+
+### Lo que se comprobó
+
+- Las invariantes (dinero con el tesoro, deudas = préstamos, acciones, bienes con
+  las despensas, participaciones) en todas las corridas.
+- **JIT = C nativo = GPU simulada**, al bit (CSV de mundos, serie y resumen; 3
+  mundos de 300 plazas, 3 años).
+- **Los lotes no cambian los mundos**: 6 mundos en un proceso = 3 + 3 en dos
+  procesos, byte a byte.
+- Un lote de 1500 mundos de 2000 plazas arranca y cumple las invariantes.
+- El cuaderno de Kaggle, probado en la nube con JIT (3 lotes, CSV juntado y
+  partido).
 
 ## Cómo se corre
 
@@ -43,14 +150,14 @@ diez economías a la vez). Para probar algo rápido:
 - **La serie** (`ecosim/salida-g3.csv`): cada 10 minutos simulados, una fila por
   mundo, solo de los 20 primeros mundos. Con miles sería enorme.
 - **Los mundos** (`ecosim/mundos-g3.csv`): **una fila por mundo** al final, con
-  todos los mundos y 101 columnas (población, nacimientos, muertes, hambre,
+  todos los mundos y 121 columnas (población, nacimientos, muertes, hambre,
   ánimo, Hoover, paro, bolsa, guerras, conquistas, revoluciones, tecnología,
   escritura, sequías, bosque…). El resumen de cada mundo lo calcula la GPU
   (`resumirMundo`, un hilo por mundo); la CPU solo escribe el texto.
 
   Si el archivo pasa de **7 MB**, se parte: se llena `mundos-g3-1.csv` hasta 7 MB,
   se sigue en `mundos-g3-2.csv`, y así. Cada parte lleva su encabezado. Una fila
-  ocupa unos 300–370 bytes, así que caben unos 19 000 mundos por archivo.
+  ocupa unos 465 bytes, así que caben unos 15 000 mundos por archivo.
 
 ### Miles de mundos
 
@@ -79,16 +186,16 @@ comprueba que todos cerraron con las invariantes en verde, junta los CSV en uno
 ordenado por mundo (partido en archivos de ≤ 7 MB si hace falta) y pinta la
 distribución.
 
-**Cuántos caben en las dos T4.** Cada mundo de 2000 plazas ocupa ≈ 1,1 MB en la
-GPU. Una T4 tiene ~15 GB, así que por memoria cabrían ~13 000 mundos en cada una;
-con 2 lotes a la vez se usan 3,3 GB de cada T4. El límite real es el tiempo:
+**Cuántos caben en las dos T4.** Cada mundo de 2000 plazas ocupa ≈ 1,2 MB en la
+GPU. Una T4 tiene ~15 GB, así que por memoria cabrían ~12 000 mundos en cada una;
+con 2 lotes a la vez se usan 3,5 GB de cada T4. El límite real es el tiempo:
 
 | mundos | lotes | CSV | tiempo estimado (6 años) |
 |---|---|---|---|
-| 3000 | 2 | ~1,1 MB, 1 archivo | 3–6 min |
-| 12 000 | 8 | ~4,4 MB, 1 archivo | 9–22 min |
-| 24 000 | 16 | ~8,8 MB, 2 archivos | 18–45 min |
-| 50 000 | 34 | ~18 MB, 3 archivos | 36–90 min |
+| 3000 | 2 | ~1,4 MB, 1 archivo | 3–6 min |
+| 12 000 | 8 | ~5,6 MB, 1 archivo | 9–22 min |
+| 24 000 | 16 | ~11 MB, 2 archivos | 18–45 min |
+| 50 000 | 34 | ~23 MB, 4 archivos | 36–90 min |
 
 Los tiempos son una **estimación sin medir en una T4**: 4–10 ms por tick por cada
 1000 mundos y GPU. El log de cada lote dice cuánto tardó de verdad.
@@ -285,7 +392,9 @@ En el código cada una está marcada con su número entre corchetes: `[47]`.
 | 99 | acuífero | la lluvia lo llena, el agua que se produce lo vacía |
 | 100 | bosque | crece solo; cada casa nueva tala; sin bosque, más desastres y más contaminación |
 
-## La corrida por defecto (nube, semilla 20261018)
+## La corrida por defecto de la 3.0 (nube, semilla 20261018)
+
+Para comparar. La de la 3.1 está [arriba](#antes-y-después-corrida-por-defecto-semilla-20261018-10-mundos).
 
 | | |
 |---|---|
