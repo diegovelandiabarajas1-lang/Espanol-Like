@@ -1,0 +1,360 @@
+# ECOSIM-G v3 · PSICOLOGÍA (mecánicas 46–60), y lo que cada persona decide cada año
+#
+# «sentir» es el corazón de la v3: un hilo por persona, una vez por hora (un año).
+# Lee la FOTO de la hora (lo de los demás: foto[o·16 + …]) y los agregados del
+# censo, y escribe solo lo suyo. Lo que afecta a otro —robarle, pedirle fiado,
+# hablar mal de él— lo deja como PEDIDO con sumarAtomico, y otros núcleos lo
+# resuelven después. Por eso el resultado no depende del orden de los hilos.
+#
+# Rasgos fijos (rasgo, 0..100, nacen con la persona): 0 carisma [45] · 1 empatía
+# [51] · 2 egoísmo [52] · 3 agresividad [50] · 4 tradicionalismo [54] · 5
+# creatividad [55] · 6 curiosidad [53] · 7 sesgo [57] · 8 memoria [56].
+# Estados (animo, 0..10000): 0 moral [46] · 1 miedo [47] · 2 esperanza [48] ·
+# 3 frustración [49] · 4 agresión · 5 adicción [58] · 6 superstición [89] ·
+# 7 identidad [60] · 8 fe [59] · 9 reputación [32] · 10 confianza [33] ·
+# 11 estatus [39] · 12 excluido [41] · 13 sigue la moda [84] · 14 se quedó sin
+# nada esta hora [20] · 15 tuvo ocio esta hora.
+# La foto de los demás (foto): 0 saldo · 1 territorio · 2 moral · 3 facción ·
+# 4 religión · 5 fe · 6 estatus · 7 rumor que cree · 8 lengua · 9 2.ª lengua.
+
+publico fn sentir(h: entero, vivo, hambre, empleo, cuerpo, civil, animo, rasgo, memo, pedido, foto, vinculo, peso, censoT, terrP, clima, estado, censoF, relacion, guerraFF, relig, horasMalas, activa, medida, cuenta, s: entero, t: entero, nAg: entero, nTerr: entero, nFac: entero, nRel: entero, nEmp: entero, kv: entero, salario: entero) {
+  fijo p = h * 16
+  pedido[p + 6] = -1
+  pedido[p + 3] = -1
+  si vivo[h] == 1 {
+    fijo k = h // nAg
+    fijo base = k * nAg
+    fijo tt = civil[p]
+    fijo kt = k * nTerr + tt
+    fijo q = kt * 16
+    fijo f = terrP[q]
+    fijo kf = k * nFac + f
+    fijo r = kf * 24
+    fijo w = kf * 16
+    fijo ed = cuerpo[p]
+    fijo pob = maximo(1, censoT[q])
+    fijo canal = t // 3600 % 17
+    fijo mayLeng = terrP[q + 12]
+    fijo hh = hambre[h]
+    fijo ss = cuerpo[p + 2]
+    fijo sinTrabajo = ed >= 16 y ed < 65 y empleo[h] < 0 y civil[p + 10] == 0
+    # ── [72] ciudadanía: tras unos años de residencia, y hablando la lengua de la
+    #    mayoría, el extranjero se naturaliza (los gobiernos tradicionalistas piden más años)
+    civil[p + 2] = civil[p + 2] + 1
+    si civil[p + 1] == 0 {
+      si civil[p + 2] >= estado[r + 11] y (civil[p + 3] == mayLeng o civil[p + 4] == mayLeng) { civil[p + 1] = 1 }
+    }
+    # ── [34] el duelo: la pareja murió
+    var me = cuerpo[p + 8]
+    fijo pj = civil[p + 13]
+    si pj >= 0 {
+      si vivo[pj] != 1 {
+        civil[p + 13] = -1
+        me = me - 3000
+      }
+    }
+    var re = animo[p + 9]
+    # ── lo que ve en sus vínculos
+    var amigos = 0
+    var enemigos = 0
+    var sumMoral = 0
+    var sumEst = 0
+    var mismos = 0
+    var amigoFe = -1
+    var amigoFac = -1
+    var amigoCar = 0
+    var amigoRumor = -1
+    var enemigo = -1
+    var amigoPresta = -1
+    var amigoModa = 0
+    para j en rango(kv) {
+      fijo x = h * kv + j
+      fijo o = vinculo[x]
+      si o >= 0 {
+        fijo po = o * 16
+        fijo pw = peso[x]
+        si pw > 0 {
+          amigos = amigos + 1
+          sumMoral = sumMoral + foto[po + 2]
+          sumEst = sumEst + foto[po + 6]
+          si foto[po + 4] == civil[p + 5] y foto[po + 3] == civil[p + 6] { mismos = mismos + 1 }
+          si foto[po + 5] > 7000 y foto[po + 4] >= 0 y foto[po + 4] != civil[p + 5] { amigoFe = o }
+          si foto[po + 3] != civil[p + 6] y rasgo[po] > amigoCar {
+            amigoFac = o
+            amigoCar = rasgo[po]
+          }
+          si foto[po + 7] >= 0 { amigoRumor = foto[po + 7] }
+          si pw > 30 y foto[po] > 10 * salario { amigoPresta = o }
+          si foto[po + 6] > 7000 { amigoModa = amigoModa + 1 }
+        } sino si pw < 0 {
+          enemigos = enemigos + 1
+          enemigo = o
+        }
+      }
+    }
+    # ── [39] estatus: el quintil de riqueza, la reputación, el cargo, la casa
+    var es = civil[p + 14] * 1800 + re // 5 + cuerpo[p + 13] * 300
+    si civil[p + 10] > 0 { es = es + 1000 }
+    si cuerpo[p + 14] > 0 { es = es - 2000 }
+    fijo estatus = minimo(10000, maximo(0, es))
+    animo[p + 11] = estatus
+    # ── [41] exclusión: minoría (de lengua, de religión sin libertad de culto, o
+    #    extranjero) en un territorio tradicionalista
+    var minoria = 0
+    si civil[p + 3] != mayLeng y civil[p + 4] != mayLeng { minoria = 1 }
+    si civil[p + 5] != terrP[q + 13] y estado[r + 6] == 0 { minoria = 1 }
+    si civil[p + 1] == 0 { minoria = 1 }
+    fijo tradMedia = censoT[q + 5] // pob
+    var excl = 0
+    si minoria == 1 y azarHilo(s + k, h % nAg, 400 + canal) * 100 < tradMedia { excl = 1 }
+    animo[p + 12] = excl
+    # ── [60] identidad: tradición, fe y cuántos amigos son «de los suyos»
+    var idn = rasgo[p + 4] * 50 + animo[p + 8] // 3
+    si amigos > 0 { idn = idn + mismos * 3000 // amigos }
+    fijo ident = minimo(10000, idn)
+    animo[p + 7] = ident
+    # ── [47] miedo: el delito, la guerra en el frente, la peste, el hambre, un
+    #    desastre reciente y la superstición; lo bajan la fe, el techo y la policía
+    fijo delitos = terrP[q + 7] * 100000 // pob
+    var mObj = minimo(4000, delitos) + animo[p + 14] * 1500 + animo[p + 6] // 4
+    si terrP[q + 4] > 0 { mObj = mObj + 4000 }
+    si clima[q + 10] > 0 { mObj = mObj + 2500 }
+    si hh > 8000 o ss > 8000 { mObj = mObj + 2000 }
+    si cuerpo[p + 10] > 0 { mObj = mObj + 1500 }
+    mObj = mObj - animo[p + 8] // 5 - cuerpo[p + 13] * 400
+    var pol = 0
+    si censoF[w] > 0 { pol = entero(censoF[w + 4] * 1000 // censoF[w] * (100 - estado[r + 12]) // 100) }
+    mObj = mObj - pol * 100
+    var mi = animo[p + 1]
+    mi = mi + (minimo(10000, maximo(0, mObj)) - mi) * 3 // 10
+    animo[p + 1] = mi
+    # ── [48] esperanza: trabajo, estudios, fe, un gobierno con autoridad y techo
+    var eObj = 4000 + civil[p + 7] // 5 + animo[p + 8] // 5 + estado[r + 2] // 10 + cuerpo[p + 13] * 500
+    si empleo[h] >= 0 o civil[p + 10] > 0 { eObj = eObj + 2000 }
+    si terrP[q + 3] > 0 y cuerpo[p + 15] == 1 { eObj = eObj + 3000 }
+    var es2 = animo[p + 2]
+    es2 = es2 + (minimo(10000, maximo(0, eObj - animo[p + 3] // 3)) - es2) * 3 // 10
+    animo[p + 2] = es2
+    # ── [49] frustración: lo que le falta frente a sus amigos, el paro, la escasez,
+    #    la exclusión y la cárcel; la esperanza la amortigua
+    var fObj = animo[p + 14] * 1500 + excl * 2000
+    si amigos > 0 { fObj = fObj + maximo(0, sumEst // amigos - estatus) // 2 }
+    si sinTrabajo { fObj = fObj + 3000 }
+    si cuerpo[p + 14] > 0 { fObj = fObj + 2000 }
+    si hh > 8000 { fObj = fObj + 2000 }
+    fObj = fObj - es2 // 3
+    var fr = animo[p + 3]
+    fr = fr + (minimo(10000, maximo(0, fObj)) - fr) * 3 // 10
+    si terrP[q + 3] > 0 { fr = fr // 2 }
+    animo[p + 3] = fr
+    # ── [50] agresión: el rasgo, la frustración y la guerra; la empatía la frena
+    var ag = rasgo[p + 3] * 60 + fr // 2 - rasgo[p + 1] * 30
+    si terrP[q + 4] > 0 { ag = ag + 1500 }
+    fijo agresion = minimo(10000, maximo(0, ag))
+    animo[p + 4] = agresion
+    # ── [46] moral: la de los amigos (presión social [31]) y la fe la sostienen;
+    #    la necesidad la rompe
+    var mo = animo[p]
+    fijo conformidad = 100 - rasgo[p + 5]
+    si amigos > 0 { mo = mo + (sumMoral // amigos - mo) * conformidad // 400 }
+    fijo moObj = 3000 + rasgo[p + 1] * 40 - rasgo[p + 2] * 20 + animo[p + 8] // 5
+    mo = mo + (moObj - mo) // 5
+    si hh > 8000 o ss > 8000 { mo = mo - 300 }
+    si memo[p + 4] == 1 {
+      # [83] tabú: romperlo deja culpa y mala fama entre los suyos
+      me = me - 1500
+      re = re - 500
+      memo[p + 4] = 0
+      sumarAtomico(cuenta, k * 48 + 19, 1)
+    }
+    fijo moral = minimo(10000, maximo(0, mo))
+    animo[p] = moral
+    # ── [58] adicción: se va bajando; sin su dosis (ocio esta hora), abstinencia
+    var ad = animo[p + 5]
+    si ad > 5000 y animo[p + 15] == 0 { me = me - 1000 }
+    animo[p + 5] = maximo(0, ad - 400)
+    animo[p + 15] = 0
+    # ── [89] superstición: con miedo y sin estudios sube; con escuela baja
+    var su = animo[p + 6]
+    su = su + (mi // 2 - civil[p + 7] // 2 + 3000 - su) // 5
+    animo[p + 6] = minimo(10000, maximo(0, su))
+    # ── [59] fe: los mitos de su religión [90], el miedo y la tradición la
+    #    alimentan; la escolarización la erosiona poco a poco
+    var fe1 = animo[p + 8]
+    fijo rel = civil[p + 5]
+    si rel >= 0 {
+      fijo kr = (k * nRel + rel) * 4
+      fijo fi = maximo(1, relig[kr])
+      fe1 = fe1 + minimo(800, relig[kr + 1] // fi) + mi // 50 + rasgo[p + 4] * 3 - civil[p + 7] // 40
+    } sino {
+      fe1 = fe1 - 100
+    }
+    # ── [81] religión: un amigo muy creyente convence (si hay libertad de culto o es
+    #    la religión del Estado); sin libertad, el Estado presiona
+    fijo relEstado = estado[r + 10]
+    si fe1 < 3000 y amigoFe >= 0 {
+      fijo nueva = foto[amigoFe * 16 + 4]
+      si estado[r + 6] == 1 o nueva == relEstado {
+        si azarHilo(s + k, h % nAg, 410 + canal) < 0.15 {
+          civil[p + 5] = nueva
+          fe1 = 4000
+          sumarAtomico(cuenta, k * 48 + 17, 1)
+        }
+      }
+    }
+    si estado[r + 6] == 0 y civil[p + 5] != relEstado y relEstado >= 0 {
+      si azarHilo(s + k, h % nAg, 411 + canal) * 10000 < 500 + (10000 - ident) // 10 {
+        civil[p + 5] = relEstado
+        sumarAtomico(cuenta, k * 48 + 17, 1)
+      }
+    }
+    animo[p + 8] = minimo(10000, maximo(0, fe1))
+    # ── [43] facción y [45] carisma: el amigo más carismático de otra facción
+    #    arrastra; un gobierno con autoridad atrae a los contentos
+    si amigoFac >= 0 y azarHilo(s + k, h % nAg, 412 + canal) * 400 < conformidad + amigoCar {
+      civil[p + 6] = foto[amigoFac * 16 + 3]
+    } sino si fr < 3000 y estado[r + 2] > 6000 y azarHilo(s + k, h % nAg, 413 + canal) < 0.1 {
+      civil[p + 6] = f
+    }
+    # ── [5] salud mental: amigos, arte [80], fe y rituales, esperanza; la dañan el
+    #    miedo, la frustración, la exclusión, la cárcel, los enemigos
+    me = me + amigos * 300 - enemigos * 300 + minimo(1500, terrP[q + 9] * 10 // pob) + animo[p + 8] // 20
+    me = me + (es2 - 5000) // 10 - mi // 10 - fr // 10 - excl * 800
+    si cuerpo[p + 14] > 0 { me = me - 500 }
+    si cuerpo[p + 7] < 3000 { me = me - 800 }
+    me = me + (6000 - me) // 10
+    cuerpo[p + 8] = minimo(10000, maximo(0, me))
+    # ── [33] confianza: la cohesión de su territorio y sus amigos; la inflación la gasta
+    var cObj = terrP[q + 15] // 2 + amigos * 800 + 2000
+    si medida[k * 20 + 6] > 200 { cObj = cObj - 1500 }
+    var co = animo[p + 10]
+    co = co + (minimo(10000, maximo(0, cObj)) - co) // 4
+    animo[p + 10] = co
+    # ── [32] reputación: vuelve despacio a lo normal
+    re = re + (5000 - re) // 20
+    animo[p + 9] = minimo(10000, maximo(0, re))
+    # ── [77] educación: la escuela (maestros del Estado, mejor con bibliotecas [87]),
+    #    la tradición oral [85] y la curiosidad; sin escritura [86] hay un techo
+    var edu = civil[p + 7]
+    si ed >= 5 y ed < 18 {
+      var maes = 0
+      si censoF[w + 3] > 0 { maes = entero(censoF[w + 5] * 2000 // censoF[w + 3]) }   # 100 = un maestro por cada 20 niños
+      si maes > 100 { maes = 100 }
+      maes = entero(maes * (100 - estado[r + 12]) // 100)
+      edu = edu + maes * 6 + terrP[q + 5] * 200 + minimo(300, censoT[q + 8] * 3000 // pob)
+    } sino si ed >= 18 {
+      edu = edu + rasgo[p + 6] * 2 + minimo(100, censoT[q + 8] * 1000 // pob)
+    }
+    si estado[r + 16] == 0 y edu > 6000 { edu = 6000 }
+    civil[p + 7] = minimo(10000, edu)
+    # ── [76] lengua: quien estudió y vive entre otra lengua la aprende
+    si civil[p + 3] != mayLeng y civil[p + 4] < 0 y civil[p + 7] > 4000 {
+      si azarHilo(s + k, h % nAg, 414 + canal) < 0.2 { civil[p + 4] = mayLeng }
+    }
+    # ── [80] arte: los creativos hacen obras que alegran a su territorio
+    si rasgo[p + 5] > 70 y azarHilo(s + k, h % nAg, 415 + canal) * 400 < rasgo[p + 5] { sumarAtomico(terrP, q + 8, 1) }
+    # ── [84] moda: la sigue quien es conformista o tiene amigos de estatus alto
+    animo[p + 13] = 0
+    si azarHilo(s + k, h % nAg, 416 + canal) * 100 < conformidad // 2 + amigoModa * 15 { animo[p + 13] = 1 }
+    # ── [37] rumores sobre empresas: el que trabaja en una que va mal lo cuenta;
+    #    el crédulo (superstición, sesgo [57]) se lo cree a un amigo; se olvida
+    #    cuando la empresa se recupera
+    fijo emp = empleo[h]
+    si emp >= 0 {
+      si horasMalas[k * nEmp + emp] > 0 { memo[p + 3] = emp }
+    }
+    si memo[p + 3] < 0 y amigoRumor >= 0 {
+      si azarHilo(s + k, h % nAg, 417 + canal) * 20000 < animo[p + 6] + rasgo[p + 7] * 50 { memo[p + 3] = amigoRumor }
+    }
+    fijo ru = memo[p + 3]
+    si ru >= 0 {
+      si activa[k * nEmp + ru] == 0 { memo[p + 3] = -1 }
+      sino si horasMalas[k * nEmp + ru] == 0 y azarHilo(s + k, h % nAg, 418 + canal) < 0.3 { memo[p + 3] = -1 }
+    }
+    # ── [56] memoria: el mal recuerdo de una empresa se olvida, más rápido con poca memoria
+    si memo[p + 2] > 0 {
+      memo[p + 2] = memo[p + 2] - 1
+      si memo[p + 2] == 0 { memo[p + 1] = -1 }
+    }
+    animo[p + 14] = 0
+    # ── [64] rebelión: frustrado, agresivo y con un gobierno sin autoridad
+    si cuerpo[p + 14] == 0 y ed >= 16 {
+      si fr > 6500 y estado[r + 2] < 5000 y agresion > 4000 { cuerpo[p + 15] = 1 }
+      sino si fr < 4000 o terrP[q + 3] > 0 { cuerpo[p + 15] = 0 }
+    }
+    # ── [71] migración: con miedo, sin trabajo o excluido, mira los dos territorios
+    #    vecinos; se va si alguno es bastante mejor, la ruta [29] está abierta y la
+    #    frontera [70] le deja pasar (mismo dueño, frontera abierta o aliados [66],
+    #    nunca en guerra); los curiosos [53] se mueven más
+    si ed >= 16 y cuerpo[p + 14] == 0 y (mi > 6000 o sinTrabajo o excl == 1) {
+      fijo ant = (tt + nTerr - 1) % nTerr
+      fijo sig = (tt + 1) % nTerr
+      var dest = -1
+      var mejor = terrP[q + 14] + 1500
+      si terrP[q + 1] >= 30 y terrP[(k * nTerr + sig) * 16 + 14] > mejor {
+        dest = entero(sig)
+        mejor = terrP[(k * nTerr + sig) * 16 + 14]
+      }
+      si terrP[(k * nTerr + ant) * 16 + 1] >= 30 y terrP[(k * nTerr + ant) * 16 + 14] > mejor {
+        dest = entero(ant)
+        mejor = terrP[(k * nTerr + ant) * 16 + 14]
+      }
+      si dest >= 0 {
+        fijo g = terrP[(k * nTerr + dest) * 16]
+        var deja = 0
+        si g == f o estado[(k * nFac + g) * 24 + 7] == 1 { deja = 1 }
+        si relacion[(k * nFac + g) * nFac + f] > 60 { deja = 1 }
+        si guerraFF[(k * nFac + g) * nFac + f] > 0 { deja = 0 }
+        si deja == 1 y azarHilo(s + k, h % nAg, 419 + canal) * 200 < 20 + rasgo[p + 6] {
+          civil[p] = dest
+          civil[p + 2] = 0
+          si g != f {
+            civil[p + 1] = 0
+            civil[p + 10] = 0
+          }
+          empleo[h] = -1
+          memo[p + 3] = -1
+          sumarAtomico(cuenta, k * 48 + 16, 1)
+        }
+      }
+    }
+    # ── [14] y [63] el delito: robar a un vecino rico, si la moral es baja, la
+    #    agresión alta y el miedo al castigo (la policía) no alcanza
+    si ed >= 14 y cuerpo[p + 14] == 0 y civil[p + 10] != 1 y moral < 5000 y (foto[p] < 5 * salario o fr > 5000 o sumEst > (estatus + 2000) * maximo(1, amigos)) {
+      fijo pRobo = (agresion + (10000 - moral) - pol * 300) / 40000.0
+      si azarHilo(s + k, h % nAg, 420 + canal) < pRobo {
+        var victima = -1
+        var intento = 0
+        mientras intento < 3 y victima < 0 {
+          fijo o = base + entero(piso(azarHilo(s + k, h % nAg, 421 + intento + canal) * nAg))
+          si o != h y vivo[o] == 1 y foto[o * 16 + 1] == tt y foto[o * 16] > 5 * salario y o != pj { victima = o }
+          intento = intento + 1
+        }
+        si victima >= 0 {
+          pedido[p + 6] = victima
+          sumarAtomico(pedido, victima * 16 + 7, 1)
+        }
+      }
+    }
+    # ── [26] fiado: con hambre o sed y sin dinero, se lo pide a un amigo que tiene
+    si ed >= 16 y (hh > 5000 o ss > 5000) y foto[p] < 3 * salario y amigoPresta >= 0 {
+      pedido[p + 3] = amigoPresta
+      sumarAtomico(pedido, amigoPresta * 16 + 5, 1)
+    }
+    # ── [38] chisme: el poco empático habla mal de su enemigo
+    si rasgo[p + 1] < 30 y enemigo >= 0 {
+      sumarAtomico(pedido, enemigo * 16 + 9, 300)
+      sumarAtomico(cuenta, k * 48 + 18, 1)
+    }
+  }
+}
+
+# ── [38] chisme: lo que dijeron de él esta hora le baja la reputación (se aplica
+#    aparte porque lo escriben otros hilos mientras «sentir» corre)
+publico fn aplicarChisme(h: entero, animo, pedido) {
+  fijo p = h * 16
+  si pedido[p + 9] > 0 {
+    animo[p + 9] = maximo(0, animo[p + 9] - pedido[p + 9])
+    pedido[p + 9] = 0
+  }
+}

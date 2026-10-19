@@ -1,0 +1,2450 @@
+# ECOSIM-G · Monte Carlo de sociedades en GPU, con C1EÑ · versión 3: 100 mecánicas
+#
+# Uso (desde D:\ProyectosJS, con el perfil C1EÑ):
+#   node motor/util/n-node.js --c1en ecosim/ecosim-g3.esl [economias] [ticks] [plazas] [semilla] [serie.csv|-] [empresasPorSector] [credito] [primerMundo] [mundos.csv|-]
+# Por defecto: 10 economías · 21600 ticks (6 h: seis años de vida) · 2000 plazas de
+# personas por economía (el 85 % ocupadas al empezar; el resto es sitio para los que
+# nazcan) · 6 empresas por sector · crédito 1 · primer mundo 0.
+#
+# DOS SALIDAS:
+#   · la SERIE (ecosim/salida-g3.csv): cada 10 minutos, una fila por mundo, solo de
+#     los 20 primeros mundos (con miles sería enorme);
+#   · los MUNDOS (ecosim/mundos-g3.csv): UNA FILA POR MUNDO al final, con todos los
+#     mundos y casi cien columnas. Si pasa de 7 MB se parte en archivos de hasta
+#     7 MB (mundos-g3-1.csv, mundos-g3-2.csv…), cada uno con su encabezado.
+# MILES DE MUNDOS EN LA GPU: el mundo «primerMundo + k» usa la semilla semilla +
+# primerMundo + k, así que varios procesos con primerMundo 0, 1500, 3000… dan mundos
+# distintos que se juntan en un solo CSV (se comprobó: el CSV juntado es idéntico,
+# byte a byte, al de un solo proceso con todos), y cualquiera de ellos se puede
+# repetir solo: 1 economía, la misma semilla, primerMundo = su número. Un proceso
+# admite como mucho 1562 mundos de 2000 plazas (un arreglo de Ñ llega a 50 millones
+# de números); c1en/kaggle-ecosim-g3.ipynb parte los miles en lotes de 1500,
+# los reparte entre las dos T4 y junta los CSV.
+# Memoria: cada mundo de 2000 plazas ocupa unos 1,1 MB (en la GPU y en la RAM).
+#
+# QUÉ ES LA v3: la v2 (ecosim-g.esl, que sigue intacta) era una ECONOMÍA: compradores,
+# empresas, bolsa, bancos y clubes, con el dinero, las deudas, las acciones, los
+# bienes y las participaciones conservados al centavo. La v3 le pone una SOCIEDAD
+# encima: personas que nacen, envejecen, se emparejan, se enferman y mueren; que
+# sienten miedo, esperanza y frustración; que tienen amigos y enemigos, lengua,
+# religión y facción; tres Estados que cobran impuestos, hacen leyes, pagan
+# policías, maestros, médicos, soldados y espías, se alían, se espían y se hacen la
+# guerra; y un mundo con estaciones, lluvia, sequías, plagas, epidemias, desastres
+# y contaminación. Las invariantes de la v2 siguen comprobándose cada minuto, con
+# dos cosas más dentro: el tesoro de los Estados (es dinero, está en un banco) y lo
+# que la gente guarda en su despensa (son bienes).
+#
+# EL TIEMPO: un tick es un segundo, como en la v2: el cuerpo (hambre, sed, sueño) y
+# el mercado van por ticks. La vida va más deprisa: un año es una hora (3600 ticks)
+# y un día son 10 minutos (600 ticks, el último tercio de noche); el año tiene
+# cuatro estaciones de 15 minutos. Si no, en una corrida nadie nacería.
+#
+# LAS 100 MECÁNICAS, y dónde vive cada una (entre corchetes en los comentarios):
+#  SUPERVIVENCIA (g3/supervivencia.esl, salvo donde se dice)
+#   [1] hambre · [2] sed · [3] sueño · [7] higiene · [8] nutrición · [15] energía: barras
+#       por tick; se come y se bebe de la despensa («vivir»).
+#   [4] salud física · [6] temperatura · [9] inmunidad · [10] edad · [12] mortalidad
+#       infantil: cada año («envejecer»); la muerte es Gompertz más lo que añaden.
+#   [11] fertilidad: parejas y nacimientos («nacimientos»).
+#   [13] refugio: la casa (0–3) se compra al sector 4; protege del frío, deja dormir,
+#       da despensa y aleja a los ladrones. [14] seguridad física: el robo y el miedo.
+#   [5] salud mental: en «sentir» (psicologia.esl).
+#  ECONOMÍA Y RECURSOS (la v2 + g3/economia.esl + este archivo)
+#   [16] riqueza (Pareto) · [17] desigualdad (Hoover y el 10 % más rico) · [18] comercio
+#   (también entre territorios) · [19] precios (IPC e inflación) · [20] escasez (la
+#   lotería del estante) · [21] producción (con energía, salud, oficio, estudios,
+#   tecnología, cohesión, estación) · [22] especialización (el oficio se aprende
+#   trabajando) · [23] trueque · [24] moneda (con inflación se desconfía de ella) ·
+#   [25] impuestos (sobre el salario y aranceles; hay evasión) · [26] deuda (bancos
+#   de la v2 y fiado entre amigos) · [27] almacenamiento (la despensa, que se
+#   estropea) · [28] cosecha (por estaciones y suelo) · [29] rutas · [30] monopolio.
+#  SOCIAL (g3/social.esl y psicologia.esl)
+#   [31] presión social · [32] reputación · [33] confianza · [34] parentesco (herencia
+#   y ayuda a los hijos) · [35] amistad · [36] enemistad · [37] rumores (sobre
+#   empresas) · [38] chisme (sobre personas) · [39] estatus · [40] movilidad social
+#   (quintiles) · [41] exclusión · [42] cohesión · [43] facción · [44] liderazgo ·
+#   [45] carisma.
+#  PSICOLOGÍA (g3/psicologia.esl)
+#   [46] moral · [47] miedo · [48] esperanza · [49] frustración · [50] agresividad ·
+#   [51] empatía · [52] egoísmo · [53] curiosidad · [54] tradicionalismo · [55]
+#   creatividad · [56] memoria · [57] sesgos · [58] adicción · [59] fe · [60] identidad.
+#  POLÍTICA Y PODER (g3/politica.esl)
+#   [61] autoridad · [62] ley · [63] castigo · [64] rebelión · [65] guerra · [66]
+#   alianza · [67] diplomacia · [68] espionaje · [69] territorio · [70] frontera ·
+#   [71] migración · [72] ciudadanía · [73] corrupción · [74] burocracia · [75] revolución.
+#  CULTURA Y CONOCIMIENTO (g3/cultura.esl y psicologia.esl)
+#   [76] lenguaje · [77] educación · [78] tecnología · [79] ciencia · [80] arte · [81]
+#   religión · [82] ritual · [83] tabú · [84] moda · [85] tradición oral · [86]
+#   escritura · [87] biblioteca · [88] innovación · [89] superstición · [90] mitología.
+#  EL MUNDO (g3/mundo.esl; la lista tenía 90 y estas completan las 100)
+#   [91] estaciones · [92] clima · [93] lluvia y sequía · [94] plagas · [95] epidemias ·
+#   [96] desastres · [97] contaminación · [98] suelo · [99] acuífero · [100] bosque.
+#
+# CÓMO ENTRA EN LA GPU: igual que la v2. Todo es un arreglo plano; cada fase es un
+# «paralelo» de un hilo por persona, por empresa, por territorio, por facción o por
+# economía. Nadie lee lo que otro hilo está escribiendo en la misma fase: las
+# decisiones de cada hora se toman con la FOTO que saca el censo, lo que una
+# persona le hace a otra se pide con sumarAtomico y se resuelve en la fase
+# siguiente, y lo que es secuencial por naturaleza (emparejarse, nacer, la guerra,
+# el trueque) va en un hilo por economía. Así cada mundo sale igual al bit en la
+# CPU y en la GPU.
+#
+# OJO, como en la v2: los arreglos enteros son de 32 bits. El dinero de una economía
+# tiene que caber en 2^31 centavos (≈ 21 millones de monedas).
+
+usar vivir, envejecer, contagiar, heredar, nacimientos de "./g3/supervivencia.esl"
+usar ayudar, prestarFiado, recibirFiado, pagarFiado, truequear, estropear de "./g3/economia.esl"
+usar ceroT, ceroF, ceroE, censar, estadisticas, cuantil, vincular de "./g3/social.esl"
+usar sentir, aplicarChisme de "./g3/psicologia.esl"
+usar robarVictima, robarCobrar, cumplirCondena, gobernar, relaciones, perderInventario de "./g3/politica.esl"
+usar rezar, saber, creer de "./g3/cultura.esl"
+usar tiempoDia, sufrirDesastre de "./g3/mundo.esl"
+
+# ─────────────────────────────────────────────── tamaño
+fijo ARGS = argumentos()
+fn arg(i: entero, defecto: entero): entero {
+  si longitud(ARGS) > i { devolver entero(ARGS[i]) }
+  devolver defecto
+}
+fijo N_ECO = arg(0, 10)
+fijo TICKS = arg(1, 21600)
+fijo N_AG = arg(2, 2000)
+fijo SEMILLA0 = arg(3, 20261018)
+fijo PRIMER = arg(7, 0)                      # número del primer mundo de este proceso
+fijo SEMILLA = SEMILLA0 + PRIMER             # el mundo k usa SEMILLA + k = SEMILLA0 + su número
+var RUTA_CSV = "ecosim/salida-g3.csv"
+si longitud(ARGS) > 4 y ARGS[4] != "-" { RUTA_CSV = ARGS[4] }
+var RUTA_MUNDOS = "ecosim/mundos-g3.csv"
+si longitud(ARGS) > 8 y ARGS[8] != "-" { RUTA_MUNDOS = ARGS[8] }
+fijo N_SERIE = minimo(N_ECO, 20)             # mundos que salen en la serie
+fijo NF = 50                                 # casillas del resumen de cada mundo
+fijo POR_SECTOR = arg(5, 6)
+fijo CREDITO = arg(6, 1)
+
+fijo N_SECTOR = 5                            # 0 agua · 1 comida · 2 tecnología · 3 ocio · 4 vivienda y lujo
+fijo N_INI = N_SECTOR * POR_SECTOR
+fijo N_EMP = N_INI + N_INI * 3 // 5
+fijo ACC = 2000
+fijo N_INV = 100
+fijo N_BANCO = 3
+fijo DINERO_AG = 100000
+fijo DINERO_INV = 1600000
+fijo DINERO_EMP = 20000000
+fijo CAPITAL_BANCO = 2000000
+fijo SALARIO = 6000
+fijo PRECIO_ACC0 = 10000
+fijo FUNDAR = 10000000
+fijo FUNDAR_ACC = FUNDAR * 7 // 5
+fijo N_FUNDADORES = 20
+fijo GRACIA = 7200
+fijo ENCAJE = 10
+fijo MARGEN_PRESTAMO = 50
+fijo MARGEN_LLAMADA = 70
+fijo INTERES = 2
+# lo nuevo de la v3
+fijo N_TERR = 6                              # territorios por economía, en anillo
+fijo N_FAC = 3                               # facciones (Estados)
+fijo N_REL = 3                               # religiones (y −1: ninguna)
+fijo N_LENG = 2                              # lenguas
+fijo KV = 4                                  # vínculos por persona
+fijo DIA = 600                               # ticks por día
+fijo ANO = 3600                              # ticks por año
+fijo N_CUB = 128                             # cubetas del histograma de riqueza
+fijo TESORO0 = 10000000                      # 100.000 monedas por Estado al empezar
+fijo TOTAL_H = N_ECO * N_AG
+fijo TOTAL_E = N_ECO * N_EMP
+fijo TOTAL_I = N_ECO * N_INV
+fijo TOTAL_B = N_ECO * N_BANCO
+fijo TOTAL_T = N_ECO * N_TERR
+fijo TOTAL_F = N_ECO * N_FAC
+fijo TOTAL_R = N_ECO * N_REL
+fijo TEN = 1 + N_INV + N_EMP
+
+# ─────────────────────────────────────────────── estado plano
+# LOS PAQUETES. El C nativo de C1EÑ llama a cada núcleo por koffi, y koffi no acepta
+# funciones de más de 64 parámetros (cada arreglo son dos: el puntero y el largo).
+# Con un arreglo por cosa, «sentir» habría tenido más de cien. Por eso lo de la v3
+# va empaquetado: cada persona, territorio o Estado tiene sus casillas seguidas.
+#
+# PERSONA (p = h·16)
+#   cuerpo: 0 edad · 1 sexo · 2 sed · 3 sueño · 4 energía · 5 higiene · 6 nutrición ·
+#           7 salud · 8 salud mental · 9 inmunidad · 10 años de enfermedad · 11 agua
+#           guardada · 12 comida guardada · 13 refugio (0–3) · 14 años de cárcel ·
+#           15 rebelde
+#   civil:  0 territorio · 1 ciudadano · 2 años de residencia · 3 lengua · 4 2.ª
+#           lengua (−1) · 5 religión (−1 ninguna) · 6 facción preferida · 7 educación ·
+#           8 oficio (sector) · 9 habilidad · 10 rol (0 ninguno, 1 policía, 2 maestro,
+#           3 médico, 4 soldado, 5 espía) · 11 padre · 12 madre · 13 pareja ·
+#           14 quintil · 15 quintil al empezar (−2 se fija el primer año, −1 no cuenta)
+#   rasgo:  0 carisma · 1 empatía · 2 egoísmo · 3 agresividad · 4 tradicionalismo ·
+#           5 creatividad · 6 curiosidad · 7 sesgo · 8 memoria (todos 0..100, fijos)
+#   animo:  0 moral · 1 miedo · 2 esperanza · 3 frustración · 4 agresión ·
+#           5 adicción · 6 superstición · 7 identidad · 8 fe · 9 reputación ·
+#           10 confianza · 11 estatus · 12 excluido · 13 sigue la moda ·
+#           14 se quedó sin nada esta hora · 15 tuvo ocio esta hora
+#   memo:   0 empresa favorita · 1 mal recuerdo · 2 años que le quedan ·
+#           3 empresa del rumor que cree · 4 rompió un tabú
+#   pedido: 0 fiado que debe · 1 a quién · 2 años · 3 pide fiado a · 4 presta a
+#           cada uno · 5 pedidos de fiado · 6 roba a · 7 pedidos de robo · 8 botín ·
+#           9 chisme recibido
+#   foto:   0 saldo · 1 territorio · 2 moral · 3 facción · 4 religión · 5 fe ·
+#           6 estatus · 7 rumor · 8 lengua · 9 2.ª lengua (lo que los demás ven)
+# TERRITORIO (kt = k·N_TERR + tt, q = kt·16)
+#   clima:  ver g3/mundo.esl (0 temperatura · 3 acuífero · 4 suelo · 5 bosque · 6
+#           contaminación · 7 plaga · 9 desastre hoy · 10 desastre este año …)
+#   terrP:  0 dueño · 1 ruta a tt+1 · 2 saqueo % · 3 victoria rebelde · 4 frente ·
+#           5 biblioteca · 6 delitos · 7 delitos del año pasado · 8 obras de arte ·
+#           9 arte acumulado · 10 rituales · 11 rituales por día · 12 lengua de la
+#           mayoría · 13 religión de la mayoría · 14 atractivo · 15 cohesión
+#   censoT: 0 población · 1 enfermos · 2 rebeldes · 3 suma de confianza ·
+#           4 excluidos · 5 suma de tradicionalismo · 6 en paro · 7 adultos ·
+#           8 mayores que enseñan
+# ESTADO (kf = k·N_FAC + f): estado (kf·24) y censoF (kf·16), ver g3/politica.esl
+# RELIGIÓN (kr = k·N_REL + r): relig (kr·4): 0 fieles · 1 mitos · 2 rituales
+# ECONOMÍA (k):
+#   medida (k·20): 0 población · 1 suma de edades · 2 riqueza (monedas) · 3 Hoover ·
+#           4 parte del 10 % · 5 IPC · 6 inflación · 7 empresa de moda · 8 enfermos ·
+#           9 excluidos · 10 rebeldes · 11 presos · 12 cambiaron de quintil ·
+#           13 con quintil inicial · 14 población máxima · 15 mínima · 16 enfermos máx
+#   cuenta (k·48), contadores acumulados: 0 nacidos · 1 parejas · 2 muertes ·
+#           3 de niños · 4 de hambre o sed · 5 en la guerra · 6 contagios ·
+#           7 herencias · 8 ayudas · 9 fiados · 10 impagos · 11 trueques ·
+#           12 escasez · 13 horas de monopolio · 14 robos · 15 castigados ·
+#           16 migraciones · 17 conversiones · 18 chismes · 19 culpas · 20 rituales ·
+#           21 guerras · 22 conquistas · 23 rebeliones · 24 revoluciones ·
+#           25 espionajes · 26 corrupción (monedas) · 27 escándalos · 28 obras ·
+#           29 bibliotecas · 30 subsidios · 31 innovaciones · 32 escrituras ·
+#           33 sequías · 34 plagas · 35 desastres · 36 aranceles (monedas) ·
+#           37 evasiones · 38 modas
+# EL TOPE DEL MOTOR: un arreglo de Ñ tiene como mucho 50 millones de números. Los
+# más grandes son los paquetes de las personas (mundos × plazas × 16) y la tenencia de
+# acciones (mundos × empresas × (1 + inversores + empresas)). Con 2000 plazas caben
+# 1562 mundos por proceso; para miles, varios procesos con primerMundo distinto (así
+# lo hace c1en/kaggle-ecosim-g3.ipynb) y luego se juntan los CSV de mundos.
+fijo TOPE = 50000000
+fijo MAX_MUNDOS = minimo(TOPE // (N_AG * 16), TOPE // (N_EMP * TEN))
+si N_ECO > MAX_MUNDOS {
+  lanzar error("{N_ECO} mundos de {N_AG} plazas no caben en un proceso: el máximo son {MAX_MUNDOS} (un arreglo de Ñ llega a 50 millones de números). Repártelos en {(N_ECO + MAX_MUNDOS - 1) // MAX_MUNDOS} procesos con primerMundo 0, {MAX_MUNDOS}, {2 * MAX_MUNDOS}…")
+}
+fn ent(n: entero) { devolver ceros([n], "entero") }
+# personas — lo de la v2
+fijo saldo = ent(TOTAL_H)
+fijo hambre = ent(TOTAL_H)
+fijo aburr = ent(TOTAL_H)
+fijo curio = ent(TOTAL_H)
+fijo empleo = ent(TOTAL_H)
+fijo eleccion = ent(TOTAL_H)
+fijo compro = ent(TOTAL_H)
+fijo voluntad = ent(TOTAL_H)
+fijo clubDe = ent(TOTAL_H)
+fijo partic = ent(TOTAL_H)
+fijo retira = ent(TOTAL_H)
+# personas — la v3
+fijo vivo = ent(TOTAL_H)                      # 0 plaza libre · 1 vivo · 2 acaba de morir
+fijo cuerpo = ent(TOTAL_H * 16)
+fijo civil = ent(TOTAL_H * 16)
+fijo rasgo = ent(TOTAL_H * 16)
+fijo animo = ent(TOTAL_H * 16)
+fijo memo = ent(TOTAL_H * 16)
+fijo pedido = ent(TOTAL_H * 16)
+fijo foto = ent(TOTAL_H * 16)
+fijo vinculo = ent(TOTAL_H * KV)
+fijo peso = ent(TOTAL_H * KV)
+# inversores
+fijo saldoInv = ent(TOTAL_I)
+fijo deudaInv = ent(TOTAL_I)
+fijo carteraInv = ent(TOTAL_I)
+fijo forzadoInv = ent(TOTAL_I)
+fijo aporte = ent(TOTAL_I)
+# empresas
+fijo activa = ent(TOTAL_E)
+fijo sector = ent(TOTAL_E)
+fijo caja = ent(TOTAL_E)
+fijo deudaEmp = ent(TOTAL_E)
+fijo precio = ent(TOTAL_E)
+fijo inv = ent(TOTAL_E)
+fijo progreso = ent(TOTAL_E)
+fijo trab = ent(TOTAL_E)
+fijo maquinas = ent(TOTAL_E)
+fijo demanda = ent(TOTAL_E)
+fijo ventas = ent(TOTAL_E)
+fijo ventasHora = ent(TOTAL_E)
+fijo ingresosHora = ent(TOTAL_E)
+fijo salariosHora = ent(TOTAL_E)
+fijo ganHora = ent(TOTAL_E)
+fijo ganMax = ent(TOTAL_E)
+fijo horasMalas = ent(TOTAL_E)
+fijo sinNomina = ent(TOTAL_E)
+fijo nacida = ent(TOTAL_E)
+fijo fundadaPor = ent(TOTAL_E)
+fijo precioAcc = ent(TOTAL_E)
+fijo precioAccH = ent(TOTAL_E)
+fijo calidad = ent(TOTAL_E)
+fijo estrellas = ent(TOTAL_E)
+fijo resenas = ent(TOTAL_E)
+fijo divPorAcc = ent(TOTAL_E)
+fijo terrEmp = ent(TOTAL_E)                   # [69] dónde está
+fijo fuerza = ent(TOTAL_E)                    # [21] trabajo efectivo (100 = un trabajador normal)
+fijo rumorE = ent(TOTAL_E)                    # [37] cuántos creen que va mal
+fijo trab0 = ent(TOTAL_E)                     # foto de las plantillas para contratar
+# clubes
+fijo clubExiste = ent(TOTAL_E)
+fijo saldoClub = ent(TOTAL_E)
+fijo deudaClub = ent(TOTAL_E)
+fijo particTotal = ent(TOTAL_E)
+fijo valorPart = ent(TOTAL_E)
+fijo carteraClub = ent(TOTAL_E)
+fijo objetivoClub = ent(TOTAL_E)
+fijo forzadoClub = ent(TOTAL_E)
+fijo candidatos = ent(TOTAL_E)
+fijo demandaRetiro = ent(TOTAL_E)
+fijo factorRetiro = ent(TOTAL_E)
+fijo clubFundadas = ent(TOTAL_E)
+fijo sumaPart = ent(TOTAL_E)
+# bancos
+fijo prestamos = ent(TOTAL_B)
+fijo capBanco = ent(TOTAL_B)
+fijo reservasB = ent(TOTAL_B)
+fijo cupo = ent(TOTAL_B)
+fijo sumaDepBanco = ent(TOTAL_B)
+fijo tenencia = ent(TOTAL_E * TEN)
+# territorios
+fijo clima = ent(TOTAL_T * 16)
+fijo terrP = ent(TOTAL_T * 16)
+fijo censoT = ent(TOTAL_T * 16)
+fijo lengT = ent(TOTAL_T * N_LENG)
+fijo relT = ent(TOTAL_T * N_REL)
+fijo rebFacT = ent(TOTAL_T * N_FAC)
+fijo pendT = ent(TOTAL_T * 2)
+# Estados
+fijo estado = ent(TOTAL_F * 24)
+fijo censoF = ent(TOTAL_F * 16)
+fijo relacion = ent(TOTAL_F * N_FAC)
+fijo guerraFF = ent(TOTAL_F * N_FAC)
+fijo comercioFF = ent(TOTAL_F * N_FAC)
+# religiones
+fijo relig = ent(TOTAL_R * 4)
+# por economía — lo de la v2
+fijo producido = ent(N_ECO)
+fijo consumido = ent(N_ECO)
+fijo destruido = ent(N_ECO)
+fijo enMaquinas = ent(N_ECO)
+fijo dinero0 = ent(N_ECO)
+fijo accVivas = ent(N_ECO)
+fijo quiebras = ent(N_ECO)
+fijo fundadas = ent(N_ECO)
+fijo fundadasClub = ent(N_ECO)
+fijo paro = ent(N_ECO)
+fijo indiceBolsa = ent(N_ECO)
+fijo nActivas = ent(N_ECO)
+fijo paroMax = ent(N_ECO)
+fijo caidaMax = ent(N_ECO)
+fijo indiceHace1h = ent(N_ECO)
+fijo sesgo = ent(N_ECO)
+fijo fallo = ent(N_ECO)
+fijo iliquidez = ent(N_ECO)
+fijo llamadas = ent(N_ECO)
+fijo castigos = ent(N_ECO)
+fijo sobregiros = ent(N_ECO)
+fijo corridas = ent(N_ECO)
+fijo nClubs = ent(N_ECO)
+fijo socios = ent(N_ECO)
+fijo prestamosVivos = ent(N_ECO)
+fijo sumaDinero = ent(N_ECO)
+fijo sumaDeuda = ent(N_ECO)
+fijo sumaAcc = ent(TOTAL_E)
+fijo sumaDesp = ent(N_ECO)
+# por economía — la v3
+fijo medida = ent(N_ECO * 20)
+fijo cuenta = ent(N_ECO * 48)
+fijo histo = ent(N_ECO * N_CUB)
+fijo qB = ent(N_ECO * 4)
+fijo ventasSector = ent(N_ECO * N_SECTOR)
+fijo fin = ent(N_ECO * NF)                    # el resumen de cada mundo, calculado en la GPU
+
+# ─────────────────────────────────────────────── tick 0, en paralelo
+# Los valores por defecto de una plaza vacía. Se usa al empezar (para todas) y cada
+# año para las plazas de los que murieron: así un recién nacido empieza limpio.
+fn reiniciar(h: entero, vivo, hambre, aburr, curio, empleo, eleccion, compro, clubDe, partic, retira, cuerpo, civil, animo, memo, pedido, vinculo, peso, kv: entero) {
+  si vivo[h] != 1 {
+    fijo p = h * 16
+    vivo[h] = 0
+    hambre[h] = 0
+    aburr[h] = 0
+    curio[h] = 0
+    empleo[h] = -1
+    eleccion[h] = -1
+    compro[h] = 0
+    clubDe[h] = -1
+    partic[h] = 0
+    retira[h] = 0
+    para j en rango(16) {
+      cuerpo[p + j] = 0
+      civil[p + j] = 0
+      animo[p + j] = 0
+      memo[p + j] = 0
+      pedido[p + j] = 0
+    }
+    cuerpo[p + 4] = 10000          # energía
+    cuerpo[p + 5] = 8000           # higiene
+    cuerpo[p + 6] = 6000           # nutrición
+    cuerpo[p + 7] = 10000          # salud
+    cuerpo[p + 8] = 8000           # salud mental
+    cuerpo[p + 9] = 4000           # inmunidad
+    civil[p + 1] = 1               # ciudadano
+    civil[p + 4] = -1              # sin segunda lengua
+    civil[p + 5] = -1              # sin religión
+    civil[p + 8] = -1              # sin oficio
+    civil[p + 11] = -1             # padre
+    civil[p + 12] = -1             # madre
+    civil[p + 13] = -1             # pareja
+    civil[p + 15] = -1             # no cuenta para la movilidad
+    animo[p] = 6000                # moral
+    animo[p + 1] = 1000            # miedo
+    animo[p + 2] = 7000            # esperanza
+    animo[p + 9] = 5000            # reputación
+    animo[p + 10] = 6000           # confianza
+    memo[p] = -1
+    memo[p + 1] = -1
+    memo[p + 3] = -1
+    pedido[p + 1] = -1
+    pedido[p + 3] = -1
+    pedido[p + 6] = -1
+    para j en rango(kv) {
+      vinculo[h * kv + j] = -1
+      peso[h * kv + j] = 0
+    }
+  }
+}
+# Las personas del principio: el 85 % de las plazas. Riqueza Pareto (como la v2),
+# edades de pirámide, carácter al azar, lengua y religión según el territorio (con
+# minorías), y trabajo para los adultos repartido por sectores según lo que se
+# necesita: 36 % agua, 34 % comida, 10 % tecnología, 10 % ocio, 10 % vivienda y lujo.
+fn iniciarAgente(h: entero, vivo, saldo, hambre, aburr, curio, voluntad, empleo, cuerpo, civil, animo, rasgo, s: entero, nAg: entero, porSector: entero, nTerr: entero, nFac: entero, dineroAg: entero) {
+  fijo k = h // nAg
+  fijo i = h % nAg
+  fijo p = h * 16
+  si azarHilo(s + k, i, 9) < 0.85 {
+    vivo[h] = 1
+    fijo u = azarHilo(s + k, i, 1) * 0.999
+    var w = dineroAg * 4 // 10
+    var f = 1.0 / (1.0 - u)
+    f = exp(log(f) * 0.6667)
+    var r = entero(piso(w * f))
+    si r > dineroAg * 12 { r = dineroAg * 12 }
+    saldo[h] = r
+    hambre[h] = entero(piso(azarHilo(s + k, i, 2) * 3000))
+    aburr[h] = entero(piso(azarHilo(s + k, i, 3) * 4000))
+    curio[h] = entero(piso(azarHilo(s + k, i, 4) * 4000))
+    voluntad[h] = entero(piso(azarHilo(s + k, i, 5) * 100))
+    fijo ue = azarHilo(s + k, i, 10)
+    fijo ed = entero(piso(exp(log(ue + 0.0001) * 1.4) * 80))
+    cuerpo[p] = ed
+    cuerpo[p + 1] = entero(piso(azarHilo(s + k, i, 11) * 2))
+    cuerpo[p + 2] = entero(piso(azarHilo(s + k, i, 6) * 3000))
+    cuerpo[p + 4] = 8000
+    cuerpo[p + 5] = 7000
+    cuerpo[p + 7] = 8000 + entero(piso(azarHilo(s + k, i, 24) * 2000))
+    cuerpo[p + 11] = 2
+    cuerpo[p + 12] = 2
+    cuerpo[p + 13] = entero(piso(azarHilo(s + k, i, 25) * 3))
+    fijo tt = entero(piso(azarHilo(s + k, i, 12) * nTerr))
+    civil[p] = tt
+    var le = 0
+    si tt * 2 >= nTerr { le = 1 }
+    si azarHilo(s + k, i, 13) < 0.15 { le = 1 - le }
+    civil[p + 3] = le
+    var re = tt % 3
+    fijo ur = azarHilo(s + k, i, 14)
+    si ur < 0.1 { re = -1 } sino si ur < 0.35 { re = entero(piso(azarHilo(s + k, i, 15) * 3)) }
+    civil[p + 5] = re
+    si re >= 0 { animo[p + 8] = 3000 + entero(piso(azarHilo(s + k, i, 16) * 6000)) } sino { animo[p + 8] = 500 }
+    var fa = tt * nFac // nTerr
+    si azarHilo(s + k, i, 17) < 0.3 { fa = entero(piso(azarHilo(s + k, i, 18) * nFac)) }
+    civil[p + 6] = fa
+    civil[p + 2] = entero(piso(azarHilo(s + k, i, 19) * 10))
+    civil[p + 15] = -2
+    # el trabajo
+    si ed >= 16 y ed < 65 {
+      fijo us = azarHilo(s + k, i, 20)
+      var sec = 4
+      si us < 0.36 { sec = 0 } sino si us < 0.70 { sec = 1 } sino si us < 0.80 { sec = 2 } sino si us < 0.90 { sec = 3 }
+      # la empresa de su sector en su territorio (o una al azar si hay menos empresas que territorios)
+      var j = tt
+      si j >= porSector { j = entero(piso(azarHilo(s + k, i, 21) * porSector)) }
+      empleo[h] = sec * porSector + j
+      civil[p + 8] = sec
+      civil[p + 9] = entero(piso(azarHilo(s + k, i, 22) * 6000))
+      civil[p + 7] = entero(piso(azarHilo(s + k, i, 23) * 6000))
+    } sino {
+      empleo[h] = -1
+      si ed < 16 { civil[p + 7] = ed * 250 } sino { civil[p + 7] = entero(piso(azarHilo(s + k, i, 23) * 5000)) }
+    }
+    animo[p] = 4000 + entero(piso(azarHilo(s + k, i, 26) * 4000))
+    animo[p + 6] = 3000 + entero(piso(azarHilo(s + k, i, 27) * 3000))
+    # el carácter (0..100); el carisma es raro (pocos tienen mucho)
+    fijo uc = azarHilo(s + k, i, 30)
+    rasgo[p] = entero(piso(uc * uc * 100))
+    para j en rango(8) { rasgo[p + 1 + j] = entero(piso(azarHilo(s + k, i, 31 + j) * 100)) }
+  }
+}
+# Las familias del principio, un hilo por economía: parejas entre adultos del mismo
+# territorio con edades parecidas, y una madre (con su pareja de padre) para cada niño.
+fn iniciarFamilias(k: entero, vivo, cuerpo, civil, vinculo, peso, s: entero, nAg: entero, kv: entero) {
+  fijo base = k * nAg
+  para i en rango(nAg) {
+    fijo h = base + i
+    fijo p = h * 16
+    si vivo[h] == 1 y civil[p + 13] < 0 y cuerpo[p] >= 20 y cuerpo[p] <= 60 y azarHilo(s + k, i, 40) < 0.6 {
+      var j = i + 1
+      mientras j < nAg y civil[p + 13] < 0 {
+        fijo o = base + j
+        fijo po = o * 16
+        si vivo[o] == 1 y civil[po + 13] < 0 y cuerpo[po + 1] != cuerpo[p + 1] y civil[po] == civil[p] y absoluto(cuerpo[po] - cuerpo[p]) <= 8 {
+          civil[p + 13] = o
+          civil[po + 13] = h
+          vinculo[h * kv + 2] = o
+          peso[h * kv + 2] = 70
+          vinculo[o * kv + 2] = h
+          peso[o * kv + 2] = 70
+        }
+        j = j + 1
+      }
+    }
+  }
+  para i en rango(nAg) {
+    fijo h = base + i
+    fijo p = h * 16
+    si vivo[h] == 1 y cuerpo[p] < 16 {
+      fijo inicio = entero(piso(azarHilo(s + k, i, 41) * nAg))
+      var j = 0
+      mientras j < nAg y civil[p + 12] < 0 {
+        fijo o = base + (inicio + j) % nAg
+        fijo po = o * 16
+        si vivo[o] == 1 y cuerpo[po + 1] == 1 y civil[po] == civil[p] y cuerpo[po] - cuerpo[p] >= 16 y cuerpo[po] - cuerpo[p] <= 40 {
+          civil[p + 12] = o
+          vinculo[h * kv] = o
+          peso[h * kv] = 80
+          fijo pj = civil[po + 13]
+          si pj >= 0 {
+            civil[p + 11] = pj
+            vinculo[h * kv + 1] = pj
+            peso[h * kv + 1] = 80
+          }
+        }
+        j = j + 1
+      }
+    }
+  }
+}
+fn iniciarInversor(h: entero, saldoInv, s: entero, nInv: entero, dineroInv: entero) {
+  fijo k = h // nInv
+  fijo q = h % nInv
+  fijo u = azarHilo(s + k, 500 + q, 1) * 0.999
+  var w = dineroInv * 4 // 10
+  var f = 1.0 / (1.0 - u)
+  f = exp(log(f) * 0.6667)
+  var r = entero(piso(w * f))
+  si r > dineroInv * 12 { r = dineroInv * 12 }
+  saldoInv[h] = r
+}
+fn iniciarBanco(h: entero, capBanco, capital: entero) { capBanco[h] = capital }
+# La empresa e del sector «sec» está en el territorio (e % porSector) % N_TERR: con 6
+# por sector, cada territorio tiene una de cada. Agua y comida empiezan con más
+# existencias (son lo que todos compran el primer minuto).
+fn iniciarEmpresa(h: entero, activa, sector, caja, precio, inv, precioAcc, calidad, estrellas, resenas, nacida, objetivoClub, terrEmp, s: entero, nEmp: entero, nIni: entero, porSector: entero, nAg: entero, nTerr: entero, dineroEmp: entero) {
+  fijo k = h // nEmp
+  fijo e = h % nEmp
+  objetivoClub[h] = -1
+  terrEmp[h] = (e % porSector) % nTerr
+  si e < nIni {
+    activa[h] = 1
+    fijo sec = e // porSector
+    sector[h] = sec
+    caja[h] = dineroEmp
+    var base = 800
+    si sec == 1 { base = 1200 }
+    si sec == 2 { base = 3000 }
+    si sec == 3 { base = 1500 }
+    si sec == 4 { base = 1000 }
+    precio[h] = base + entero(piso(azarHilo(s + k, 1000 + e, 5) * (base // 2)))
+    var stock = nAg // nIni + 50
+    si sec <= 1 { stock = nAg * 2 // porSector }
+    inv[h] = stock
+    precioAcc[h] = 10000
+    calidad[h] = 1 + entero(piso(azarHilo(s + k, 1000 + e, 6) * 5))
+    estrellas[h] = 20 * (1 + entero(piso(azarHilo(s + k, 1000 + e, 7) * 5))) * 100
+    resenas[h] = 20
+  } sino {
+    activa[h] = 0
+    resenas[h] = 1
+  }
+  nacida[h] = 0
+}
+fn repartirAcciones(h: entero, tenencia, activa, s: entero, nEmp: entero, acc: entero, ten: entero, nInv: entero) {
+  fijo ke = h // acc
+  si activa[ke] == 1 {
+    fijo k = ke // nEmp
+    fijo a = h % acc
+    fijo quien = 1 + entero(piso(azarHilo(s + k, 2000 + ke % nEmp, 8 + a) * nInv))
+    sumarAtomico(tenencia, ke * ten + quien, 1)
+  }
+}
+# Los territorios: de dos en dos para cada facción; rutas buenas, agua, suelo y bosque.
+fn iniciarTerritorio(h: entero, clima, terrP, nTerr: entero, nFac: entero) {
+  fijo tt = h % nTerr
+  fijo q = h * 16
+  terrP[q] = tt * nFac // nTerr
+  terrP[q + 1] = 80
+  terrP[q + 13] = -1
+  clima[q] = 18
+  clima[q + 3] = 20000
+  clima[q + 4] = 8000
+  clima[q + 5] = 9000
+}
+fn iniciarFaccion(h: entero, estado, tesoro0: entero) {
+  fijo r = h * 24
+  estado[r] = tesoro0
+  estado[r + 1] = -1             # líder: se elige el primer año
+  estado[r + 2] = 6000           # autoridad
+  estado[r + 3] = 10             # impuesto
+  estado[r + 4] = 2              # años de cárcel
+  estado[r + 6] = 1              # libertad de culto
+  estado[r + 7] = 1              # frontera abierta
+  estado[r + 8] = 1              # subsidio
+  estado[r + 9] = 8              # policías por mil
+  estado[r + 10] = -1            # sin religión de Estado
+  estado[r + 11] = 3             # años para naturalizarse
+  estado[r + 12] = 10            # burocracia
+  estado[r + 14] = 100           # tecnología
+}
+# La relación de cada par de facciones empieza entre −70 y 30, igual en los dos sentidos.
+fn iniciarRelacion(h: entero, relacion, s: entero, nFac: entero) {
+  fijo kf = h // nFac
+  fijo k = kf // nFac
+  fijo f = kf % nFac
+  fijo g = h % nFac
+  si f != g {
+    fijo a = minimo(f, g)
+    fijo b = maximo(f, g)
+    relacion[h] = entero(piso(azarHilo(s + k, 9400 + a * 7 + b, 1) * 101)) - 70
+  }
+}
+
+# ─────────────────────────────────────────────── fases del tick (lo que cambió de la v2)
+# 1. elegir qué comprar. La v2 compraba cuando el hambre llegaba a 4000; la v3
+#    compra para LLENAR LA DESPENSA [27] (agua y comida), y cuánto quiere guardar
+#    lo decide el miedo [47] (acaparar), el otoño (se guarda para el invierno) y lo
+#    que cabe en su casa [13]. Además:
+#    · no va a un estante vacío (se ve desde la puerta);
+#    · solo compra donde llega [29][70]: su territorio, o el vecino si la ruta está
+#      abierta y no hay guerra entre los dos Estados (con la frontera cerrada se
+#      puede, pero la aduana cobra doble arancel);
+#    · en lo que no es agua ni comida, no compra a la empresa del rumor [37] ni a la
+#      que le dejó sin nada [56] (con hambre nadie guarda rencor);
+#    · prefiere la de siempre [57] (sesgo de lealtad) y la que está de moda [84];
+#    · respeta el tabú de su religión [83], salvo que la adicción [58] o un
+#      aburrimiento insoportable puedan más (y entonces carga con la culpa);
+#    · el supersticioso [89] no compra caprichos en día nefasto (uno de cada siete);
+#    · sin casa, la casa es lo primero después de comer y beber.
+fn elegir(h: entero, vivo, aburr, curio, hambre, eleccion, saldo, cuerpo, civil, animo, rasgo, memo, activa, inv, precio, estrellas, resenas, sector, terrEmp, demanda, terrP, estado, relacion, guerraFF, medida, t: entero, s: entero, nAg: entero, nEmp: entero, nTerr: entero, nFac: entero, dia: entero, ano: entero) {
+  eleccion[h] = -1
+  si vivo[h] == 1 {
+    fijo k = h // nAg
+    fijo i = h % nAg
+    fijo p = h * 16
+    var aa = aburr[h] + 2
+    si animo[p + 5] > 5000 { aa = aa + 1 }
+    si aa > 10000 { aa = 10000 }
+    aburr[h] = aa
+    var cc = curio[h] + 1
+    si rasgo[p + 6] > 70 { cc = cc + 1 }
+    si cc > 10000 { cc = 10000 }
+    curio[h] = cc
+    fijo ref = cuerpo[p + 13]
+    var obj = 2 + animo[p + 1] // 2500
+    si (t % ano) * 4 // ano == 2 { obj = obj + 2 }            # en otoño se guarda para el invierno [28]
+    si obj > 3 + ref * 3 { obj = 3 + ref * 3 }
+    fijo agua = cuerpo[p + 11]
+    fijo comida = cuerpo[p + 12]
+    var sec = -1
+    si agua < 1 o (agua < obj y cuerpo[p + 2] >= 2000) { sec = 0 }
+    sino si comida < 1 o (comida < obj y hambre[h] >= 2000) { sec = 1 }
+    sino si aa >= 4000 y aa >= cc { sec = 3 }
+    sino si cc >= 4000 { sec = 2 }
+    sino si ref < 3 y (t + i * 7) % 900 == 0 { sec = 4 }
+    sino si animo[p + 13] == 1 y (t + i * 13) % 1500 == 0 { sec = 4 }
+    si sec >= 2 y (t // dia) % 7 == 6 y animo[p + 6] > 6000 { sec = -1 }
+    fijo rel = civil[p + 5]
+    si sec >= 2 y rel >= 0 y sec == 4 - rel y animo[p + 8] > 6000 y animo[p + 5] < 7000 y aa < 9500 { sec = -1 }
+    si sec >= 0 {
+      fijo base = k * nEmp
+      fijo ta = civil[p]
+      fijo fa = terrP[(k * nTerr + ta) * 16]
+      fijo me = medida[k * 20 + 7]
+      var mejor = -1
+      var mejorPz = 0
+      var intento = 0
+      mientras intento < 8 {
+        fijo e = base + entero(piso(azarHilo(s + k, h % nAg, 20 + intento + 7 * (t % 11)) * nEmp))
+        si activa[e] == 1 y sector[e] == sec y inv[e] > 0 y (sec < 2 o (e - base != memo[p + 3] y e - base != memo[p + 1])) {
+          fijo te = terrEmp[e]
+          var llega = 0
+          si te == ta { llega = 1 }
+          si te == (ta + 1) % nTerr y terrP[(k * nTerr + ta) * 16 + 1] >= 30 { llega = 1 }
+          si te == (ta + nTerr - 1) % nTerr y terrP[(k * nTerr + te) * 16 + 1] >= 30 { llega = 1 }
+          si llega == 1 y te != ta {
+            fijo fb = terrP[(k * nTerr + te) * 16]
+            si fb != fa {
+              si guerraFF[(k * nFac + fa) * nFac + fb] > 0 { llega = 0 }
+            }
+          }
+          si llega == 1 {
+            var pz = (estrellas[e] // resenas[e]) * 4 - precio[e]
+            si e - base == memo[p] { pz = pz + rasgo[p + 7] * 10 }
+            si e - base == me y animo[p + 13] == 1 { pz = pz + 2000 }
+            si mejor < 0 o pz > mejorPz {
+              mejor = e
+              mejorPz = pz
+            }
+          }
+        }
+        intento = intento + 1
+      }
+      si mejor >= 0 {
+        var colchon = 20
+        si sec == 4 y ref == 0 { colchon = 5 }
+        si sec < 2 o saldo[h] >= precio[mejor] * colchon {
+          eleccion[h] = mejor
+          sumarAtomico(demanda, mejor, 1)
+        }
+      }
+    }
+  }
+}
+# 2. comprar: la lotería del estante de la v2 [20]. Lo nuevo:
+#    · agua y comida van a la DESPENSA (se consumen después, en «vivir»);
+#    · comprar en otro Estado paga ARANCEL [25] al Estado propio (salvo aliados), y
+#      doble si el otro tiene la frontera cerrada [70];
+#    · el comercio entre Estados acerca a sus gobiernos [67];
+#    · la casa [13] sube un nivel y gasta bosque [100] del territorio de la empresa;
+#    · el ocio alimenta la adicción [58]; la tecnología, un poco de educación [77];
+#    · si se queda sin nada, lo apunta: escasez [20] y un mal recuerdo [56].
+fn comprar(h: entero, eleccion, saldo, caja, inv, demanda, ventas, precio, aburr, curio, sector, estrellas, resenas, calidad, consumido, cuerpo, civil, animo, rasgo, memo, terrEmp, terrP, clima, estado, relacion, comercioFF, cuenta, t: entero, s: entero, nAg: entero, nEmp: entero, nTerr: entero, nFac: entero) {
+  fijo e = eleccion[h]
+  si e >= 0 {
+    fijo k = h // nAg
+    fijo p = h * 16
+    fijo pr = precio[e]
+    fijo kte = k * nTerr + terrEmp[e]
+    fijo fa = terrP[(k * nTerr + civil[p]) * 16]
+    fijo fb = terrP[kte * 16]
+    fijo rfa = (k * nFac + fa) * 24
+    var ar = 0
+    si fa != fb y relacion[(k * nFac + fa) * nFac + fb] <= 60 {
+      ar = entero(pr * estado[rfa + 3] // 100)
+      si estado[(k * nFac + fb) * 24 + 7] == 0 { ar = ar * 2 }     # frontera cerrada: aduana
+    }
+    si saldo[h] >= pr + ar {
+      fijo d = demanda[e]
+      fijo stock = inv[e]
+      var puede = 1
+      si d > stock {
+        si azarHilo(s + k, h % nAg, 30 + t % 5) * d >= stock { puede = 0 }
+      }
+      si puede == 1 {
+        saldo[h] = saldo[h] - pr - ar
+        sumarAtomico(caja, e, pr)
+        sumarAtomico(ventas, e, 1)
+        si ar > 0 {
+          sumarAtomico(estado, rfa, ar)
+          sumarAtomico(estado, rfa + 17, ar)
+          sumarAtomico(cuenta, k * 48 + 36, ar // 100)
+        }
+        si fa != fb { sumarAtomico(comercioFF, (k * nFac + fa) * nFac + fb, 1) }
+        fijo sec = sector[e]
+        si sec == 0 { cuerpo[p + 11] = cuerpo[p + 11] + 1 }
+        sino si sec == 1 { cuerpo[p + 12] = cuerpo[p + 12] + 1 }
+        sino {
+          sumarAtomico(consumido, k, 1)
+          si sec == 2 {
+            curio[h] = maximo(0, curio[h] - 4500)
+            civil[p + 7] = minimo(10000, civil[p + 7] + 50)
+          } sino si sec == 3 {
+            aburr[h] = maximo(0, aburr[h] - 4500)
+            animo[p + 5] = minimo(10000, animo[p + 5] + 800)
+            animo[p + 15] = 1
+          } sino {
+            si cuerpo[p + 13] < 3 {
+              cuerpo[p + 13] = cuerpo[p + 13] + 1
+              sumarAtomico(clima, kte * 16 + 14, 1)
+            } sino {
+              animo[p + 11] = minimo(10000, animo[p + 11] + 500)
+            }
+          }
+          fijo rel = civil[p + 5]
+          si rel >= 0 y sec == 4 - rel y animo[p + 8] > 6000 { memo[p + 4] = 1 }
+        }
+        si calidad[e] >= 3 { memo[p] = e - k * nEmp }
+        si azarHilo(s + k, h % nAg, 40 + t % 3) < 0.1 {
+          var est = calidad[e] + entero(piso(azarHilo(s + k, h % nAg, 50) * 3)) - 1
+          si est < 1 { est = 1 }
+          si est > 5 { est = 5 }
+          sumarAtomico(estrellas, e, est * 100)
+          sumarAtomico(resenas, e, 1)
+        }
+      } sino {
+        animo[p + 14] = 1
+        memo[p + 1] = e - k * nEmp
+        memo[p + 2] = 1 + rasgo[p + 8] // 30
+        sumarAtomico(cuenta, k * 48 + 12, 1)
+      }
+    }
+  }
+}
+fn cerrarVentas(h: entero, inv, ventas, ventasHora, ingresosHora, precio, demanda, activa) {
+  si activa[h] == 1 {
+    inv[h] = inv[h] - ventas[h]
+    ventasHora[h] = ventasHora[h] + ventas[h]
+    ingresosHora[h] = ingresosHora[h] + ventas[h] * precio[h]
+  }
+  demanda[h] = 0
+}
+# 3. producir: el trabajo efectivo de la plantilla («fuerza», 100 por trabajador
+#    normal) × la tecnología de su Estado [78] × la cohesión del territorio [42];
+#    de noche un 40 %; las máquinas como en la v2. El agua necesita acuífero [99]; la
+#    comida, estación [91][28], suelo [98], lluvia [93] y que no haya plaga [94]. La
+#    tecnología y el lujo contaminan [97].
+fn producir(h: entero, activa, progreso, fuerza, inv, maquinas, producido, sector, terrEmp, terrP, estado, clima, t: entero, nEmp: entero, nTerr: entero, nFac: entero, dia: entero, ano: entero) {
+  si activa[h] == 1 {
+    fijo k = h // nEmp
+    fijo q = (k * nTerr + terrEmp[h]) * 16
+    var fz = fuerza[h]
+    si (t % dia) * 3 >= dia * 2 { fz = fz * 40 // 100 }
+    fz = fz * estado[(k * nFac + terrP[q]) * 24 + 14] // 100
+    fz = fz * (90 + terrP[q + 15] // 500) // 100
+    fijo sec = sector[h]
+    si sec == 0 {
+      fijo ac = clima[q + 3]
+      si ac < 2000 { fz = fz * ac // 2000 }
+    }
+    si sec == 1 {
+      fijo est = (t % ano) * 4 // ano
+      var cos = 90
+      si est == 1 { cos = 110 }
+      si est == 2 { cos = 140 }
+      si est == 3 { cos = 60 }
+      fz = fz * cos // 100
+      fz = fz * clima[q + 4] // 10000
+      si clima[q + 2] >= 3 { fz = fz // 2 }
+      si clima[q + 7] > 0 { fz = fz * 40 // 100 }
+    }
+    var m = maquinas[h]
+    si m > 20 { m = 20 }
+    progreso[h] = progreso[h] + fz * 15 * (10 + m) // 100       # 15 unidades por hora y trabajador (sin máquinas)
+    fijo u = progreso[h] // 36000
+    progreso[h] = progreso[h] % 36000
+    inv[h] = inv[h] + u
+    sumarAtomico(producido, k, u)
+    si u > 0 {
+      si sec == 0 { sumarAtomico(clima, q + 11, u * 15) }
+      si sec == 1 { sumarAtomico(clima, q + 12, u) }
+      si sec == 2 o sec == 4 { sumarAtomico(clima, q + 13, u * 4) }
+    }
+  }
+}
+# 3b. cada hora, el trabajo efectivo de cada trabajador: energía [15], salud [4],
+#     oficio [22] y estudios [77]; con sueño [3] rinde menos; el preso, el rebelde en
+#     huelga [64] y el enfermo no van. El oficio se aprende trabajando y se pierde a
+#     medias al cambiar de sector.
+fn fuerzaLaboral(h: entero, vivo, empleo, cuerpo, civil, sector, fuerza, nAg: entero, nEmp: entero) {
+  fijo e = empleo[h]
+  si vivo[h] == 1 y e >= 0 {
+    fijo p = h * 16
+    fijo ke = (h // nAg) * nEmp + e
+    fijo sec = sector[ke]
+    si civil[p + 8] != sec {
+      civil[p + 8] = sec
+      civil[p + 9] = civil[p + 9] // 2
+    } sino {
+      civil[p + 9] = minimo(10000, civil[p + 9] + 300 + civil[p + 7] // 30)
+    }
+    si cuerpo[p + 14] == 0 y cuerpo[p + 15] == 0 y cuerpo[p + 10] == 0 {
+      var f = 100 * (50 + cuerpo[p + 4] // 200) // 100
+      f = f * (50 + cuerpo[p + 7] // 200) // 100
+      f = f * (70 + civil[p + 9] // 250) // 100
+      f = f * (90 + civil[p + 7] // 1000) // 100
+      si cuerpo[p + 3] > 8000 { f = f * 70 // 100 }
+      sumarAtomico(fuerza, ke, f)
+    }
+  }
+}
+# 4. cada hora: salarios, como en la v2, y ahora con IMPUESTO [25] para el Estado
+#    del territorio donde vive el trabajador (el egoísta [52] evade si el gobierno
+#    no tiene autoridad [61]). El rebelde [64] está en huelga: ni trabaja ni cobra.
+fn pagarSalarios(h: entero, activa, empleo, saldo, caja, salariosHora, deudaEmp, prestamos, cupo, sinNomina, trab, cuerpo, civil, rasgo, terrP, estado, cuenta, nAg: entero, nEmp: entero, nBanco: entero, nTerr: entero, nFac: entero, salario: entero, credito: entero) {
+  si activa[h] == 1 {
+    fijo k = h // nEmp
+    fijo e = h % nEmp
+    fijo kb = k * nBanco + e % nBanco
+    fijo base = k * nAg
+    fijo nomina = trab[h] * salario
+    si credito == 1 y caja[h] < nomina {
+      fijo falta = nomina - caja[h]
+      fijo c = cupo[kb]
+      si falta <= c {
+        caja[h] = caja[h] + falta
+        deudaEmp[h] = deudaEmp[h] + falta
+        sumarAtomico(prestamos, kb, falta)
+        sumarAtomico(cupo, kb, 0 - falta)
+      }
+    }
+    var despedidos = 0
+    para i en rango(nAg) {
+      fijo w = base + i
+      si empleo[w] == e y cuerpo[w * 16 + 15] == 0 {
+        si caja[h] >= salario {
+          caja[h] = caja[h] - salario
+          fijo r = (k * nFac + terrP[(k * nTerr + civil[w * 16]) * 16]) * 24
+          var imp = salario * estado[r + 3] // 100
+          si rasgo[w * 16 + 2] > 70 y estado[r + 2] < 5000 {
+            imp = 0
+            sumarAtomico(cuenta, k * 48 + 37, 1)
+          }
+          saldo[w] = saldo[w] + salario - imp
+          si imp > 0 {
+            sumarAtomico(estado, r, imp)
+            sumarAtomico(estado, r + 17, imp)
+          }
+          salariosHora[h] = salariosHora[h] + salario
+        } sino {
+          empleo[w] = -1
+          despedidos = despedidos + 1
+        }
+      }
+    }
+    si despedidos > 0 { sinNomina[h] = sinNomina[h] + 1 } sino { sinNomina[h] = 0 }
+  }
+}
+fn sumarVentasSector(h: entero, activa, sector, ventasHora, ventasSector, nEmp: entero, nSector: entero) {
+  si activa[h] == 1 { sumarAtomico(ventasSector, (h // nEmp) * nSector + sector[h], ventasHora[h]) }
+}
+# 5. cada hora: como la v2, y el MONOPOLIO [30]: la que vende más de la mitad de su
+#    sector sube el precio un 4 % por hora, salvo que el Estado de su territorio
+#    tenga ley antimonopolio [62].
+fn cerrarHora(h: entero, activa, ventasHora, ingresosHora, salariosHora, ganHora, ganMax, horasMalas, inv, precio, trab, caja, deudaEmp, prestamos, nacida, sector, terrEmp, terrP, estado, ventasSector, cuenta, t: entero, gracia: entero, nEmp: entero, nBanco: entero, nTerr: entero, nFac: entero, nSector: entero, salario: entero) {
+  si activa[h] == 1 {
+    fijo k = h // nEmp
+    var v = ventasHora[h]
+    si v < 1 { v = 1 }
+    ganHora[h] = ingresosHora[h] - salariosHora[h]
+    si ganHora[h] > ganMax[h] { ganMax[h] = ganHora[h] }
+    si ingresosHora[h] < salariosHora[h] { precio[h] = precio[h] * 103 // 100 + 1 }
+    sino si inv[h] > 2 * v {
+      precio[h] = precio[h] * 98 // 100
+      si precio[h] < 100 { precio[h] = 100 }
+    }
+    sino si inv[h] < v // 2 { precio[h] = precio[h] * 102 // 100 + 1 }
+    fijo vs = ventasSector[k * nSector + sector[h]]
+    si vs > 0 y ventasHora[h] * 2 > vs {
+      si estado[(k * nFac + terrP[(k * nTerr + terrEmp[h]) * 16]) * 24 + 5] == 0 {
+        precio[h] = precio[h] * 104 // 100 + 1
+        sumarAtomico(cuenta, k * 48 + 13, 1)
+      }
+    }
+    si t - nacida[h] >= gracia {
+      si ganMax[h] > 0 y ganHora[h] * 100 <= ganMax[h] { horasMalas[h] = horasMalas[h] + 1 } sino { horasMalas[h] = 0 }
+    }
+    fijo d = deudaEmp[h]
+    si d > 0 {
+      fijo reserva = trab[h] * salario * 2
+      var pago = caja[h] - reserva
+      si pago > d { pago = d }
+      si pago > 0 {
+        caja[h] = caja[h] - pago
+        deudaEmp[h] = d - pago
+        sumarAtomico(prestamos, (h // nEmp) * nBanco + (h % nEmp) % nBanco, 0 - pago)
+      }
+    }
+    ventasHora[h] = 0
+    ingresosHora[h] = 0
+    salariosHora[h] = 0
+  }
+}
+# 6. recontar: el paro es de los adultos vivos (16 a 64) que no trabajan, no son
+#    funcionarios y no están presos
+fn recontar(h: entero, empleo, vivo, cuerpo, civil, trab, paro, nAg: entero, nEmp: entero) {
+  fijo k = h // nAg
+  fijo e = empleo[h]
+  fijo p = h * 16
+  si e >= 0 { sumarAtomico(trab, k * nEmp + e, 1) }
+  sino si vivo[h] == 1 y cuerpo[p] >= 16 y cuerpo[p] < 65 y civil[p + 10] == 0 y cuerpo[p + 14] == 0 { sumarAtomico(paro, k, 1) }
+}
+# 7. contratar: como la v2, pero solo adultos sanos y libres, en una empresa a la
+#    que pueda ir [29], y ahora con MERCADO DE TRABAJO: de cuatro empresas al azar
+#    elige la que más manos necesita (menos existencias por trabajador), así el
+#    trabajo va a donde falta lo que se vende. El que trabaja en una empresa con el
+#    almacén lleno (más de 20 unidades por trabajador) se va con probabilidad 1/10 a
+#    buscar otra. Al excluido [41] lo rechazan la mitad de las veces. Las plantillas
+#    se leen de una foto (trab0): así nadie decide mirando lo que otro hilo cambia.
+fn contratar(h: entero, empleo, vivo, cuerpo, civil, animo, activa, caja, trab, trab0, inv, terrEmp, terrP, t: entero, s: entero, nAg: entero, nEmp: entero, nTerr: entero, salario: entero) {
+  fijo p = h * 16
+  fijo ed = cuerpo[p]
+  fijo k = h // nAg
+  si vivo[h] == 1 y empleo[h] >= 0 {
+    fijo ke0 = k * nEmp + empleo[h]
+    si inv[ke0] > 20 * maximo(1, trab0[ke0]) y azarHilo(s + k, h % nAg, 59 + t // 3600 % 13) < 0.1 {
+      empleo[h] = -1
+      sumarAtomico(trab, ke0, 0 - 1)
+    }
+  }
+  si vivo[h] == 1 y empleo[h] < 0 y ed >= 16 y ed < 65 y cuerpo[p + 14] == 0 y cuerpo[p + 15] == 0 y civil[p + 10] == 0 y cuerpo[p + 10] == 0 {
+    fijo ta = civil[p]
+    var mejor = -1
+    var mejorR = 0
+    para intento en rango(4) {
+      fijo e = entero(piso(azarHilo(s + k, h % nAg, 60 + intento + t % 13) * nEmp))
+      fijo ke = k * nEmp + e
+      si activa[ke] == 1 y caja[ke] > (trab0[ke] + 1) * salario * 4 {
+        fijo te = terrEmp[ke]
+        var llega = 0
+        si te == ta { llega = 1 }
+        si te == (ta + 1) % nTerr y terrP[(k * nTerr + ta) * 16 + 1] >= 30 { llega = 1 }
+        si te == (ta + nTerr - 1) % nTerr y terrP[(k * nTerr + te) * 16 + 1] >= 30 { llega = 1 }
+        si llega == 1 {
+          fijo ratio = maximo(0, inv[ke]) * 100 // (trab0[ke] + 1)
+          si mejor < 0 o ratio < mejorR {
+            mejor = e
+            mejorR = entero(ratio)
+          }
+        }
+      }
+    }
+    si mejor >= 0 {
+      var acepta = 1
+      si animo[p + 12] == 1 y azarHilo(s + k, h % nAg, 70 + t % 13) < 0.5 { acepta = 0 }
+      si acepta == 1 {
+        empleo[h] = mejor
+        sumarAtomico(trab, k * nEmp + mejor, 1)
+      }
+    }
+  }
+}
+
+# ─────────────────────────────────────────────── de la v2, sin cambios
+# 5b. máquinas: con caja de sobra (4 nóminas) y sin deuda, compra una máquina a una
+#     empresa de tecnología con inventario; vale 20 unidades de su producto. El
+#     dinero y el bien se mueven con atómicos (la tecnológica puede quedar en
+#     negativo de inventario: pedido pendiente).
+fn invertirMaquinas(h: entero, activa, sector, caja, deudaEmp, trab, inv, precio, maquinas, ventasHora, ingresosHora, enMaquinas, t: entero, s: entero, nEmp: entero, salario: entero) {
+  si activa[h] == 1 y deudaEmp[h] == 0 y maquinas[h] < 20 {
+    fijo k = h // nEmp
+    fijo e = h % nEmp
+    fijo reserva = trab[h] * salario * 4
+    var intento = 0
+    var hecho = 0
+    mientras intento < 4 y hecho == 0 {
+      fijo te = k * nEmp + entero(piso(azarHilo(s + k, 6000 + e, 90 + intento + t % 7) * nEmp))
+      si te != h y activa[te] == 1 y sector[te] == 2 y inv[te] > 0 {
+        fijo p = precio[te] * 20
+        si caja[h] >= reserva + p {
+          # la propia caja también con atómico: una tecnológica puede estar comprando
+          # una máquina mientras otra le paga la suya (en la T4 salió dinero fantasma)
+          sumarAtomico(caja, h, 0 - p)
+          sumarAtomico(caja, te, p)
+          sumarAtomico(inv, te, 0 - 1)
+          sumarAtomico(ventasHora, te, 1)
+          sumarAtomico(ingresosHora, te, p)
+          sumarAtomico(enMaquinas, k, 1)
+          maquinas[h] = maquinas[h] + 1
+          hecho = 1
+        }
+      }
+      intento = intento + 1
+    }
+  }
+}
+fn aCero(h: entero, a) { a[h] = 0 }
+# 8. dividendos cada 10 min: la mitad de la ganancia de la hora, por acción en circulación
+fn dividendos(h: entero, activa, caja, ganHora, tenencia, trab, divPorAcc, deudaEmp, nEmp: entero, ten: entero, acc: entero, salario: entero) {
+  divPorAcc[h] = 0
+  si activa[h] == 1 y deudaEmp[h] == 0 {
+    fijo circulan = acc - tenencia[h * ten]
+    fijo reserva = trab[h] * salario * 2
+    var reparto = ganHora[h] // 12          # la ganancia por hora, prorrateada a 10 min, mitad
+    si reparto > caja[h] - reserva { reparto = caja[h] - reserva }
+    si reparto > 0 y circulan > 0 {
+      fijo porAcc = reparto // circulan
+      si porAcc > 0 {
+        divPorAcc[h] = porAcc
+        caja[h] = caja[h] - porAcc * circulan
+      }
+    }
+  }
+}
+fn cobrarDividendos(h: entero, saldoInv, tenencia, divPorAcc, nInv: entero, nEmp: entero, ten: entero) {
+  fijo k = h // nInv
+  fijo q = h % nInv
+  var total = 0
+  para e en rango(nEmp) {
+    fijo ke = k * nEmp + e
+    total = total + tenencia[ke * ten + 1 + q] * divPorAcc[ke]
+  }
+  saldoInv[h] = saldoInv[h] + total
+}
+fn cobrarDividendosClub(h: entero, saldoClub, clubExiste, tenencia, divPorAcc, nInv: entero, nEmp: entero, ten: entero) {
+  si clubExiste[h] == 1 {
+    fijo k = h // nEmp
+    fijo c = h % nEmp
+    var total = 0
+    para e en rango(nEmp) {
+      fijo ke = k * nEmp + e
+      total = total + tenencia[ke * ten + 1 + nInv + c] * divPorAcc[ke]
+    }
+    saldoClub[h] = saldoClub[h] + total
+  }
+}
+# 9. quiebra: dos horas malas seguidas, o dos horas sin nómina. Paga al banco con la
+#    caja (el resto se castiga), destruye inventario y máquinas, reparte lo que
+#    queda por acción y cancela las acciones. Un hilo por empresa.
+fn quebrar(h: entero, activa, horasMalas, sinNomina, inv, maquinas, destruido, enMaquinas, caja, deudaEmp, prestamos, capBanco, castigos, tenencia, divPorAcc, precioAcc, trab, quiebras, accVivas, nEmp: entero, nBanco: entero, ten: entero, acc: entero) {
+  divPorAcc[h] = 0
+  si activa[h] == 1 y (horasMalas[h] >= 2 o sinNomina[h] >= 2) {
+    fijo k = h // nEmp
+    fijo kb = k * nBanco + (h % nEmp) % nBanco
+    activa[h] = 0
+    sumarAtomico(destruido, k, inv[h] + maquinas[h])
+    sumarAtomico(enMaquinas, k, 0 - maquinas[h])
+    inv[h] = 0
+    maquinas[h] = 0
+    # primero el banco
+    fijo d: entero = deudaEmp[h]
+    si d > 0 {
+      var pago = d
+      si pago > caja[h] { pago = caja[h] }
+      si pago < 0 { pago = 0 }
+      caja[h] = caja[h] - pago
+      sumarAtomico(prestamos, kb, 0 - pago)
+      fijo resto = d - pago
+      si resto > 0 {
+        # castigo: el banco pierde el préstamo contra su propio capital
+        sumarAtomico(prestamos, kb, 0 - resto)
+        sumarAtomico(capBanco, kb, 0 - resto)
+        sumarAtomico(castigos, k, resto)
+      }
+      deudaEmp[h] = 0
+    }
+    fijo circulan = acc - tenencia[h * ten]
+    si circulan > 0 y caja[h] > 0 {
+      divPorAcc[h] = caja[h] // circulan           # liquidación: todo lo que hay
+      caja[h] = caja[h] - divPorAcc[h] * circulan
+    }
+    # el residuo no se destruye: se queda en la cuenta de la empresa cerrada
+    precioAcc[h] = 0
+    sumarAtomico(quiebras, k, 1)
+    sumarAtomico(accVivas, k, 0 - acc)
+    trab[h] = 0
+  }
+}
+fn cancelarAcciones(h: entero, tenencia, activa, precioAcc, ten: entero) {
+  # h recorre economías × empresas × tenedores
+  fijo ke = h // ten
+  si activa[ke] == 0 y precioAcc[ke] == 0 { tenencia[h] = 0 }
+}
+fn despedir(h: entero, empleo, activa, nAg: entero, nEmp: entero) {
+  fijo e = empleo[h]
+  si e >= 0 {
+    si activa[(h // nAg) * nEmp + e] == 0 { empleo[h] = -1 }
+  }
+}
+# 10a. fundar entre inversores: los N_FUNDADORES más ricos ponen hasta la mitad de su
+#      dinero; si llegan al capital y «quieren» (una de cada tres horas), fundan en el
+#      sector con más ganancia y se reparten las acciones a prorrata. Un hilo por economía.
+fn fundarInversores(k: entero, saldoInv, activa, sector, ganHora, caja, precioAcc, nacida, fundadaPor, tenencia, fundadas, accVivas, aporte, t: entero, s: entero, nInv: entero, nEmp: entero, nIni: entero, nSector: entero, ten: entero, acc: entero, fundarCon: entero, nFund: entero) {
+  var juntan = 0
+  para q en rango(nInv) { aporte[k * nInv + q] = 0 }
+  para ronda en rango(nFund) {
+    var rico = -1
+    var masRico = 0
+    para q en rango(nInv) {
+      fijo hq = k * nInv + q
+      si aporte[hq] == 0 y saldoInv[hq] > masRico {
+        masRico = saldoInv[hq]
+        rico = hq
+      }
+    }
+    si rico >= 0 {
+      aporte[rico] = masRico // 2
+      juntan = juntan + masRico // 2
+    }
+  }
+  fijo voluntad = azarHilo(s + k, 4000 + t // 3600, 71)
+  si juntan >= fundarCon y voluntad < 0.34 {
+    var hueco = -1
+    para e en rango(nEmp) {
+      fijo ke = k * nEmp + e
+      si hueco < 0 y e >= nIni y activa[ke] == 0 y nacida[ke] == 0 y precioAcc[ke] == 0 { hueco = ke }
+    }
+    var mejorS = -1
+    var mejorG = 0
+    para sec en rango(nSector) {
+      var g = 0
+      var n = 0
+      para e en rango(nEmp) {
+        fijo ke = k * nEmp + e
+        si activa[ke] == 1 y sector[ke] == sec {
+          g = g + ganHora[ke]
+          n = n + 1
+        }
+      }
+      var media = 1000000000
+      si n > 0 { media = g // n }
+      si media > mejorG {
+        mejorG = media
+        mejorS = sec
+      }
+    }
+    si hueco >= 0 y mejorS >= 0 {
+      var puesto = 0
+      var repartidas = 0
+      para q en rango(nInv) {
+        fijo hq = k * nInv + q
+        si aporte[hq] > 0 {
+          fijo ap: entero = aporte[hq]
+          var pone: entero = ap * fundarCon // juntan
+          si puesto + pone > fundarCon { pone = fundarCon - puesto }
+          saldoInv[hq] = saldoInv[hq] - pone
+          puesto = puesto + pone
+          fijo recibe: entero = pone * acc // fundarCon
+          tenencia[hueco * ten + 1 + q] = recibe
+          repartidas = repartidas + recibe
+          aporte[hq] = pone
+        }
+      }
+      para q en rango(nInv) {
+        fijo hq = k * nInv + q
+        si aporte[hq] > 0 y puesto < fundarCon {
+          saldoInv[hq] = saldoInv[hq] - (fundarCon - puesto)
+          puesto = fundarCon
+        }
+      }
+      tenencia[hueco * ten] = acc - repartidas      # las acciones sin dueño quedan en tesorería
+      activa[hueco] = 1
+      sector[hueco] = mejorS
+      caja[hueco] = fundarCon
+      nacida[hueco] = t                           # «nacer» termina de armarla
+      precioAcc[hueco] = fundarCon // acc
+      fundadaPor[hueco] = 1
+      fundadas[k] = fundadas[k] + 1
+      accVivas[k] = accVivas[k] + acc
+    }
+  }
+}
+# 10b. fundar por un club: el primer club con el efectivo, o con acciones por 7/5 del
+#      capital y un banco con cupo (pide el capital contra ellas). Todas las acciones
+#      son del club. Un hilo por economía, una fundación por hora como mucho.
+fn fundarClub(k: entero, clubExiste, saldoClub, deudaClub, carteraClub, cupo, prestamos, activa, sector, ganHora, caja, precioAcc, nacida, fundadaPor, tenencia, fundadas, fundadasClub, clubFundadas, accVivas, t: entero, s: entero, nInv: entero, nEmp: entero, nIni: entero, nSector: entero, nBanco: entero, ten: entero, acc: entero, fundarCon: entero, fundarAcc: entero, credito: entero) {
+  var quien = -1
+  var conPrestamo = 0
+  para c en rango(nEmp) {
+    fijo kc = k * nEmp + c
+    si quien < 0 y clubExiste[kc] == 1 {
+      si saldoClub[kc] >= fundarCon { quien = kc }
+      sino si credito == 1 y deudaClub[kc] == 0 y carteraClub[kc] >= fundarAcc {
+        fijo kb = k * nBanco + c % nBanco
+        si cupo[kb] >= fundarCon {
+          quien = kc
+          conPrestamo = 1
+        }
+      }
+    }
+  }
+  si quien >= 0 {
+    var hueco = -1
+    para e en rango(nEmp) {
+      fijo ke = k * nEmp + e
+      si hueco < 0 y e >= nIni y activa[ke] == 0 y nacida[ke] == 0 y precioAcc[ke] == 0 { hueco = ke }
+    }
+    var mejorS = -1
+    var mejorG = 0
+    para sec en rango(nSector) {
+      var g = 0
+      var n = 0
+      para e en rango(nEmp) {
+        fijo ke = k * nEmp + e
+        si activa[ke] == 1 y sector[ke] == sec {
+          g = g + ganHora[ke]
+          n = n + 1
+        }
+      }
+      var media = 1000000000
+      si n > 0 { media = g // n }
+      si media > mejorG {
+        mejorG = media
+        mejorS = sec
+      }
+    }
+    si hueco >= 0 y mejorS >= 0 {
+      fijo c = quien % nEmp
+      si conPrestamo == 1 {
+        fijo kb = k * nBanco + c % nBanco
+        saldoClub[quien] = saldoClub[quien] + fundarCon
+        deudaClub[quien] = deudaClub[quien] + fundarCon
+        prestamos[kb] = prestamos[kb] + fundarCon
+        cupo[kb] = cupo[kb] - fundarCon
+      }
+      saldoClub[quien] = saldoClub[quien] - fundarCon
+      tenencia[hueco * ten + 1 + nInv + c] = acc
+      activa[hueco] = 1
+      sector[hueco] = mejorS
+      caja[hueco] = fundarCon
+      nacida[hueco] = t                           # «nacer» termina de armarla
+      precioAcc[hueco] = fundarCon // acc
+      fundadaPor[hueco] = 2
+      fundadas[k] = fundadas[k] + 1
+      fundadasClub[k] = fundadasClub[k] + 1
+      clubFundadas[quien] = clubFundadas[quien] + 1
+      accVivas[k] = accVivas[k] + acc
+    }
+  }
+}
+# 11. bolsa: subasta de precio único por empresa, UN HILO POR EMPRESA (secuencial
+#     dentro, paralela entre empresas y economías). Las empresas de una economía
+#     tocan a los MISMOS inversores y clubes a la vez, así que su dinero se mueve
+#     con sumarAtomico. Las acciones de cada empresa son solo de su hilo.
+#     Tenedores: inversores (valor / tendencia / azar, con margen y llamadas) y
+#     clubes (compran su objetivo, venden las que pierden). El precio se mueve con
+#     el desequilibrio y las acciones cambian de mano al precio de cierre.
+fn bolsa(h: entero, activa, precioAcc, precioAccH, tenencia, saldoInv, deudaInv, carteraInv, forzadoInv, divPorAcc, ganHora, caja, trab, clubExiste, saldoClub, objetivoClub, forzadoClub, cupo, sesgo, nActivas, t: entero, s: entero, nEmp: entero, nInv: entero, nBanco: entero, ten: entero, acc: entero, salario: entero, margen: entero, credito: entero) {
+  si activa[h] == 1 {
+    fijo k = h // nEmp
+    fijo p: entero = precioAcc[h]
+    fijo pH: entero = precioAccH[h]
+    # valor fundamental: caja por acción, menos los salarios que debe esta hora,
+    # más 40 horas de la ganancia actual
+    fijo cj: entero = caja[h]
+    fijo gh: entero = ganHora[h]
+    fijo tr: entero = trab[h]
+    var valor: entero = (cj - tr * salario + gh * 40) // acc
+    si valor < 1 { valor = 1 }
+    fijo sg: entero = sesgo[k]
+    fijo umbral = 0.5 + sg / 100.0          # euforia: más compran al azar; pánico: menos
+    # el presupuesto de un inversor se reparte entre todas las empresas activas: en
+    # cada subasta se juega 1–5 % de su dinero dividido por el número de empresas
+    var nAct: entero = nActivas[k]
+    si nAct < 1 { nAct = 1 }
+    fijo r3 = azarHilo(s + k, 5500 + h % nEmp, 120 + t % 17)   # ¿sesión en la que actúan los clubes?
+    var compras = 0
+    var ventas = 0
+    fijo tes: entero = tenencia[h * ten]
+    var ofertaTes: entero = 0
+    # ── inversores: lado y cantidad
+    para q en rango(nInv) {
+      fijo hq = k * nInv + q
+      fijo r = azarHilo(s + k, 5000 + h % nEmp + 97 * q, 80 + t % 17)
+      fijo r2 = azarHilo(s + k, 5000 + h % nEmp + 97 * q, 100 + t % 17)
+      fijo estilo = q % 3
+      var lado = -1
+      si forzadoInv[hq] == 1 { lado = 2 }
+      sino si estilo == 0 {
+        si p * 10 < valor * 9 { lado = 0 } sino si p * 10 > valor * 11 { lado = 1 }
+      } sino si estilo == 1 {
+        # sigue la tendencia del precio: compra si subió más de un 2 % desde el
+        # cierre de la hora anterior, vende si bajó más de un 2 %; actúa 1 de
+        # cada 6 sesiones. Son los que inflan burbujas y las pinchan.
+        si r2 < 0.17 y pH > 0 {
+          si p * 100 > pH * 102 { lado = 0 } sino si p * 100 < pH * 98 { lado = 1 }
+        }
+      } sino {
+        si r < umbral { lado = 0 } sino { lado = 1 }
+      }
+      si lado == 0 {
+        fijo dinero: entero = saldoInv[hq]
+        var presupuesto = dinero
+        si credito == 1 {
+          # a margen: hasta el 50 % de la cartera menos lo que ya debe, si su banco tiene cupo
+          fijo kb = k * nBanco + q % nBanco
+          fijo cart: entero = carteraInv[hq]
+          fijo deu: entero = deudaInv[hq]
+          var cred = cart * margen // 100 - deu
+          si cred < 0 { cred = 0 }
+          si cupo[kb] <= 0 { cred = 0 }
+          presupuesto = dinero + cred
+        }
+        var pp = p
+        si pp < 1 { pp = 1 }
+        si presupuesto > 0 { compras = compras + (presupuesto * (1 + entero(piso(r * 5))) // 100 // nAct) // pp }
+      } sino si lado == 1 {
+        fijo tengo: entero = tenencia[h * ten + 1 + q]
+        ventas = ventas + tengo * (1 + entero(piso(r * 5))) // 100
+      } sino si lado == 2 {
+        ventas = ventas + tenencia[h * ten + 1 + q]       # llamada de margen: todo
+      }
+    }
+    # ── clubes: compran su objetivo con el 10 % del efectivo, venden el 5 % de las que pierden
+    para c en rango(nEmp) {
+      fijo kc = k * nEmp + c
+      si clubExiste[kc] == 1 {
+        fijo tengoC: entero = tenencia[h * ten + 1 + nInv + c]
+        si forzadoClub[kc] == 1 { ventas = ventas + tengoC }
+        sino si r3 < 0.17 {
+          si objetivoClub[kc] == h {
+            fijo ef: entero = saldoClub[kc]
+            var pp = p
+            si pp < 1 { pp = 1 }
+            si ef > 0 { compras = compras + (ef // 20) // pp }
+          } sino si gh < 0 y tengoC > 0 {
+            ventas = ventas + tengoC // 20
+          }
+        }
+      }
+    }
+    # la tesorería sale a vender solo cuando hay más compras que ventas, y cubre
+    # como mucho la mitad del exceso: así la emisión frena las subidas sin hundir
+    # el precio cuando nadie compra
+    si compras > ventas {
+      ofertaTes = (compras - ventas) // 2
+      si ofertaTes > tes // 50 { ofertaTes = tes // 50 }
+      si ofertaTes > tes { ofertaTes = tes }
+      ventas = ventas + ofertaTes
+    }
+    # precio nuevo según el desequilibrio, acotado al ±0,5 % por sesión (60 sesiones
+    # por hora: hasta ±35 % en una hora si todos empujan al mismo lado)
+    var pNuevo = p
+    si compras + ventas > 0 {
+      fijo deseq = (compras - ventas) * 100 // (compras + ventas)   # -100..100
+      pNuevo = p + p * deseq // 20000
+      si pNuevo < 1 { pNuevo = 1 }
+    }
+    var cruzan = compras
+    si ventas < cruzan { cruzan = ventas }
+    si cruzan > 0 {
+      # PRIMERO los compradores: cada uno toma su parte de lo cruzado en proporción a
+      # lo que quería, mientras le alcance el presupuesto, y paga. DESPUÉS los
+      # vendedores entregan exactamente lo comprado: tesorería primero, luego
+      # inversores y clubes. Así nunca se paga una acción que nadie recibió (antes la
+      # tesorería recompraba lo sobrante y su caja podía quedar en negativo).
+      var porRepartir = cruzan
+      var cmp = compras
+      si cmp < 1 { cmp = 1 }
+      para q en rango(nInv) {
+        fijo hq = k * nInv + q
+        fijo r = azarHilo(s + k, 5000 + h % nEmp + 97 * q, 80 + t % 17)
+        fijo r2 = azarHilo(s + k, 5000 + h % nEmp + 97 * q, 100 + t % 17)
+        fijo estilo = q % 3
+        var compra = 0
+        si forzadoInv[hq] == 0 {
+          si estilo == 0 y p * 10 < valor * 9 { compra = 1 }
+          si estilo == 1 y r2 < 0.17 y pH > 0 y p * 100 > pH * 102 { compra = 1 }
+          si estilo == 2 y r < umbral { compra = 1 }
+        }
+        si compra == 1 y porRepartir > 0 {
+          var pp = p
+          si pp < 1 { pp = 1 }
+          fijo dinero: entero = saldoInv[hq]
+          var presupuesto = dinero
+          si credito == 1 {
+            fijo kb = k * nBanco + q % nBanco
+            fijo cart: entero = carteraInv[hq]
+            fijo deu: entero = deudaInv[hq]
+            var cred = cart * margen // 100 - deu
+            si cred < 0 { cred = 0 }
+            si cupo[kb] <= 0 { cred = 0 }
+            presupuesto = dinero + cred
+          }
+          si presupuesto > 0 {
+            fijo quiere: entero = (presupuesto * (1 + entero(piso(r * 5))) // 100 // nAct) // pp
+            var c = quiere * cruzan // cmp
+            si c > porRepartir { c = porRepartir }
+            si c * pNuevo > presupuesto { c = presupuesto // pNuevo }
+            si c > 0 {
+              tenencia[h * ten + 1 + q] = tenencia[h * ten + 1 + q] + c
+              sumarAtomico(saldoInv, hq, 0 - c * pNuevo)   # si queda en negativo es un sobregiro: deuda, al cierre de la sesión
+              porRepartir = porRepartir - c
+            }
+          }
+        }
+      }
+      para c en rango(nEmp) {
+        fijo kc = k * nEmp + c
+        si clubExiste[kc] == 1 y forzadoClub[kc] == 0 y r3 < 0.17 y objetivoClub[kc] == h y porRepartir > 0 {
+          fijo ef: entero = saldoClub[kc]
+          var pp = p
+          si pp < 1 { pp = 1 }
+          si ef > 0 {
+            fijo quiere: entero = (ef // 20) // pp
+            var cc = quiere * cruzan // cmp
+            si cc > porRepartir { cc = porRepartir }
+            si cc * pNuevo > ef { cc = ef // pNuevo }
+            si cc > 0 {
+              tenencia[h * ten + 1 + nInv + c] = tenencia[h * ten + 1 + nInv + c] + cc
+              sumarAtomico(saldoClub, kc, 0 - cc * pNuevo)
+              porRepartir = porRepartir - cc
+            }
+          }
+        }
+      }
+      # lo que de verdad se compró es lo que los vendedores entregan
+      var quedan = cruzan - porRepartir
+      var deTes = ofertaTes
+      si quedan < deTes { deTes = quedan }
+      tenencia[h * ten] = tenencia[h * ten] - deTes
+      caja[h] = caja[h] + deTes * pNuevo
+      quedan = quedan - deTes
+      para q en rango(nInv) {
+        fijo hq = k * nInv + q
+        fijo r = azarHilo(s + k, 5000 + h % nEmp + 97 * q, 80 + t % 17)
+        fijo r2 = azarHilo(s + k, 5000 + h % nEmp + 97 * q, 100 + t % 17)
+        fijo estilo = q % 3
+        var vende = 0
+        si forzadoInv[hq] == 1 { vende = 2 }
+        sino {
+          si estilo == 0 y p * 10 > valor * 11 { vende = 1 }
+          si estilo == 1 y r2 < 0.17 y pH > 0 y p * 100 < pH * 98 { vende = 1 }
+          si estilo == 2 y r >= umbral { vende = 1 }
+        }
+        si vende > 0 y quedan > 0 {
+          fijo tengo: entero = tenencia[h * ten + 1 + q]
+          var v: entero = tengo
+          si vende == 1 { v = tengo * (1 + entero(piso(r * 5))) // 100 }
+          si v > quedan { v = quedan }
+          si v > 0 {
+            tenencia[h * ten + 1 + q] = tengo - v
+            sumarAtomico(saldoInv, hq, v * pNuevo)
+            quedan = quedan - v
+          }
+        }
+      }
+      para c en rango(nEmp) {
+        fijo kc = k * nEmp + c
+        si clubExiste[kc] == 1 y quedan > 0 {
+          fijo tengoC: entero = tenencia[h * ten + 1 + nInv + c]
+          var v: entero = 0
+          si forzadoClub[kc] == 1 { v = tengoC }
+          sino si r3 < 0.17 y objetivoClub[kc] != h y gh < 0 { v = tengoC // 20 }
+          si v > quedan { v = quedan }
+          si v > 0 {
+            tenencia[h * ten + 1 + nInv + c] = tengoC - v
+            sumarAtomico(saldoClub, kc, v * pNuevo)
+            quedan = quedan - v
+          }
+        }
+      }
+      # no debería quedar nada (los vendedores ofrecieron al menos lo cruzado); si
+      # queda, lo entrega la tesorería y la invariante de acciones lo delataría
+      si quedan > 0 {
+        tenencia[h * ten] = tenencia[h * ten] - quedan
+        caja[h] = caja[h] + quedan * pNuevo
+      }
+    }
+    precioAcc[h] = pNuevo
+  }
+}
+# 11b. tras la sesión: un saldo negativo es un sobregiro y se convierte en deuda con
+#      el banco (crea el depósito que faltaba). Un hilo por inversor.
+fn sobregirar(h: entero, saldoInv, deudaInv, prestamos, sobregiros, nInv: entero, nBanco: entero) {
+  fijo sal: entero = saldoInv[h]
+  si sal < 0 {
+    fijo k = h // nInv
+    fijo kb = k * nBanco + (h % nInv) % nBanco
+    deudaInv[h] = deudaInv[h] - sal
+    sumarAtomico(prestamos, kb, 0 - sal)
+    sumarAtomico(sobregiros, k, 1)
+    saldoInv[h] = 0
+  }
+}
+fn sobregirarClub(h: entero, saldoClub, deudaClub, prestamos, sobregiros, clubExiste, nEmp: entero, nBanco: entero) {
+  fijo sal: entero = saldoClub[h]
+  si clubExiste[h] == 1 y sal < 0 {
+    fijo k = h // nEmp
+    fijo kb = k * nBanco + (h % nEmp) % nBanco
+    deudaClub[h] = deudaClub[h] - sal
+    sumarAtomico(prestamos, kb, 0 - sal)
+    sumarAtomico(sobregiros, k, 1)
+    saldoClub[h] = 0
+  }
+}
+# 11c. cada hora los inversores CONSUMEN: gastan hasta el 5 % de su efectivo en una
+#      empresa de lujo (sector 4) o de ocio (3) con inventario. Así el dinero de los
+#      dividendos vuelve a la economía real (cajas → salarios → compradores).
+fn consumirInv(h: entero, saldoInv, activa, sector, inv, caja, precio, ventasHora, ingresosHora, consumido, t: entero, s: entero, nInv: entero, nEmp: entero) {
+  fijo k = h // nInv
+  fijo q = h % nInv
+  fijo sal: entero = saldoInv[h]
+  si sal > 0 {
+    var intento = 0
+    var hecho = 0
+    mientras intento < 4 y hecho == 0 {
+      fijo e = k * nEmp + entero(piso(azarHilo(s + k, 7000 + q, 130 + intento + t // 3600 % 11) * nEmp))
+      si activa[e] == 1 y sector[e] >= 3 y inv[e] > 0 {
+        fijo pr: entero = precio[e]
+        var u = (sal // 20) // pr
+        si u > 50 { u = 50 }
+        si u > 0 {
+          saldoInv[h] = sal - u * pr
+          sumarAtomico(caja, e, u * pr)
+          sumarAtomico(inv, e, 0 - u)
+          sumarAtomico(ventasHora, e, u)
+          sumarAtomico(ingresosHora, e, u * pr)
+          sumarAtomico(consumido, k, u)
+          hecho = 1
+        }
+      }
+      intento = intento + 1
+    }
+  }
+}
+# 12. cada hora, los deudores: valoran su cartera, pagan intereses (0,2 %) y deuda con
+#     el efectivo, y si la deuda pasa el 70 % de la cartera —o su banco está en crisis
+#     de liquidez— quedan en llamada de margen (venden todo en la próxima sesión). El
+#     que ya no tiene nada y debe: el banco castiga el préstamo contra su capital.
+fn cerrarDeudorInv(h: entero, saldoInv, deudaInv, carteraInv, forzadoInv, tenencia, precioAcc, activa, prestamos, capBanco, reservasB, llamadas, castigos, nInv: entero, nEmp: entero, nBanco: entero, ten: entero, interes: entero, llamada: entero) {
+  fijo k = h // nInv
+  fijo q = h % nInv
+  fijo kb = k * nBanco + q % nBanco
+  var cart = 0
+  para e en rango(nEmp) {
+    fijo ke = k * nEmp + e
+    si activa[ke] == 1 { cart = cart + tenencia[ke * ten + 1 + q] * precioAcc[ke] }
+  }
+  carteraInv[h] = cart
+  forzadoInv[h] = 0
+  fijo d: entero = deudaInv[h]
+  si d > 0 {
+    # intereses: se pagan del efectivo o se suman a la deuda (el banco se los acredita)
+    fijo i = d * interes // 1000
+    si saldoInv[h] >= i {
+      saldoInv[h] = saldoInv[h] - i
+      sumarAtomico(capBanco, kb, i)
+    } sino {
+      deudaInv[h] = deudaInv[h] + i
+      sumarAtomico(prestamos, kb, i)
+      sumarAtomico(capBanco, kb, i)
+    }
+    # paga deuda con la mitad del efectivo
+    fijo salI: entero = saldoInv[h]
+    var pago: entero = salI // 2
+    si pago > deudaInv[h] { pago = deudaInv[h] }
+    si pago > 0 {
+      saldoInv[h] = saldoInv[h] - pago
+      deudaInv[h] = deudaInv[h] - pago
+      sumarAtomico(prestamos, kb, 0 - pago)
+    }
+    fijo d2: entero = deudaInv[h]
+    si d2 > 0 {
+      si cart == 0 y saldoInv[h] == 0 {
+        sumarAtomico(prestamos, kb, 0 - d2)
+        sumarAtomico(capBanco, kb, 0 - d2)
+        sumarAtomico(castigos, k, d2)
+        deudaInv[h] = 0
+      } sino si d2 * 100 > cart * llamada o reservasB[kb] < 0 {
+        forzadoInv[h] = 1
+        sumarAtomico(llamadas, k, 1)
+      }
+    }
+  }
+}
+fn cerrarDeudorClub(h: entero, clubExiste, saldoClub, deudaClub, carteraClub, forzadoClub, tenencia, precioAcc, activa, prestamos, capBanco, reservasB, llamadas, castigos, nInv: entero, nEmp: entero, nBanco: entero, ten: entero, interes: entero, llamada: entero) {
+  forzadoClub[h] = 0
+  si clubExiste[h] == 1 {
+    fijo k = h // nEmp
+    fijo c = h % nEmp
+    fijo kb = k * nBanco + c % nBanco
+    var cart = 0
+    para e en rango(nEmp) {
+      fijo ke = k * nEmp + e
+      si activa[ke] == 1 { cart = cart + tenencia[ke * ten + 1 + nInv + c] * precioAcc[ke] }
+    }
+    carteraClub[h] = cart
+    fijo d: entero = deudaClub[h]
+    si d > 0 {
+      fijo i = d * interes // 1000
+      si saldoClub[h] >= i {
+        saldoClub[h] = saldoClub[h] - i
+        sumarAtomico(capBanco, kb, i)
+      } sino {
+        deudaClub[h] = deudaClub[h] + i
+        sumarAtomico(prestamos, kb, i)
+        sumarAtomico(capBanco, kb, i)
+      }
+      fijo salC: entero = saldoClub[h]
+      var pago: entero = salC // 2
+      si pago > deudaClub[h] { pago = deudaClub[h] }
+      si pago > 0 {
+        saldoClub[h] = saldoClub[h] - pago
+        deudaClub[h] = deudaClub[h] - pago
+        sumarAtomico(prestamos, kb, 0 - pago)
+      }
+      fijo d2: entero = deudaClub[h]
+      si d2 > 0 {
+        si cart == 0 y saldoClub[h] == 0 {
+          sumarAtomico(prestamos, kb, 0 - d2)
+          sumarAtomico(capBanco, kb, 0 - d2)
+          sumarAtomico(castigos, k, d2)
+          deudaClub[h] = 0
+        } sino si d2 * 100 > cart * llamada o reservasB[kb] < 0 {
+          forzadoClub[h] = 1
+          sumarAtomico(llamadas, k, 1)
+        }
+      }
+    }
+  }
+}
+# 13. los bancos, cada hora: reservas = depósitos − préstamos (ya sumadas en la
+#     verificación); el cupo de la hora es lo que sobra del encaje; reservas en
+#     negativo son una crisis de liquidez (no presta). Un hilo por banco.
+fn cerrarBanco(h: entero, reservasB, sumaDepBanco, prestamos, cupo, iliquidez, nBanco: entero, encaje: entero, credito: entero) {
+  fijo dep: entero = sumaDepBanco[h]
+  fijo pr: entero = prestamos[h]
+  fijo res = dep - pr
+  reservasB[h] = res
+  var c = res - dep * encaje // 100
+  si c < 0 { c = 0 }
+  si credito == 0 { c = 0 }
+  cupo[h] = c
+  si res < 0 { sumarAtomico(iliquidez, h // nBanco, 1) }
+}
+# 14. los clubes, cada hora
+# 14a. valor por participación: (efectivo + cartera − deuda) / participaciones; sin
+#      participaciones, 100 centavos
+fn valorarClub(h: entero, clubExiste, saldoClub, carteraClub, deudaClub, particTotal, valorPart, objetivoClub, activa, ganHora, precioAcc, nEmp: entero) {
+  objetivoClub[h] = -1
+  si clubExiste[h] == 1 {
+    fijo pt: entero = particTotal[h]
+    var v: entero = saldoClub[h] + carteraClub[h] - deudaClub[h]
+    si v < 1 { v = 1 }
+    si pt > 0 { valorPart[h] = v // pt } sino { valorPart[h] = 100 }
+    si valorPart[h] < 1 { valorPart[h] = 1 }
+    # objetivo: la empresa activa con más ganancia por hora frente a su precio
+    fijo k = h // nEmp
+    var mejor = -1
+    var mejorR = 0
+    para e en rango(nEmp) {
+      fijo ke = k * nEmp + e
+      si activa[ke] == 1 y ganHora[ke] > 0 y precioAcc[ke] > 0 {
+        fijo gk: entero = ganHora[ke]
+        fijo pk: entero = precioAcc[ke]
+        fijo r = gk * 10000 // pk
+        si r > mejorR {
+          mejorR = r
+          mejor = ke
+        }
+      }
+    }
+    objetivoClub[h] = mejor
+  }
+}
+# 14b. candidatos a fundar: trabajadores decididos (voluntad ≥ 90) sin club en una
+#      empresa sin club
+fn candidatosClub(h: entero, empleo, clubDe, voluntad, clubExiste, activa, candidatos, nAg: entero, nEmp: entero) {
+  fijo e = empleo[h]
+  si e >= 0 y clubDe[h] < 0 y voluntad[h] >= 90 {
+    fijo ke = (h // nAg) * nEmp + e
+    si activa[ke] == 1 y clubExiste[ke] == 0 { sumarAtomico(candidatos, ke, 1) }
+  }
+}
+fn nacerClub(h: entero, candidatos, clubExiste, activa, saldoClub, deudaClub, particTotal, valorPart, nClubs, nEmp: entero) {
+  si candidatos[h] > 0 y clubExiste[h] == 0 y activa[h] == 1 {
+    clubExiste[h] = 1
+    saldoClub[h] = 0
+    deudaClub[h] = 0
+    particTotal[h] = 0
+    valorPart[h] = 100
+    sumarAtomico(nClubs, h // nEmp, 1)
+  }
+  candidatos[h] = 0
+}
+# 14c. unirse o aportar: el trabajador de una empresa con club, con probabilidad
+#      voluntad/300 por hora, pone saldo × voluntad / 200 y recibe participaciones al
+#      valor del club (lo que no da para una participación entera no se mueve)
+fn aportarClub(h: entero, empleo, clubDe, partic, saldo, voluntad, clubExiste, saldoClub, particTotal, valorPart, socios, t: entero, s: entero, nAg: entero, nEmp: entero, salario: entero) {
+  fijo e = empleo[h]
+  si e >= 0 {
+    fijo k = h // nAg
+    fijo ke = k * nEmp + e
+    si clubExiste[ke] == 1 y (clubDe[h] < 0 o clubDe[h] == ke) {
+      fijo vo: entero = voluntad[h]
+      fijo r = azarHilo(s + k, h % nAg, 110 + t // 3600 % 7)
+      si r * 300 < vo y saldo[h] > salario * 2 {
+        fijo sal: entero = saldo[h]
+        fijo ap = sal * vo // 200
+        fijo vp: entero = valorPart[ke]
+        fijo parts = ap // vp
+        si parts > 0 {
+          fijo pago = parts * vp
+          saldo[h] = sal - pago
+          sumarAtomico(saldoClub, ke, pago)
+          sumarAtomico(particTotal, ke, parts)
+          si clubDe[h] < 0 {
+            clubDe[h] = ke
+            sumarAtomico(socios, k, 1)
+          }
+          partic[h] = partic[h] + parts
+        }
+      }
+    }
+  }
+}
+#      el club paga lo pedido si tiene efectivo; si no, a prorrata de lo que hay (corrida)
+fn atenderRetiros(h: entero, clubExiste, saldoClub, demandaRetiro, factorRetiro, corridas, nEmp: entero) {
+  factorRetiro[h] = 1000000
+  fijo dem: entero = demandaRetiro[h]
+  si clubExiste[h] == 1 y dem > 0 {
+    fijo ef: entero = saldoClub[h]
+    si ef < dem {
+      var f = 0
+      si ef > 0 { f = ef * 1000000 // dem }
+      factorRetiro[h] = f
+      sumarAtomico(corridas, h // nEmp, 1)
+    }
+  }
+  demandaRetiro[h] = 0
+}
+fn cobrarRetiro(h: entero, clubDe, partic, saldo, retira, saldoClub, particTotal, factorRetiro, socios, nAg: entero) {
+  fijo c = clubDe[h]
+  fijo monto: entero = retira[h]
+  si c >= 0 y monto > 0 {
+    fijo f: entero = factorRetiro[c]
+    fijo cobra = monto * f // 1000000
+    saldo[h] = saldo[h] + cobra
+    sumarAtomico(saldoClub, c, 0 - cobra)
+    sumarAtomico(particTotal, c, 0 - partic[h])
+    partic[h] = 0
+    clubDe[h] = -1
+    sumarAtomico(socios, h // nAg, 0 - 1)
+    retira[h] = 0
+  }
+}
+# 15. verificación por economía
+fn sumarDineroAg(h: entero, saldo, sumaDinero, sumaDepBanco, nAg: entero, nBanco: entero) {
+  fijo k = h // nAg
+  sumarAtomico(sumaDinero, k, saldo[h])
+  sumarAtomico(sumaDepBanco, k * nBanco + (h % nAg) % nBanco, saldo[h])
+}
+fn sumarDineroInv(h: entero, saldoInv, deudaInv, sumaDinero, sumaDeuda, sumaDepBanco, nInv: entero, nBanco: entero) {
+  fijo k = h // nInv
+  sumarAtomico(sumaDinero, k, saldoInv[h])
+  sumarAtomico(sumaDeuda, k, deudaInv[h])
+  sumarAtomico(sumaDepBanco, k * nBanco + (h % nInv) % nBanco, saldoInv[h])
+}
+fn sumarDineroEmp(h: entero, caja, deudaEmp, saldoClub, deudaClub, sumaDinero, sumaDeuda, sumaDepBanco, nEmp: entero, nBanco: entero) {
+  fijo k = h // nEmp
+  fijo kb = k * nBanco + (h % nEmp) % nBanco
+  sumarAtomico(sumaDinero, k, caja[h] + saldoClub[h])
+  sumarAtomico(sumaDeuda, k, deudaEmp[h] + deudaClub[h])
+  sumarAtomico(sumaDepBanco, kb, caja[h] + saldoClub[h])
+}
+fn sumarDineroBanco(h: entero, capBanco, prestamos, sumaDinero, sumaDepBanco, prestamosVivos, nBanco: entero) {
+  fijo k = h // nBanco
+  sumarAtomico(sumaDinero, k, capBanco[h])
+  sumarAtomico(sumaDepBanco, h, capBanco[h])
+  sumarAtomico(prestamosVivos, k, prestamos[h])
+}
+fn sumarTenencia(h: entero, tenencia, sumaAcc, ten: entero) { sumarAtomico(sumaAcc, h // ten, tenencia[h]) }
+fn sumarPartic(h: entero, clubDe, partic, sumaPart) {
+  fijo c = clubDe[h]
+  si c >= 0 { sumarAtomico(sumaPart, c, partic[h]) }
+}
+fn medir(k: entero, activa, precioAcc, indiceBolsa, nActivas, indiceHace1h, caidaMax, paro, paroMax, nEmp: entero) {
+  var suma = 0
+  var n = 0
+  para e en rango(nEmp) {
+    fijo ke = k * nEmp + e
+    si activa[ke] == 1 {
+      suma = suma + precioAcc[ke]
+      n = n + 1
+    }
+  }
+  si n > 0 { indiceBolsa[k] = suma // n }
+  nActivas[k] = n
+  si paro[k] > paroMax[k] { paroMax[k] = paro[k] }
+  si indiceHace1h[k] > 0 {
+    fijo caida = (indiceHace1h[k] - indiceBolsa[k]) * 100 // indiceHace1h[k]
+    si caida > caidaMax[k] { caidaMax[k] = caida }
+  }
+}
+# euforia y pánico: el azar de la bolsa se sesga según cómo fue la última hora
+fn guardarIndice(k: entero, indiceBolsa, indiceHace1h, sesgo) {
+  fijo antes: entero = indiceHace1h[k]
+  fijo ahora: entero = indiceBolsa[k]
+  sesgo[k] = 0
+  si antes > 0 {
+    si ahora * 100 > antes * 110 { sesgo[k] = 20 }
+    si ahora * 100 < antes * 90 { sesgo[k] = -20 }
+  }
+  indiceHace1h[k] = ahora
+}
+fn guardarPrecioAcc(h: entero, precioAcc, precioAccH) { precioAccH[h] = precioAcc[h] }
+
+# ─────────────────────────────────────────────── lo que cambió de la v2 en clubes y cuentas
+# 14d. retiros: pide su parte el socio sin dinero… y el que acaba de morir [10]
+#      (su parte va a su saldo y de ahí a sus herederos [34])
+fn pedirRetiro(h: entero, clubDe, partic, saldo, valorPart, demandaRetiro, retira, vivo, salario: entero) {
+  retira[h] = 0
+  fijo c = clubDe[h]
+  si c >= 0 y partic[h] > 0 y (saldo[h] < salario // 2 o vivo[h] == 2) {
+    fijo pa: entero = partic[h]
+    fijo vp: entero = valorPart[c]
+    fijo monto = pa * vp
+    retira[h] = monto
+    sumarAtomico(demandaRetiro, c, monto)
+  }
+}
+# 10c. nacer: como la v2, y la empresa nueva se instala en un territorio [69]
+fn nacer(h: entero, activa, nacida, sector, precio, inv, trab, maquinas, calidad, estrellas, resenas, horasMalas, sinNomina, ganMax, terrEmp, t: entero, s: entero, nEmp: entero, nTerr: entero) {
+  si activa[h] == 1 y nacida[h] == t y t > 0 {
+    fijo k = h // nEmp
+    fijo sec = sector[h]
+    var base = 800
+    si sec == 1 { base = 1200 }
+    si sec == 2 { base = 3000 }
+    si sec == 3 { base = 1500 }
+    si sec == 4 { base = 1000 }
+    precio[h] = base
+    inv[h] = 0
+    trab[h] = 0
+    maquinas[h] = 0
+    calidad[h] = 1 + entero(piso(azarHilo(s + k, 3000 + h % nEmp, 70 + t // 3600 % 29) * 5))
+    estrellas[h] = 5 * 300
+    resenas[h] = 5
+    horasMalas[h] = 0
+    sinNomina[h] = 0
+    ganMax[h] = 0
+    terrEmp[h] = entero(piso(azarHilo(s + k, 3100 + h % nEmp, 71 + t // 3600 % 29) * nTerr))
+  }
+}
+# el tesoro de los Estados es dinero (depositado en un banco) y lo guardado en las
+# despensas son bienes: entran en las invariantes
+fn sumarTesoro(h: entero, estado, sumaDinero, sumaDepBanco, nFac: entero, nBanco: entero) {
+  fijo k = h // nFac
+  sumarAtomico(sumaDinero, k, estado[h * 24])
+  sumarAtomico(sumaDepBanco, k * nBanco + (h % nFac) % nBanco, estado[h * 24])
+}
+fn sumarDespensa(h: entero, cuerpo, sumaDesp, nAg: entero) {
+  sumarAtomico(sumaDesp, h // nAg, cuerpo[h * 16 + 11] + cuerpo[h * 16 + 12])
+}
+fn verificar(k: entero, sumaDinero, sumaDeuda, prestamosVivos, dinero0, sumaAcc, activa, accVivas, inv, producido, consumido, destruido, enMaquinas, sumaDesp, sumaPart, particTotal, clubExiste, fallo, nEmp: entero, acc: entero) {
+  fijo dep: entero = sumaDinero[k]
+  fijo pr: entero = prestamosVivos[k]
+  si dep - pr != dinero0[k] { fallo[k] = 2 }
+  si sumaDeuda[k] != pr { fallo[k] = 3 }
+  var vivas = 0
+  var enEstante = 0
+  para e en rango(nEmp) {
+    fijo ke = k * nEmp + e
+    si activa[ke] == 1 {
+      si sumaAcc[ke] != acc { fallo[k] = 4 }
+      vivas = vivas + acc
+    } sino {
+      si sumaAcc[ke] != 0 { fallo[k] = 4 }
+    }
+    enEstante = enEstante + inv[ke]
+    si clubExiste[ke] == 1 y sumaPart[ke] != particTotal[ke] { fallo[k] = 6 }
+  }
+  si vivas != accVivas[k] { fallo[k] = 4 }
+  si producido[k] != consumido[k] + enEstante + destruido[k] + enMaquinas[k] + sumaDesp[k] { fallo[k] = 5 }
+}
+fn contarInicial(h: entero, activa, inv, producido, nEmp: entero) { si activa[h] == 1 { sumarAtomico(producido, h // nEmp, inv[h]) } }
+fn fijarDinero0(k: entero, sumaDinero, dinero0, accVivas, medida, nIni: entero, acc: entero) {
+  dinero0[k] = sumaDinero[k]
+  accVivas[k] = nIni * acc
+  medida[k * 20 + 7] = -1                      # todavía no hay moda
+  medida[k * 20 + 15] = 1000000000             # la población mínima, por ver
+}
+
+# ─────────────────────────────────────────────── el programa
+imprimir("ECOSIM-G v3 · {N_ECO} economías × {N_AG} plazas de personas · {N_TERR} territorios · {N_FAC} Estados · {N_REL} religiones · {N_INI} empresas al empezar (hasta {N_EMP}) · {N_INV} inversores · {N_BANCO} bancos · crédito {CREDITO} · {TICKS} ticks ({TICKS // ANO} años) · semilla {SEMILLA}")
+imprimir("dispositivo: {dispositivo()}")
+fijo t0 = reloj()
+paralelo(TOTAL_H, reiniciar, vivo, hambre, aburr, curio, empleo, eleccion, compro, clubDe, partic, retira, cuerpo, civil, animo, memo, pedido, vinculo, peso, KV)
+paralelo(TOTAL_H, iniciarAgente, vivo, saldo, hambre, aburr, curio, voluntad, empleo, cuerpo, civil, animo, rasgo, SEMILLA, N_AG, POR_SECTOR, N_TERR, N_FAC, DINERO_AG)
+paralelo(N_ECO, iniciarFamilias, vivo, cuerpo, civil, vinculo, peso, SEMILLA, N_AG, KV)
+paralelo(TOTAL_I, iniciarInversor, saldoInv, SEMILLA, N_INV, DINERO_INV)
+paralelo(TOTAL_B, iniciarBanco, capBanco, CAPITAL_BANCO)
+paralelo(TOTAL_E, iniciarEmpresa, activa, sector, caja, precio, inv, precioAcc, calidad, estrellas, resenas, nacida, objetivoClub, terrEmp, SEMILLA, N_EMP, N_INI, POR_SECTOR, N_AG, N_TERR, DINERO_EMP)
+paralelo(TOTAL_E * ACC, repartirAcciones, tenencia, activa, SEMILLA, N_EMP, ACC, TEN, N_INV)
+paralelo(TOTAL_T, iniciarTerritorio, clima, terrP, N_TERR, N_FAC)
+paralelo(TOTAL_F, iniciarFaccion, estado, TESORO0)
+paralelo(TOTAL_F * N_FAC, iniciarRelacion, relacion, SEMILLA, N_FAC)
+# el inventario inicial y lo que cada uno tiene guardado cuentan como producido
+paralelo(TOTAL_E, contarInicial, activa, inv, producido, N_EMP)
+paralelo(TOTAL_H, sumarDespensa, cuerpo, producido, N_AG)
+# la plantilla de cada empresa y su trabajo efectivo
+paralelo(TOTAL_E, aCero, trab)
+paralelo(N_ECO, aCero, paro)
+paralelo(TOTAL_H, recontar, empleo, vivo, cuerpo, civil, trab, paro, N_AG, N_EMP)
+paralelo(TOTAL_E, aCero, fuerza)
+paralelo(TOTAL_H, fuerzaLaboral, vivo, empleo, cuerpo, civil, sector, fuerza, N_AG, N_EMP)
+# la base monetaria: todo el dinero del arranque, con el tesoro de los Estados
+paralelo(N_ECO, aCero, sumaDinero)
+paralelo(TOTAL_B, aCero, sumaDepBanco)
+paralelo(N_ECO, aCero, prestamosVivos)
+paralelo(TOTAL_H, sumarDineroAg, saldo, sumaDinero, sumaDepBanco, N_AG, N_BANCO)
+paralelo(TOTAL_I, sumarDineroInv, saldoInv, deudaInv, sumaDinero, sumaDeuda, sumaDepBanco, N_INV, N_BANCO)
+paralelo(TOTAL_E, sumarDineroEmp, caja, deudaEmp, saldoClub, deudaClub, sumaDinero, sumaDeuda, sumaDepBanco, N_EMP, N_BANCO)
+paralelo(TOTAL_B, sumarDineroBanco, capBanco, prestamos, sumaDinero, sumaDepBanco, prestamosVivos, N_BANCO)
+paralelo(TOTAL_F, sumarTesoro, estado, sumaDinero, sumaDepBanco, N_FAC, N_BANCO)
+paralelo(N_ECO, fijarDinero0, sumaDinero, dinero0, accVivas, medida, N_INI, ACC)
+paralelo(TOTAL_B, cerrarBanco, reservasB, sumaDepBanco, prestamos, cupo, iliquidez, N_BANCO, ENCAJE, CREDITO)
+paralelo(N_ECO, aCero, iliquidez)
+# el primer día (sin desastres: el mundo empieza en calma)
+paralelo(TOTAL_T, tiempoDia, clima, terrP, cuenta, SEMILLA, 0, N_TERR, ANO)
+fn calma(h: entero, clima) {
+  clima[h * 16 + 9] = 0
+  clima[h * 16 + 10] = 0
+}
+paralelo(TOTAL_T, calma, clima)
+paralelo(N_ECO * 48, aCero, cuenta)
+fn olvidarDesastre(h: entero, clima) { clima[h * 16 + 10] = 0 }
+fn copiar1(h: entero, a, b) { b[h] = a[h] }
+# la población del principio de cada mundo, contada en la GPU (con miles de mundos,
+# recorrer a todas las personas desde la CPU tardaría minutos)
+fn contarVivos(k: entero, vivo, fin, nAg: entero, nf: entero) {
+  var n = 0
+  para i en rango(nAg) { si vivo[k * nAg + i] == 1 { n = n + 1 } }
+  fin[k * nf] = n
+}
+paralelo(N_ECO, contarVivos, vivo, fin, N_AG, NF)
+var vivos0 = 0
+para k en rango(N_ECO) { vivos0 = entero(vivos0 + elemento(fin, k * NF)) }
+imprimir("arranque: {entero(reloj() - t0)} ms · {vivos0 // N_ECO} personas por economía · base monetaria por economía: {elemento(dinero0, 0) // 100} monedas")
+
+var csv = "tick,economia,poblacion,nacidos,muertes,muertesInf,enfermos,paro,hoover,top10,ipc,inflacion,robos,presos,rebeldes,migraciones,guerras,conquistas,revoluciones,tecMax,escrituras,innovaciones,sequias,plagas,desastres,temp0,indiceBolsa,activas,quiebras,producido,consumido,prestamosVivos,trueques,fiados\n"
+fn md(k: entero, j: entero): entero { devolver entero(elemento(medida, k * 20 + j)) }
+fn cu(k: entero, j: entero): entero { devolver entero(elemento(cuenta, k * 48 + j)) }
+fn filaCsv(t: entero) {
+  para k en rango(N_SERIE) {
+    var act = 0
+    para e en rango(N_EMP) { si elemento(activa, k * N_EMP + e) == 1 { act = act + 1 } }
+    var tecMax = 0
+    para f en rango(N_FAC) { tecMax = maximo(tecMax, elemento(estado, (k * N_FAC + f) * 24 + 14)) }
+    csv = csv + "{t},{PRIMER + k},{md(k, 0)},{cu(k, 0)},{cu(k, 2)},{cu(k, 3)},{md(k, 8)},{elemento(paro, k)},{md(k, 3)},{md(k, 4)},{md(k, 5)},{md(k, 6)},{cu(k, 14)},{md(k, 11)},{md(k, 10)},{cu(k, 16)},{cu(k, 21)},{cu(k, 22)},{cu(k, 24)},{tecMax},{cu(k, 32)},{cu(k, 31)},{cu(k, 33)},{cu(k, 34)},{cu(k, 35)},{elemento(clima, k * N_TERR * 16)},{elemento(indiceBolsa, k)},{act},{elemento(quiebras, k)},{elemento(producido, k)},{elemento(consumido, k)},{elemento(prestamosVivos, k)},{cu(k, 11)},{cu(k, 9)}\n"
+  }
+}
+
+fijo t1 = reloj()
+para t en rango(TICKS) {
+  # ── cada tick: elegir, comprar, vivir, producir
+  paralelo(TOTAL_H, elegir, vivo, aburr, curio, hambre, eleccion, saldo, cuerpo, civil, animo, rasgo, memo, activa, inv, precio, estrellas, resenas, sector, terrEmp, demanda, terrP, estado, relacion, guerraFF, medida, t, SEMILLA, N_AG, N_EMP, N_TERR, N_FAC, DIA, ANO)
+  paralelo(TOTAL_H, comprar, eleccion, saldo, caja, inv, demanda, ventas, precio, aburr, curio, sector, estrellas, resenas, calidad, consumido, cuerpo, civil, animo, rasgo, memo, terrEmp, terrP, clima, estado, relacion, comercioFF, cuenta, t, SEMILLA, N_AG, N_EMP, N_TERR, N_FAC)
+  paralelo(TOTAL_H, vivir, vivo, hambre, empleo, cuerpo, civil, animo, clima, consumido, t, N_AG, N_TERR, DIA)
+  paralelo(TOTAL_E, cerrarVentas, inv, ventas, ventasHora, ingresosHora, precio, demanda, activa)
+  paralelo(TOTAL_E, aCero, ventas)
+  paralelo(TOTAL_E, producir, activa, progreso, fuerza, inv, maquinas, producido, sector, terrEmp, terrP, estado, clima, t, N_EMP, N_TERR, N_FAC, DIA, ANO)
+  # ── cada día: el tiempo, lo que destruye, los desastres y los ritos
+  si t % DIA == DIA - 1 {
+    paralelo(TOTAL_T, tiempoDia, clima, terrP, cuenta, SEMILLA, t + 1, N_TERR, ANO)
+    paralelo(TOTAL_E, perderInventario, activa, sector, inv, terrEmp, terrP, clima, destruido, 0, N_EMP, N_TERR)
+    paralelo(TOTAL_H, sufrirDesastre, vivo, cuerpo, civil, clima, SEMILLA, t, N_AG, N_TERR)
+    paralelo(TOTAL_H, rezar, vivo, cuerpo, civil, animo, terrP, relig, cuenta, N_AG, N_TERR, N_REL)
+  }
+  # ── cada minuto: la bolsa (la v2)
+  si t % 60 == 59 {
+    paralelo(TOTAL_E, bolsa, activa, precioAcc, precioAccH, tenencia, saldoInv, deudaInv, carteraInv, forzadoInv, divPorAcc, ganHora, caja, trab, clubExiste, saldoClub, objetivoClub, forzadoClub, cupo, sesgo, nActivas, t, SEMILLA, N_EMP, N_INV, N_BANCO, TEN, ACC, SALARIO, MARGEN_PRESTAMO, CREDITO)
+    paralelo(TOTAL_I, sobregirar, saldoInv, deudaInv, prestamos, sobregiros, N_INV, N_BANCO)
+    paralelo(TOTAL_E, sobregirarClub, saldoClub, deudaClub, prestamos, sobregiros, clubExiste, N_EMP, N_BANCO)
+  }
+  si t % 600 == 599 {
+    paralelo(TOTAL_E, dividendos, activa, caja, ganHora, tenencia, trab, divPorAcc, deudaEmp, N_EMP, TEN, ACC, SALARIO)
+    paralelo(TOTAL_I, cobrarDividendos, saldoInv, tenencia, divPorAcc, N_INV, N_EMP, TEN)
+    paralelo(TOTAL_E, cobrarDividendosClub, saldoClub, clubExiste, tenencia, divPorAcc, N_INV, N_EMP, TEN)
+  }
+  # ── cada hora (un año)
+  si t % 3600 == 3599 {
+    # la economía de la v2, con impuestos y monopolio
+    paralelo(TOTAL_I, consumirInv, saldoInv, activa, sector, inv, caja, precio, ventasHora, ingresosHora, consumido, t, SEMILLA, N_INV, N_EMP)
+    paralelo(TOTAL_E, aCero, salariosHora)
+    paralelo(TOTAL_E, pagarSalarios, activa, empleo, saldo, caja, salariosHora, deudaEmp, prestamos, cupo, sinNomina, trab, cuerpo, civil, rasgo, terrP, estado, cuenta, N_AG, N_EMP, N_BANCO, N_TERR, N_FAC, SALARIO, CREDITO)
+    paralelo(N_ECO * N_SECTOR, aCero, ventasSector)
+    paralelo(TOTAL_E, sumarVentasSector, activa, sector, ventasHora, ventasSector, N_EMP, N_SECTOR)
+    paralelo(TOTAL_E, cerrarHora, activa, ventasHora, ingresosHora, salariosHora, ganHora, ganMax, horasMalas, inv, precio, trab, caja, deudaEmp, prestamos, nacida, sector, terrEmp, terrP, estado, ventasSector, cuenta, t, GRACIA, N_EMP, N_BANCO, N_TERR, N_FAC, N_SECTOR, SALARIO)
+    paralelo(TOTAL_E, invertirMaquinas, activa, sector, caja, deudaEmp, trab, inv, precio, maquinas, ventasHora, ingresosHora, enMaquinas, t, SEMILLA, N_EMP, SALARIO)
+    paralelo(TOTAL_E, quebrar, activa, horasMalas, sinNomina, inv, maquinas, destruido, enMaquinas, caja, deudaEmp, prestamos, capBanco, castigos, tenencia, divPorAcc, precioAcc, trab, quiebras, accVivas, N_EMP, N_BANCO, TEN, ACC)
+    paralelo(TOTAL_I, cobrarDividendos, saldoInv, tenencia, divPorAcc, N_INV, N_EMP, TEN)
+    paralelo(TOTAL_E, cobrarDividendosClub, saldoClub, clubExiste, tenencia, divPorAcc, N_INV, N_EMP, TEN)
+    paralelo(TOTAL_E * TEN, cancelarAcciones, tenencia, activa, precioAcc, TEN)
+    paralelo(TOTAL_H, despedir, empleo, activa, N_AG, N_EMP)
+    paralelo(TOTAL_I, cerrarDeudorInv, saldoInv, deudaInv, carteraInv, forzadoInv, tenencia, precioAcc, activa, prestamos, capBanco, reservasB, llamadas, castigos, N_INV, N_EMP, N_BANCO, TEN, INTERES, MARGEN_LLAMADA)
+    paralelo(TOTAL_E, cerrarDeudorClub, clubExiste, saldoClub, deudaClub, carteraClub, forzadoClub, tenencia, precioAcc, activa, prestamos, capBanco, reservasB, llamadas, castigos, N_INV, N_EMP, N_BANCO, TEN, INTERES, MARGEN_LLAMADA)
+    # la vida: un año más, y los que mueren
+    paralelo(TOTAL_H, envejecer, vivo, hambre, empleo, cuerpo, civil, clima, terrP, estado, censoF, cuenta, SEMILLA, t, N_AG, N_TERR, N_FAC)
+    # clubes (la v2): los muertos retiran su parte
+    paralelo(TOTAL_E, valorarClub, clubExiste, saldoClub, carteraClub, deudaClub, particTotal, valorPart, objetivoClub, activa, ganHora, precioAcc, N_EMP)
+    paralelo(TOTAL_H, candidatosClub, empleo, clubDe, voluntad, clubExiste, activa, candidatos, N_AG, N_EMP)
+    paralelo(TOTAL_E, nacerClub, candidatos, clubExiste, activa, saldoClub, deudaClub, particTotal, valorPart, nClubs, N_EMP)
+    paralelo(TOTAL_H, aportarClub, empleo, clubDe, partic, saldo, voluntad, clubExiste, saldoClub, particTotal, valorPart, socios, t, SEMILLA, N_AG, N_EMP, SALARIO)
+    paralelo(TOTAL_H, pedirRetiro, clubDe, partic, saldo, valorPart, demandaRetiro, retira, vivo, SALARIO)
+    paralelo(TOTAL_E, atenderRetiros, clubExiste, saldoClub, demandaRetiro, factorRetiro, corridas, N_EMP)
+    paralelo(TOTAL_H, cobrarRetiro, clubDe, partic, saldo, retira, saldoClub, particTotal, factorRetiro, socios, N_AG)
+    # la herencia y la plaza libre
+    paralelo(TOTAL_H, heredar, vivo, saldo, cuerpo, civil, pedido, vinculo, peso, terrP, estado, destruido, cuenta, N_AG, N_TERR, N_FAC, KV)
+    paralelo(TOTAL_H, reiniciar, vivo, hambre, aburr, curio, empleo, eleccion, compro, clubDe, partic, retira, cuerpo, civil, animo, memo, pedido, vinculo, peso, KV)
+    paralelo(TOTAL_H, cumplirCondena, cuerpo)
+    # el censo y las estadísticas
+    paralelo(TOTAL_T, ceroT, censoT, lengT, relT, rebFacT, N_LENG, N_REL, N_FAC)
+    paralelo(TOTAL_F, ceroF, censoF)
+    paralelo(N_ECO, ceroE, medida, histo, N_CUB)
+    paralelo(TOTAL_E, aCero, rumorE)
+    paralelo(TOTAL_H, censar, vivo, saldo, empleo, cuerpo, civil, animo, rasgo, memo, foto, sector, censoT, lengT, relT, rebFacT, terrP, censoF, relig, rumorE, histo, medida, N_AG, N_TERR, N_FAC, N_REL, N_LENG, N_EMP, N_CUB)
+    paralelo(N_ECO, estadisticas, vivo, saldo, medida, histo, qB, censoT, terrP, lengT, relT, activa, sector, precio, cuenta, SEMILLA, t, N_AG, N_TERR, N_LENG, N_REL, N_EMP, N_CUB)
+    paralelo(TOTAL_H, cuantil, vivo, saldo, civil, qB, medida, N_AG)
+    # la salud, los vínculos y lo que cada uno siente y decide
+    paralelo(TOTAL_H, contagiar, vivo, cuerpo, civil, censoT, clima, terrP, censoF, cuenta, SEMILLA, t, N_AG, N_TERR, N_FAC)
+    paralelo(TOTAL_H, vincular, vivo, empleo, civil, rasgo, foto, vinculo, peso, terrP, guerraFF, SEMILLA, t, N_AG, N_TERR, N_FAC, KV)
+    paralelo(TOTAL_H, sentir, vivo, hambre, empleo, cuerpo, civil, animo, rasgo, memo, pedido, foto, vinculo, peso, censoT, terrP, clima, estado, censoF, relacion, guerraFF, relig, horasMalas, activa, medida, cuenta, SEMILLA, t, N_AG, N_TERR, N_FAC, N_REL, N_EMP, KV, SALARIO)
+    paralelo(TOTAL_H, aplicarChisme, animo, pedido)
+    paralelo(TOTAL_T, olvidarDesastre, clima)
+    # lo que unos le hacen a otros: ayudar, robar, fiar, truequear
+    paralelo(TOTAL_H, ayudar, vivo, saldo, hambre, cuerpo, civil, rasgo, foto, vinculo, peso, cuenta, N_AG, KV, SALARIO)
+    paralelo(TOTAL_H, robarVictima, vivo, saldo, cuerpo, animo, pedido, civil, terrP, cuenta, SEMILLA, t, N_AG, N_TERR)
+    paralelo(TOTAL_H, robarCobrar, saldo, empleo, pedido, cuerpo, animo, civil, terrP, estado, censoF, cuenta, SEMILLA, t, N_AG, N_TERR, N_FAC)
+    paralelo(TOTAL_H, prestarFiado, vivo, saldo, pedido, animo, SALARIO)
+    paralelo(TOTAL_H, recibirFiado, saldo, pedido, cuenta, N_AG)
+    paralelo(TOTAL_H, pagarFiado, vivo, saldo, foto, pedido, animo, cuenta, N_AG, SALARIO)
+    paralelo(N_ECO, truequear, vivo, hambre, cuerpo, civil, medida, pendT, cuenta, N_AG, N_TERR)
+    paralelo(TOTAL_H, estropear, vivo, cuerpo, civil, clima, destruido, SEMILLA, t, N_AG, N_TERR)
+    paralelo(N_ECO, nacimientos, vivo, saldo, hambre, voluntad, cuerpo, civil, animo, rasgo, vinculo, peso, cuenta, SEMILLA, t, N_AG, KV, SALARIO)
+    # la política y la cultura
+    paralelo(N_ECO, relaciones, relacion, guerraFF, comercioFF, terrP, estado, rasgo, civil, censoT, censoF, rebFacT, cuenta, SEMILLA, t, N_TERR, N_FAC)
+    paralelo(TOTAL_E, perderInventario, activa, sector, inv, terrEmp, terrP, clima, destruido, 1, N_EMP, N_TERR)
+    paralelo(TOTAL_F, gobernar, vivo, saldo, empleo, cuerpo, civil, animo, rasgo, estado, censoF, terrP, censoT, activa, sector, inv, caja, precio, ventasHora, ingresosHora, consumido, cuenta, SEMILLA, t, N_AG, N_TERR, N_FAC, N_EMP, SALARIO)
+    paralelo(TOTAL_F, saber, estado, censoF, terrP, animo, cuenta, SEMILLA, t, N_TERR, N_FAC)
+    paralelo(N_ECO, creer, relig, estado, N_REL, N_FAC)
+    # fundaciones, contrataciones y el trabajo efectivo (la v2, con el territorio)
+    paralelo(N_ECO, fundarInversores, saldoInv, activa, sector, ganHora, caja, precioAcc, nacida, fundadaPor, tenencia, fundadas, accVivas, aporte, t, SEMILLA, N_INV, N_EMP, N_INI, N_SECTOR, TEN, ACC, FUNDAR, N_FUNDADORES)
+    paralelo(N_ECO, fundarClub, clubExiste, saldoClub, deudaClub, carteraClub, cupo, prestamos, activa, sector, ganHora, caja, precioAcc, nacida, fundadaPor, tenencia, fundadas, fundadasClub, clubFundadas, accVivas, t, SEMILLA, N_INV, N_EMP, N_INI, N_SECTOR, N_BANCO, TEN, ACC, FUNDAR, FUNDAR_ACC, CREDITO)
+    paralelo(TOTAL_E, nacer, activa, nacida, sector, precio, inv, trab, maquinas, calidad, estrellas, resenas, horasMalas, sinNomina, ganMax, terrEmp, t, SEMILLA, N_EMP, N_TERR)
+    paralelo(TOTAL_E, aCero, trab)
+    paralelo(N_ECO, aCero, paro)
+    paralelo(TOTAL_H, recontar, empleo, vivo, cuerpo, civil, trab, paro, N_AG, N_EMP)
+    paralelo(TOTAL_E, copiar1, trab, trab0)
+    paralelo(TOTAL_H, contratar, empleo, vivo, cuerpo, civil, animo, activa, caja, trab, trab0, inv, terrEmp, terrP, t, SEMILLA, N_AG, N_EMP, N_TERR, SALARIO)
+    paralelo(TOTAL_E, aCero, trab)
+    paralelo(N_ECO, aCero, paro)
+    paralelo(TOTAL_H, recontar, empleo, vivo, cuerpo, civil, trab, paro, N_AG, N_EMP)
+    paralelo(TOTAL_E, aCero, fuerza)
+    paralelo(TOTAL_H, fuerzaLaboral, vivo, empleo, cuerpo, civil, sector, fuerza, N_AG, N_EMP)
+    paralelo(N_ECO, medir, activa, precioAcc, indiceBolsa, nActivas, indiceHace1h, caidaMax, paro, paroMax, N_EMP)
+    paralelo(N_ECO, guardarIndice, indiceBolsa, indiceHace1h, sesgo)
+    paralelo(TOTAL_E, guardarPrecioAcc, precioAcc, precioAccH)
+  }
+  si t % 60 == 0 {
+    # las invariantes en todas las economías (dinero con el tesoro, bienes con las despensas)
+    paralelo(N_ECO, aCero, sumaDinero)
+    paralelo(N_ECO, aCero, sumaDeuda)
+    paralelo(N_ECO, aCero, prestamosVivos)
+    paralelo(N_ECO, aCero, sumaDesp)
+    paralelo(TOTAL_B, aCero, sumaDepBanco)
+    paralelo(TOTAL_H, sumarDineroAg, saldo, sumaDinero, sumaDepBanco, N_AG, N_BANCO)
+    paralelo(TOTAL_I, sumarDineroInv, saldoInv, deudaInv, sumaDinero, sumaDeuda, sumaDepBanco, N_INV, N_BANCO)
+    paralelo(TOTAL_E, sumarDineroEmp, caja, deudaEmp, saldoClub, deudaClub, sumaDinero, sumaDeuda, sumaDepBanco, N_EMP, N_BANCO)
+    paralelo(TOTAL_B, sumarDineroBanco, capBanco, prestamos, sumaDinero, sumaDepBanco, prestamosVivos, N_BANCO)
+    paralelo(TOTAL_F, sumarTesoro, estado, sumaDinero, sumaDepBanco, N_FAC, N_BANCO)
+    paralelo(TOTAL_H, sumarDespensa, cuerpo, sumaDesp, N_AG)
+    paralelo(TOTAL_E, aCero, sumaAcc)
+    paralelo(TOTAL_E * TEN, sumarTenencia, tenencia, sumaAcc, TEN)
+    paralelo(TOTAL_E, aCero, sumaPart)
+    paralelo(TOTAL_H, sumarPartic, clubDe, partic, sumaPart)
+    paralelo(N_ECO, verificar, sumaDinero, sumaDeuda, prestamosVivos, dinero0, sumaAcc, activa, accVivas, inv, producido, consumido, destruido, enMaquinas, sumaDesp, sumaPart, particTotal, clubExiste, fallo, N_EMP, ACC)
+    para k en rango(N_ECO) {
+      fijo f = elemento(fallo, k)
+      si f == 2 { lanzar error("tick {t}, economía {k}: dinero fantasma (depósitos − préstamos − base = {elemento(sumaDinero, k) - elemento(prestamosVivos, k) - elemento(dinero0, k)} centavos)") }
+      si f == 3 { lanzar error("tick {t}, economía {k}: las deudas ({elemento(sumaDeuda, k)}) no cuadran con los préstamos ({elemento(prestamosVivos, k)})") }
+      si f == 4 { lanzar error("tick {t}, economía {k}: las acciones no cuadran") }
+      si f == 5 { lanzar error("tick {t}, economía {k}: bienes que no cuadran (producido {elemento(producido, k)} · consumido {elemento(consumido, k)} · destruido {elemento(destruido, k)} · despensas {elemento(sumaDesp, k)})") }
+      si f == 6 { lanzar error("tick {t}, economía {k}: las participaciones de un club no cuadran") }
+    }
+    si t % 3600 == 0 y t > 0 {
+      paralelo(TOTAL_B, cerrarBanco, reservasB, sumaDepBanco, prestamos, cupo, iliquidez, N_BANCO, ENCAJE, CREDITO)
+    }
+    paralelo(N_ECO, medir, activa, precioAcc, indiceBolsa, nActivas, indiceHace1h, caidaMax, paro, paroMax, N_EMP)
+    si t % 600 == 0 { filaCsv(t) }
+  }
+}
+fijo ms = reloj() - t1
+escribirTexto(RUTA_CSV, csv)
+
+# ─────────────────────────────────────────────── el resumen de cada mundo, en la GPU
+# Un hilo por mundo recorre a su gente, sus empresas, sus Estados y sus territorios y
+# deja NF casillas en «fin» (la tabla está en el encabezado del CSV de mundos). Así
+# el resumen de miles de mundos no tiene que bajar a la CPU millones de personas.
+fn resumirMundo(k: entero, vivo, hambre, empleo, cuerpo, civil, animo, vinculo, peso, activa, estado, terrP, clima, relacion, fin, nAg: entero, nEmp: entero, nTerr: entero, nFac: entero, kv: entero, nf: entero) {
+  fijo z = k * nf
+  para j en rango(nf - 1) { fin[z + 1 + j] = 0 }
+  para i en rango(nAg) {
+    fijo h = k * nAg + i
+    si vivo[h] == 1 {
+      fijo p = h * 16
+      fijo ed = cuerpo[p]
+      fin[z + 1] = fin[z + 1] + 1
+      fin[z + 2] = fin[z + 2] + ed
+      fin[z + 3] = fin[z + 3] + cuerpo[p + 7]
+      fin[z + 4] = fin[z + 4] + cuerpo[p + 8]
+      fin[z + 5] = fin[z + 5] + civil[p + 7]
+      para j en rango(12) { fin[z + 6 + j] = fin[z + 6 + j] + animo[p + j] }
+      si cuerpo[p + 13] > 0 { fin[z + 18] = fin[z + 18] + 1 }
+      si civil[p + 13] >= 0 { fin[z + 19] = fin[z + 19] + 1 }
+      si civil[p + 4] >= 0 { fin[z + 20] = fin[z + 20] + 1 }
+      si civil[p + 5] < 0 { fin[z + 21] = fin[z + 21] + 1 }
+      si civil[p + 1] == 1 { fin[z + 22] = fin[z + 22] + 1 }
+      si civil[p + 10] > 0 { fin[z + 23] = fin[z + 23] + 1 }
+      si ed >= 16 y ed < 65 {
+        fin[z + 24] = fin[z + 24] + 1
+        si empleo[h] < 0 y civil[p + 10] == 0 y cuerpo[p + 14] == 0 { fin[z + 25] = fin[z + 25] + 1 }
+      }
+      si hambre[h] >= 9000 o cuerpo[p + 2] >= 9000 { fin[z + 26] = fin[z + 26] + 1 }
+      var am = 0
+      var en2 = 0
+      para j en rango(kv) {
+        si vinculo[h * kv + j] >= 0 {
+          si peso[h * kv + j] > 0 { am = 1 }
+          si peso[h * kv + j] < 0 { en2 = 1 }
+        }
+      }
+      fin[z + 27] = fin[z + 27] + am
+      fin[z + 28] = fin[z + 28] + en2
+    }
+  }
+  para e en rango(nEmp) { si activa[k * nEmp + e] == 1 { fin[z + 29] = fin[z + 29] + 1 } }
+  para f en rango(nFac) {
+    fijo r = (k * nFac + f) * 24
+    fin[z + 30] = maximo(fin[z + 30], estado[r + 14])
+    fin[z + 31] = fin[z + 31] + estado[r + 14]
+    si estado[r + 16] == 1 { fin[z + 32] = fin[z + 32] + 1 }
+    var tiene = 0
+    para tt en rango(nTerr) { si terrP[(k * nTerr + tt) * 16] == f { tiene = 1 } }
+    si tiene == 0 { fin[z + 33] = fin[z + 33] + 1 }
+    para g en rango(nFac) {
+      si f < g {
+        fijo x = relacion[(k * nFac + f) * nFac + g]
+        si x > 60 { fin[z + 34] = fin[z + 34] + 1 }
+        si x < -50 { fin[z + 35] = fin[z + 35] + 1 }
+      }
+    }
+    si estado[r + 1] >= 0 { fin[z + 36] = fin[z + 36] + 1 }
+    fin[z + 37] = fin[z + 37] + estado[r + 2]
+    fin[z + 38] = fin[z + 38] + estado[r + 3]
+    fin[z + 39] = fin[z + 39] + estado[r + 12]
+    fin[z + 40] = fin[z + 40] + estado[r + 13]
+    fin[z + 41] = fin[z + 41] + estado[r] // 100
+  }
+  var duenos = 0
+  para tt en rango(nTerr) {
+    fijo q = (k * nTerr + tt) * 16
+    fin[z + 42] = fin[z + 42] + clima[q + 5]
+    fin[z + 43] = fin[z + 43] + clima[q + 6]
+    fin[z + 44] = fin[z + 44] + clima[q + 4]
+    fin[z + 45] = fin[z + 45] + clima[q + 3]
+    fin[z + 46] = fin[z + 46] + terrP[q + 1]
+    fin[z + 47] = fin[z + 47] + terrP[q + 5]
+    fin[z + 48] = fin[z + 48] + terrP[q + 15]
+    duenos = duenos * 10 + terrP[q]
+  }
+  fin[z + 49] = duenos
+}
+paralelo(N_ECO, resumirMundo, vivo, hambre, empleo, cuerpo, civil, animo, vinculo, peso, activa, estado, terrP, clima, relacion, fin, N_AG, N_EMP, N_TERR, N_FAC, KV, NF)
+
+# ─────────────────────────────────────────────── el CSV de mundos: una fila por mundo
+fn fi(k: entero, j: entero): entero { devolver entero(elemento(fin, k * NF + j)) }
+fn div(a: entero, b: entero): entero {
+  si b == 0 { devolver 0 }
+  devolver a // b
+}
+fn pctx(a: entero, b: entero): real {
+  si b == 0 { devolver 0.0 }
+  devolver redondear(a * 1000.0 / b) / 10
+}
+fijo ENCABEZADO = "mundo,semilla,poblacion0,poblacion,nacidos,muertes,muertesNinos,muertesHambre,muertesGuerra,contagios,picoEnfermos,edadMedia,saludMedia,saludMental,educacion,moral,miedo,esperanza,frustracion,agresion,adiccion,supersticion,identidad,fe,reputacion,confianza,estatus,conTecho,conPareja,pasandoHambre,amigos,enemigos,hoover,top10,movilidad,ipc,paro,empresas,quiebras,fundadas,indiceBolsa,escasez,trueques,fiados,impagos,ayudas,herencias,horasMonopolio,aranceles,evasiones,robos,castigados,presos,migraciones,conversiones,chismes,culpasTabu,rituales,excluidos,ciudadanos,funcionarios,bilingues,sinReligion,autoridad,impuesto,burocracia,corrupcion,robadoCorrupcion,escandalos,subsidios,tesoroMedio,guerras,conquistas,rebeliones,revoluciones,espionajes,estadosSinTerritorio,aliados,enemistados,duenosTerritorios,estadosConEscritura,bibliotecas,obras,innovaciones,tecnologiaMax,tecnologiaMedia,modas,sequias,plagas,desastres,bosque,contaminacion,suelo,acuifero,rutas,cohesion,iliquidez,llamadasMargen,corridas,caidaMaxBolsa,prestamosVivos\n"
+fn filaMundo(k: entero): texto {
+  fijo v = maximo(1, fi(k, 1))
+  fijo nt = N_TERR
+  var duenos = "{fi(k, 49)}"
+  mientras longitud(duenos) < N_TERR { duenos = "0" + duenos }
+  var s = "{PRIMER + k},{SEMILLA + k},{fi(k, 0)},{fi(k, 1)},{cu(k, 0)},{cu(k, 2)},{cu(k, 3)},{cu(k, 4)},{cu(k, 5)},{cu(k, 6)},{md(k, 16)},"
+  s = s + "{redondear(fi(k, 2) * 10.0 / v) / 10},{fi(k, 3) // v},{fi(k, 4) // v},{fi(k, 5) // v},"
+  para j en rango(12) { s = s + "{fi(k, 6 + j) // v}," }
+  s = s + "{pctx(fi(k, 18), v)},{pctx(fi(k, 19), v)},{pctx(fi(k, 26), v)},{pctx(fi(k, 27), v)},{pctx(fi(k, 28), v)},"
+  s = s + "{md(k, 3) / 100.0},{md(k, 4) / 100.0},{pctx(md(k, 12), md(k, 13))},{md(k, 5)},{pctx(fi(k, 25), fi(k, 24))},{fi(k, 29)},{elemento(quiebras, k)},{elemento(fundadas, k)},{elemento(indiceBolsa, k) / 100.0},"
+  s = s + "{cu(k, 12)},{cu(k, 11)},{cu(k, 9)},{cu(k, 10)},{cu(k, 8)},{cu(k, 7)},{cu(k, 13)},{cu(k, 36)},{cu(k, 37)},{cu(k, 14)},{cu(k, 15)},{md(k, 11)},{cu(k, 16)},{cu(k, 17)},{cu(k, 18)},{cu(k, 19)},{cu(k, 20)},"
+  s = s + "{pctx(md(k, 9), v)},{pctx(fi(k, 22), v)},{pctx(fi(k, 23), v)},{pctx(fi(k, 20), v)},{pctx(fi(k, 21), v)},"
+  s = s + "{fi(k, 37) // N_FAC},{redondear(fi(k, 38) * 10.0 / N_FAC) / 10},{redondear(fi(k, 39) * 10.0 / N_FAC) / 10},{redondear(fi(k, 40) * 10.0 / N_FAC) / 10},{cu(k, 26)},{cu(k, 27)},{cu(k, 30)},{fi(k, 41) // N_FAC},"
+  s = s + "{cu(k, 21)},{cu(k, 22)},{cu(k, 23)},{cu(k, 24)},{cu(k, 25)},{fi(k, 33)},{fi(k, 34)},{fi(k, 35)},{duenos},{fi(k, 32)},{fi(k, 47)},{cu(k, 28)},{cu(k, 31)},{fi(k, 30)},{fi(k, 31) // N_FAC},{cu(k, 38)},"
+  s = s + "{cu(k, 33)},{cu(k, 34)},{cu(k, 35)},{fi(k, 42) // nt},{fi(k, 43) // nt},{fi(k, 44) // nt},{fi(k, 45) // nt},{fi(k, 46) // nt},{fi(k, 48) // nt},"
+  s = s + "{elemento(iliquidez, k)},{elemento(llamadas, k)},{elemento(corridas, k)},{elemento(caidaMax, k)},{entero(elemento(prestamosVivos, k)) // 100}\n"
+  devolver s
+}
+fijo tCsv = reloj()
+fijo filas: lista<texto> = []
+var bytes = 0
+para k en rango(N_ECO) {
+  fijo f = filaMundo(k)
+  agregar(filas, f)
+  bytes = bytes + longitud(f)
+}
+# hasta 7 MB por archivo (el texto es ASCII: un carácter es un byte). Si cabe, un
+# solo archivo; si no, se llena uno hasta 7 MB y se sigue en el siguiente (con 10.000
+# mundos son unos 3,7 MB: un archivo; con 20.000, dos).
+fijo LIMITE = 7 * 1024 * 1024
+fn sinCsv(r: texto): texto {
+  fijo n = longitud(r)
+  si n > 4 y r[n - 4] == "." y r[n - 3] == "c" y r[n - 2] == "s" y r[n - 1] == "v" {
+    var b = ""
+    para i en rango(n - 4) { b = b + r[i] }
+    devolver b
+  }
+  devolver r
+}
+var archivosMundos = ""
+si bytes + longitud(ENCABEZADO) <= LIMITE {
+  var todo = ENCABEZADO
+  para f en filas { todo = todo + f }
+  escribirTexto(RUTA_MUNDOS, todo)
+  archivosMundos = RUTA_MUNDOS
+} sino {
+  fijo base = sinCsv(RUTA_MUNDOS)
+  var parte = 1
+  var actual = ENCABEZADO
+  para f en filas {
+    si longitud(actual) + longitud(f) > LIMITE {
+      escribirTexto("{base}-{parte}.csv", actual)
+      archivosMundos = archivosMundos + "{base}-{parte}.csv "
+      parte = parte + 1
+      actual = ENCABEZADO
+    }
+    actual = actual + f
+  }
+  escribirTexto("{base}-{parte}.csv", actual)
+  archivosMundos = archivosMundos + "{base}-{parte}.csv"
+}
+fijo msCsv = reloj() - tCsv
+
+# ─────────────────────────────────────────────── el resumen Monte Carlo
+imprimir("{TICKS} ticks × {N_ECO} economías en {entero(ms)} ms · {ms / TICKS} ms por tick (todas a la vez) · {ms / TICKS / N_ECO} ms por tick y economía")
+imprimir("invariantes ✓ en las {N_ECO} economías: dinero (con el tesoro de los Estados), deudas = préstamos, acciones, bienes (con las despensas), participaciones")
+# los contadores de cada economía: media por mundo, y en cuántos mundos pasó
+fn mc(j: entero): real {
+  var s = 0.0
+  para k en rango(N_ECO) { s = s + cu(k, j) }
+  devolver s / N_ECO
+}
+fn mm(j: entero): real {
+  var s = 0.0
+  para k en rango(N_ECO) { s = s + md(k, j) }
+  devolver s / N_ECO
+}
+# el censo es de cada hora y los nacimientos y muertes del final de año pueden caer
+# después: los extremos de la población cuentan también la población final
+fn poblMax(): real {
+  var s = 0.0
+  para k en rango(N_ECO) { s = s + maximo(md(k, 14), fi(k, 1)) }
+  devolver s / N_ECO
+}
+fn poblMin(): real {
+  var s = 0.0
+  para k en rango(N_ECO) { s = s + minimo(md(k, 15), fi(k, 1)) }
+  devolver s / N_ECO
+}
+fn media(a): real {
+  var s = 0.0
+  para k en rango(N_ECO) { s = s + elemento(a, k) }
+  devolver s / N_ECO
+}
+fn mundosCon(j: entero): entero {
+  var n = 0
+  para k en rango(N_ECO) { si cu(k, j) > 0 { n = n + 1 } }
+  devolver n
+}
+fn conAlMenos(a, x: entero): entero {
+  var n = 0
+  para k en rango(N_ECO) { si elemento(a, k) >= x { n = n + 1 } }
+  devolver n
+}
+fn pct(n: entero): texto { devolver "{n} de {N_ECO} ({n * 100 // N_ECO} %)" }
+fn r1(x: real): real { devolver redondear(x * 10) / 10 }
+fn re0(x: real): entero { devolver entero(redondear(x)) }
+# lo que se mide de las personas, los Estados y los territorios: sale de «fin», que
+# cada mundo calculó en la GPU (resumirMundo)
+fn sf(j: entero): real {
+  var s = 0.0
+  para k en rango(N_ECO) { s = s + fi(k, j) }
+  devolver s
+}
+var vivos = sf(1)
+fijo sEdad = sf(2)
+fijo sSalud = sf(3)
+fijo sMente = sf(4)
+fijo sEduc = sf(5)
+fijo conCasa = sf(18)
+fijo conPareja = sf(19)
+fijo bilingues = sf(20)
+fijo sinReligion = sf(21)
+fijo ciudadanos = sf(22)
+fijo funcionarios = sf(23)
+fijo adultosV = sf(24)
+fijo enParo = sf(25)
+fijo pasando = sf(26)
+fijo conAmigos = sf(27)
+fijo conEnemigos = sf(28)
+fijo act = sf(29)
+fijo tecSum = sf(31)
+fijo conEscritura = sf(32)
+fijo sinTerritorio = sf(33)
+fijo aliados = sf(34)
+fijo enemistados = sf(35)
+fijo conLider = sf(36)
+fijo autSum = sf(37)
+fijo impSum = sf(38)
+fijo buroSum = sf(39)
+fijo corrSum = sf(40)
+fijo tesoroSum = sf(41) * 100
+var tecMaxG = 0
+para k en rango(N_ECO) { tecMaxG = maximo(tecMaxG, fi(k, 30)) }
+si vivos < 1 { vivos = 1 }
+fn prom(x: real): entero { devolver re0(x / vivos) }
+fn porc(x: real): real { devolver r1(x * 100 / vivos) }
+fn an(j: entero): entero { devolver prom(sf(6 + j)) }
+fn fT(j: entero): entero { devolver re0(sf(j) / (N_ECO * N_TERR)) }
+fn es(kf: entero, j: entero): entero { devolver entero(elemento(estado, kf * 24 + j)) }
+var movidos = 0.0
+var conQ0 = 0.0
+para k en rango(N_ECO) {
+  movidos = movidos + md(k, 12)
+  conQ0 = conQ0 + md(k, 13)
+}
+
+imprimir("")
+imprimir("── SUPERVIVENCIA [1–15]")
+imprimir("  población: empezó con {vivos0 // N_ECO} por mundo y acaba con {re0(vivos / N_ECO)} (en el peor momento {re0(poblMin())}, en el mejor {re0(poblMax())}) · edad media {r1(sEdad / vivos)} años")
+imprimir("  nacimientos {re0(mc(0))} por mundo · muertes {re0(mc(2))} (niños menores de 5: {re0(mc(3))} · de hambre o sed: {re0(mc(4))} · en la guerra: {re0(mc(5))}) · parejas formadas {re0(mc(1))}")
+imprimir("  salud física media {prom(sSalud)} · salud mental {prom(sMente)} · con techo {porc(conCasa)} % · con pareja {porc(conPareja)} % · pasando hambre o sed ahora {porc(pasando)} %")
+imprimir("  epidemias: {re0(mc(6))} contagios por mundo · el pico medio de enfermos a la vez {re0(mm(16))}")
+imprimir("── ECONOMÍA Y RECURSOS [16–30]")
+imprimir("  desigualdad (Hoover) {r1(mm(3) / 100)} % · el 10 % más rico tiene el {r1(mm(4) / 100)} % · movilidad: el {r1(movidos * 100 / maximo(1.0, conQ0))} % cambió de quintil")
+imprimir("  IPC de agua y comida {re0(mm(5))} centavos · desempleo {r1(enParo * 100 / maximo(1.0, adultosV))} % de los adultos · empresas activas {re0(act / N_ECO)} por mundo · quiebras {re0(media(quiebras))} · fundadas {re0(media(fundadas))}")
+imprimir("  escasez (se quedaron sin nada) {re0(mc(12))} veces · trueques {re0(mc(11))} · fiados {re0(mc(9))} (impagos {re0(mc(10))}) · ayudas {re0(mc(8))} · herencias {re0(mc(7))}")
+imprimir("  horas de monopolio {re0(mc(13))} · aranceles {re0(mc(36))} monedas · evasiones de impuestos {re0(mc(37))} · tesoro medio de un Estado {entero(tesoroSum / TOTAL_F / 100)} monedas")
+imprimir("── SOCIAL [31–45]")
+imprimir("  con amigos {porc(conAmigos)} % · con enemigos {porc(conEnemigos)} % · confianza media {an(10)} · reputación media {an(9)} · chismes {re0(mc(18))} · cohesión media de los territorios {fT(48)}")
+imprimir("  excluidos {porc(mm(9) * N_ECO)} % · ciudadanos {porc(ciudadanos)} % · Estados con líder {conLider} de {TOTAL_F}")
+imprimir("── PSICOLOGÍA [46–60]")
+imprimir("  moral {an(0)} · miedo {an(1)} · esperanza {an(2)} · frustración {an(3)} · agresión {an(4)} · adicción {an(5)} · identidad {an(7)} · fe {an(8)} · culpas por tabú {re0(mc(19))}")
+imprimir("── POLÍTICA Y PODER [61–75]")
+imprimir("  autoridad media {re0(autSum / TOTAL_F)} · impuesto medio {r1(impSum / TOTAL_F)} % · burocracia media {r1(buroSum / TOTAL_F)} % · corrupción media {r1(corrSum / TOTAL_F)} (robado {re0(mc(26))} monedas por mundo, escándalos {r1(mc(27))})")
+imprimir("  funcionarios {porc(funcionarios)} % de la gente · robos {re0(mc(14))} por mundo (castigados {re0(mc(15))}) · presos ahora {r1(mm(11))} por mundo · subsidios pagados {re0(mc(30))}")
+imprimir("  mundos con guerra: {pct(mundosCon(21))} · con conquistas: {pct(mundosCon(22))} · con rebelión: {pct(mundosCon(23))} · con revolución: {pct(mundosCon(24))}")
+imprimir("  pares de Estados aliados al final {aliados} · enemistados {enemistados} (de {N_ECO * 3}) · Estados sin territorio {sinTerritorio} · espionajes logrados {r1(mc(25))} · migraciones {re0(mc(16))} por mundo")
+imprimir("── CULTURA Y CONOCIMIENTO [76–90]")
+imprimir("  educación media {prom(sEduc)} · superstición {an(6)} · bilingües {porc(bilingues)} % · sin religión {porc(sinReligion)} % · conversiones {re0(mc(17))} · rituales {re0(mc(20))} por mundo")
+imprimir("  Estados con escritura {conEscritura} de {TOTAL_F} · bibliotecas {re0(sf(47))} · obras públicas {re0(mc(28))} · innovaciones {r1(mc(31))} por mundo · tecnología media {re0(tecSum / TOTAL_F)} (máx {tecMaxG}) · modas {r1(mc(38))}")
+imprimir("── EL MUNDO [91–100]")
+imprimir("  sequías {r1(mc(33))} · plagas {r1(mc(34))} · desastres {r1(mc(35))} por mundo · bosque medio {fT(42)} · contaminación {fT(43)} · suelo {fT(44)} · acuífero {fT(45)} · rutas {fT(46)}")
+imprimir("── LA ECONOMÍA DE LA v2")
+imprimir("  mundos con caída de bolsa (≥ 20 % en una hora): {pct(conAlMenos(caidaMax, 20))} · crisis de liquidez: {pct(conAlMenos(iliquidez, 1))} · llamadas de margen: {pct(conAlMenos(llamadas, 1))} · corridas: {pct(conAlMenos(corridas, 1))}")
+imprimir("primeros mundos:")
+para k en rango(minimo(5, N_ECO)) {
+  var duenos = ""
+  para tt en rango(N_TERR) { duenos = duenos + "{elemento(terrP, (k * N_TERR + tt) * 16)}" }
+  imprimir("  mundo {PRIMER + k}: {fi(k, 1)} personas · nacieron {cu(k, 0)}, murieron {cu(k, 2)} · Hoover {r1(md(k, 3) / 100.0)} % · robos {cu(k, 14)} · guerras {cu(k, 21)} · revoluciones {cu(k, 24)} · dueños de los territorios {duenos} · tecnología {es(k * N_FAC, 14)}/{es(k * N_FAC + 1, 14)}/{es(k * N_FAC + 2, 14)} · {elemento(nActivas, k)} empresas · índice {elemento(indiceBolsa, k) / 100}")
+}
+imprimir("serie cada 10 min de los {N_SERIE} primeros mundos en {RUTA_CSV}")
+imprimir("una fila por mundo ({N_ECO} mundos, del {PRIMER} al {PRIMER + N_ECO - 1}) en {archivosMundos} · {bytes // 1024} KB · {entero(msCsv)} ms")

@@ -1,0 +1,197 @@
+# ECOSIM-G v3 · ECONOMÍA Y RECURSOS (mecánicas 16–30), lo que se añade a la v2
+#
+# La v2 ya tenía la riqueza [16] (desigual desde el principio, Pareto), el comercio
+# [18], los precios [19], la producción [21], la moneda [24] y la deuda con los
+# bancos [26]. Aquí está lo nuevo entre personas: el fiado, el trueque, la ayuda y
+# la despensa que se estropea. Lo demás de esta categoría vive donde tiene que
+# vivir: los impuestos [25] en la nómina, el monopolio [30] en el cierre de la hora
+# de cada empresa, la cosecha [28] en la producción y las rutas [29] al elegir
+# dónde comprar (ecosim-g3.esl).
+#
+# REGLA DE ESTOS NÚCLEOS: las decisiones se toman con la FOTO de la hora (foto[p],
+# el saldo que copió el censo) y el dinero se mueve con sumarAtomico. Así el
+# resultado no depende del orden en que corren los hilos, y nadie paga con dinero
+# que ya no tiene (cada núcleo toca como mucho una fracción pequeña de la foto).
+#
+# Paquetes (p = h · 16): cuerpo 0 edad · 2 sed · 11 agua · 12 comida · 13 refugio ·
+# civil 0 territorio · 3 lengua · 4 2.ª lengua · 11 padre · 12 madre · rasgo 1
+# empatía · animo 9 reputación · 10 confianza · pedido 0 fiado · 1 a quién · 2 años ·
+# 3 pide a · 4 presta por · 5 pedidos · foto 0 saldo · cuenta (k·48) 8 ayudas ·
+# 9 fiados · 10 impagos · 11 trueques.
+
+# ── [34] parentesco y [51] empatía: la ayuda.
+# El niño sin dinero se lo pide a su madre (o a su padre); quien tiene de sobra y
+# es empático ayuda a un amigo que no llega.
+publico fn ayudar(h: entero, vivo, saldo, hambre, cuerpo, civil, rasgo, foto, vinculo, peso, cuenta, nAg: entero, kv: entero, salario: entero) {
+  si vivo[h] == 1 {
+    fijo k = h // nAg
+    fijo p = h * 16
+    fijo mio = foto[p]
+    si cuerpo[p] < 16 y mio < 2 * salario {
+      var dador = -1
+      fijo m = civil[p + 12]
+      fijo pa = civil[p + 11]
+      si m >= 0 { si vivo[m] == 1 y foto[m * 16] > 10 * salario { dador = m } }
+      si dador < 0 y pa >= 0 { si vivo[pa] == 1 y foto[pa * 16] > 10 * salario { dador = pa } }
+      si dador >= 0 {
+        fijo x = minimo(salario, foto[dador * 16] // 20)
+        sumarAtomico(saldo, dador, 0 - x)
+        sumarAtomico(saldo, h, x)
+        sumarAtomico(cuenta, k * 48 + 8, 1)
+      }
+    }
+    si mio > 20 * salario y rasgo[p + 1] > 60 {
+      var hecho = 0
+      para j en rango(kv) {
+        fijo o = vinculo[h * kv + j]
+        si hecho == 0 y o >= 0 y peso[h * kv + j] > 50 {
+          si vivo[o] == 1 y foto[o * 16] < salario y hambre[o] > 5000 {
+            fijo x = minimo(salario, mio // 40)
+            sumarAtomico(saldo, h, 0 - x)
+            sumarAtomico(saldo, o, x)
+            sumarAtomico(cuenta, k * 48 + 8, 1)
+            hecho = 1
+          }
+        }
+      }
+    }
+  }
+}
+
+# ── [26] deuda entre personas: el fiado. En tres pasos, como los retiros de los
+# clubes: (1) quien pasa hambre y no tiene se lo pide a un amigo con dinero (lo
+# decide «sentir», en psicologia.esl); (2) el prestamista reparte un poco de lo
+# suyo entre todos los que le pidieron; (3) cada uno recoge su parte y queda debiendo.
+publico fn prestarFiado(h: entero, vivo, saldo, pedido, animo, salario: entero) {
+  fijo p = h * 16
+  pedido[p + 4] = 0
+  fijo n = pedido[p + 5]
+  si vivo[h] == 1 y n > 0 {
+    # cuánto confía decide cuánto presta: hasta el 5 % de lo suyo
+    var m = saldo[h] * animo[p + 10] // 200000 // n
+    si m > 2 * salario { m = 2 * salario }
+    si m > 0 {
+      pedido[p + 4] = m
+      saldo[h] = saldo[h] - m * n
+    }
+  }
+  pedido[p + 5] = 0
+}
+publico fn recibirFiado(h: entero, saldo, pedido, cuenta, nAg: entero) {
+  fijo p = h * 16
+  fijo a = pedido[p + 3]
+  si a >= 0 {
+    fijo m = pedido[a * 16 + 4]
+    si m > 0 {
+      saldo[h] = saldo[h] + m
+      pedido[p] = m
+      pedido[p + 1] = a
+      pedido[p + 2] = 0
+      sumarAtomico(cuenta, (h // nAg) * 48 + 9, 1)
+    }
+  }
+  pedido[p + 3] = -1
+}
+# devolver: con la foto del saldo, un octavo cada año; el que no paga en 5 años
+# queda como moroso [32]: pierde reputación.
+publico fn pagarFiado(h: entero, vivo, saldo, foto, pedido, animo, cuenta, nAg: entero, salario: entero) {
+  fijo p = h * 16
+  fijo d = pedido[p]
+  si vivo[h] == 1 y d > 0 {
+    fijo a = pedido[p + 1]
+    pedido[p + 2] = pedido[p + 2] + 1
+    si a < 0 {
+      pedido[p] = 0
+    } sino si foto[p] > 2 * salario {
+      var pago = foto[p] // 8
+      si pago > d { pago = d }
+      sumarAtomico(saldo, h, 0 - pago)
+      sumarAtomico(saldo, a, pago)
+      pedido[p] = d - pago
+      si pedido[p] == 0 {
+        pedido[p + 1] = -1
+        animo[p + 9] = minimo(10000, animo[p + 9] + 300)
+      }
+    } sino si pedido[p + 2] > 5 {
+      pedido[p] = 0
+      pedido[p + 1] = -1
+      animo[p + 9] = maximo(0, animo[p + 9] - 1500)
+      sumarAtomico(cuenta, (h // nAg) * 48 + 10, 1)
+    }
+  }
+}
+
+# ── [23] trueque y [24] confianza en la moneda.
+# Un hilo por economía, en orden: quien tiene comida de sobra y le falta agua se
+# cruza con quien tiene agua de sobra y le falta comida, en el mismo territorio y
+# con una lengua en común [76]. Con inflación alta la gente desconfía del dinero y
+# el trueque empieza antes (el umbral de la necesidad baja de 3000 a 1500).
+publico fn truequear(k: entero, vivo, hambre, cuerpo, civil, medida, pendT, cuenta, nAg: entero, nTerr: entero) {
+  para j en rango(nTerr * 2) { pendT[k * nTerr * 2 + j] = -1 }
+  var umbral = 3000
+  si medida[k * 20 + 6] > 200 { umbral = 1500 }
+  fijo base = k * nAg
+  para i en rango(nAg) {
+    fijo h = base + i
+    fijo p = h * 16
+    si vivo[h] == 1 {
+      fijo kt2 = (k * nTerr + civil[p]) * 2
+      var tipo = -1
+      si cuerpo[p + 11] == 0 y cuerpo[p + 2] >= umbral y cuerpo[p + 12] >= 2 { tipo = 0 }     # ofrece comida, quiere agua
+      si cuerpo[p + 12] == 0 y hambre[h] >= umbral y cuerpo[p + 11] >= 2 { tipo = 1 }         # ofrece agua, quiere comida
+      si tipo >= 0 {
+        fijo otro = pendT[kt2 + 1 - tipo]
+        var hablan = 0
+        si otro >= 0 {
+          fijo po = otro * 16
+          si civil[po + 3] == civil[p + 3] o civil[po + 3] == civil[p + 4] { hablan = 1 }
+          si civil[po + 4] >= 0 y civil[po + 4] == civil[p + 3] { hablan = 1 }
+        }
+        si hablan == 1 {
+          fijo po = otro * 16
+          si tipo == 0 {
+            cuerpo[p + 12] = cuerpo[p + 12] - 1
+            cuerpo[po + 11] = cuerpo[po + 11] - 1
+            cuerpo[po + 12] = cuerpo[po + 12] + 1
+            cuerpo[p + 11] = cuerpo[p + 11] + 1
+          } sino {
+            cuerpo[p + 11] = cuerpo[p + 11] - 1
+            cuerpo[po + 12] = cuerpo[po + 12] - 1
+            cuerpo[po + 11] = cuerpo[po + 11] + 1
+            cuerpo[p + 12] = cuerpo[p + 12] + 1
+          }
+          pendT[kt2 + 1 - tipo] = -1
+          cuenta[k * 48 + 11] = cuenta[k * 48 + 11] + 1
+        } sino {
+          pendT[kt2 + tipo] = h
+        }
+      }
+    }
+  }
+}
+
+# ── [27] almacenamiento: lo guardado se estropea. Una unidad de comida de cada
+# despensa se pierde con probabilidad 3 % por año (8 % con calor), y lo que no cabe
+# (la capacidad la da el refugio [13]) se tira.
+publico fn estropear(h: entero, vivo, cuerpo, civil, clima, destruido, s: entero, t: entero, nAg: entero, nTerr: entero) {
+  si vivo[h] == 1 {
+    fijo k = h // nAg
+    fijo p = h * 16
+    fijo q = (k * nTerr + civil[p]) * 16
+    var pr = 0.03
+    si clima[q] > 28 { pr = 0.08 }
+    si cuerpo[p + 12] > 0 y azarHilo(s + k, h % nAg, 280 + t // 3600 % 23) < pr {
+      cuerpo[p + 12] = cuerpo[p + 12] - 1
+      sumarAtomico(destruido, k, 1)
+    }
+    fijo cap = 4 + cuerpo[p + 13] * 4
+    si cuerpo[p + 12] > cap {
+      sumarAtomico(destruido, k, cuerpo[p + 12] - cap)
+      cuerpo[p + 12] = cap
+    }
+    si cuerpo[p + 11] > cap {
+      sumarAtomico(destruido, k, cuerpo[p + 11] - cap)
+      cuerpo[p + 11] = cap
+    }
+  }
+}
