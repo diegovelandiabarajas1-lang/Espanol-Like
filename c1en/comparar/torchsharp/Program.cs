@@ -52,5 +52,7 @@ void Pruebas(Device dev, string disp)
     Medir("fft", nf.ToString(), disp, () => torch.fft.fft(xf), X => X.abs().sum().item<double>());
 }
 
-Pruebas(torch.CPU, "cpu");
-if (torch.cuda.is_available()) Pruebas(torch.CUDA, "gpu");
+// SOLO=cpu o SOLO=gpu: el cuaderno reparte CPU y GPU en dos máquinas
+var solo = Environment.GetEnvironmentVariable("SOLO") ?? "";
+if (solo != "gpu") Pruebas(torch.CPU, "cpu");
+if (solo != "cpu" && torch.cuda.is_available()) Pruebas(torch.CUDA, "gpu");

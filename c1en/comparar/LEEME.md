@@ -23,14 +23,26 @@ FFT, Σy² en softmax) se calcula fuera del tiempo medido. Salida de todos, una 
 
 `escala chica` (primer argumento `chica`) usa tamaños pequeños para comprobar que todo corre.
 
-## Las dos T4 a la vez
+## Dos cuadernos a la vez: uno con las T4, otro solo CPU
 
-El cuaderno trabaja en dos fases. **Fase 1:** instala y compila varios lenguajes a la vez (`INSTALAR_A_LA_VEZ`, 3 por
-defecto; `apt-get` de uno en uno). **Fase 2:** dos trabajadores sacan tareas de una cola, de la más larga a la más corta:
-el 1 con la T4 0 y la mitad de los núcleos físicos, el 2 con la T4 1 y la otra mitad (`CUDA_VISIBLE_DEVICES`, `taskset`
-y los hilos de OpenMP/MKL/OpenBLAS/Go/Rust/Julia/JVM limitados a su mitad). Así las medidas no se estorban y todos los
-lenguajes compiten en las mismas condiciones; el precio es que los tiempos de CPU son con media CPU. `MODO =
-'secuencial'` corre uno detrás de otro con la CPU entera y la T4 0.
+El mismo cuaderno se importa dos veces en Kaggle y se elige el papel en la primera celda:
+
+- **`PAPEL = 'gpu'`** (sesión *GPU T4 x2*): instala solo los lenguajes con GPU (Ñ, PyTorch, CUDA.jl, Candle, R torch,
+  TorchSharp) y mide **solo sus pruebas de GPU**, dos a la vez: un trabajador por T4 (`CUDA_VISIBLE_DEVICES`), cada uno
+  atado a su mitad de núcleos (`taskset`). Los demás lenguajes salen como «en el cuaderno de CPU».
+- **`PAPEL = 'cpu'`** (sesión sin acelerador): instala lo de CPU de todos (Julia sin CUDA.jl, Candle sin `cuda`,
+  torch de R y TorchSharp en su versión CPU) y mide **todas las pruebas de CPU**, una tras otra, con la CPU entera.
+- **`PAPEL = 'todo'`**: las dos cosas en una sola sesión de GPU, con `MODO = 'paralelo'` (dos a la vez, media CPU
+  cada uno) o `'secuencial'`.
+
+Los programas que miden CPU y GPU (pytorch.py, cudajl.jl, candle, rtorch.R, torchsharp) leen la variable `SOLO=cpu|gpu`
+que les pasa el cuaderno. Así cada ranking sale de una sola máquina: las pruebas de CPU todas de la sesión de CPU, las de
+GPU de la de GPU, y la tabla las muestra separadas. Cada cuaderno guarda `comparar-lenguajes-cpu.csv` o `-gpu.csv`; para
+la tabla conjunta, en uno de los dos se añade como entrada (*Add Input → Your Work*) la salida del otro y se corre de
+nuevo desde «Juntar con el otro cuaderno» (si la sesión se reinició, antes las tres primeras celdas de código; no hace
+falta medir otra vez): lee `/kaggle/input/**/comparar-lenguajes-*.csv` y escribe
+`comparar-lenguajes-junto.csv`. En las dos fases, la 1 instala varios lenguajes a la vez (`INSTALAR_A_LA_VEZ`, 3 por
+defecto; `apt-get` de uno en uno) y la 2 mide sacando tareas de una cola, de la más larga a la más corta.
 
 ## Los programas
 

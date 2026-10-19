@@ -56,9 +56,11 @@ fn pruebas(dev: &Device, disp: &str, chica: bool) -> Result<()> {
 
 fn main() -> Result<()> {
     let chica = std::env::args().nth(1).map(|a| a == "chica").unwrap_or(false);
-    pruebas(&Device::Cpu, "cpu", chica)?;
+    // SOLO=cpu o SOLO=gpu: el cuaderno reparte CPU y GPU en dos máquinas
+    let solo = std::env::var("SOLO").unwrap_or_default();
+    if solo != "gpu" { pruebas(&Device::Cpu, "cpu", chica)?; }
     #[cfg(feature = "cuda")]
-    {
+    if solo != "cpu" {
         match Device::new_cuda(0) {
             Ok(dev) => pruebas(&dev, "gpu", chica)?,
             Err(e) => println!("# sin GPU para Candle: {}", e),

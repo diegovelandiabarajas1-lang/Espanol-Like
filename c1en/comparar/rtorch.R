@@ -39,5 +39,6 @@ pruebas <- function(dev, disp, sinc) {
 }
 
 cat("# torch para R", as.character(packageVersion("torch")), "\n")
-pruebas(torch_device("cpu"), "cpu", function() invisible(NULL))
-if (cuda_is_available()) pruebas(torch_device("cuda"), "gpu", function() cuda_synchronize())
+SOLO <- Sys.getenv("SOLO")          # "cpu" o "gpu": el cuaderno reparte CPU y GPU en dos máquinas
+if (SOLO != "gpu") pruebas(torch_device("cpu"), "cpu", function() invisible(NULL))
+if (SOLO != "cpu" && cuda_is_available()) pruebas(torch_device("cuda"), "gpu", function() cuda_synchronize())

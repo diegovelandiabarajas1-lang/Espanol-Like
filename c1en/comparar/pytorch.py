@@ -8,7 +8,9 @@ import sys, time, torch
 chica = len(sys.argv) > 1 and sys.argv[1] == 'chica'
 NS = [128, 256] if chica else [1024, 2048]
 NV, SM, SK, NF = (65536, 256, 1024, 16384) if chica else (1 << 24, 4096, 1024, 1 << 20)
-dispositivos = ['cpu'] + (['cuda'] if torch.cuda.is_available() else [])
+import os
+SOLO = os.environ.get('SOLO', '')          # 'cpu' o 'gpu': el cuaderno reparte CPU y GPU en dos máquinas
+dispositivos = (['cpu'] if SOLO != 'gpu' else []) + (['cuda'] if torch.cuda.is_available() and SOLO != 'cpu' else [])
 print(f'# torch {torch.__version__} · hilos CPU {torch.get_num_threads()} · ' +
       (torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'sin GPU'), flush=True)
 

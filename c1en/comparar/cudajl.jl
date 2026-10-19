@@ -38,8 +38,10 @@ end
 # con el cuaderno en paralelo, cada trabajo tiene sus núcleos: los de BLAS, los mismos
 haskey(ENV, "HILOS") && BLAS.set_num_threads(parse(Int, ENV["HILOS"]))
 println("# julia ", VERSION, " · hilos ", Threads.nthreads(), " · BLAS ", BLAS.get_num_threads())
-pruebas("cpu", identity, f -> f())
-if get(ENV, "SIN_GPU", "") != "1"
+# SOLO=cpu o SOLO=gpu: el cuaderno reparte CPU y GPU en dos máquinas
+const SOLO = get(ENV, "SOLO", "")
+SOLO != "gpu" && pruebas("cpu", identity, f -> f())
+if get(ENV, "SIN_GPU", "") != "1" && SOLO != "cpu"
     # «using» dentro de un «if» se puede, pero CUDA.@sync se expande al leer el
     # bloque, antes de cargar CUDA: por eso la parte de la GPU se lee después
     @eval using CUDA
