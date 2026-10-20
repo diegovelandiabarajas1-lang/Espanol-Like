@@ -37,7 +37,8 @@ function instalarNumerico(vm) {
   // millón bajó de 43 a ~1 ms). Las sumas van en el mismo orden, de izquierda a
   // derecha y desde 0, así que dan exactamente lo mismo que antes.
   const numsPlanos = (v, n, f) => {
-    if (v instanceof ObjArreglo && v.seguida && v.tipo !== 'complejo') { vm.cobrar(v.tamano); return v.datos.subarray(0, v.tamano); }
+    if (v instanceof ObjArreglo && esBig(v.tipo)) vm.nadaDeComplejos(v, f);
+    if (v instanceof ObjArreglo && v.seguida && v.tipo !== 'complejo') { vm.cobrar(v.tamano); return v.datos.subarray(v.desp || 0, (v.desp || 0) + v.tamano); }
     return nums(v, n, f);
   };
   const sumaDe = xs => { let s = 0; for (let i = 0; i < xs.length; i++) s += xs[i]; return s; };
@@ -86,13 +87,22 @@ function instalarNumerico(vm) {
     vm.nadaDeComplejos(v, f);
     return v;
   };
+  // (motor-exp N4.5) «arrB»: la puerta de las que saben de i64/u64 (y no de complejos)
+  const arrB = (v, n, f) => {
+    if (!(v instanceof ObjArreglo)) vm.error(`«${f}»: el argumento ${n} debe ser un arreglo y es ${tipoDe(v)}`);
+    if (v.tipo === 'complejo') vm.nadaDeComplejos(v, f);
+    return v;
+  };
   const arrC = (v, n, f) => {
     if (!(v instanceof ObjArreglo)) vm.error(`«${f}»: el argumento ${n} debe ser un arreglo y es ${tipoDe(v)}`);
     return v;
   };
   // «bool» está desde que existen las máscaras: es lo que devuelven las
   // comparaciones, así que tiene que poder pedirse y convertirse como los otros.
-  const TIPOS_OK = ['real', 'entero', 'bool'];
+  // (motor-exp N4.2) «real32» y «real16»: precisión simple y media (ver TIPOS_ARR)
+  // (motor-exp N4.5) y los enteros de máquina: i8 u8 i16 u16 u32 i64 u64 (con
+  // i32, f64, f32 y f16 como otros nombres de entero, real, real32 y real16)
+  const TIPOS_OK = ['real', 'entero', 'bool', 'real32', 'real16', 'i8', 'u8', 'i16', 'u16', 'u32', 'i64', 'u64'];
   // Una forma puede venir como número —arreglo de una dimensión— o como lista.
   const formaDe = (v, f) => {
     const xs = typeof v === 'number' ? [v] : lst(v, 1, f).items;
@@ -108,7 +118,7 @@ function instalarNumerico(vm) {
   };
   const tipoArg = (v, f) => {
     if (v === undefined || v === null) return 'real';
-    const t = txtA(v, f);
+    const t0 = txtA(v, f), t = ALIAS_TIPO[t0] || t0;
     // El mensaje sale de la lista, no de una copia a mano: cuando se añadió
     // «bool» el mensaje siguió diciendo que solo había dos tipos.
     if (!TIPOS_OK.includes(t))
@@ -539,9 +549,13 @@ function instalarNumerico(vm) {
   // Llenar un arreglo nuevo desde una lista plana.
   const cargar = (forma, plano, tipo) => {
     const a = vm.arrNuevo(forma, tipo);
+    if (esBig(tipo)) { for (let i = 0; i < plano.length; i++) a.datos[i] = aBig64(plano[i]); return a; }
     for (let i = 0; i < plano.length; i++) a.datos[i] = plano[i];
-    return a;
+    return vm.arrRedondear(a);
   };
+  // (motor-exp N4.2) el tipo común de varios arreglos (pegarlos, elegir entre
+  // ellos): el mismo que da la aritmética entre ellos
+  const tipoComunDe = ts => ts.reduce((acc, t) => (acc === null ? t : (acc === t ? t : tipoAritmetico(acc, t, '+', true, true))), null);
 
   return function (def) {
     // Una línea extiende TRECE funciones a los arreglos. El tipo de la firma es
@@ -586,6 +600,13 @@ function instalarNumerico(vm) {
     // Sin eje suma todo y devuelve un número, que es lo que ya hacía.
     def('suma', '... -> cualquiera', a => {
       const x = a[0];
+      // (motor-exp N4.5) la suma de un i64/u64 es EXACTA (BigInt): sale un número
+      // si cabe en 2^53 y si no un grande exacto
+      if (x instanceof ObjArreglo && esBig(x.tipo) && a.length === 1) {
+        let s = 0n; for (const p of x.posiciones()) s += x.datos[p];
+        vm.cobrar(x.tamano);
+        return deBig64(s);
+      }
       if (x instanceof ObjArreglo && a.length > 1)
         return vm.arrReducir(x, ent(a[1], 2, 'suma'), 0, (acc, v) => acc + v, null,
           x.tipo === 'entero' ? 'entero' : 'real');
@@ -1131,13 +1152,13 @@ function instalarNumerico(vm) {
       'ceros(forma, tipo?) — ceros(3) o ceros([2, 4])');
     def('unos', '... -> arreglo', a => {
       const x = vm.arrNuevo(formaDe(a[0], 'unos'), tipoArg(a[1], 'unos'));
-      x.datos.fill(1);
+      x.datos.fill(guardable(x.tipo, 1));
       return x;
     }, 'unos(forma, tipo?)');
     def('lleno', '... -> arreglo', a => {
       const v = num(a[1], 2, 'lleno');
       const x = vm.arrNuevo(formaDe(a[0], 'lleno'), a.length > 2 ? tipoArg(a[2], 'lleno') : (todoEntero([v]) ? 'entero' : 'real'));
-      x.datos.fill(v);
+      x.datos.fill(guardable(x.tipo, v));
       return x;
     }, 'lleno(forma, valor, tipo?) — todo el arreglo con el mismo valor');
     def('secuencia', '... -> arreglo', a => {
@@ -1187,7 +1208,7 @@ function instalarNumerico(vm) {
     def('tamano', 'arreglo -> entero', a => arrC(a[0], 1, 'tamano').tamano,
       'cuántos números tiene en total');
     def('tipoArreglo', 'arreglo -> texto', a => arrC(a[0], 1, 'tipoArreglo').tipo,
-      '"real" o "entero" — el tipo de TODOS sus números');
+      '"real", "entero", "bool", "complejo", "real32", "real16" o un entero de máquina ("i8" … "u64") — el tipo de TODOS sus números');
     def('esVista', 'arreglo -> bool', a => arrC(a[0], 1, 'esVista').base !== null,
       'dice si comparte memoria con otro arreglo en vez de tener la suya');
 
@@ -1195,7 +1216,7 @@ function instalarNumerico(vm) {
     def('redimensionar', '... -> arreglo', a => {
       // Cambia la forma sin tocar los números. Si la memoria está seguida, la
       // nueva forma es una VISTA y no copia nada.
-      const x = arr(a[0], 1, 'redimensionar');
+      const x = arrB(a[0], 1, 'redimensionar');
       const f = formaDe(a[1], 'redimensionar');
       if (tamanoDeF(f) !== x.tamano)
         vm.error(`«redimensionar»: ${x.forma.join('×')} son ${x.tamano} números y ${f.join('×')} son ${tamanoDeF(f)}`,
@@ -1224,7 +1245,7 @@ function instalarNumerico(vm) {
         x.desp + i * x.zancadas[0], x.base || x);
     }, 'fila(a, i) — una VISTA de la fila i, sin copiar');
     def('copia', 'arreglo -> arreglo', a => {
-      const x = arr(a[0], 1, 'copia');
+      const x = arrB(a[0], 1, 'copia');
       const y = vm.arrNuevo(x.forma, x.tipo);
       let i = 0;
       for (const p of x.posiciones()) y.datos[i++] = x.datos[p];
@@ -1234,23 +1255,23 @@ function instalarNumerico(vm) {
 
     // ── entrar y salir ──────────────────────────────────────────────────────
     def('aListaA', 'arreglo -> lista', a => {
-      const x = arr(a[0], 1, 'aListaA');
+      const x = arrB(a[0], 1, 'aListaA');
       // Esta lee «datos» a mano en vez de pasar por arrValores, así que la
       // negativa para complejos hay que ponerla aquí: sin ella devolvía las
       // partes reales e imaginarias revueltas como si fueran números sueltos,
       // sin quejarse. Lo encontró una prueba que esperaba que fallara.
-      vm.nadaDeComplejos(x, 'aListaA');
+      if (!esBig(x.tipo)) vm.nadaDeComplejos(x, 'aListaA');
       vm.cobrar(x.tamano);
       const sube = (d, base) => {
         const n = x.forma[d], z = x.zancadas[d], out = new Array(n);
         for (let i = 0; i < n; i++)
-          out[i] = d === x.forma.length - 1 ? x.datos[base + i * z] : sube(d + 1, base + i * z);
+          out[i] = d === x.forma.length - 1 ? deBig64(x.datos[base + i * z]) : sube(d + 1, base + i * z);
         return L(out);
       };
       return sube(0, x.desp);
     }, 'aListaA(a) — de arreglo a lista anidada');
     def('elemento', '... -> real', a => {
-      const x = arr(a[0], 1, 'elemento');
+      const x = arrB(a[0], 1, 'elemento');
       const ix = [];
       for (let k = 1; k < a.length; k++) ix.push(ent(a[k], k + 1, 'elemento'));
       if (ix.length !== x.dimensiones)
@@ -1259,11 +1280,12 @@ function instalarNumerico(vm) {
       for (let d = 0; d < ix.length; d++)
         if (ix[d] < 0 || ix[d] >= x.forma[d])
           vm.error(`«elemento»: el índice ${ix[d]} se sale del eje ${d}, que mide ${x.forma[d]}`);
-      return x.datos[x.pos(ix)];
+      return deBig64(x.datos[x.pos(ix)]);
     }, 'elemento(a, i, j, …) — un solo número');
     def('ponerElemento', '... -> arreglo', a => {
-      const x = arr(a[0], 1, 'ponerElemento');
-      const v = num(a[a.length - 1], a.length, 'ponerElemento');
+      const x = arrB(a[0], 1, 'ponerElemento');
+      const ult = a[a.length - 1];
+      const v = esBig(x.tipo) && ult instanceof ObjGrande ? ult : num(ult, a.length, 'ponerElemento');
       const ix = [];
       for (let k = 1; k < a.length - 1; k++) ix.push(ent(a[k], k + 1, 'ponerElemento'));
       if (ix.length !== x.dimensiones)
@@ -1271,7 +1293,7 @@ function instalarNumerico(vm) {
       for (let d = 0; d < ix.length; d++)
         if (ix[d] < 0 || ix[d] >= x.forma[d])
           vm.error(`«ponerElemento»: el índice ${ix[d]} se sale del eje ${d}, que mide ${x.forma[d]}`);
-      x.datos[x.pos(ix)] = v;
+      x.datos[x.pos(ix)] = guardable(x.tipo, v);
       return x;
     }, 'ponerElemento(a, i, j, …, valor) — cambia un número · MODIFICA el arreglo');
 
@@ -1351,16 +1373,15 @@ function instalarNumerico(vm) {
           vm.error(`«donde»: el argumento ${k} debe ser un arreglo o un número y es ${tipoDe(v)}`);
       let f = m.forma.slice();
       for (const v of [si, no]) if (v instanceof ObjArreglo) f = difundirF(f, v.forma, 'donde');
-      const entero = (si instanceof ObjArreglo ? si.tipo === 'entero' : Number.isInteger(si)) &&
-                     (no instanceof ObjArreglo ? no.tipo === 'entero' : Number.isInteger(no));
-      const out = vm.arrNuevo(f, entero ? 'entero' : 'real');
+      const tipoV = v => (v instanceof ObjArreglo ? v.tipo : (Number.isInteger(v) ? 'entero' : 'real'));
+      const out = vm.arrNuevo(f, tipoAritmetico(tipoV(si), tipoV(no), '+', si instanceof ObjArreglo, no instanceof ObjArreglo));
       const vm_ = vm.arrValores(difundirVista(m, f));
       const vs = si instanceof ObjArreglo ? vm.arrValores(difundirVista(si, f)) : null;
       const vn = no instanceof ObjArreglo ? vm.arrValores(difundirVista(no, f)) : null;
       const n = out.tamano;
       vm.cobrar(n);
       for (let i = 0; i < n; i++) out.datos[i] = vm_[i] ? (vs ? vs[i] : si) : (vn ? vn[i] : no);
-      return out;
+      return vm.arrRedondear(out);
     }, 'donde(mascara, siCierto, siFalso) — elige elemento a elemento · el «si» de los arreglos');
 
     def('enMascara', 'arreglo, arreglo -> arreglo', a => {
@@ -1390,7 +1411,7 @@ function instalarNumerico(vm) {
       const vm2 = vm.arrValores(m);
       let i = 0, j = 0;
       for (const p of x.posiciones()) {
-        if (vm2[i]) x.datos[p] = esArr ? vv[j++ % vv.length] : v;
+        if (vm2[i]) x.datos[p] = guardable(x.tipo, esArr ? vv[j++ % vv.length] : v);
         i++;
       }
       vm.cobrar(x.tamano);
@@ -1406,10 +1427,10 @@ function instalarNumerico(vm) {
       const x = arr(a[0], 1, nombre), y = a[1];
       if (y instanceof ObjArreglo) {
         const f = difundirF(x.forma, y.forma, nombre);
-        const out = vm.arrNuevo(f, x.tipo === 'entero' && y.tipo === 'entero' ? 'entero' : 'real');
+        const out = vm.arrNuevo(f, tipoAritmetico(x.tipo, y.tipo, '+', true, true));
         const vx = vm.arrValores(difundirVista(x, f)), vy = vm.arrValores(difundirVista(y, f));
         for (let i = 0; i < out.tamano; i++) out.datos[i] = fn(vx[i], vy[i]);
-        return out;
+        return vm.arrRedondear(out);
       }
       const k = num(y, 2, nombre);
       return vm.arrUnaria(x, v => fn(v, k));
@@ -1616,7 +1637,7 @@ function instalarNumerico(vm) {
       }
       const f = xs[0].forma.slice();
       f[e] = xs.reduce((n, x) => n + x.forma[e], 0);
-      const tipo = xs.every(x => x.tipo === 'entero') ? 'entero' : (xs.every(x => x.tipo === 'bool') ? 'bool' : 'real');
+      const tipo = xs.every(x => x.tipo === 'bool') ? 'bool' : tipoComunDe(xs.map(x => (x.tipo === 'bool' ? 'real' : x.tipo)));
       const out = vm.arrNuevo(f, tipo);
       let off = 0;
       for (const x of xs) {
@@ -1628,7 +1649,7 @@ function instalarNumerico(vm) {
         for (let c = 0; c < x.tamano; c++) {
           let pos = 0;
           for (let q = 0; q < nd; q++) pos += (q === e ? ix[q] + off : ix[q]) * out.zancadas[q];
-          out.datos[pos] = vx[k++];
+          out.datos[pos] = guardable(tipo, vx[k++]);
           for (let q = nd - 1; q >= 0; q--) { if (++ix[q] < x.forma[q]) break; ix[q] = 0; }
         }
         off += x.forma[e];
@@ -1648,7 +1669,7 @@ function instalarNumerico(vm) {
       if (eje < 0) eje += xs[0].dimensiones + 1;
       if (eje < 0 || eje > xs[0].dimensiones) vm.error(`«apilar»: el eje no cabe · puede ir de 0 a ${xs[0].dimensiones}`);
       const f = xs[0].forma.slice(); f.splice(eje, 0, xs.length);
-      const tipo = xs.every(x => x.tipo === 'entero') ? 'entero' : 'real';
+      const tipo = tipoComunDe(xs.map(x => (x.tipo === 'bool' ? 'real' : x.tipo)));
       const out = vm.arrNuevo(f, tipo);
       const nd = f.length;
       for (let i = 0; i < xs.length; i++) {
@@ -1658,7 +1679,7 @@ function instalarNumerico(vm) {
         for (let c = 0; c < xs[i].tamano; c++) {
           let pos = 0, q2 = 0;
           for (let q = 0; q < nd; q++) pos += (q === eje ? i : ix[q2++]) * out.zancadas[q];
-          out.datos[pos] = vx[k++];
+          out.datos[pos] = guardable(tipo, vx[k++]);
           for (let q = ix.length - 1; q >= 0; q--) { if (++ix[q] < xs[i].forma[q]) break; ix[q] = 0; }
         }
       }
@@ -1746,15 +1767,150 @@ function instalarNumerico(vm) {
     como('cerosComo', 0, 'cerosComo(a, tipo?) — ceros con la forma y el tipo de otro');
     como('unosComo', 1, 'unosComo(a, tipo?)');
     como('vacioComo', null, 'vacioComo(a, tipo?) — sin inicializar');
+    // ══════════════════════════════════════════════ (motor-exp N4.5) bits
+    // Las operaciones de bits de C. Con NÚMEROS sueltos, enteros de verdad (como
+    // en Python: complemento a dos con infinitos unos a la izquierda, así que
+    // bitsNo(5) es −6 y desplazarIzq(1, 70) es 2^70 exacto, un grande). Con
+    // ARREGLOS, en el tipo del arreglo, como C y NumPy: un u8 desplazado se sale
+    // por la izquierda y desplazarDer de un negativo con signo rellena con unos.
+    const aEntBig = (v, n, f) => {
+      if (typeof v === 'number') {
+        if (!Number.isInteger(v)) vm.error(`«${f}»: el argumento ${n} tiene que ser un entero y es ${v}`);
+        return BigInt(v);
+      }
+      if (v instanceof ObjGrande) {
+        const b = aBig64(v);
+        if (!v.exacto || (v.e < 0 && b * (10n ** BigInt(-v.e)) !== v.m))
+          vm.error(`«${f}»: el argumento ${n} tiene que ser un entero exacto`);
+        return b;
+      }
+      vm.error(`«${f}»: el argumento ${n} tiene que ser un entero y es ${tipoDe(v)}`);
+    };
+    const arrEnt = (x, n, f) => {
+      if (!ENT_INFO[x.tipo])
+        vm.error(`«${f}»: las operaciones de bits son de arreglos ENTEROS y el argumento ${n} es ${x.tipo}`,
+          'pásalo antes con aTipo(a, "i32") o al entero que toque');
+      return x;
+    };
+    const DESPL_MAX = 1 << 16;
+    const despl = (v, n, f) => {
+      const k = vm.exigeNum(v, n, f);
+      if (!Number.isInteger(k) || k < 0) vm.error(`«${f}»: el desplazamiento es un entero no negativo y llegó ${k}`);
+      if (k > DESPL_MAX) vm.error(`«${f}»: el desplazamiento llega como mucho a ${DESPL_MAX}`);
+      return k;
+    };
+    // las operaciones, para BigInt y para números de hasta 32 bits (JavaScript
+    // las hace en 32 bits con signo, y el arreglo de destino envuelve al guardar)
+    const OPS_BITS = {
+      bitsY:   [(x, y) => x & y, (x, y) => x & y],
+      bitsO:   [(x, y) => x | y, (x, y) => x | y],
+      bitsXor: [(x, y) => x ^ y, (x, y) => x ^ y],
+      // desplazar por multiplicar o dividir por 2^k: exacto en un double, y el
+      // arreglo se queda con los bits que caben; con BigInt, el desplazamiento
+      // de JavaScript (el de la derecha es aritmético, el «>>» de C con signo)
+      desplazarIzq: [(x, k) => x << BigInt(k), (x, k) => x * Math.pow(2, Math.min(k, 1100))],
+      desplazarDer: [(x, k) => x >> BigInt(k), (x, k) => Math.floor(x / Math.pow(2, Math.min(k, 1100)))],
+    };
+    const bitsDos = (nombre) => a => {
+      const [fb, fn] = OPS_BITS[nombre], esDespl = nombre.startsWith('desplazar');
+      const x = a[0], y = a[1];
+      const ax = x instanceof ObjArreglo, ay = y instanceof ObjArreglo;
+      if (!ax && !ay) {
+        const bx = aEntBig(x, 1, nombre);
+        const r = esDespl ? fb(bx, despl(y, 2, nombre)) : fb(bx, aEntBig(y, 2, nombre));
+        return deBig64(r);
+      }
+      if (!ax) vm.error(`«${nombre}»: si hay un arreglo, va primero`, `${nombre}(arreglo, número) o ${nombre}(arreglo, arreglo)`);
+      arrEnt(x, 1, nombre);
+      if (ay) arrEnt(y, 2, nombre);
+      else if (esDespl) despl(y, 2, nombre);
+      else if (typeof y !== 'number' || !Number.isInteger(y)) vm.error(`«${nombre}»: el argumento 2 tiene que ser un entero o un arreglo entero`);
+      const tipo = esDespl ? x.tipo : (ay ? tipoAritmetico(x.tipo, y.tipo, '+', true, true) : x.tipo);
+      if (!ENT_INFO[tipo]) vm.error(`«${nombre}»: ${x.tipo} con ${y.tipo} no tiene un entero común`, 'pásalos a un mismo tipo con aTipo');
+      const f = ay ? difundir(x.forma, y.forma) : x.forma.slice();
+      if (f === null) vm.error(`«${nombre}»: las formas ${x.forma.join('×')} y ${y.forma.join('×')} no se pueden difundir`);
+      const out = vm.arrNuevo(f, tipo), d = out.datos, n = out.tamano;
+      vm.cobrar(n);
+      const big = esBig(tipo);
+      // el camino rápido: seguidos (o con un número), hasta 32 bits
+      if (!big && x.seguida && x.tamano === n && (!ay || (y.seguida && y.tamano === n && !esBig(y.tipo)))) {
+        const xd = x.datos, yd = ay ? y.datos : null;
+        if (ay && esDespl) { for (let k = 0; k < n; k++) { const w = yd[k]; if (w < 0 || w > DESPL_MAX) vm.error(`«${nombre}»: el desplazamiento es un entero de 0 a ${DESPL_MAX} y llegó ${w}`); d[k] = fn(xd[k], w); } }
+        else if (ay) for (let k = 0; k < n; k++) d[k] = fn(xd[k], yd[k]);
+        else for (let k = 0; k < n; k++) d[k] = fn(xd[k], y);
+        return out;
+      }
+      const zx = zancadasDifundidas(x, f), zy = ay ? zancadasDifundidas(y, f) : null;
+      const nd = f.length, ix = new Array(nd).fill(0);
+      const ys = ay ? null : (big && !esDespl ? BigInt(y) : y);
+      for (let k = 0; k < n; k++) {
+        let px = x.desp, py = ay ? y.desp : 0;
+        for (let q = 0; q < nd; q++) { px += ix[q] * zx[q]; if (ay) py += ix[q] * zy[q]; }
+        let u = x.datos[px], w = ay ? y.datos[py] : ys;
+        if (esDespl) {
+          if (ay) { w = Number(w); if (w < 0 || w > DESPL_MAX) vm.error(`«${nombre}»: el desplazamiento es un entero de 0 a ${DESPL_MAX} y llegó ${w}`); }
+          d[k] = big ? fb(BigInt(u), w) : fn(Number(u), w);
+        } else if (big) d[k] = fb(BigInt(u), BigInt(w));
+        else d[k] = fn(Number(u), Number(w));
+        for (let q = nd - 1; q >= 0; q--) { if (++ix[q] < f[q]) break; ix[q] = 0; }
+      }
+      return out;
+    };
+    for (const [nombre, ayuda] of [
+      ['bitsY', 'bitsY(a, b) — el «&» de C, bit a bit'],
+      ['bitsO', 'bitsO(a, b) — el «|» de C'],
+      ['bitsXor', 'bitsXor(a, b) — el «^» de C'],
+      ['desplazarIzq', 'desplazarIzq(a, k) — el «<<» de C · en un arreglo, en su tipo (lo que sale por la izquierda se pierde)'],
+      ['desplazarDer', 'desplazarDer(a, k) — el «>>» de C · aritmético en los tipos con signo, lógico en los sin signo'],
+    ]) def(nombre, '... -> cualquiera', bitsDos(nombre), ayuda);
+    def('bitsNo', '... -> cualquiera', a => {
+      const x = a[0];
+      if (!(x instanceof ObjArreglo)) return deBig64(~aEntBig(x, 1, 'bitsNo'));
+      arrEnt(x, 1, 'bitsNo');
+      const out = vm.arrNuevo(x.forma, x.tipo), d = out.datos, big = esBig(x.tipo);
+      let i = 0;
+      for (const p of x.posiciones()) d[i++] = big ? ~x.datos[p] : ~x.datos[p];
+      vm.cobrar(x.tamano);
+      return out;
+    }, 'bitsNo(a) — el «~» de C: bitsNo(5) es −6, y en un u8, 5 da 250');
+    def('contarBits', '... -> cualquiera', a => {
+      const x = a[0];
+      const pop = b => { let c = 0; if (b < 0n) vm.error('«contarBits» de un negativo suelto no tiene fin', 'pásalo a un arreglo de su tipo, o usa bitsY con una máscara'); while (b) { c += Number(b & 1n); b >>= 1n; } return c; };
+      if (!(x instanceof ObjArreglo)) return pop(aEntBig(x, 1, 'contarBits'));
+      arrEnt(x, 1, 'contarBits');
+      const [bits] = ENT_INFO[x.tipo];
+      const out = vm.arrNuevo(x.forma, 'entero'), d = out.datos;
+      let i = 0;
+      for (const p of x.posiciones()) d[i++] = pop(BigInt.asUintN(bits, BigInt(x.datos[p])));
+      vm.cobrar(x.tamano);
+      return out;
+    }, 'contarBits(a) — cuántos bits a 1 (el popcount) · en un arreglo, en los bits de su tipo');
+
     def('aTipo', 'arreglo, texto -> arreglo', a => {
-      const x = arr(a[0], 1, 'aTipo');
+      const x = arrB(a[0], 1, 'aTipo');
       const t = tipoArg(a[1], 'aTipo');
+      if (x.tipo === 'complejo') vm.nadaDeComplejos(x, 'aTipo');
       const y = vm.arrNuevo(x.forma, t);
       let i = 0;
-      for (const p of x.posiciones()) y.datos[i++] = x.datos[p];
+      // (motor-exp N4.5) entre BigInt y número hay que convertir a mano (las
+      // TypedArray no lo hacen): de real a i64 se trunca, como en C
+      if (esBig(t) || esBig(x.tipo)) {
+        for (const p of x.posiciones()) {
+          const v = x.datos[p];
+          y.datos[i++] = t === 'bool' ? ((typeof v === 'bigint' ? v !== 0n : v !== 0) ? 1 : 0) : guardable(t, v);
+        }
+      } else if (ENT_INFO[t] && t !== 'entero' && !ENT_INFO[x.tipo] && x.tipo !== 'bool') {
+        // de coma flotante a un entero de máquina: se trunca y se envuelve (la
+        // TypedArray lo hace exacto); NaN e infinito no son enteros
+        for (const p of x.posiciones()) {
+          const v = x.datos[p];
+          if (!Number.isFinite(v)) vm.error(`«aTipo»: ${v} no cabe en un ${t}`);
+          y.datos[i++] = v;
+        }
+      } else for (const p of x.posiciones()) y.datos[i++] = x.datos[p];
       vm.cobrar(x.tamano);
-      return y;
-    }, 'aTipo(a, "real" | "entero" | "bool") — convierte, copiando');
+      return vm.arrRedondear(y);
+    }, 'aTipo(a, tipo) — convierte, copiando · tipos: real entero bool real32 real16 i8 u8 i16 u16 u32 i64 u64 · a entero se trunca y ENVUELVE (300 en un u8 es 44), como en C');
 
     // ══════════════════════════════════════════════ álgebra lineal
     def('por', 'arreglo, arreglo -> arreglo', a => {
@@ -2216,6 +2372,10 @@ function instalarNumerico(vm) {
       if (x.dimensiones !== 1) vm.error(`«fourier» trabaja sobre una dimensión y llegó un arreglo de ${x.dimensiones}`,
         'saca la fila o la columna con fila(a, i) o trozoVarios, y transfórmala');
       if (x.tamano < 1) vm.error('«fourier» de un arreglo vacío');
+      // (motor-exp N3) potencia de dos y seguido: el resultado lo hacen los
+      // núcleos de NEÑ y se queda en la GPU si la hay (mismos bits)
+      const r = vm.nenFourier ? vm.nenFourier(x, -1) : null;
+      if (r) return r;
       let d = aPlano(x);
       if (vm.nenFFT) d = vm.nenFFT(d, x.tamano, -1);        // (motor-exp N2) por los núcleos de NEÑ
       else transformar(d, x.tamano, -1);
@@ -2226,6 +2386,8 @@ function instalarNumerico(vm) {
       if (x.dimensiones !== 1) vm.error(`«fourierInversa» trabaja sobre una dimensión y llegó un arreglo de ${x.dimensiones}`);
       if (x.tamano < 1) vm.error('«fourierInversa» de un arreglo vacío');
       const n = x.tamano;
+      const r = vm.nenFourier ? vm.nenFourier(x, 1, n) : null;      // (motor-exp N3)
+      if (r) return r;
       let d = aPlano(x);
       if (vm.nenFFT) d = vm.nenFFT(d, n, 1, n);             // (motor-exp N2) dividida allí mismo
       else { transformar(d, n, 1); for (let i = 0; i < 2 * n; i++) d[i] /= n; }

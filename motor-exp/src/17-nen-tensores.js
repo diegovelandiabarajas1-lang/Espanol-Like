@@ -124,6 +124,144 @@ function nenReduccion(nombre, inicio, paso, pasoJs, conMu) {
   return { nombre, params, cuerpo, js, lee: conMu ? ['x', 'mu'] : ['x'], escribe: ['y'] };
 }
 
+// (motor-exp N3) fma(a, b, c) = a·b + c con UN solo redondeo, en JavaScript.
+// El producto de matrices suma con FMA en los tres dispositivos (DFMA en la
+// GPU, AVX2/fma() en la CPU), y JavaScript no la trae: aquí se emula EXACTA.
+// Camino rápido: a·b = p + e exacto (Dekker con el partido de Veltkamp),
+// c + p = th + tl exacto (TwoSum), v = tl + e redondeado A IMPAR, y el
+// resultado th + v redondeado al más cercano (Boldo y Melquiond, «Emulation of
+// FMA and correctly rounded sums: proved algorithms using rounding to odd»,
+// IEEE TC 2008). En los extremos (cerca del desbordamiento o de los
+// subnormales) un camino lento exacto con enteros grandes. Comprobada contra la
+// fma de C (glibc) en 16 millones de casos, empates y cancelaciones incluidos:
+// los mismos bits en todos.
+const NEN_FMA_F = new Float64Array(1), NEN_FMA_U = new Uint32Array(NEN_FMA_F.buffer);   // NEN_FMA_U[0] bajo, NEN_FMA_U[1] alto (little-endian)
+const NEN_FMA_PARTIR = 134217729;                                       // 2^27 + 1 (Veltkamp)
+function nenFma_pot2(k) {   // 2^k exacto para -1074 ≤ k ≤ 1023
+  if (k >= -1022) { NEN_FMA_U[1] = (k + 1023) << 20; NEN_FMA_U[0] = 0; return NEN_FMA_F[0]; }
+  const s = -1022 - k;          // subnormal: solo el bit 52 − s
+  if (s <= 20) { NEN_FMA_U[1] = 1 << (20 - s); NEN_FMA_U[0] = 0; } else { NEN_FMA_U[1] = 0; NEN_FMA_U[0] = 2 ** (52 - s); }
+  return NEN_FMA_F[0];
+}
+function nenFma_porPot2(x, k) {
+  while (k > 1000) { x *= nenFma_pot2(1000); k -= 1000; }
+  while (k < -1000) { x *= nenFma_pot2(-1000); k += 1000; }
+  return x * nenFma_pot2(k);
+}
+function nenFma_partes(x) {   // x = ±m·2^e exacto
+  NEN_FMA_F[0] = x; const hi = NEN_FMA_U[1], lo = NEN_FMA_U[0];
+  const ex = (hi >>> 20) & 0x7ff, neg = (hi >>> 31) === 1;
+  let m = (BigInt(hi & 0xfffff) << 32n) | BigInt(lo), e;
+  if (ex === 0) e = -1074; else { m |= 1n << 52n; e = ex - 1075; }
+  return { m: neg ? -m : m, e, neg };
+}
+function nenFma_longitud(x) { return x.toString(2).length; }
+// El camino lento, exacto con enteros grandes: sirve para todo, se usa solo en
+// los extremos (cerca del desbordamiento o de los subnormales).
+function nenFma_fmaLenta(a, b, c) {
+  if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) return a * b + c;
+  const A = nenFma_partes(a), B = nenFma_partes(b), C = nenFma_partes(c);
+  const mp = A.m * B.m, ep = A.e + B.e;
+  const E = Math.min(ep, C.e);
+  const M = (mp << BigInt(ep - E)) + (C.m << BigInt(C.e - E));
+  if (M === 0n) {
+    const pNeg = A.neg !== B.neg;
+    return (mp === 0n && C.m === 0n && pNeg && C.neg) ? -0 : 0;
+  }
+  const neg = M < 0n, X = neg ? -M : M;
+  const L = nenFma_longitud(X), e2 = L - 1 + E;
+  if (e2 > 1023) return neg ? -Infinity : Infinity;
+  const q = Math.max(e2 - 52, -1074), d = q - E;
+  let r;
+  if (d > 0) {
+    const D = BigInt(d);
+    r = X >> D; const resto = X - (r << D), mitad = 1n << (D - 1n);
+    if (resto > mitad || (resto === mitad && (r & 1n))) r += 1n;
+  } else r = X << BigInt(-d);
+  const v = nenFma_porPot2(Number(r), q);
+  return neg ? -v : v;
+}
+const NEN_FMA_GRANDE = 2 ** 995, NEN_FMA_CHICO = 2 ** -960;
+function nenFma(a, b, c) {
+  const p = a * b;
+  const ap = Math.abs(p);
+  if (!(ap < NEN_FMA_GRANDE) || !(Math.abs(c) < NEN_FMA_GRANDE) || (ap < NEN_FMA_CHICO && p !== 0) || !(Math.abs(a) < NEN_FMA_GRANDE) || !(Math.abs(b) < NEN_FMA_GRANDE))
+    return nenFma_fmaLenta(a, b, c);
+  // a·b = p + e exacto (Dekker con el partido de Veltkamp)
+  let t = NEN_FMA_PARTIR * a; const ah = t - (t - a), al = a - ah;
+  t = NEN_FMA_PARTIR * b; const bh = t - (t - b), bl = b - bh;
+  const e = ((ah * bh - p) + ah * bl + al * bh) + al * bl;
+  if (e === 0) return p + c;
+  // c + p = th + tl exacto (TwoSum)
+  const th = c + p, z = th - c, tl = (c - (th - z)) + (p - z);
+  // v = RO(tl + e): redondeo a impar
+  let v = tl + e;
+  const w = v - tl, err = (tl - (v - w)) + (e - w);
+  if (err !== 0) {
+    NEN_FMA_F[0] = v;
+    if ((NEN_FMA_U[0] & 1) === 0) {
+      if ((v > 0) === (err > 0)) NEN_FMA_U[0] += 1;                      // un ulp más lejos de 0 (par → sin acarreo)
+      else if (NEN_FMA_U[0] === 0) { NEN_FMA_U[0] = 0xffffffff; NEN_FMA_U[1] -= 1; } else NEN_FMA_U[0] -= 1;
+      v = NEN_FMA_F[0];
+    }
+  }
+  return th + v;
+}
+
+// (motor-exp N3) fila[j] = fma(x, b[o + j], fila[j]) para j < p, con b ya
+// partido en bh + bl (Veltkamp): lo mismo que nenFma casilla a casilla, sin
+// partir b cada vez. Es el bucle interior del producto de matrices en jit.
+function nenFmaFila(x, b, bh, bl, o, fila, p) {
+  if (!(Math.abs(x) < NEN_FMA_GRANDE)) { for (let j = 0; j < p; j++) fila[j] = nenFma(x, b[o + j], fila[j]); return; }
+  const t0 = NEN_FMA_PARTIR * x, xh = t0 - (t0 - x), xl = x - xh;
+  for (let j = 0; j < p; j++) {
+    const bv = b[o + j], s = fila[j], pr = x * bv, ap = Math.abs(pr);
+    if (!(ap < NEN_FMA_GRANDE && Math.abs(s) < NEN_FMA_GRANDE && (ap >= NEN_FMA_CHICO || pr === 0) && Math.abs(bv) < NEN_FMA_GRANDE)) {
+      fila[j] = nenFma(x, bv, s); continue;
+    }
+    const bhj = bh[o + j], blj = bl[o + j];
+    const e = ((xh * bhj - pr) + xh * blj + xl * bhj) + xl * blj;
+    if (e === 0) { fila[j] = pr + s; continue; }
+    const th = s + pr, z = th - s, tl = (s - (th - z)) + (pr - z);
+    let v = tl + e;
+    const w = v - tl, err = (tl - (v - w)) + (e - w);
+    if (err !== 0) {
+      NEN_FMA_F[0] = v;
+      if ((NEN_FMA_U[0] & 1) === 0) {
+        if ((v > 0) === (err > 0)) NEN_FMA_U[0] += 1;
+        else if (NEN_FMA_U[0] === 0) { NEN_FMA_U[0] = 0xffffffff; NEN_FMA_U[1] -= 1; } else NEN_FMA_U[0] -= 1;
+        v = NEN_FMA_F[0];
+      }
+    }
+    fila[j] = th + v;
+  }
+}
+// (motor-exp N4.2) fmaf(a, b, c) de C con a, b y c floats: a·b + c con UN solo
+// redondeo a 32 bits. a·b de dos floats es exacto en un double (24 + 24 ≤ 53
+// bits), c + p = s + e exacto (TwoSum), y s se lleva A IMPAR con e: redondear a
+// impar en 53 bits y luego al más cercano en 24 es lo mismo que redondear el
+// valor exacto (53 ≥ 24 + 2; Boldo y Melquiond). Es la FMA de la GPU (FFMA), de
+// AVX2 (_mm256_fmadd_ps) y de fmaf(): los mismos bits.
+function nenFmaf(a, b, c) {
+  const p = a * b, s = p + c;
+  const bb = s - p, e = (p - (s - bb)) + (c - bb);
+  if (e === 0 || !(s - s === 0)) return Math.fround(s);
+  NEN_FMA_F[0] = s;
+  if ((e < 0) !== (s < 0)) {                                   // s se pasó: truncar es bajar un ulp
+    if (NEN_FMA_U[0] === 0) { NEN_FMA_U[0] = 0xffffffff; NEN_FMA_U[1] -= 1; } else NEN_FMA_U[0] -= 1;
+  }
+  NEN_FMA_U[0] |= 1;                                           // inexacto: el último bit, a 1 (impar)
+  return Math.fround(NEN_FMA_F[0]);
+}
+function nenFmaPartir(b, desde, hasta) {
+  const n = hasta - desde, bh = new Float64Array(n), bl = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = b[desde + i];
+    if (Math.abs(x) < NEN_FMA_GRANDE) { const t = NEN_FMA_PARTIR * x; bh[i] = t - (t - x); bl[i] = x - bh[i]; }
+  }
+  return [bh, bl];
+}
+
 const NEN_T_NUCLEOS = {};
 for (const k of [
   nenUnario('nen_seno', 'y[i] = sin(x[i]);', Math.sin),
@@ -507,6 +645,495 @@ for (const k of [
       }
     },
   },
+  {
+    // (motor-exp N3) EL producto de matrices de C1EÑ, nuestro «cuBLAS»: un
+    // DGEMM de verdad en cada dispositivo, por lotes (n = lotes). Cada casilla:
+    // s = +0; para k de 0 a K−1, s = fma(a, b, s). Con FMA porque es lo que hace
+    // rápida a la GPU (la DFMA cuenta doble: sin ella la T4 no pasa de la mitad
+    // de su pico en doble) y a la CPU (AVX2), y como la FMA es exacta, los tres
+    // dispositivos dan LOS MISMOS BITS. Frente a nen_matmul (sin FMA) cambia el
+    // último bit, y casi siempre hacia el valor exacto.
+    //   CPU: paneles empaquetados (B en NR = 8 columnas, A en MR = 6 filas, por
+    //        trozos de 256 en k) y un micronúcleo AVX2 de 6×8 con 12 registros de
+    //        suma; si la CPU no tiene AVX2+FMA (o C1EN_SIN_AVX=1), el mismo con
+    //        fma() de C. OpenMP por bloques de 96 filas.
+    //   GPU: mosaicos de 64×64 por bloque de 256 hilos, 4×4 casillas por hilo,
+    //        trozos de 16 en k por memoria compartida (__syncthreads).
+    //   jit: la misma suma con la FMA emulada (nenFma), fila por fila.
+    nombre: 'nen_dgemm',
+    params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
+    lee: ['a', 'b'], escribe: ['c'],
+    coop: true,
+    lanzamiento: (n, m, K, p) => ({ bloques: n * Math.ceil(m / 64) * Math.ceil(p / 64), hilos: 256 }),
+    cFuente: `/* (motor-exp N3) El DGEMM de la CPU de C1EÑ: C = A·B por lotes, fila mayor.
+   Cada casilla se suma en el orden de siempre, con FMA:
+       s = +0;  para k de 0 a K−1:  s = fma(a[i][k], b[k][j], s)
+   La FMA es exacta (un solo redondeo), así que da los mismos bits en la CPU
+   (AVX2 o fma() de la libm), en la GPU (DFMA) y en JavaScript (fma emulada).
+   Por dentro: B se empaqueta en paneles de NR columnas y A en paneles de MR
+   filas (contiguos en k), por trozos de KC en k; el micronúcleo de 6×8 tiene 12
+   registros AVX de suma. Entre trozos de k la suma parcial se guarda en C y se
+   retoma: el orden de cada casilla no cambia. */
+#include <stdlib.h>
+#include <string.h>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
+#define NEN_X86 1
+#include <immintrin.h>
+#endif
+#define NEN_MR 6
+#define NEN_NR 8
+#define NEN_KC 256
+#define NEN_MC 96
+#define NEN_NC 2048
+
+/* micronúcleo genérico: acumula en t (MR×NR, fila mayor) desde Ap (kc×MR) y Bp (kc×NR) */
+static void nen_mk_escalar(long long kc, const double* Ap, const double* Bp, double* t) {
+  for (long long k = 0; k < kc; k++) {
+    const double* ak = Ap + k * NEN_MR; const double* bk = Bp + k * NEN_NR;
+    for (int r = 0; r < NEN_MR; r++) { double x = ak[r]; for (int q = 0; q < NEN_NR; q++) t[r * NEN_NR + q] = fma(x, bk[q], t[r * NEN_NR + q]); }
+  }
+}
+#ifdef NEN_X86
+__attribute__((target("avx2,fma")))
+static void nen_mk_avx2(long long kc, const double* Ap, const double* Bp, double* t) {
+  __m256d c00 = _mm256_loadu_pd(t + 0), c01 = _mm256_loadu_pd(t + 4);
+  __m256d c10 = _mm256_loadu_pd(t + 8), c11 = _mm256_loadu_pd(t + 12);
+  __m256d c20 = _mm256_loadu_pd(t + 16), c21 = _mm256_loadu_pd(t + 20);
+  __m256d c30 = _mm256_loadu_pd(t + 24), c31 = _mm256_loadu_pd(t + 28);
+  __m256d c40 = _mm256_loadu_pd(t + 32), c41 = _mm256_loadu_pd(t + 36);
+  __m256d c50 = _mm256_loadu_pd(t + 40), c51 = _mm256_loadu_pd(t + 44);
+  for (long long k = 0; k < kc; k++) {
+    __m256d b0 = _mm256_loadu_pd(Bp + 8 * k), b1 = _mm256_loadu_pd(Bp + 8 * k + 4);
+    const double* ak = Ap + 6 * k; __m256d x;
+    x = _mm256_broadcast_sd(ak + 0); c00 = _mm256_fmadd_pd(x, b0, c00); c01 = _mm256_fmadd_pd(x, b1, c01);
+    x = _mm256_broadcast_sd(ak + 1); c10 = _mm256_fmadd_pd(x, b0, c10); c11 = _mm256_fmadd_pd(x, b1, c11);
+    x = _mm256_broadcast_sd(ak + 2); c20 = _mm256_fmadd_pd(x, b0, c20); c21 = _mm256_fmadd_pd(x, b1, c21);
+    x = _mm256_broadcast_sd(ak + 3); c30 = _mm256_fmadd_pd(x, b0, c30); c31 = _mm256_fmadd_pd(x, b1, c31);
+    x = _mm256_broadcast_sd(ak + 4); c40 = _mm256_fmadd_pd(x, b0, c40); c41 = _mm256_fmadd_pd(x, b1, c41);
+    x = _mm256_broadcast_sd(ak + 5); c50 = _mm256_fmadd_pd(x, b0, c50); c51 = _mm256_fmadd_pd(x, b1, c51);
+  }
+  _mm256_storeu_pd(t + 0, c00); _mm256_storeu_pd(t + 4, c01); _mm256_storeu_pd(t + 8, c10); _mm256_storeu_pd(t + 12, c11);
+  _mm256_storeu_pd(t + 16, c20); _mm256_storeu_pd(t + 20, c21); _mm256_storeu_pd(t + 24, c30); _mm256_storeu_pd(t + 28, c31);
+  _mm256_storeu_pd(t + 32, c40); _mm256_storeu_pd(t + 36, c41); _mm256_storeu_pd(t + 40, c50); _mm256_storeu_pd(t + 44, c51);
+}
+#endif
+typedef void (*nen_mk_t)(long long, const double*, const double*, double*);
+static nen_mk_t nen_mk_elegir(void) {
+#ifdef NEN_X86
+  if (getenv("C1EN_SIN_AVX") == NULL) {
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) return nen_mk_avx2;
+  }
+#endif
+  return nen_mk_escalar;
+}
+/* un lote: A m×K, B K×p, C m×p */
+static void nen_dgemm_uno(nen_mk_t mk, long long m, long long K, long long p, const double* A, const double* B, double* C) {
+  for (long long i = 0; i < m * p; i++) C[i] = 0.0;
+  if (K == 0) return;
+  long long ncMax = p < NEN_NC ? p : NEN_NC;
+  double* Bp = (double*)malloc(sizeof(double) * NEN_KC * (((ncMax + NEN_NR - 1) / NEN_NR) * NEN_NR));
+  for (long long jc = 0; jc < p; jc += NEN_NC) {
+    long long nc = p - jc < NEN_NC ? p - jc : NEN_NC, npan = (nc + NEN_NR - 1) / NEN_NR;
+    for (long long pc = 0; pc < K; pc += NEN_KC) {
+      long long kc = K - pc < NEN_KC ? K - pc : NEN_KC;
+      /* B[pc:pc+kc, jc:jc+nc] en paneles de NR columnas, k mayor; lo que falta, ceros */
+      #pragma omp parallel for schedule(static) if (npan * kc > 4096)
+      for (long long jp = 0; jp < npan; jp++) {
+        double* dst = Bp + jp * kc * NEN_NR; long long j0 = jc + jp * NEN_NR;
+        for (long long k = 0; k < kc; k++) { const double* src = B + (pc + k) * p + j0;
+          for (int q = 0; q < NEN_NR; q++) dst[k * NEN_NR + q] = (j0 + q < p) ? src[q] : 0.0; }
+      }
+      long long nbm = (m + NEN_MC - 1) / NEN_MC;
+      #pragma omp parallel for schedule(dynamic, 1) if (nbm * npan > 1 && m * nc * kc > 32768)
+      for (long long ib = 0; ib < nbm; ib++) {
+        double* Ap = (double*)malloc(sizeof(double) * NEN_KC * NEN_MC); double t[NEN_MR * NEN_NR];
+        long long i0 = ib * NEN_MC, mc = m - i0 < NEN_MC ? m - i0 : NEN_MC, npa = (mc + NEN_MR - 1) / NEN_MR;
+        for (long long ip = 0; ip < npa; ip++) {     /* A[i0.., pc..] en paneles de MR filas */
+          double* dst = Ap + ip * kc * NEN_MR;
+          for (int r = 0; r < NEN_MR; r++) { long long fi = i0 + ip * NEN_MR + r;
+            if (fi < m) { const double* src = A + fi * K + pc; for (long long k = 0; k < kc; k++) dst[k * NEN_MR + r] = src[k]; }
+            else for (long long k = 0; k < kc; k++) dst[k * NEN_MR + r] = 0.0; }
+        }
+        for (long long jp = 0; jp < npan; jp++) {
+          long long j0 = jc + jp * NEN_NR; int nq = (int)(p - j0 < NEN_NR ? p - j0 : NEN_NR);
+          for (long long ip = 0; ip < npa; ip++) {
+            long long f0 = i0 + ip * NEN_MR; int nr = (int)(m - f0 < NEN_MR ? m - f0 : NEN_MR);
+            for (int r = 0; r < NEN_MR; r++) for (int q = 0; q < NEN_NR; q++)
+              t[r * NEN_NR + q] = (r < nr && q < nq) ? C[(f0 + r) * p + j0 + q] : 0.0;
+            mk(kc, Ap + ip * kc * NEN_MR, Bp + jp * kc * NEN_NR, t);
+            for (int r = 0; r < nr; r++) for (int q = 0; q < nq; q++) C[(f0 + r) * p + j0 + q] = t[r * NEN_NR + q];
+          }
+        }
+        free(Ap);
+      }
+    }
+  }
+  free(Bp);
+}
+void nen_dgemm(c1en_i64 n, c1en_i64 m, c1en_i64 K, c1en_i64 p, double* a, double* b, double* c) {
+  nen_mk_t mk = nen_mk_elegir();
+  for (long long l = 0; l < n; l++) nen_dgemm_uno(mk, m, K, p, a + l * m * K, b + l * K * p, c + l * m * p);
+}
+`,
+    cudaFuente: `/* (motor-exp N3) El DGEMM de la GPU de C1EÑ. Mosaico de 64×64 de C por bloque,
+   256 hilos con 4×4 casillas cada uno (filas ty+16i, columnas tx+16j: los hilos
+   de un warp leen columnas seguidas), trozos de 16 en k por memoria compartida.
+   As va traspuesta y con una columna de relleno (65) para que guardarla no
+   choque en los bancos. Cada casilla: s = +0; s = fma(a, b, s) con k de 0 a
+   K−1: los mismos bits que la CPU y que JavaScript. n = lotes. */
+#define NEN_BM 64
+#define NEN_BN 64
+#define NEN_BK 16
+extern "C" __global__ void nen_dgemm(long long n, long long m, long long K, long long p, double* a, double* b, double* c) {
+  __shared__ double As[NEN_BK][NEN_BM + 1];
+  __shared__ double Bs[NEN_BK][NEN_BN];
+  long long tm = (m + NEN_BM - 1) / NEN_BM, tp = (p + NEN_BN - 1) / NEN_BN;
+  long long blk = (long long)blockIdx.x, porLote = tm * tp;
+  long long l = blk / porLote, r = blk % porLote, bi = r / tp, bj = r % tp;
+  int t = (int)threadIdx.x, tx = t & 15, ty = t >> 4;
+  const double* A = a + l * m * K; const double* B = b + l * K * p; double* C = c + l * m * p;
+  long long r0 = bi * NEN_BM, c0 = bj * NEN_BN;
+  double s00 = 0.0, s01 = 0.0, s02 = 0.0, s03 = 0.0, s10 = 0.0, s11 = 0.0, s12 = 0.0, s13 = 0.0;
+  double s20 = 0.0, s21 = 0.0, s22 = 0.0, s23 = 0.0, s30 = 0.0, s31 = 0.0, s32 = 0.0, s33 = 0.0;
+  for (long long k0 = 0; k0 < K; k0 += NEN_BK) {
+    for (int q = 0; q < 4; q++) {
+      int rr = (t >> 4) + 16 * q, kk = t & 15; long long gr = r0 + rr, gk = k0 + kk;
+      As[kk][rr] = (gr < m && gk < K) ? A[gr * K + gk] : 0.0;
+      int kb = (t >> 6) + 4 * q, cc = t & 63; long long gkb = k0 + kb, gc = c0 + cc;
+      Bs[kb][cc] = (gkb < K && gc < p) ? B[gkb * p + gc] : 0.0;
+    }
+    __syncthreads();
+    int kmax = (K - k0 < NEN_BK) ? (int)(K - k0) : NEN_BK;
+#define NEN_PASO(k) { \
+      double x0 = As[k][ty], x1 = As[k][ty + 16], x2 = As[k][ty + 32], x3 = As[k][ty + 48]; \
+      double y0 = Bs[k][tx], y1 = Bs[k][tx + 16], y2 = Bs[k][tx + 32], y3 = Bs[k][tx + 48]; \
+      s00 = fma(x0, y0, s00); s01 = fma(x0, y1, s01); s02 = fma(x0, y2, s02); s03 = fma(x0, y3, s03); \
+      s10 = fma(x1, y0, s10); s11 = fma(x1, y1, s11); s12 = fma(x1, y2, s12); s13 = fma(x1, y3, s13); \
+      s20 = fma(x2, y0, s20); s21 = fma(x2, y1, s21); s22 = fma(x2, y2, s22); s23 = fma(x2, y3, s23); \
+      s30 = fma(x3, y0, s30); s31 = fma(x3, y1, s31); s32 = fma(x3, y2, s32); s33 = fma(x3, y3, s33); }
+    if (kmax == NEN_BK) {
+#pragma unroll
+      for (int k = 0; k < NEN_BK; k++) NEN_PASO(k)
+    } else {
+      for (int k = 0; k < kmax; k++) NEN_PASO(k)
+    }
+#undef NEN_PASO
+    __syncthreads();
+  }
+  long long f0 = r0 + ty, j0 = c0 + tx;
+#define NEN_GUARDA(i, j, v) { long long f = f0 + 16 * (i), cj = j0 + 16 * (j); if (f < m && cj < p) C[f * p + cj] = v; }
+  NEN_GUARDA(0, 0, s00) NEN_GUARDA(0, 1, s01) NEN_GUARDA(0, 2, s02) NEN_GUARDA(0, 3, s03)
+  NEN_GUARDA(1, 0, s10) NEN_GUARDA(1, 1, s11) NEN_GUARDA(1, 2, s12) NEN_GUARDA(1, 3, s13)
+  NEN_GUARDA(2, 0, s20) NEN_GUARDA(2, 1, s21) NEN_GUARDA(2, 2, s22) NEN_GUARDA(2, 3, s23)
+  NEN_GUARDA(3, 0, s30) NEN_GUARDA(3, 1, s31) NEN_GUARDA(3, 2, s32) NEN_GUARDA(3, 3, s33)
+#undef NEN_GUARDA
+}
+`,
+    js: (n, m, K, p, a, b, c) => {
+      const fila = new Float64Array(p);
+      for (let l = 0; l < n; l++) {
+        const oa = l * m * K, ob = l * K * p, oc = l * m * p;
+        const [bh, bl] = nenFmaPartir(b, ob, ob + K * p);
+        const bLote = b.subarray(ob, ob + K * p);
+        for (let i = 0; i < m; i++) {
+          fila.fill(0.0);
+          const ai = oa + i * K;
+          for (let k = 0; k < K; k++) nenFmaFila(a[ai + k], bLote, bh, bl, k * p, fila, p);
+          c.set(fila, oc + i * p);
+        }
+      }
+    },
+  },
+  {
+    // (motor-exp N4.2) El SGEMM de C1EÑ: el producto de matrices en PRECISIÓN
+    // SIMPLE (real32; real16 entra igual, porque en la VM vive en floats, y se
+    // redondea a 16 bits al final). Lo mismo que nen_dgemm con floats: cada
+    // casilla, s = +0 y s = fmaf(a, b, s) con k de 0 a K−1. La FFMA es exacta,
+    // así que jit (nenFmaf), nativo (AVX2 de 8 floats o fmaf) y GPU dan los
+    // mismos bits. En una GPU de consumo la simple va hasta 32 veces más rápida
+    // que la doble; en la CPU, el doble de números por instrucción.
+    //   CPU: paneles empaquetados (B en NR = 16 columnas, A en MR = 6 filas, por
+    //        trozos de 256 en k) y un micronúcleo AVX2 de 6×16 con 12 registros
+    //        de suma. OpenMP por bloques de 96 filas.
+    //   GPU: mosaicos de 64×64 por bloque de 256 hilos, 4×4 casillas por hilo,
+    //        trozos de 16 en k por memoria compartida.
+    nombre: 'nen_sgemm',
+    params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f32*'], ['b', 'f32*'], ['c', 'f32*']],
+    lee: ['a', 'b'], escribe: ['c'],
+    coop: true,
+    lanzamiento: (n, m, K, p) => ({ bloques: n * Math.ceil(m / 64) * Math.ceil(p / 64), hilos: 256 }),
+    cFuente: `/* (motor-exp N4.2) El SGEMM de la CPU de C1EÑ: el de nen_dgemm con floats.
+   Cada casilla: s = +0; para k de 0 a K−1: s = fmaf(a[i][k], b[k][j], s). */
+#include <stdlib.h>
+#include <string.h>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
+#define NEN_S_X86 1
+#include <immintrin.h>
+#endif
+#define NEN_S_MR 6
+#define NEN_S_NR 16
+#define NEN_S_KC 256
+#define NEN_S_MC 96
+#define NEN_S_NC 2048
+static void nen_smk_escalar(long long kc, const float* Ap, const float* Bp, float* t) {
+  for (long long k = 0; k < kc; k++) {
+    const float* ak = Ap + k * NEN_S_MR; const float* bk = Bp + k * NEN_S_NR;
+    for (int r = 0; r < NEN_S_MR; r++) { float x = ak[r]; for (int q = 0; q < NEN_S_NR; q++) t[r * NEN_S_NR + q] = fmaf(x, bk[q], t[r * NEN_S_NR + q]); }
+  }
+}
+#ifdef NEN_S_X86
+__attribute__((target("avx2,fma")))
+static void nen_smk_avx2(long long kc, const float* Ap, const float* Bp, float* t) {
+  __m256 c00 = _mm256_loadu_ps(t + 0), c01 = _mm256_loadu_ps(t + 8);
+  __m256 c10 = _mm256_loadu_ps(t + 16), c11 = _mm256_loadu_ps(t + 24);
+  __m256 c20 = _mm256_loadu_ps(t + 32), c21 = _mm256_loadu_ps(t + 40);
+  __m256 c30 = _mm256_loadu_ps(t + 48), c31 = _mm256_loadu_ps(t + 56);
+  __m256 c40 = _mm256_loadu_ps(t + 64), c41 = _mm256_loadu_ps(t + 72);
+  __m256 c50 = _mm256_loadu_ps(t + 80), c51 = _mm256_loadu_ps(t + 88);
+  for (long long k = 0; k < kc; k++) {
+    __m256 b0 = _mm256_loadu_ps(Bp + 16 * k), b1 = _mm256_loadu_ps(Bp + 16 * k + 8);
+    const float* ak = Ap + 6 * k; __m256 x;
+    x = _mm256_broadcast_ss(ak + 0); c00 = _mm256_fmadd_ps(x, b0, c00); c01 = _mm256_fmadd_ps(x, b1, c01);
+    x = _mm256_broadcast_ss(ak + 1); c10 = _mm256_fmadd_ps(x, b0, c10); c11 = _mm256_fmadd_ps(x, b1, c11);
+    x = _mm256_broadcast_ss(ak + 2); c20 = _mm256_fmadd_ps(x, b0, c20); c21 = _mm256_fmadd_ps(x, b1, c21);
+    x = _mm256_broadcast_ss(ak + 3); c30 = _mm256_fmadd_ps(x, b0, c30); c31 = _mm256_fmadd_ps(x, b1, c31);
+    x = _mm256_broadcast_ss(ak + 4); c40 = _mm256_fmadd_ps(x, b0, c40); c41 = _mm256_fmadd_ps(x, b1, c41);
+    x = _mm256_broadcast_ss(ak + 5); c50 = _mm256_fmadd_ps(x, b0, c50); c51 = _mm256_fmadd_ps(x, b1, c51);
+  }
+  _mm256_storeu_ps(t + 0, c00); _mm256_storeu_ps(t + 8, c01); _mm256_storeu_ps(t + 16, c10); _mm256_storeu_ps(t + 24, c11);
+  _mm256_storeu_ps(t + 32, c20); _mm256_storeu_ps(t + 40, c21); _mm256_storeu_ps(t + 48, c30); _mm256_storeu_ps(t + 56, c31);
+  _mm256_storeu_ps(t + 64, c40); _mm256_storeu_ps(t + 72, c41); _mm256_storeu_ps(t + 80, c50); _mm256_storeu_ps(t + 88, c51);
+}
+#endif
+typedef void (*nen_smk_t)(long long, const float*, const float*, float*);
+static nen_smk_t nen_smk_elegir(void) {
+#ifdef NEN_S_X86
+  if (getenv("C1EN_SIN_AVX") == NULL) {
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) return nen_smk_avx2;
+  }
+#endif
+  return nen_smk_escalar;
+}
+static void nen_sgemm_uno(nen_smk_t mk, long long m, long long K, long long p, const float* A, const float* B, float* C) {
+  for (long long i = 0; i < m * p; i++) C[i] = 0.0f;
+  if (K == 0) return;
+  long long ncMax = p < NEN_S_NC ? p : NEN_S_NC;
+  float* Bp = (float*)malloc(sizeof(float) * NEN_S_KC * (((ncMax + NEN_S_NR - 1) / NEN_S_NR) * NEN_S_NR));
+  for (long long jc = 0; jc < p; jc += NEN_S_NC) {
+    long long nc = p - jc < NEN_S_NC ? p - jc : NEN_S_NC, npan = (nc + NEN_S_NR - 1) / NEN_S_NR;
+    for (long long pc = 0; pc < K; pc += NEN_S_KC) {
+      long long kc = K - pc < NEN_S_KC ? K - pc : NEN_S_KC;
+      #pragma omp parallel for schedule(static) if (npan * kc > 4096)
+      for (long long jp = 0; jp < npan; jp++) {
+        float* dst = Bp + jp * kc * NEN_S_NR; long long j0 = jc + jp * NEN_S_NR;
+        for (long long k = 0; k < kc; k++) { const float* src = B + (pc + k) * p + j0;
+          for (int q = 0; q < NEN_S_NR; q++) dst[k * NEN_S_NR + q] = (j0 + q < p) ? src[q] : 0.0f; }
+      }
+      long long nbm = (m + NEN_S_MC - 1) / NEN_S_MC;
+      #pragma omp parallel for schedule(dynamic, 1) if (nbm * npan > 1 && m * nc * kc > 32768)
+      for (long long ib = 0; ib < nbm; ib++) {
+        float* Ap = (float*)malloc(sizeof(float) * NEN_S_KC * NEN_S_MC); float t[NEN_S_MR * NEN_S_NR];
+        long long i0 = ib * NEN_S_MC, mc = m - i0 < NEN_S_MC ? m - i0 : NEN_S_MC, npa = (mc + NEN_S_MR - 1) / NEN_S_MR;
+        for (long long ip = 0; ip < npa; ip++) {
+          float* dst = Ap + ip * kc * NEN_S_MR;
+          for (int r = 0; r < NEN_S_MR; r++) { long long fi = i0 + ip * NEN_S_MR + r;
+            if (fi < m) { const float* src = A + fi * K + pc; for (long long k = 0; k < kc; k++) dst[k * NEN_S_MR + r] = src[k]; }
+            else for (long long k = 0; k < kc; k++) dst[k * NEN_S_MR + r] = 0.0f; }
+        }
+        for (long long jp = 0; jp < npan; jp++) {
+          long long j0 = jc + jp * NEN_S_NR; int nq = (int)(p - j0 < NEN_S_NR ? p - j0 : NEN_S_NR);
+          for (long long ip = 0; ip < npa; ip++) {
+            long long f0 = i0 + ip * NEN_S_MR; int nr = (int)(m - f0 < NEN_S_MR ? m - f0 : NEN_S_MR);
+            for (int r = 0; r < NEN_S_MR; r++) for (int q = 0; q < NEN_S_NR; q++)
+              t[r * NEN_S_NR + q] = (r < nr && q < nq) ? C[(f0 + r) * p + j0 + q] : 0.0f;
+            mk(kc, Ap + ip * kc * NEN_S_MR, Bp + jp * kc * NEN_S_NR, t);
+            for (int r = 0; r < nr; r++) for (int q = 0; q < nq; q++) C[(f0 + r) * p + j0 + q] = t[r * NEN_S_NR + q];
+          }
+        }
+        free(Ap);
+      }
+    }
+  }
+  free(Bp);
+}
+void nen_sgemm(c1en_i64 n, c1en_i64 m, c1en_i64 K, c1en_i64 p, float* a, float* b, float* c) {
+  nen_smk_t mk = nen_smk_elegir();
+  for (long long l = 0; l < n; l++) nen_sgemm_uno(mk, m, K, p, a + l * m * K, b + l * K * p, c + l * m * p);
+}
+`,
+    cudaFuente: `/* (motor-exp N4.2) El SGEMM de la GPU de C1EÑ: el de nen_dgemm con floats y FFMA.
+   Cada casilla: s = +0; s = fmaf(a, b, s) con k de 0 a K−1. n = lotes. */
+#define NEN_S_BM 64
+#define NEN_S_BN 64
+#define NEN_S_BK 16
+extern "C" __global__ void nen_sgemm(long long n, long long m, long long K, long long p, float* a, float* b, float* c) {
+  __shared__ float As[NEN_S_BK][NEN_S_BM + 1];
+  __shared__ float Bs[NEN_S_BK][NEN_S_BN];
+  long long tm = (m + NEN_S_BM - 1) / NEN_S_BM, tp = (p + NEN_S_BN - 1) / NEN_S_BN;
+  long long blk = (long long)blockIdx.x, porLote = tm * tp;
+  long long l = blk / porLote, r = blk % porLote, bi = r / tp, bj = r % tp;
+  int t = (int)threadIdx.x, tx = t & 15, ty = t >> 4;
+  const float* A = a + l * m * K; const float* B = b + l * K * p; float* C = c + l * m * p;
+  long long r0 = bi * NEN_S_BM, c0 = bj * NEN_S_BN;
+  float s00 = 0.0f, s01 = 0.0f, s02 = 0.0f, s03 = 0.0f, s10 = 0.0f, s11 = 0.0f, s12 = 0.0f, s13 = 0.0f;
+  float s20 = 0.0f, s21 = 0.0f, s22 = 0.0f, s23 = 0.0f, s30 = 0.0f, s31 = 0.0f, s32 = 0.0f, s33 = 0.0f;
+  for (long long k0 = 0; k0 < K; k0 += NEN_S_BK) {
+    for (int q = 0; q < 4; q++) {
+      int rr = (t >> 4) + 16 * q, kk = t & 15; long long gr = r0 + rr, gk = k0 + kk;
+      As[kk][rr] = (gr < m && gk < K) ? A[gr * K + gk] : 0.0f;
+      int kb = (t >> 6) + 4 * q, cc = t & 63; long long gkb = k0 + kb, gc = c0 + cc;
+      Bs[kb][cc] = (gkb < K && gc < p) ? B[gkb * p + gc] : 0.0f;
+    }
+    __syncthreads();
+    int kmax = (K - k0 < NEN_S_BK) ? (int)(K - k0) : NEN_S_BK;
+#define NEN_S_PASO(k) { \
+      float x0 = As[k][ty], x1 = As[k][ty + 16], x2 = As[k][ty + 32], x3 = As[k][ty + 48]; \
+      float y0 = Bs[k][tx], y1 = Bs[k][tx + 16], y2 = Bs[k][tx + 32], y3 = Bs[k][tx + 48]; \
+      s00 = fmaf(x0, y0, s00); s01 = fmaf(x0, y1, s01); s02 = fmaf(x0, y2, s02); s03 = fmaf(x0, y3, s03); \
+      s10 = fmaf(x1, y0, s10); s11 = fmaf(x1, y1, s11); s12 = fmaf(x1, y2, s12); s13 = fmaf(x1, y3, s13); \
+      s20 = fmaf(x2, y0, s20); s21 = fmaf(x2, y1, s21); s22 = fmaf(x2, y2, s22); s23 = fmaf(x2, y3, s23); \
+      s30 = fmaf(x3, y0, s30); s31 = fmaf(x3, y1, s31); s32 = fmaf(x3, y2, s32); s33 = fmaf(x3, y3, s33); }
+    if (kmax == NEN_S_BK) {
+#pragma unroll
+      for (int k = 0; k < NEN_S_BK; k++) NEN_S_PASO(k)
+    } else {
+      for (int k = 0; k < kmax; k++) NEN_S_PASO(k)
+    }
+#undef NEN_S_PASO
+    __syncthreads();
+  }
+  long long f0 = r0 + ty, j0 = c0 + tx;
+#define NEN_S_GUARDA(i, j, v) { long long f = f0 + 16 * (i), cj = j0 + 16 * (j); if (f < m && cj < p) C[f * p + cj] = v; }
+  NEN_S_GUARDA(0, 0, s00) NEN_S_GUARDA(0, 1, s01) NEN_S_GUARDA(0, 2, s02) NEN_S_GUARDA(0, 3, s03)
+  NEN_S_GUARDA(1, 0, s10) NEN_S_GUARDA(1, 1, s11) NEN_S_GUARDA(1, 2, s12) NEN_S_GUARDA(1, 3, s13)
+  NEN_S_GUARDA(2, 0, s20) NEN_S_GUARDA(2, 1, s21) NEN_S_GUARDA(2, 2, s22) NEN_S_GUARDA(2, 3, s23)
+  NEN_S_GUARDA(3, 0, s30) NEN_S_GUARDA(3, 1, s31) NEN_S_GUARDA(3, 2, s32) NEN_S_GUARDA(3, 3, s33)
+#undef NEN_S_GUARDA
+}
+`,
+    js: (n, m, K, p, a, b, c) => {
+      const fila = new Float32Array(p);
+      for (let l = 0; l < n; l++) {
+        const oa = l * m * K, ob = l * K * p, oc = l * m * p;
+        for (let i = 0; i < m; i++) {
+          fila.fill(0);
+          const ai = oa + i * K;
+          for (let k = 0; k < K; k++) {
+            const x = a[ai + k], o = ob + k * p;
+            for (let j = 0; j < p; j++) fila[j] = nenFmaf(x, b[o + j], fila[j]);
+          }
+          c.set(fila, oc + i * p);
+        }
+      }
+    },
+  },
+  {
+    // (motor-exp N3) FFT: cargar un arreglo REAL ya permutado (inversión de
+    // bits) como complejo: y[rev[j]] = (x[j], 0). Una pasada en vez de copiar a
+    // complejos en la CPU y subir el doble.
+    nombre: 'nen_fft_cargar_real',
+    params: [['n', 'i64'], ['N', 'i64'], ['lgN', 'i64'], ['rev', 'i32*'], ['x', 'f64*'], ['y', 'f64*']],
+    lee: ['rev', 'x'], escribe: ['y'],
+    cuerpo: 'long long f = i >> lgN; long long j = i & (N - 1); long long d = f * 2 * N + 2 * (long long)rev[j]; y[d] = x[i]; y[d + 1] = 0.0;',
+    js: (n, N, lgN, rev, x, y) => {
+      for (let i = 0; i < n; i++) { const f = Math.floor(i / N), j = i % N, d = f * 2 * N + 2 * rev[j]; y[d] = x[i]; y[d + 1] = 0.0; }
+    },
+  },
+  {
+    // (motor-exp N3) FFT: las PRIMERAS etapas (largo 2, 4… hasta T ≤ 2048) de
+    // un trozo de T números seguidos, todas de una vez: tras la permutación,
+    // esas etapas solo mezclan dentro de trozos alineados de T. En la GPU un
+    // bloque carga su trozo en memoria compartida (32 KB), hace las lgT etapas
+    // con __syncthreads entre una y otra y lo devuelve: una pasada por la
+    // memoria en vez de lgT. En la CPU, un hilo por trozo (cabe en la caché).
+    // Las mismas mariposas, con la misma tabla y la misma aritmética que
+    // «nen_fft_etapa»: los mismos bits. n = trozos.
+    nombre: 'nen_fft_bloque',
+    params: [['n', 'i64'], ['N', 'i64'], ['lgN', 'i64'], ['T', 'i64'], ['lgT', 'i64'], ['conj', 'f64'], ['twr', 'f64*'], ['twi', 'f64*'], ['d', 'f64*']],
+    lee: ['twr', 'twi'],
+    minParalelo: 1,
+    coop: true,
+    lanzamiento: n => ({ bloques: n, hilos: 256 }),
+    cuerpo: 'long long o = i * 2 * T; ' +
+      'for (long long lgL = 1; lgL <= lgT; lgL++) { long long largo = 1LL << lgL; long long mitad = largo >> 1; long long sh = lgN - lgL; ' +
+      '  for (long long j = 0; j < (T >> 1); j++) { long long g = j >> (lgL - 1); long long k = j & (mitad - 1); ' +
+      '    long long p = o + 2 * (g * largo + k); long long q = p + 2 * mitad; long long w = k << sh; ' +
+      '    double wr = twr[w]; double wi = conj * twi[w]; double qr = d[q]; double qi = d[q + 1]; double vr = qr * wr - qi * wi; double vi = qr * wi + qi * wr; double ur = d[p]; double ui = d[p + 1]; ' +
+      '    d[p] = ur + vr; d[p + 1] = ui + vi; d[q] = ur - vr; d[q + 1] = ui - vi; } }',
+    cudaFuente: `#define NEN_FFT_T 2048
+extern "C" __global__ void nen_fft_bloque(long long n, long long N, long long lgN, long long T, long long lgT, double conj, double* twr, double* twi, double* d) {
+  __shared__ double sr[NEN_FFT_T];
+  __shared__ double si[NEN_FFT_T];
+  long long o = (long long)blockIdx.x * 2 * T;
+  long long t = (long long)threadIdx.x, H = (long long)blockDim.x;
+  for (long long j = t; j < T; j += H) { sr[j] = d[o + 2 * j]; si[j] = d[o + 2 * j + 1]; }
+  __syncthreads();
+  for (long long lgL = 1; lgL <= lgT; lgL++) {
+    long long largo = 1LL << lgL; long long mitad = largo >> 1; long long sh = lgN - lgL;
+    for (long long j = t; j < (T >> 1); j += H) {
+      long long g = j >> (lgL - 1); long long k = j & (mitad - 1);
+      long long p = g * largo + k; long long q = p + mitad; long long w = k << sh;
+      double wr = twr[w]; double wi = conj * twi[w]; double qr = sr[q]; double qi = si[q]; double vr = qr * wr - qi * wi; double vi = qr * wi + qi * wr; double ur = sr[p]; double ui = si[p]; 
+      sr[p] = ur + vr; si[p] = ui + vi; sr[q] = ur - vr; si[q] = ui - vi;
+    }
+    __syncthreads();
+  }
+  for (long long j = t; j < T; j += H) { d[o + 2 * j] = sr[j]; d[o + 2 * j + 1] = si[j]; }
+}`,
+    js: (n, N, lgN, T, lgT, conj, twr, twi, d) => {
+      for (let i = 0; i < n; i++) {
+        const o = i * 2 * T;
+        for (let lgL = 1; lgL <= lgT; lgL++) {
+          const largo = 2 ** lgL, mitad = largo / 2, sh = 2 ** (lgN - lgL);
+          for (let j = 0; j < T / 2; j++) {
+            const g = Math.floor(j / mitad), k = j % mitad, p = o + 2 * (g * largo + k), q = p + 2 * mitad, w = k * sh;
+            const wr = twr[w], wi = conj * twi[w], qr = d[q], qi = d[q + 1];
+            const vr = qr * wr - qi * wi, vi = qr * wi + qi * wr, ur = d[p], ui = d[p + 1];
+            d[p] = ur + vr; d[p + 1] = ui + vi; d[q] = ur - vr; d[q + 1] = ui - vi;
+          }
+        }
+      }
+    },
+  },
+  {
+    // (motor-exp N3) FFT: TRES etapas seguidas (largo L, 2L y 4L) de una vez.
+    // Cada hilo toma los 8 números que esas tres etapas mezclan entre sí
+    // (base + m·L/2, m = 0…7), hace sus 12 mariposas en registros y los
+    // devuelve: una pasada por la memoria en vez de tres. Cada mariposa es la
+    // de «nen_fft_etapa» (misma raíz de la tabla, misma aritmética): los mismos
+    // bits. n = filas × N/8; lgL = log₂ L de la primera de las tres.
+    nombre: 'nen_fft_r8',
+    params: [['n', 'i64'], ['N', 'i64'], ['lgN', 'i64'], ['lgL', 'i64'], ['conj', 'f64'], ['twr', 'f64*'], ['twi', 'f64*'], ['d', 'f64*']],
+    lee: ['twr', 'twi'],
+    cuerpo: 'long long f = i >> (lgN - 3); long long gi = i & ((N >> 3) - 1); long long L = 1LL << lgL; long long h = L >> 1; ' +
+      'long long gb = gi >> (lgL - 1); long long k = gi & (h - 1); long long o = f * 2 * N; long long base = gb * 4 * L + k; ' +
+      'double xr[8], xi[8]; for (int m = 0; m < 8; m++) { long long ix = o + 2 * (base + m * h); xr[m] = d[ix]; xi[m] = d[ix + 1]; } ' +
+      'for (int e = 0; e < 3; e++) { long long sh = lgN - lgL - e; int paso = 1 << e; ' +
+      '  for (int m = 0; m < 8; m++) { if (m & paso) continue; int mq = m + paso; long long kk = k + h * (long long)(m & (paso - 1)); long long w = kk << sh; ' +
+      '    double wr = twr[w]; double wi = conj * twi[w]; double qr = xr[mq]; double qi = xi[mq]; double vr = qr * wr - qi * wi; double vi = qr * wi + qi * wr; double ur = xr[m]; double ui = xi[m]; ' +
+      '    xr[m] = ur + vr; xi[m] = ui + vi; xr[mq] = ur - vr; xi[mq] = ui - vi; } } ' +
+      'for (int m = 0; m < 8; m++) { long long ix = o + 2 * (base + m * h); d[ix] = xr[m]; d[ix + 1] = xi[m]; }',
+    js: (n, N, lgN, lgL, conj, twr, twi, d) => {
+      const xr = new Float64Array(8), xi = new Float64Array(8), L = 2 ** lgL, h = L / 2, gpf = N / 8;
+      for (let i = 0; i < n; i++) {
+        const f = Math.floor(i / gpf), gi = i % gpf, gb = Math.floor(gi / h), k = gi % h, o = f * 2 * N, base = gb * 4 * L + k;
+        for (let m = 0; m < 8; m++) { const ix = o + 2 * (base + m * h); xr[m] = d[ix]; xi[m] = d[ix + 1]; }
+        for (let e = 0; e < 3; e++) {
+          const sh = 2 ** (lgN - lgL - e), paso = 1 << e;
+          for (let m = 0; m < 8; m++) {
+            if (m & paso) continue;
+            const mq = m + paso, kk = k + h * (m & (paso - 1)), w = kk * sh;
+            const wr = twr[w], wi = conj * twi[w], qr = xr[mq], qi = xi[mq];
+            const vr = qr * wr - qi * wi, vi = qr * wi + qi * wr, ur = xr[m], ui = xi[m];
+            xr[m] = ur + vr; xi[m] = ui + vi; xr[mq] = ur - vr; xi[mq] = ui - vi;
+          }
+        }
+        for (let m = 0; m < 8; m++) { const ix = o + 2 * (base + m * h); d[ix] = xr[m]; d[ix + 1] = xi[m]; }
+      }
+    },
+  },
 ]) NEN_T_NUCLEOS[k.nombre] = k;
 
 // ============================================================================
@@ -524,7 +1151,9 @@ function instalarNenTensores(vm, def) {
   // pasa TAL CUAL (en la GPU se queda residente y el resultado no baja hasta
   // que alguien lo lea), y un Float64Array interno va y vuelve como antes.
   const cacheNucleos = new Map();
-  const crudo = a => (a instanceof ObjArreglo ? a.datos.subarray(a.desp, a.desp + a.tamano) : a);
+  // (motor-exp N3) un complejo son 2n reales entrelazados
+  const crudo = a => (a instanceof ObjArreglo ? (a.tipo === 'complejo' ? a.datos.subarray(2 * a.desp, 2 * (a.desp + a.tamano))
+    : a.datos.subarray(a.desp, a.desp + a.tamano)) : a);
   function correr(nombre, trabajo, ...args) {
     const spec = NEN_T_NUCLEOS[nombre];
     vm.cobrar(trabajo);
@@ -613,10 +1242,11 @@ function instalarNenTensores(vm, def) {
 
   // ── el producto de matrices, por el núcleo ────────────────────────────────
   // (lotes × m × K) · (lotes × K × p) → (lotes × m × p), todo plano.
-  // (motor-exp N2) En la GPU, 4×4 casillas por hilo (nen_matmul_4x4); en la
-  // CPU, bloques de 4 filas × 32 columnas que reusan b en la caché
-  // (nen_matmul_bloques). Las dos suman cada casilla en el mismo orden (k de 0
-  // a K−1, empezando en 0), así que dan los mismos bits que nen_matmul.
+  // (motor-exp N3) Por «nen_dgemm», el DGEMM propio: en la GPU mosaicos de
+  // 64×64 en memoria compartida, en la CPU paneles empaquetados con AVX2, y los
+  // dos con FMA en el orden de siempre (k de 0 a K−1, desde +0): los mismos
+  // bits en jit, nativo y GPU. (En N2 eran nen_matmul_4x4 y nen_matmul_bloques,
+  // sin FMA; siguen en la lista como referencia.)
   // «a» y «b» pueden ser Float64Array o arreglos de Ñ seguidos; «c», si llega,
   // es el arreglo de Ñ donde va el resultado (y en la GPU se queda allí).
   function mm(a, b, m, K, p, lotes, c) {
@@ -625,17 +1255,35 @@ function instalarNenTensores(vm, def) {
     const trabajo = lotes * m * K * p;
     if (m === 0 || p === 0) return salida;
     if (K === 0) { crudo(salida).fill(0); return salida; }
-    if (trabajo >= NEN_T_UMBRAL && enGpuAhora())
-      correr('nen_matmul_4x4', trabajo, lotes * Math.ceil(m / 4) * Math.ceil(p / 4), m, K, p, a, b, salida);
-    else correr('nen_matmul_bloques', trabajo, lotes * Math.ceil(p / 32) * Math.ceil(m / 4), m, K, p, a, b, salida);
+    // (motor-exp N3) el DGEMM propio en los tres dispositivos (ver nen_dgemm)
+    correr('nen_dgemm', trabajo, lotes, m, K, p, a, b, salida);
     return salida;
   }
   // numerico (por, multMatriz) multiplica con esto mismo
   vm.nenMatmul = (a, b, m, K, p) => mm(a, b, m, K, p, 1);
   // (motor-exp N2) «por» de arreglos sin copiarlos: entran tal cual y el
   // resultado es un arreglo de Ñ nuevo (residente en la GPU si la hay)
+  // (motor-exp N4.2) en precisión simple o media, por el SGEMM («nen_sgemm»):
+  // los operandos que no sean ya floats seguidos se pasan a floats (redondeando,
+  // como hace la aritmética) y real16 se redondea a 16 bits al final, que es lo
+  // que hacen los núcleos de media precisión de las GPU (acumular en 32).
+  const directo32 = x => x instanceof ObjArreglo && (x.tipo === 'real32' || x.tipo === 'real16') && x.seguida;
+  const plano32 = x => Float32Array.from(planoDe(x));
+  function sm(a, b, m, K, p, lotes, c) {
+    const trabajo = lotes * m * K * p;
+    if (m === 0 || p === 0) return c;
+    if (K === 0) { crudo(c).fill(0); return c; }
+    correr('nen_sgemm', trabajo, lotes, m, K, p, a, b, c);
+    return c;
+  }
   vm.nenPor = (A, B) => {
     const m = A.forma[0], K = A.forma[1], p = B.forma[1];
+    const t = tipoAritmetico(A.tipo === 'bool' ? 'real' : A.tipo, B.tipo === 'bool' ? 'real' : B.tipo, '*', true, true);
+    if (t === 'real32' || t === 'real16') {
+      const o = vm.arrNuevo([m, p], t);
+      sm(directo32(A) ? A : plano32(A), directo32(B) ? B : plano32(B), m, K, p, 1, o);
+      return vm.arrRedondear(o);
+    }
     const o = vm.arrNuevo([m, p], 'real');
     mm(directo(A) ? A : planoDe(A), directo(B) ? B : planoDe(B), m, K, p, 1, o);
     return o;
@@ -679,6 +1327,40 @@ function instalarNenTensores(vm, def) {
     return t;
   }
   const potenciaDeDos = n => (n & (n - 1)) === 0;
+  // (motor-exp N3) Las log₂ n etapas de la FFT con menos pasadas por la
+  // memoria: las primeras (hasta largo 2048) en un solo núcleo por trozos
+  // (nen_fft_bloque, en memoria compartida en la GPU), y las demás de tres en
+  // tres (nen_fft_r8); si sobran una o dos, de una en una (nen_fft_etapa). En
+  // 2^20: 1 + 3 pasadas en vez de 20. Las mismas mariposas en el mismo orden
+  // por casilla, así que los mismos bits que etapa a etapa. «trabajo» es el
+  // mismo en todas para que todas vayan por el mismo camino (núcleo o JS).
+  function etapasFFT(y, filas, n, lgN, signo, t, trabajo) {
+    const lgT = Math.min(lgN, 11), T = 2 ** lgT, total = filas * n;
+    correr('nen_fft_bloque', trabajo, total / T, n, lgN, T, lgT, -signo, t.reA, t.imA, y);
+    let lgL = lgT + 1;
+    while (lgL <= lgN) {
+      if (lgN - lgL + 1 >= 3) { correr('nen_fft_r8', trabajo, total / 8, n, lgN, lgL, -signo, t.reA, t.imA, y); lgL += 3; }
+      else { correr('nen_fft_etapa', trabajo, filas * (n >> 1), n, lgN, 2 ** lgL, lgL, -signo, t.reA, t.imA, y); lgL++; }
+    }
+  }
+  // (motor-exp N3) «fourier» de un vector seguido de largo potencia de dos,
+  // con el resultado como arreglo complejo de Ñ hecho por los núcleos: en la
+  // GPU la entrada no se copia a complejos en la CPU (nen_fft_cargar_real lo
+  // hace allí) y el resultado se QUEDA en la GPU hasta que alguien lo lea.
+  // Mismos pasos y mismos bits que fftFilas. Si no se puede, null (y numerico
+  // sigue por su camino de siempre).
+  vm.nenFourier = (x, signo, dividirEntre) => {
+    const n = x.tamano;
+    if (!(x instanceof ObjArreglo) || x.dimensiones !== 1 || n < 2 || !potenciaDeDos(n) || !x.seguida || x.base !== null) return null;
+    if (x.tipo !== 'real' && x.tipo !== 'complejo') return null;
+    const t = tablaDe(n), lgN = Math.round(Math.log2(n)), out = vm.arrNuevo(x.forma.slice(), 'complejo');
+    const trabajo = n;
+    if (x.tipo === 'real') correr('nen_fft_cargar_real', trabajo, n, n, lgN, t.revA, x, out);
+    else correr('nen_fft_permutar', trabajo, n, n, lgN, t.revA, x, out);
+    etapasFFT(out, 1, n, lgN, signo, t, trabajo);
+    if (dividirEntre) correr('nen_dividir', trabajo, 2 * n, dividirEntre, out);
+    return out;
+  };
   // Transforma «filas» filas de largo n, guardadas seguidas y entrelazadas
   // (re, im). Devuelve un arreglo NUEVO. signo −1 directa, +1 inversa (sin
   // dividir entre n: lo hace quien llama).
@@ -694,9 +1376,8 @@ function instalarNenTensores(vm, def) {
       const trabajo = filas * n;
       const lgN = Math.round(Math.log2(n));
       correr('nen_fft_permutar', trabajo, filas * n, n, lgN, t.revA, d, y);
-      for (let largo = 2, lgL = 1; largo <= n; largo <<= 1, lgL++)
-        correr('nen_fft_etapa', trabajo, filas * (n >> 1), n, lgN, largo, lgL, -signo, t.reA, t.imA, y);
-      if (dividirEntre) correr('nen_dividir', 2 * filas * n, 2 * filas * n, dividirEntre, y);
+      etapasFFT(y, filas, n, lgN, signo, t, trabajo);
+      if (dividirEntre) correr('nen_dividir', trabajo, 2 * filas * n, dividirEntre, y);
       return y.datos;
     }
     // Bluestein: las longitudes que no son potencia de dos se convierten en una
@@ -748,18 +1429,23 @@ function instalarNenTensores(vm, def) {
   // partes), dos arreglos seguidos de la misma forma o uno con un número. Lo
   // demás (difusión, vistas, enteros, %, //, **) devuelve null y lo hace la VM.
   const OPS_ARIT = { '+': 0, '-': 1, '*': 2, '/': 3 };
-  vm.nenArit = (a, b, op) => {
+  let zQuieta = null;
+  vm.nenArit = (a, b, op, tipo) => {
+    if (tipo && tipo !== 'real') return null;   // (motor-exp N4.2) real32/real16: la VM
     const codigo = OPS_ARIT[op];
     if (codigo === undefined || !vm.c1en || typeof vm.c1en.describir !== 'function') return null;
     const esA = a instanceof ObjArreglo, esB = b instanceof ObjArreglo;
     const n = esA ? a.tamano : b.tamano;
     if (n < NEN_T_UMBRAL || vm.c1en.describir() === 'jit') return null;
-    const z = new Int32Array(1);
+    // (motor-exp N4.3) la marca de «división entre cero» solo hace falta mirarla
+    // al dividir: con + − × se pasa una que vive en la GPU y nadie lee, así la
+    // operación no obliga a esperar a la GPU ni a bajar nada
+    const z = codigo === 3 ? new Int32Array(1) : (zQuieta || (zQuieta = vm.arrNuevo([1], 'entero')));
     if (esA && esB) {
       if (!directo(a) || !directo(b) || a.forma.length !== b.forma.length || !a.forma.every((v, i) => v === b.forma[i])) return null;
       const o = vm.arrNuevo(a.forma.slice(), 'real');
       correr('nen_op_aa', n, n, codigo, a, b, o, z);
-      if (z[0]) vm.error('división entre cero');
+      if (codigo === 3 && z[0]) vm.error('división entre cero');
       return o;
     }
     const x = esA ? a : b, s = esA ? b : a;
@@ -767,7 +1453,7 @@ function instalarNenTensores(vm, def) {
     if (esA && codigo === 3 && s === 0) vm.error('división entre cero');
     const o = vm.arrNuevo(x.forma.slice(), 'real');
     correr('nen_op_ae', n, n, codigo, esA ? 0 : 1, s, x, o, z);
-    if (z[0]) vm.error('división entre cero');
+    if (codigo === 3 && z[0]) vm.error('división entre cero');
     return o;
   };
   // (motor-exp N2) suma, media, varianza y desviación de numerico para

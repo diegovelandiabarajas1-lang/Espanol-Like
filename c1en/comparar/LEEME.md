@@ -9,6 +9,7 @@ tiempos y comprobar que todos calculan lo mismo (la «huella» de cada resultado
 | prueba | qué | tamaño (escala normal) | datos |
 |---|---|---|---|
 | `matmul` | C = A·B | 1024×1024 y 2048×2048 | A[i,j] = ((7i + 3j) mód 13)/13 − 0.5 · B[i,j] = ((5i + 11j) mód 17)/17 − 0.5 |
+| `matmul32` | lo mismo en float32 | igual | los mismos, redondeados a float (por ahora solo Ñ —nativo y gpu— y PyTorch) |
 | `seno` | sin(x) elemento a elemento | 2^24 números | x[i] = (i mód 1000)/1000 |
 | `x*2+1` | x·2 + 1 | 2^24 | igual |
 | `suma` | Σx | 2^24 | igual |

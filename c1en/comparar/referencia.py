@@ -19,6 +19,7 @@ def huellas(ns=(1024, 2048), nv=1 << 24, sm=4096, sk=1024, nf=1 << 20):
     for n in ns:
         A, B = datos_matriz(n)
         out[('matmul', str(n))] = float((A @ B).sum())
+        out[('matmul32', str(n))] = out[('matmul', str(n))]   # la misma cuenta, medida en float32 (tolerancia 1e-3)
     x = vector(nv)
     out[('seno', str(nv))] = float(np.sin(x).sum())
     out[('x*2+1', str(nv))] = float((x * 2 + 1).sum())

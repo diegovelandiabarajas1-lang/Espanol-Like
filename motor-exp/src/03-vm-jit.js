@@ -118,8 +118,161 @@ const TIPOS_ARR = {
   // difusión y «trozo» funcionan sin tocar nada, y solo quien de verdad lee o
   // escribe un número multiplica por la anchura.
   complejo: { ctor: Float64Array, ent: false, anchura: 2 },
+  // (motor-exp N4.2) PRECISIÓN SIMPLE Y MEDIA. «real32» es el float de C, el de
+  // las GPU: la mitad de memoria, y en una GPU de consumo hasta 32 veces más
+  // rápido que «real». «real16» es el half (IEEE binary16): 11 bits de mantisa,
+  // hasta 65504. La regla, la misma en jit, nativo y GPU: cada operación se
+  // hace en 64 bits y el resultado se REDONDEA una vez al tipo del arreglo.
+  // Para + − × ÷ y la raíz eso es exactamente la aritmética de 32 (o de 16)
+  // bits de verdad, porque 53 ≥ 2·24 + 2: redondear dos veces no cambia nada.
+  // En la VM un real16 ocupa 4 bytes (Node 22 no trae Float16Array); en un
+  // archivo binario y en la GPU, los suyos.
+  real32: { ctor: Float32Array, ent: false, bits: 32 },
+  real16: { ctor: Float32Array, ent: false, bits: 16 },
+  // (motor-exp N4.5) TIPOS DE MÁQUINA: los enteros de C con su tamaño, como los
+  // dtypes de NumPy. Guardar en uno lo ENVUELVE (200 en un i8 es −56): es lo
+  // que hace el hardware y lo que hacen C, CUDA y NumPy. «entero» sigue siendo
+  // el de siempre (i32, y se escribe también así). i64 y u64 viven en
+  // BigInt64Array: sus cuentas son exactas en los 64 bits, y un elemento que no
+  // cabe en 2^53 se lee como un «grande» exacto.
+  i8:  { ctor: Int8Array,   ent: true, bits: 8,  signo: true },
+  u8:  { ctor: Uint8Array,  ent: true, bits: 8,  signo: false },
+  i16: { ctor: Int16Array,  ent: true, bits: 16, signo: true },
+  u16: { ctor: Uint16Array, ent: true, bits: 16, signo: false },
+  u32: { ctor: Uint32Array, ent: true, bits: 32, signo: false },
+  i64: { ctor: BigInt64Array,  ent: true, bits: 64, signo: true,  big: true },
+  u64: { ctor: BigUint64Array, ent: true, bits: 64, signo: false, big: true },
 };
+// los nombres de NumPy y de C que son otro nombre de uno que ya hay
+const ALIAS_TIPO = { i32: 'entero', f64: 'real', f32: 'real32', f16: 'real16' };
+// bits y signo de los enteros, «entero» incluido
+const ENT_INFO = { i8: [8, true], u8: [8, false], i16: [16, true], u16: [16, false], entero: [32, true], u32: [32, false], i64: [64, true], u64: [64, false] };
+const esEntMaq = t => ENT_INFO[t] !== undefined;
+const esBig = t => t === 'i64' || t === 'u64';
+// el entero con signo de b bits, o sin signo
+const ENT_DE = (b, s) => ({ '8,true': 'i8', '8,false': 'u8', '16,true': 'i16', '16,false': 'u16', '32,true': 'entero', '32,false': 'u32', '64,true': 'i64', '64,false': 'u64' })[`${b},${s}`];
 const ANCHO = t => (TIPOS_ARR[t] && TIPOS_ARR[t].anchura) || 1;
+// (motor-exp N4.2) Los tipos de coma flotante, del más ancho al más estrecho.
+const TIPOS_FLOT = ['real', 'real32', 'real16'];
+const esFlot = t => t === 'real' || t === 'real32' || t === 'real16';
+// El tipo de una operación entre dos arreglos (o un arreglo y un número), como
+// en PyTorch: un número suelto no ensancha un arreglo (x32 * 2.5 sigue siendo
+// real32), un entero con un real32 da real32, y entre dos de coma flotante gana
+// el más ancho. «/» y «**» nunca dan entero.
+function tipoAritmetico(tA, tB, op, esA, esB) {
+  // (motor-exp N4.5) los enteros de máquina, como NumPy: entre dos, el que cabe
+  // los dos (i8 + u8 → i16, i32 + u32 → i64; i64 + u64 no cabe y da real); un
+  // número suelto entero adopta el tipo del arreglo (y uno con decimales da
+  // real); con un arreglo de coma flotante, ese. «/» y «**» dan real.
+  const mA = esA && esEntMaq(tA) && tA !== 'entero', mB = esB && esEntMaq(tB) && tB !== 'entero';
+  if (mA || mB) {
+    const flA = esA && esFlot(tA), flB = esB && esFlot(tB);
+    // con un arreglo de coma flotante gana el de coma flotante, sea cual sea el
+    // entero: la regla de N4.2 para «entero» (la de PyTorch), igual para todos;
+    // así i8 + real16 e i32 + real16 dan lo mismo (real16). NumPy, en cambio,
+    // ensancha el real según el entero (i16 + f16 → f32): ver EXPERIMENTAL.md.
+    if (flA || flB) return flA ? tA : tB;
+    if (op === '/' || op === '**') return 'real';
+    const ia = esA ? ENT_INFO[tA] : null, ib = esB ? ENT_INFO[tB] : null;
+    if (!esA || !esB) {                                  // con un número suelto
+      const s = esA ? b0(tB) : b0(tA);
+      if (s === 'real') return 'real';
+      return mA ? tA : tB;
+    }
+    if (!ia || !ib) return 'real';                       // con bool (o algo que no es entero)
+    if (ia[1] === ib[1]) return ENT_DE(Math.max(ia[0], ib[0]), ia[1]);
+    const [bs, bu] = ia[1] ? [ia[0], ib[0]] : [ib[0], ia[0]];
+    if (bs > bu) return ENT_DE(bs, true);
+    if (bu === 64) return 'real';
+    return ENT_DE(bu * 2, true);
+  }
+  const fA = esA && esFlot(tA) ? tA : null, fB = esB && esFlot(tB) ? tB : null;
+  if (fA || fB) {
+    for (const t of TIPOS_FLOT) if (fA === t || fB === t) return t;
+  }
+  const entero = tA === 'entero' && tB === 'entero' && op !== '/' && op !== '**';
+  return entero ? 'entero' : 'real';
+}
+// el «tipo» de un número suelto
+const b0 = t => (t === 'entero' ? 'entero' : 'real');
+// Redondear al half más cercano (empates a par), lo que hace Math.f16round en
+// los JavaScript que lo tienen: subnormales desde 2^-24, y de 65520 en adelante
+// infinito. Todo exacto: dividir y multiplicar por una potencia de dos no
+// redondea.
+// El exponente sale de los bits del double (sin Math.log2: diez veces más rápido).
+const R16_F = new Float64Array(1), R16_U = new Uint32Array(R16_F.buffer), R16_ALTO = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1 ? 1 : 0;
+const R16_Q = Array.from({ length: 41 }, (_, k) => 2 ** Math.max(k - 25 - 10, -24));   // el cuanto para el exponente k − 25
+function redondear16(x) {
+  if (x !== x || x === 0) return x;
+  R16_F[0] = x;
+  const E = ((R16_U[R16_ALTO] >>> 20) & 0x7ff) - 1023;
+  if (E >= 16) return x > 0 ? Infinity : -Infinity;      // 65536 o más (o infinito)
+  if (E < -25) return x > 0 ? 0 : -0;                    // por debajo de 2^-25: a cero
+  const a = x < 0 ? -x : x;
+  if (a >= 65520) return x > 0 ? Infinity : -Infinity;
+  const q = R16_Q[E + 25];
+  const y = a / q;
+  let r = Math.floor(y);
+  const f = y - r;
+  if (f > 0.5 || (f === 0.5 && r % 2 === 1)) r += 1;
+  const v = r * q;
+  return x < 0 ? -v : v;
+}
+// Los 16 bits IEEE de un half (x ya redondeado con redondear16) y al revés: para
+// los archivos binarios, que llevan los 2 bytes de verdad (float16 de NumPy).
+function bitsDe16(x) {
+  if (x !== x) return 0x7e00;
+  const sg = (x < 0 || Object.is(x, -0)) ? 0x8000 : 0, a = Math.abs(x);
+  if (a === Infinity) return sg | 0x7c00;
+  if (a === 0) return sg;
+  if (a < 6.103515625e-05) return sg | Math.round(a / 5.960464477539063e-08);
+  let e = Math.floor(Math.log2(a));
+  if (2 ** e > a) e--; else if (2 ** (e + 1) <= a) e++;
+  return sg | ((e + 15) << 10) | Math.round((a / 2 ** e - 1) * 1024);
+}
+function deBits16(h) {
+  const sg = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, m = h & 1023;
+  if (e === 0) return sg * m * 5.960464477539063e-08;
+  if (e === 31) return m ? NaN : sg * Infinity;
+  return sg * (1 + m / 1024) * 2 ** (e - 15);
+}
+// Lo que se guarda en un arreglo de ese tipo (real32 lo redondea Float32Array solo).
+const guardable = (tipo, x) => (tipo === 'i64' || tipo === 'u64') ? aBig64(x)
+  : typeof x === 'bigint' ? deBigA(tipo, x)
+  : (x && x.clase === 'grande') ? guardable(tipo, ENT_INFO[tipo] ? aBig64(x) : Number(x.m) * Math.pow(10, x.e))
+  : (tipo === 'real16' ? redondear16(x) : x);
+// un BigInt (de un i64/u64) guardado en otro tipo: a un entero, sus bits de abajo
+// (como el «(int8_t)» de C); a coma flotante, el real más cercano
+function deBigA(tipo, x) {
+  if (ENT_INFO[tipo]) return Number(BigInt.asUintN(32, x));      // el arreglo envuelve el resto
+  if (tipo === 'bool') return x !== 0n ? 1 : 0;
+  return tipo === 'real16' ? redondear16(Number(x)) : Number(x);
+}
+// (motor-exp N4.5) un número (o un grande exacto) a BigInt para un i64/u64:
+// se trunca como al guardar en cualquier entero; infinito o NaN no caben
+function aBig64(x) {
+  if (typeof x === 'bigint') return x;
+  if (x && x.clase === 'grande') {
+    if (x.e >= 0) return x.m * (10n ** BigInt(x.e));
+    return x.m / (10n ** BigInt(-x.e));
+  }
+  if (!Number.isFinite(x)) throw new ErrorTiempoEjecucion(`${x} no cabe en un entero de 64 bits`);
+  return BigInt(Math.trunc(x));
+}
+// y al revés: lo que se lee de un i64/u64 es un número si cabe exacto, y si no un grande exacto
+function deBig64(v) {
+  if (typeof v !== 'bigint') return v;
+  if (v >= -9007199254740992n && v <= 9007199254740992n) return Number(v);
+  return new ObjGrande(v, 0, Math.max(50, grCifras(v)), true);
+}
+// Los dígitos más cortos que vuelven al mismo número EN ESE TIPO: un real32 con
+// 0.1 dentro se imprime «0.1» y no «0.100000001490116», como en NumPy.
+function cortoFlot(x, tipo) {
+  if (!Number.isFinite(x) || Number.isInteger(x)) return x;
+  const r = tipo === 'real16' ? redondear16 : Math.fround, hasta = tipo === 'real16' ? 5 : 9;
+  for (let p = 1; p <= hasta; p++) { const v = Number(x.toPrecision(p)); if (r(v) === x) return v; }
+  return x;
+}
 
 function zancadasDe(forma) {
   const z = new Array(forma.length);
@@ -438,7 +591,8 @@ function reprArreglo(v, prof) {
     }
     const x = v.datos[p];
     if (v.tipo === 'bool') return x ? 'cierto' : 'falso';
-    return v.tipo === 'entero' ? String(x) : repr(x, 1);
+    if (v.tipo === 'real32' || v.tipo === 'real16') return repr(cortoFlot(x, v.tipo), 1);
+    return v.tipo === 'entero' || esEntMaq(v.tipo) ? String(x) : repr(x, 1);
   };
   const BORDE = 3, MAX = 1000;
   // Recursivo por ejes, que es lo que hace que una matriz se lea como una
@@ -1329,6 +1483,8 @@ class VM {
   // alguno es otra cosa. Así añadir arreglos no cuesta un microsegundo en el
   // 99% de los programas, que no los usan.
   aritOtro(a, b, op) {
+    // (motor-exp N4.5) un grande entero con un arreglo i64/u64: la cuenta exacta del arreglo
+    if ((a instanceof ObjArreglo && b instanceof ObjGrande) || (b instanceof ObjArreglo && a instanceof ObjGrande)) return this.arrArit(a, b, op);
     if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeArit(this, a, b, op);
     if (a instanceof ObjArreglo || b instanceof ObjArreglo) return this.arrArit(a, b, op);
     if (op === '+') return this.sumar(a, b);
@@ -1340,6 +1496,17 @@ class VM {
   // de «mapear(lista, fn(x) { … })», donde cada elemento paga una llamada.
   arrArit(a, b, op) {
     const esA = a instanceof ObjArreglo, esB = b instanceof ObjArreglo;
+    // (motor-exp N4.5) un grande suelto con un i64/u64: tiene que ser un entero exacto
+    if ((esA && b instanceof ObjGrande) || (esB && a instanceof ObjGrande)) {
+      const x = esA ? a : b, g = esA ? b : a;
+      if (!esBig(x.tipo))
+        this.error(`«${op}»: un grande se opera con arreglos i64 o u64, y este es ${x.tipo}`, 'pásalo a número con aNumero(g), o el arreglo a "i64"');
+      const v = aBig64(g);
+      if (!g.exacto || (g.e < 0 && v * (10n ** BigInt(-g.e)) !== g.m))
+        this.error(`«${op}»: con un arreglo ${x.tipo} el grande tiene que ser un entero exacto`);
+      if (op === '/' || op === '**') this.error(`«${op}» de un arreglo ${x.tipo} con un grande todavía no`, 'pásalos a real con aTipo(a, "real")');
+      return this.arrAritEnt(esA ? a : v, esA ? v : b, op, esA, esB, x.tipo);
+    }
     if (esA && !esB && typeof b !== 'number')
       this.error(`«${op}»: un arreglo se opera con otro arreglo o con un número, y llegó ${tipoDe(b)}`);
     if (esB && !esA && typeof a !== 'number')
@@ -1351,12 +1518,125 @@ class VM {
 
     // El tipo del resultado: entero solo si los dos lo son y la operación lo
     // conserva. Dividir siempre da real, como en el resto del lenguaje.
+    // (motor-exp N4.2) real32 y real16 se conservan: ver «tipoAritmetico».
     const tA = esA ? a.tipo : (Number.isInteger(a) ? 'entero' : 'real');
     const tB = esB ? b.tipo : (Number.isInteger(b) ? 'entero' : 'real');
-    const entero = tA === 'entero' && tB === 'entero' && op !== '/' && op !== '**';
-    const tipo = entero ? 'entero' : 'real';
+    const tipo = tipoAritmetico(tA, tB, op, esA, esB);
+    const entero = tipo === 'entero';
+    // (motor-exp N4.5) un resultado real con un i64/u64 dentro: se pasa a real antes
+    if (!esEntMaq(tipo) && ((esA && esBig(a.tipo)) || (esB && esBig(b.tipo)))) {
+      const aR = esA && esBig(a.tipo) ? this.arrAReal(a) : a, bR = esB && esBig(b.tipo) ? this.arrAReal(b) : b;
+      const out = this.arrAritR(aR, bR, op, esA, esB, tipo);
+      if (tipo === 'real16') this.arrRedondear(out);
+      return out;
+    }
     // (motor-exp N2) grande y con C1EÑ: por los núcleos de NEÑ (GPU si la hay)
-    if (!entero && this.nenArit) { const r = this.nenArit(a, b, op); if (r) return r; }
+    if (!entero && !esEntMaq(tipo) && this.nenArit) { const r = this.nenArit(a, b, op, tipo); if (r) return r; }
+    // (motor-exp N4.5) los enteros (de máquina y «entero») van por su camino exacto
+    // («entero» sigue por el camino de siempre, que es el rápido; los de hasta 16
+    // bits también, porque en un double sus cuentas son exactas; el «*» de 32 bits
+    // y todo lo de 64 necesitan el camino exacto)
+    if (tipo === 'entero' && op === '*') return this.arrAritEnt(a, b, op, esA, esB, tipo);
+    if (esEntMaq(tipo) && tipo !== 'entero') {
+      if (esBig(tipo) || (op === '*' && ENT_INFO[tipo][0] === 32) ||
+        (esA && esBig(a.tipo)) || (esB && esBig(b.tipo))) return this.arrAritEnt(a, b, op, esA, esB, tipo);
+      if (!esA && !Number.isInteger(a)) this.error(`«${op}»: un arreglo ${tipo} se opera con enteros y llegó ${a}`);
+      if (!esB && !Number.isInteger(b)) this.error(`«${op}»: un arreglo ${tipo} se opera con enteros y llegó ${b}`);
+      return this.arrAritR(a, b, op, esA, esB, tipo);
+    }
+    const out = this.arrAritR(a, b, op, esA, esB, tipo);
+    if (tipo === 'real16') this.arrRedondear(out);
+    return out;
+  }
+  // (motor-exp N4.5) un i64/u64 como real (exacto hasta 2^53)
+  arrAReal(x) {
+    const o = this.arrNuevo(x.forma, 'real'), d = o.datos; let i = 0;
+    for (const p of x.posiciones()) d[i++] = Number(x.datos[p]);
+    this.cobrar(x.tamano);
+    return o;
+  }
+  // (motor-exp N4.5) Aritmética de enteros, EXACTA y con el envoltorio del tipo:
+  // hasta 32 bits con números (el producto de 32 con Math.imul, que da los 32
+  // bits de abajo exactos), los de 64 con BigInt. // y % redondean hacia abajo,
+  // como siempre en Ñ.
+  arrAritEnt(a, b, op, esA, esB, tipo) {
+    const f = esA && esB ? difundir(a.forma, b.forma) : (esA ? a.forma.slice() : b.forma.slice());
+    if (f === null)
+      this.error(`«${op}»: las formas ${a.forma.join('×')} y ${b.forma.join('×')} no se pueden difundir`,
+        'de derecha a izquierda, cada par de ejes tiene que ser igual o uno de los dos ser 1');
+    if (!esA && typeof a !== 'bigint' && !Number.isInteger(a)) this.error(`«${op}»: un arreglo ${tipo} se opera con enteros y llegó ${a}`);
+    if (!esB && typeof b !== 'bigint' && !Number.isInteger(b)) this.error(`«${op}»: un arreglo ${tipo} se opera con enteros y llegó ${b}`);
+    const out = this.arrNuevo(f, tipo);
+    const n = out.tamano, d = out.datos, [bits] = ENT_INFO[tipo];
+    this.cobrar(n);
+    // el camino rápido del «*» de 32 bits (Math.imul da los 32 bits de abajo exactos)
+    if (bits === 32 && op === '*' && !(esA && esBig(a.tipo)) && !(esB && esBig(b.tipo))) {
+      if (esA && esB && a.seguida && b.seguida && a.tamano === n && b.tamano === n) {
+        const x = a.datos, y = b.datos, oa = a.desp || 0, ob = b.desp || 0;
+        for (let i = 0; i < n; i++) d[i] = Math.imul(x[oa + i], y[ob + i]);
+        return out;
+      }
+      if (esA !== esB && (esA ? a : b).seguida) {
+        const v = esA ? a : b, x = v.datos, o = v.desp || 0, k = Number(esA ? b : a);
+        for (let i = 0; i < n; i++) d[i] = Math.imul(x[o + i], k);
+        return out;
+      }
+    }
+    const za = esA ? zancadasDifundidas(a, f) : null, zb = esB ? zancadasDifundidas(b, f) : null;
+    const nd = f.length, ix = new Array(nd).fill(0);
+    const big = bits === 64;
+    const sa = !esA ? (big ? BigInt(a) : a) : 0, sb = !esB ? (big ? BigInt(b) : b) : 0;
+    for (let k = 0; k < n; k++) {
+      let pa = esA ? a.desp : 0, pb = esB ? b.desp : 0;
+      for (let q = 0; q < nd; q++) { if (esA) pa += ix[q] * za[q]; if (esB) pb += ix[q] * zb[q]; }
+      let x = esA ? a.datos[pa] : sa, y = esB ? b.datos[pb] : sb;
+      if (big) {
+        if (typeof x !== 'bigint') x = BigInt(x);
+        if (typeof y !== 'bigint') y = BigInt(y);
+        let r;
+        switch (op) {
+          case '+': r = x + y; break;
+          case '-': r = x - y; break;
+          case '*': r = x * y; break;
+          case '//': case '%': {
+            if (y === 0n) this.error(op === '//' ? 'división entre cero' : 'módulo entre cero');
+            let q = x / y;
+            if ((x % y !== 0n) && ((x < 0n) !== (y < 0n))) q -= 1n;
+            r = op === '//' ? q : x - q * y;
+            break;
+          }
+          default: this.error(`«${op}» no se puede aplicar a un arreglo ${tipo}`);
+        }
+        d[k] = r;                                   // BigInt64Array y BigUint64Array envuelven a 64 bits
+      } else {
+        if (typeof x === 'bigint') x = Number(x);
+        if (typeof y === 'bigint') y = Number(y);
+        let r;
+        switch (op) {
+          case '+': r = x + y; break;
+          case '-': r = x - y; break;
+          case '*': r = bits === 32 ? Math.imul(x, y) : x * y; break;
+          case '//': if (y === 0) this.error('división entre cero'); r = Math.floor(x / y); break;
+          case '%': if (y === 0) this.error('módulo entre cero'); r = x - y * Math.floor(x / y); break;
+          default: this.error(`«${op}» no se puede aplicar a un arreglo ${tipo}`);
+        }
+        d[k] = r;                                   // el arreglo del tipo lo envuelve al guardar
+      }
+      for (let q = nd - 1; q >= 0; q--) { if (++ix[q] < f[q]) break; ix[q] = 0; }
+    }
+    return out;
+  }
+  // (motor-exp N4.2) Un arreglo real16 vive en un Float32Array: tras escribir
+  // en él se redondea cada número a 16 bits. Es lo que hace que «guardar»
+  // signifique lo mismo que en un half de verdad.
+  arrRedondear(o) {
+    if (o.tipo !== 'real16') return o;
+    const d = o.datos;   // «datos» y no «_d»: si estaba en la GPU, baja primero
+    for (let i = 0; i < d.length; i++) d[i] = redondear16(d[i]);
+    return o;
+  }
+  tipoFlotante(t) { return t === 'real32' || t === 'real16' ? t : 'real'; }
+  arrAritR(a, b, op, esA, esB, tipo) {
 
     const f = esA && esB ? difundir(a.forma, b.forma) : (esA ? a.forma.slice() : b.forma.slice());
     if (f === null)
@@ -1469,6 +1749,11 @@ class VM {
   // no haya podido romper en silencio ninguna de las ciento cincuenta funciones
   // que ya había: ninguna lo acepta hasta que se la enseña a propósito.
   nadaDeComplejos(x, f) {
+    // (motor-exp N4.5) los de 64 bits van por las funciones que los conocen (aritmética,
+    // comparar, aTipo, bits, suma, aListaA, a[i], archivos); el resto, después de aTipo
+    if (x instanceof ObjArreglo && (x.tipo === 'i64' || x.tipo === 'u64'))
+      this.error(f ? `«${f}» todavía no trabaja con arreglos ${x.tipo}` : `esta operación todavía no trabaja con arreglos ${x.tipo}`,
+        'pásalo antes con aTipo(a, "real") —exacto hasta 2^53— o a un entero más pequeño');
     if (x instanceof ObjArreglo && x.tipo === 'complejo')
       this.error(f ? `«${f}» todavía no sabe trabajar con arreglos complejos`
                    : 'esta operación todavía no sabe trabajar con arreglos complejos',
@@ -1484,13 +1769,15 @@ class VM {
   // «seno(x)» en «seno(arreglo)» sin escribir nada nuevo.
   arrUnaria(x, fn, tipo) {
     this.nadaDeComplejos(x, null);
+    // (motor-exp N4.2) un resultado real de un real32 (o real16) se queda en su tipo
+    if (tipo === 'real') tipo = this.tipoFlotante(x.tipo);
     const out = this.arrNuevo(x.forma, tipo || (x.tipo === 'bool' ? 'real' : x.tipo));
     const d = out.datos, n = out.tamano;
     this.cobrar(n);
-    if (x.seguida) { const s = x.datos; for (let i = 0; i < n; i++) d[i] = fn(s[i]); return out; }
+    if (x.seguida) { const s = x.datos; for (let i = 0; i < n; i++) d[i] = fn(s[i]); return this.arrRedondear(out); }
     let i = 0;
     for (const p of x.posiciones()) d[i++] = fn(x.datos[p]);
-    return out;
+    return this.arrRedondear(out);
   }
 
   // Comparar elemento a elemento da un arreglo de «bool», que es la mitad del
@@ -1537,8 +1824,14 @@ class VM {
     const out = this.arrNuevo(f, 'bool');
     const d = out.datos, n = out.tamano;
     this.cobrar(n);
-    const cmp = CMP_ARR[op];
+    let cmp = CMP_ARR[op];
     if (!cmp) this.error(`«${op}» no es una comparación`);
+    // (motor-exp N4.5) un i64/u64 guarda BigInt: «<» entre BigInt y número ya es
+    // exacto en JavaScript; la igualdad necesita la suelta (1n == 1)
+    if ((esA && esBig(a.tipo)) || (esB && esBig(b.tipo))) {
+      // eslint-disable-next-line eqeqeq
+      if (op === '==') cmp = (x, y) => x == y; else if (op === '!=') cmp = (x, y) => x != y;
+    }
     if (esA && esB && a.seguida && b.seguida && a.tamano === n && b.tamano === n) {
       const x = a.datos, y = b.datos;
       for (let i = 0; i < n; i++) d[i] = cmp(x[i], y[i]) ? 1 : 0;
@@ -1638,6 +1931,7 @@ class VM {
     if (typeof a === 'string' && typeof b === 'string') return a + b;
     if (a instanceof ObjLista && b instanceof ObjLista) return this.nuevaLista(a.items.concat(b.items));
     if (a instanceof ObjArreglo || b instanceof ObjArreglo) return this.arrArit(a, b, '+');
+    if ((a instanceof ObjArreglo && b instanceof ObjGrande) || (b instanceof ObjArreglo && a instanceof ObjGrande)) return this.arrArit(a, b, '+');
     if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeArit(this, a, b, '+');
     if (typeof a === 'string' || typeof b === 'string')
       this.error(`no se puede sumar ${tipoDe(a)} y ${tipoDe(b)}`,
@@ -1840,7 +2134,7 @@ class VM {
     if (o instanceof ObjGenerador) return o.actual;
     if (o instanceof ObjArreglo) {
       const k = this.arrIndice(o, i);
-      if (o.forma.length === 1) return o.datos[o.desp + k * o.zancadas[0]];
+      if (o.forma.length === 1) return deBig64(o.datos[o.desp + k * o.zancadas[0]]);
       return this.arrFila(o, k);
     }
     if (o instanceof ObjError) {
@@ -1883,8 +2177,9 @@ class VM {
         this.error(`a[${i}] = … solo vale en un arreglo de 1 dimensión y este tiene ${o.forma.length}`,
           'baja hasta el número: a[i][j] = v');
       // Mismo control que ponerElemento: en un arreglo solo entran números.
-      const x = (typeof v === 'boolean' && o.tipo === 'bool') ? (v ? 1 : 0) : this.exigeNum(v, 2, 'a[i] =');
-      o.datos[o.desp + k * o.zancadas[0]] = x;
+      const x = (typeof v === 'boolean' && o.tipo === 'bool') ? (v ? 1 : 0)
+        : (esBig(o.tipo) && v instanceof ObjGrande) ? v : this.exigeNum(v, 2, 'a[i] =');
+      o.datos[o.desp + k * o.zancadas[0]] = guardable(o.tipo, x);
       return;
     }
     if (o instanceof ObjLista) {
@@ -2574,5 +2869,6 @@ function generarJS(fn, vm) {
 
 if (typeof module !== 'undefined') module.exports = {
   VM, ErrorTiempoEjecucion, ObjLista, ObjDic, ObjCierre, ObjNativa, ObjUpvalue, ObjNodo, ObjError, ObjEstilo,
-  repr, tipoDe, verdad, iguales, generarJS, ObjFecha, isoDeFecha, ObjTabla,
+  repr, tipoDe, verdad, iguales, generarJS, ObjFecha, isoDeFecha, ObjTabla, redondear16, bitsDe16, deBits16, tipoAritmetico, esFlot, guardable, cortoFlot,
+  ALIAS_TIPO, ENT_INFO, esEntMaq, esBig, aBig64, deBig64, ENT_DE,
 };

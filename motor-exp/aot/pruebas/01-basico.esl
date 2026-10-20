@@ -1,0 +1,23 @@
+tipo Punto {
+  x: real
+  y: real
+}
+fn Punto.norma(): real { devolver yo.x * yo.x + yo.y * yo.y }
+fn fib(n: entero): entero {
+    si n < 2 { devolver n }
+    devolver fib(n - 1) + fib(n - 2)
+}
+var total = 0
+para i en rango(10) { total = total + i }
+fn contador() {
+    var c = 0
+    devolver fn() { c = c + 1
+        devolver c }
+}
+fijo k = contador()
+k()
+imprimir("fib", fib(20), total, k(), [1, 2.5, "a"], {"a": 1})
+intentar { var z = 1 / 0 } capturar (e) { imprimir("error:", e.mensaje) }
+fijo p = Punto(3.0, 4.0)
+imprimir(p, p.norma(), "x vale ${p.x}")
+para x en [1, 2] { imprimir(x) }

@@ -31,9 +31,11 @@ try { koffi = require('koffi'); } catch (_) { saltar('no hay koffi'); }
 try { execFileSync('gcc', ['--version'], { stdio: 'ignore' }); } catch (_) { saltar('no hay gcc'); }
 
 // ── el C ─────────────────────────────────────────────────────────────────────
-const TIPO_C = { i64: 'long long', f64: 'double', i32: 'int', 'f64*': 'double *', 'i32*': 'int *' };
-const TIPO_K = { i64: 'int64_t', f64: 'double', i32: 'int32_t', 'f64*': 'double *', 'i32*': 'int32_t *' };
+const TIPO_C = { i64: 'long long', f64: 'double', i32: 'int', 'f64*': 'double *', 'i32*': 'int *', 'f32*': 'float *' };
+const TIPO_K = { i64: 'int64_t', f64: 'double', i32: 'int32_t', 'f64*': 'double *', 'i32*': 'int32_t *', 'f32*': 'float *' };
 const PROLOGO = `#include <math.h>
+#include <stdint.h>
+typedef int64_t c1en_i64;
 /* Los ayudantes de la interfaz común de C1EÑ: división y resto como Python. */
 static long long c1en_div_piso(long long a, long long b) { long long q = a / b; if ((a % b != 0) && ((a < 0) != (b < 0))) q--; return q; }
 static long long c1en_mod(long long a, long long b) { long long r = a % b; if (r != 0 && ((r < 0) != (b < 0))) r += b; return r; }
@@ -43,6 +45,8 @@ let fuente = PROLOGO;
 for (const n of nombres) {
   const k = NEN_T_NUCLEOS[n];
   if (k.params[0][0] !== 'n' || k.params[0][1] !== 'i64') throw new Error(`${n}: el primer parámetro tiene que ser n i64`);
+  // (motor-exp N3) los que traen su función de C entera (nen_dgemm) van tal cual
+  if (k.cFuente) { fuente += k.cFuente + '\n'; continue; }
   fuente += `void ${n}(${k.params.map(([p, t]) => `${TIPO_C[t]} ${p}`).join(', ')}) {\n` +
     `  for (long long i = 0; i < n; i++) { ${k.cuerpo} }\n}\n`;
 }
@@ -103,12 +107,40 @@ const CASOS = {
     [L * Math.ceil(p / 32) * Math.ceil(m / 4), m, K, p, unif(L * m * K, -2, 2), unif(L * K * p, -2, 2), new Float64Array(L * m * p)]),
   nen_matmul_4x4: [[3, 7, 13, 5], [2, 9, 300, 19], [1, 4, 257, 8], [1, 1, 1, 1], [2, 5, 40, 70]].map(([L, m, K, p]) => () =>
     [L * Math.ceil(m / 4) * Math.ceil(p / 4), m, K, p, unif(L * m * K, -2, 2), unif(L * K * p, -2, 2), new Float64Array(L * m * p)]),
+  // (motor-exp N3) el DGEMM con FMA: bordes de los paneles (6 filas, 8
+  // columnas), K de más de un trozo (256), lotes, y números muy dispares para
+  // que la FMA (un redondeo) y a·b + c (dos) no coincidan por casualidad
+  nen_dgemm: [[3, 7, 13, 5], [2, 9, 300, 19], [1, 6, 257, 8], [1, 1, 1, 1], [2, 13, 40, 70], [1, 100, 600, 33]].map(([L, m, K, p]) => () => {
+    const a = unif(L * m * K, -2, 2), b = unif(L * K * p, -2, 2);
+    for (let i = 0; i < a.length; i += 7) a[i] *= 1e8;
+    for (let i = 0; i < b.length; i += 5) b[i] *= 1e-9;
+    return [L, m, K, p, conBordes(a), b, new Float64Array(L * m * p)];
+  }),
+  // (motor-exp N4.2) el SGEMM: lo mismo en floats (paneles de 6×16), con
+  // escalas dispares para que fmaf (un redondeo) y a·b + c (dos) no coincidan
+  nen_sgemm: [[3, 7, 13, 5], [2, 9, 300, 19], [1, 6, 257, 17], [1, 1, 1, 1], [2, 13, 40, 70], [1, 100, 600, 33], [1, 31, 1100, 47]].map(([L, m, K, p]) => () => {
+    const a = Float32Array.from(unif(L * m * K, -2, 2)), b = Float32Array.from(unif(L * K * p, -2, 2));
+    for (let i = 0; i < a.length; i += 7) a[i] *= 1e4;
+    for (let i = 0; i < b.length; i += 5) b[i] *= 1e-5;
+    for (let i = 0; i < a.length; i += 11) a[i] = -a[i - (i ? 1 : 0)];   // cancelaciones
+    return [L, m, K, p, a, b, new Float32Array(L * m * p)];
+  }),
   nen_op_aa: [0, 1, 2, 3].map(op => () => { const b = unif(n, -3, 3); if (op === 3) b[5] = 0; return [n, op, unif(n, -3, 3), b, new Float64Array(n), new Int32Array(1)]; }),
   nen_op_ae: [0, 1, 2, 3].flatMap(op => [0, 1].map(rev => () => { const a = unif(n, -3, 3); if (op === 3 && rev) a[7] = 0; return [n, op, rev, 1.7, a, new Float64Array(n), new Int32Array(1)]; })),
   nen_fft_permutar: [() => { const N = 64, F = 3; return [F * N, N, 6, bitrev(N), unif(F * 2 * N, -1, 1), new Float64Array(F * 2 * N)]; }],
   nen_fft_etapa: [1, -1].flatMap(conj => [2, 8, 64].map(largo => () => {
     const N = 64, F = 3, [re, im] = tabla(N);
     return [F * N / 2, N, 6, largo, Math.log2(largo), conj, re, im, unif(F * 2 * N, -1, 1)];
+  })),
+  // (motor-exp N3) la FFT con menos pasadas
+  nen_fft_cargar_real: [() => { const N = 64, F = 3; return [F * N, N, 6, bitrev(N), unif(F * N, -1, 1), new Float64Array(F * 2 * N)]; }],
+  nen_fft_bloque: [1, -1].flatMap(conj => [[64, 6, 3], [64, 4, 2], [4096, 11, 1]].map(([N, lgT, F]) => () => {
+    const [re, im] = tabla(N), T = 2 ** lgT;
+    return [F * N / T, N, Math.log2(N), T, lgT, conj, re, im, unif(F * 2 * N, -1, 1)];
+  })),
+  nen_fft_r8: [1, -1].flatMap(conj => [[64, 1], [64, 4], [512, 7], [512, 2]].map(([N, lgL]) => () => {
+    const [re, im] = tabla(N), F = 2;
+    return [F * N / 8, N, Math.log2(N), lgL, conj, re, im, unif(F * 2 * N, -1, 1)];
   })),
   nen_cmul_filas: [() => { const N = 16, F = 4; return [F * N, N, unif(F * 2 * N, -3, 3), unif(2 * N, -3, 3)]; }],
   nen_dividir: [() => [n, 7.3, unif(n, -100, 100)]],
@@ -119,7 +151,7 @@ const CASOS = {
 };
 
 // ── comparar ─────────────────────────────────────────────────────────────────
-const copiar = v => (v instanceof Float64Array ? Float64Array.from(v) : v instanceof Int32Array ? Int32Array.from(v) : v);
+const copiar = v => (v instanceof Float64Array ? Float64Array.from(v) : v instanceof Int32Array ? Int32Array.from(v) : v instanceof Float32Array ? Float32Array.from(v) : v);
 const bits = x => { const b = new BigInt64Array(1); new Float64Array(b.buffer)[0] = x; return b[0]; };
 // La distancia en ulp entre dos reales: con el orden de los enteros que tienen
 // los mismos bits, que es monótono en cada signo.
@@ -154,9 +186,10 @@ for (const nombre of nombres) {
     fn(...aC);
     for (let p = 0; p < args.length; p++) {
       const x = aJs[p], y = aC[p];
-      if (!(x instanceof Float64Array) && !(x instanceof Int32Array)) continue;
+      if (!(x instanceof Float64Array) && !(x instanceof Int32Array) && !(x instanceof Float32Array)) continue;
       for (let i = 0; i < x.length; i++) {
         if (x instanceof Int32Array) { if (x[i] !== y[i]) { mal = `${k.params[p][0]}[${i}]: js ${x[i]} y C ${y[i]}`; break; } continue; }
+        if (x instanceof Float32Array) { if (!Object.is(x[i], y[i])) { mal = `${k.params[p][0]}[${i}]: js ${x[i]} y C ${y[i]} (no son el mismo float)`; break; } continue; }
         const u = ulp(x[i], y[i]);
         if (u > peor) peor = u;
         if (u > 0n && !NEN_T_ULP.has(nombre)) { mal = `${k.params[p][0]}[${i}]: js ${x[i]} y C ${y[i]} (no son el mismo número)`; break; }
@@ -169,6 +202,26 @@ for (const nombre of nombres) {
   if (mal) { fallos++; console.log(`  ✗ ${nombre}: ${mal}`); continue; }
   if (peor === 0n) { exactos++; console.log(`  ✓ ${nombre.padEnd(18)} bit a bit`); }
   else { conUlp++; console.log(`  ✓ ${nombre.padEnd(18)} a ${peor} ulp como mucho (usa la biblioteca matemática)`); }
+}
+// (motor-exp N3) La FFT por trozos y de tres en tres tiene que dar EL MISMO
+// número que etapa por etapa: mismas mariposas en el mismo orden por casilla.
+for (const [N, F, lgT] of [[64, 3, 6], [64, 2, 3], [1 << 14, 1, 11], [1 << 13, 2, 11], [1 << 12, 1, 4]]) {
+  casos++;
+  const lgN = Math.log2(N), [re, im] = tabla(N);
+  for (const conj of [1, -1]) {
+    const x = unif(F * 2 * N, -1, 1), a = Float64Array.from(x), b = Float64Array.from(x);
+    for (let lgL = 1; lgL <= lgN; lgL++) NEN_T_NUCLEOS.nen_fft_etapa.js(F * N / 2, N, lgN, 2 ** lgL, lgL, conj, re, im, a);
+    const T = 2 ** lgT;
+    NEN_T_NUCLEOS.nen_fft_bloque.js(F * N / T, N, lgN, T, lgT, conj, re, im, b);
+    let lgL = lgT + 1;
+    while (lgL <= lgN) {
+      if (lgN - lgL + 1 >= 3) { NEN_T_NUCLEOS.nen_fft_r8.js(F * N / 8, N, lgN, lgL, conj, re, im, b); lgL += 3; }
+      else { NEN_T_NUCLEOS.nen_fft_etapa.js(F * N / 2, N, lgN, 2 ** lgL, lgL, conj, re, im, b); lgL++; }
+    }
+    const j = a.findIndex((v, i) => !Object.is(v, b[i]));
+    if (j >= 0) { fallos++; console.log(`  ✗ FFT por trozos ≠ etapa a etapa (N ${N}, filas ${F}, T 2^${lgT}, conj ${conj}, casilla ${j})`); }
+    else console.log(`  ✓ FFT trozos + r8 = etapa a etapa  N ${N} × ${F} filas, T 2^${lgT}, conj ${conj}, bit a bit`);
+  }
 }
 // (motor-exp N2) Las tres multiplicaciones de matrices (una celda por hilo, la
 // de 4×4 de la GPU y la de bloques de la CPU) tienen que dar EL MISMO número:

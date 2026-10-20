@@ -31,6 +31,11 @@ const SUITES = [
   ['exp: sistema', 'exp-sistema.js', 'motor-exp S1–S2: FFI con firmas de C, arreglos sin copiar, retrollamadas, servidor, reloj, procesos, entrada'],
   ['exp: NEÑ',    'exp-nen.js',     'motor-exp N1: grande contra mpmath, enteros exactos, amplitud contra SciPy, numerico y datos en nen, volumen'],
   ['exp: NEÑ gpu', 'exp-nen-gpu.js', 'motor-exp N2: NEÑ igual en jit, nativo y GPU (simulada), y residente en la GPU'],
+  ['exp: precisión', 'exp-precision.js', 'motor-exp N4.2: real32 y real16 contra float, _Float16 y fmaf de C, NumPy, y el SGEMM igual en jit, nativo y GPU'],
+  ['exp: colas GPU', 'exp-asincrono.js', 'motor-exp N4.3: colas, eventos y lanzar sin esperar, con la GPU simulada perezosa (nada corre hasta que hace falta)'],
+  ['exp: bloques', 'exp-bloques.js', 'motor-exp N4.4: paraleloBloques — bloques, hilos, memoria compartida y barreras, igual en jit, nativo y GPU (simulada)'],
+  ['exp: tipos de máquina', 'exp-tipos.js', 'motor-exp N4.5: i8 u8 i16 u16 u32 i64 u64 — aritmética y bits al bit contra NumPy, 64 bits exactos, y en los núcleos de jit, nativo y GPU (simulada)'],
+  ['exp: sin runtime', 'exp-aot.js --rapida', 'motor-exp N4.1: el programa como ejecutable nativo, igual a la VM letra por letra (la completa: exp-aot.js)'],
 ];
 
 let fallan = 0, saltadas = 0;
@@ -38,7 +43,8 @@ const t0 = Date.now();
 for (const [nombre, archivo, que] of SUITES) {
   process.stdout.write(`── ${nombre.padEnd(12)} ${que}\n`);
   try {
-    const salida = execFileSync(process.execPath, [path.join(__dirname, archivo)], { encoding: 'utf8' });
+    const [arch, ...args] = archivo.split(' ');   // una suite puede llevar opciones: «exp-aot.js --rapida»
+    const salida = execFileSync(process.execPath, [path.join(__dirname, arch), ...args], { encoding: 'utf8' });
     const ultima = salida.trim().split('\n').filter(l => l.trim()).pop() || '';
     // Una suite saltada entera sale con 0 igual que una que pasa, pero no es lo
     // mismo y marcarla con ✓ miente: no se probó nada.

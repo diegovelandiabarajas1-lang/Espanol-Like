@@ -874,6 +874,500 @@ copia, calentamiento antes de medir ECOSIM-G y la huella calculada fuera del tie
   menos de 8 bytes y la residencia creía que habían cambiado de tamaño, y los soltaba sin bajarlos (dos pruebas de
   `pruebas/c1en.js` lo vieron).
 
+## Fase N3 · El BLAS propio de C1EÑ: DGEMM con FMA en GPU y CPU, y una FFT de pocas pasadas (20-oct-2026)
+
+En la comparación de Kaggle (`c1en/kaggle-comparar-lenguajes.ipynb`), PyTorch y torch para R le ganaban a Ñ de lejos en
+`matmul` (los dos usan cuBLAS en la GPU y MKL/oneDNN en la CPU) y en `fft` (cuFFT). Diego pidió **nuestro propio
+cuBLAS** —sin depender de las bibliotecas de NVIDIA— y **un núcleo propio en la CPU**, también sin bibliotecas.
+
+| en Kaggle (N2) | Ñ | el mejor | por qué |
+|---|---|---|---|
+| matmul 2048, T4 | 163,6 ms (≈105 GFLOP/s) | PyTorch 69,7 (≈247 = el pico de la T4 en doble) | **sin FMA**: C1EÑ compila con `--fmad=false` para dar los mismos bits que JavaScript, y la DFMA es la mitad del pico (sin ella la T4 no pasa de ~127) |
+| matmul 2048, CPU | 2941 ms (≈6 GFLOP/s) | PyTorch 311 (≈55) | sin FMA y sin AVX: gcc `-O2` sin `-march` solo usa SSE2 (2 números por instrucción) |
+| fft 2^20, T4 | 80,2 ms | 0,85 | la entrada se pasaba a complejos en la CPU, subía, y el resultado bajaba en cada llamada; y 21 pasadas por la memoria |
+| fft 2^20, CPU | 113,9 ms | 30,9 | 21 pasadas por la memoria, de a una etapa |
+
+### 1. La FMA en los tres dispositivos, con los mismos bits
+
+La regla de C1EÑ es que jit, nativo y GPU dan **el mismo número al bit**. Por eso no había FMA: gcc con
+`-ffp-contract=off`, NVRTC con `--fmad=false`, porque JavaScript no la tiene. La salida no es renunciar a la regla sino
+**darle FMA a JavaScript**: `nenFma(a, b, c)` en `src/17-nen-tensores.js` la emula **exacta** (un solo redondeo).
+
+- Camino rápido: a·b = p + e exacto (Dekker con el partido de Veltkamp), c + p = th + tl exacto (TwoSum), v = tl + e
+  **redondeado a impar** y el resultado th + v al más cercano: el algoritmo de Boldo y Melquiond (IEEE TC 2008), probado
+  formalmente. Camino lento para los extremos (cerca del desbordamiento o de los subnormales): exacto con BigInt.
+- Comprobada contra la `fma` de C (glibc) en **16 millones de casos** (bits al azar, mantisas cortas con empates y
+  cancelaciones, exponentes extremos, c = −a·b ± 2 ulp, valores de matmul): **0 diferencias**, en los dos caminos.
+- En el producto de matrices, `nenFmaFila` hace una fila con b ya partido. Cuesta: **jit `por` es unas 4–5 veces más
+  lento que antes** (1024: 8,1 s aquí). Es el precio de que jit dé los mismos bits que la GPU con FMA.
+- Solo el producto de matrices usa FMA. El resto de los núcleos (y todo `paralelo`, ECOSIM incluido) sigue sin FMA.
+
+### 2. `nen_dgemm`, el DGEMM de C1EÑ (src/17)
+
+`por`, `multMatriz`, `multLotes` y todo lo que multiplica matrices en NEÑ y numerico va por un solo núcleo, `nen_dgemm`,
+con una versión escrita a mano para cada dispositivo. Cada casilla: s = +0; para k de 0 a K−1, s = fma(a, b, s). Mismo
+orden y FMA exacta → **los mismos bits en jit, nativo (con o sin AVX) y GPU**.
+
+- **GPU**: mosaico de 64×64 de C por bloque de 256 hilos, 4×4 casillas por hilo (filas ty+16i, columnas tx+16j), trozos de
+  16 en k por **memoria compartida** con `__syncthreads`, A traspuesta y con una columna de relleno para no chocar en los
+  bancos. 16 DFMA por cada 8 lecturas de memoria compartida: lo que manda es la DFMA, como en cuBLAS. Pasado por clang a
+  PTX de sm_75: 272 `fma.rn.f64`, 2 barreras.
+- **CPU**: B en paneles de 8 columnas y A en paneles de 6 filas, contiguos en k, por trozos de 256; micronúcleo AVX2 de
+  6×8 con **12 registros de suma** y `_mm256_fmadd_pd`; OpenMP por bloques de 96 filas. Se elige en tiempo de ejecución
+  (`__builtin_cpu_supports("avx2")` y `"fma"`, con `__attribute__((target))`: no hace falta compilar todo con
+  `-march`); sin AVX2 (o con `C1EN_SIN_AVX=1`) el mismo con `fma()` de C. Entre trozos de k la suma parcial se guarda y
+  se retoma: el orden de cada casilla no cambia.
+- Medido aquí (2 vCPU Xeon 2,8 GHz con AVX2): **2048 en 279 ms = 61,5 GFLOP/s** (N2: ~2,2 s), 1024 en 41 ms. En Kaggle
+  (2,2 GHz) debería quedar cerca de PyTorch (311 ms).
+- `nen_matmul`, `nen_matmul_4x4` y `nen_matmul_bloques` (N2, sin FMA) siguen en la lista como referencia.
+
+### 3. Núcleos con fuente propia en C1EÑ (src/14-c1en.js)
+
+`vm.c1en.kernel(spec)` acepta ahora, además del cuerpo por índice:
+
+- `cFuente`: la función de C entera (reparte el trabajo como quiera), y `cudaFuente`: el `__global__` entero, que puede
+  usar `__shared__` y `__syncthreads`, con `lanzamiento(...args) → { bloques, hilos }`;
+- `coop: true`: en el simulador, cada hilo del bloque es una **corrutina** (`ucontext`) y `__syncthreads` cede el turno
+  (pruebas/c1en-sim/cuda-falsa.h). Así el DGEMM y la FFT de memoria compartida se prueban sin GPU;
+- `minParalelo`: desde cuántos índices se reparte entre los hilos de la CPU (1 para núcleos de índices pesados);
+- los parámetros `f64*` de estos núcleos aceptan **arreglos complejos** (sus 2n reales entrelazados), y un complejo puede
+  quedarse **residente** en la GPU. `paralelo` sigue sin aceptarlos.
+
+### 4. La FFT de pocas pasadas, residente (src/17, 11)
+
+- `nen_fft_cargar_real`: el real se carga ya permutado como complejo, **en el dispositivo** (antes se copiaba a complejos
+  en la CPU y subía el doble).
+- `nen_fft_bloque`: las primeras etapas (largo 2…2048) de un trozo de 2048 números, todas de una vez: en la GPU un bloque
+  lo carga en **memoria compartida** (32 KB) y hace las 11 etapas con barreras; en la CPU, un hilo por trozo (cabe en la
+  caché).
+- `nen_fft_r8`: las demás etapas **de tres en tres** (cada hilo, los 8 números que esas tres mezclan, 12 mariposas en
+  registros).
+- 2^20: **5 pasadas** (cargar, trozos, 3 de r8) en vez de 21, y `fourier`/`fourierInversa` de un vector seguido de largo
+  potencia de dos devuelven el complejo **hecho por los núcleos y residente**: no baja hasta que alguien lo lee.
+- Las mismas mariposas (misma tabla, misma aritmética) en el mismo orden por casilla: **los mismos bits** que etapa a
+  etapa y que el LTS.
+- Medido aquí, nativo: fft 2^20 **43,8 ms** (N2: ~92). En la GPU simulada: 5 lanzamientos, 20 MB subidos (entrada y
+  tablas), 0 bajados.
+
+### Qué se probó
+
+- `pruebas/nen-nucleos.js`: 42 núcleos, 96 casos, 0 fallan; `nen_dgemm` al bit contra su respaldo en jit con AVX2 y sin
+  AVX (`C1EN_SIN_AVX=1`), con números de escalas muy dispares para que FMA y a·b + c no coincidan por casualidad; la FFT
+  por trozos + r8 igual al bit a etapa por etapa (N de 64 a 16384, varias filas, las dos direcciones).
+- `pruebas/exp-nen-gpu.js`: 18 pasan. `por` da los mismos bits en jit, nativo y GPU simulada, y queda a menos de 1e-14
+  relativo del LTS (sin FMA); fourier, inversa, espectro y convolución, **iguales al LTS al bit**; residencia de fourier.
+- `pruebas/c1en.js`: 95/95. Batería entera: 23 de 24 (la de siempre: `apps/ecosim5`).
+- `c1en/comparar/n.esl`: las huellas siguen iguales a NumPy (1e-9).
+
+### Qué cambió
+
+- `por` (y todo producto de matrices) **cambia en el último bit** respecto al LTS y a N2: ahora es con FMA, casi siempre
+  más cerca del valor exacto. Entre dispositivos sigue igual al bit.
+- `por` en jit, unas 4–5 veces más lento. En `c1en/comparar/n.esl` jit solo mide matmul 1024 (2048 serían minutos).
+- `c1en/kaggle-comparar-lenguajes.ipynb`: en la sesión de GPU corre antes `exp-nen-gpu.js --gpu` (los mismos bits en la
+  T4) y dice el resultado.
+
+## Fase N4.1 · Cero runtime: el programa de Ñ como ejecutable nativo (20-oct-2026)
+
+Diego pidió diez cosas para N4 y marcó una como la primera y la de más peso (30 %): **«Cero runtime»**, hecha de modo
+que las otras nueve no obliguen a rehacerla. Decisiones suyas: memoria por **conteo de referencias**, y el primer alcance
+es **el núcleo del lenguaje** (los eDSL van entrando tanda por tanda).
+
+```
+node motor-exp/util/n-compilar.js programa.esl              # → ./programa  (programa.exe en Windows)
+node motor-exp/util/n-compilar.js programa.esl -o salida --c programa.c --ejecutar arg1 arg2
+```
+
+El ejecutable no necesita **nada** instalado: ni Node, ni la VM, ni el JIT, ni un recolector. En Linux enlaza solo con
+libc y libm. El compilador de C (gcc, clang o mingw; `--cc` o `C1EN_CC`) hace falta solo al construir.
+
+### Cómo funciona
+
+1. **El mismo análisis que la VM.** `n-compilar` pasa el programa por `crearMotor().analizar` (con el mismo cargador
+   de módulos que `n-node`): los errores de sintaxis, de tipos y de módulos salen igual, dichos igual. Un programa que
+   no pasa el verificador no llega a C.
+2. **Del bytecode a C** (`aot/compilador.js`). El bytecode verificado de cada función (y de cada módulo) se descodifica
+   y se analiza: profundidad de la pila en cada instrucción y manejadores de `intentar` activos (la base del IR para
+   lo que viene: ranuras con tipo, tipos de máquina). Cada función de Ñ es una función de C; cada ranura de la pila,
+   una variable local de C (`s0…sN`). Las ranuras que nunca se reasignan ni se capturan (`yo`, los parámetros) son
+   **prestadas**: no se cuentan.
+3. **Errores al estilo de CPython, sin `setjmp`.** Una operación que falla devuelve `N_ERR` y deja el error pendiente en
+   `n_hilo` (local a cada hilo). Quien llama mira `N_FALLO` y salta a su **escalera de limpieza** (`L<manejador>_<prof>`):
+   suelta lo que tenía en la pila y sigue en el `capturar` que toque, o sube. Los marcos de sombra (900 como máximo,
+   igual que la VM) dan la traza `en f (línea L)` idéntica.
+4. **La biblioteca de apoyo** (`aot/nrt.h`, `aot/nrt.c` y los `nrt_*.inc`, ~7.600 líneas): valores de 16 bytes con
+   etiqueta (`NV`), textos en UTF-16 como JavaScript, listas, diccionarios con orden de inserción, cierres con upvalues
+   abiertos y cerrados, registros con métodos, errores, módulos (cada uno corre una vez), y **295 funciones nativas**.
+   Se compila una vez y se guarda en `os.tmpdir()/n-aot-cache` por la huella de todos sus archivos, del compilador y de
+   las banderas: compilar un programa es compilar solo su C (~0,3 s).
+
+### Lo que trae el ejecutable
+
+| | funciones | notas |
+|---|---|---|
+| biblioteca | 45 | imprimir, texto, entero, real, rango, listas, diccionarios, ordenar (estable), mapear/filtrar/reducir, error, archivos de texto, leerLinea, argumentos, entorno, salir, reloj… |
+| `texto` | 49 | mayúsculas y minúsculas con las reglas de JavaScript (ß→SS, İ, ŉ, sigma final), orden del español, distancia, plantilla… |
+| `numerico` (escalar y listas) | 73 | estadística, azar (mulberry32, la misma serie que la VM), primos, finanzas, matrices de listas (`multMatriz` con FMA en el orden de `nen_dgemm`) |
+| `formato` | 41 | todo menos `rangoFechas`; `toFixed` **exacto** (la mitad hacia arriba sobre el valor exacto del double, con un entero grande propio) |
+| `probar` | 35 | todo: pruebas, grupos, ganchos, espías, `soloEsta`, semilla (xorshift32 como la VM), resumen |
+| `fecha` | 52 | todo, con el tipo `fecha` en el núcleo (repr ISO, `==` por valor, `<` entre fechas, ordenar, máximo); Date.UTC hecho a mano con las reglas del estándar (años 0–99 → 1900–1999, TimeClip) |
+
+**Igual al bit que la VM.** Los números se imprimen con el algoritmo de JavaScript (dígitos más cortos y sus reglas de
+exponente); `Math.sin`, `exp`, `log`, `pow`, `atan2`, `cbrt`… son **el fdlibm de V8 12.4 (el de Node 22) pasado a C**
+(`nrt_fdlibm.inc`, con su licencia de Sun): 200.000 casos al azar por función, 0 diferencias; `hypot` con el algoritmo de
+Kahan de V8. Se compila con `-O2 -ffp-contract=off -fno-fast-math`, como C1EÑ.
+
+### Medido (nube, 2 vCPU)
+
+| | VM (Node 22, con JIT) | ejecutable |
+|---|---|---|
+| arrancar e imprimir «hola» | 162 ms | **2 ms** |
+| tamaño | Node + bundle | **300 KB** (285 KB sin símbolos), solo libc y libm |
+| fib(30) | 26 ms | 35 ms |
+| bucle `mientras` 10⁷ | 3.987 ms | **112 ms** |
+| listas (agregar y leer) | 1.105 ms | **114 ms** |
+| diccionario | 177 ms | 285 ms |
+
+Lo que falta para pasar a la VM en todo es el IR con tipos (números sin caja dentro de una función), que es justo lo
+que piden «tipos de máquina» y «precisión simple y media»: está previsto, no se rehace nada.
+
+### Pensado para el resto de N4 sin rehacerlo
+
+| lo que viene | dónde ya tiene sitio |
+|---|---|
+| precisión simple y media · tipos de máquina | la etiqueta de `NV` es de 8 bits y tiene reservados `N_I8…N_U64, N_F16, N_F32` junto a `N_NUM`; el análisis de pila del compilador es la base del IR con tipos |
+| hilos y memoria compartida | `n_hilo` es `_Thread_local`; el conteo de referencias tiene el gancho `N_RC_ATOMICO`; no hay estado global en el camino de un error |
+| ser la lengua franca · interoperabilidad directa | una función de Ñ ya es una función de C (`NFnC`) y un error es un valor de retorno, no un `longjmp`: exportarla con la ABI de C es envolverla |
+| trabajo asíncrono / varias GPU / el modelo de la GPU / plantillas en los núcleos | las nativas son una tabla (`NNatDef`): C1EÑ y NEÑ entran como un `nrt_*.inc` más, igual que entraron texto, formato, fecha… |
+| quitar la seguridad donde uno quiere | las comprobaciones (tipos, índices, conteo) las emite el compilador en sitios conocidos; una zona sin ellas es otra forma de emitir, no otra biblioteca |
+
+### Qué no entra todavía (y lo dice al compilar)
+
+`[ejecutable] todavía no están en el ejecutable nativo: «arreglo» de "numerico", …` — sin fallar en silencio. Faltan:
+**arreglos** (`ObjArreglo`, NEÑ y C1EÑ: la siguiente tanda, que además es el cimiento de precisión simple/media y de la
+GPU), `datos` (tablas), `estilo` y la página (`pintar`, `etiqueta`: son del navegador), y **generadores y asíncronas**
+(se rechazan al compilar; irán como corrutinas con pila propia).
+
+### Qué se probó
+
+- `pruebas/exp-aot.js`: cada programa en la VM y como ejecutable, y la salida tiene que ser **igual letra por letra**,
+  código de salida incluido (errores sin capturar con su traza). Los de `aot/pruebas/` (11, escritos para esto:
+  básico, números, textos, funciones y cierres, errores, registros, módulos, numerico, formato, probar, fecha) y los 608
+  ejemplos de la referencia. **307 iguales · 0 distintos · 0 no compilan · 312 sin soporte todavía** (arreglos, página,
+  datos, estilo).
+- `pruebas/todas.js` corre la rápida (`exp-aot.js --rapida`, los 11, ~25 s). Batería entera: 24 de 25 (la de siempre:
+  `apps/ecosim5`).
+- AddressSanitizer y UBSan sobre los 11: sin accesos fuera de sitio, sin comportamiento indefinido, sin fugas.
+- Windows: la biblioteca y un programa compilan en cruzado con mingw-w64 (gcc 13) sin avisos; el `.exe` enlaza solo
+  `KERNEL32.dll` y `msvcrt.dll`. **No se corrió allí** (sin Wine): falta confirmarlo en el PC de Diego.
+
+### Qué cambió o se arregló por el camino
+
+- `aot/` es nuevo; `util/n-compilar.js` y `pruebas/exp-aot.js` también; `pruebas/todas.js` suma la suite (y acepta
+  opciones por suite). **No se tocó `src/`**: la VM es la referencia.
+- Dos fugas del ejecutable (el nombre de un método atado y el de un espía), un desborde en `correrPruebas` y un
+  `memcpy` con puntero nulo en `iguales`, encontrados con ASan/UBSan antes de entregar.
+- La caché de `nrt.o` miraba solo `nrt.c` y `nrt.h`: cambiar un `nrt_*.inc` enlazaba el objeto viejo. Ahora la huella
+  lleva todos.
+
+## Fase N4.2 · Precisión simple y media: `real32` y `real16` (20-oct-2026)
+
+Dos tipos de arreglo nuevos, junto a `real` (64 bits), `entero`, `bool` y `complejo`:
+
+| tipo | qué es | bits de mantisa | hasta | memoria en la VM | en archivo y GPU |
+|---|---|---|---|---|---|
+| `real32` | el `float` de C, el de las GPU | 24 | 3,4·10³⁸ | 4 bytes (`Float32Array`) | 4 bytes |
+| `real16` | el half (IEEE binary16) | 11 | 65504 | 4 bytes (Node 22 no trae `Float16Array`) | 2 bytes en archivo; 4 en la GPU por ahora |
+
+```
+fijo a = arreglo([[1, 2], [3, 4]], "real32")       # o aTipo(x, "real32"), ceros(n, "real16"), lleno(f, v, "real32")…
+fijo h = aTipo(a, "real16")
+imprimir(a * 0.1)          # [[0.1, 0.2], [0.3, 0.4]] — los dígitos más cortos DEL TIPO, como NumPy
+imprimir(por(a, a))        # el SGEMM de C1EÑ: GPU, AVX2 de 8 floats o jit, los mismos bits
+```
+
+### La regla (la misma en jit, nativo y GPU)
+
+**Cada operación se hace en 64 bits y el resultado se redondea UNA vez al tipo del arreglo.** Para + − × ÷ y la raíz
+eso es exactamente la aritmética de 32 (o de 16) bits de verdad, porque 53 ≥ 2·24 + 2: redondear dos veces no cambia
+nada (comprobado abajo contra `float` y `_Float16` de gcc). En las demás (seno, exp…) es «calcular en doble y guardar en
+simple», que es determinista y más exacto que la `sinf` de cualquier biblioteca.
+
+- **Tipos como en PyTorch:** un número suelto no ensancha (`x32 * 2.5` sigue en real32), `entero · real16` da real16,
+  y entre dos de coma flotante gana el más ancho (`real32 · real16` → real32, `real32 + real` → real). `/` nunca da
+  entero. Lo mismo al pegar (`concatenar`, `apilar`) y al elegir (`donde`).
+- **Se conservan** en la aritmética, las comparaciones (dan `bool`), las 13 unarias de numerico (`seno(a32)` es real32),
+  `recortar`, las vistas (`trozo`, `transpuesta`, `redimensionar`, `copia`), `aTipo`, crear con tipo, `a[i] = v` y
+  `ponerElemento` (redondean al guardar), y `por`.
+- **Devuelven `real`** (se calculan en 64): las reducciones (`suma`, `media`, `varianza`… dan un número de 64 bits) y lo
+  avanzado (descomposiciones, Fourier, estadística de NEÑ). Para volver: `aTipo(r, "real32")`.
+- `leerArregloBinario` / `escribirArregloBinario` con `"real32"` (float32) y `"real16"` (**2 bytes por número**,
+  float16 de NumPy).
+
+### El producto de matrices en simple: `nen_sgemm` (src/17)
+
+El de `nen_dgemm` (N3) con floats: cada casilla, s = +0 y s = fmaf(a, b, s) con k de 0 a K−1.
+
+- **GPU:** mosaicos de 64×64 por bloque de 256 hilos, 4×4 casillas por hilo, trozos de 16 en k por memoria compartida.
+  Compilado a PTX de sm_75 con clang: 272 `fma.rn.f32`, 0 en doble, 2 barreras. En una T4 la simple tiene 32 veces el
+  pico de la doble (8,1 contra 0,25 TFLOP/s).
+- **CPU:** paneles de 6×16 y micronúcleo AVX2 de 8 floats con 12 registros de suma (`_mm256_fmadd_ps`); sin AVX2,
+  `fmaf()`.
+- **jit:** `nenFmaf`, la fmaf **exacta** en JavaScript: a·b de dos floats es exacto en un double, c + p = s + e exacto
+  (TwoSum), s se lleva a impar con e y se redondea a float (Boldo y Melquiond: 53 ≥ 24 + 2).
+- **real16:** entra en el mismo SGEMM (en la VM ya vive en floats) y se redondea a 16 bits al final: acumular en 32 y
+  guardar en 16, que es lo que hacen los núcleos de media precisión de las GPU.
+
+Medido aquí (2 vCPU AVX2, nativo): 1024² `real` 57 ms → `real32` **26 ms**; 2048² 446 → **223 ms** (el doble de
+números por instrucción). `real16` 2048² 1,05 s, casi todo en pasar los dos operandos a 16 bits en JavaScript.
+
+### C1EÑ con floats (src/14)
+
+- `vm.c1en.kernel`: tipo de parámetro nuevo **`f32*`** (`float*` en C y CUDA, `Float32Array` en jit); acepta arreglos
+  `real32` y `real16`.
+- **`paralelo` sobre un `real32`:** el núcleo lee float, calcula en double y guarda redondeado a float. Los tres
+  dispositivos dan los mismos bits (probado). La mitad de memoria y de tráfico por el PCIe. `real16` en `paralelo`
+  todavía no (lo dice y explica cómo pasar a real32 y volver). `sumarAtomico` acepta real32.
+- La aritmética de arreglos por los núcleos de NEÑ (N2) sigue siendo solo para `real`; real32/real16 van por la VM.
+
+### Qué se probó (`pruebas/exp-precision.js`, 32 pruebas, en `todas.js`)
+
+- `redondear16` = `(_Float16)` de gcc en **590.480** casos: los 63.488 halves finitos, todos sus puntos medios (los
+  empates), ±1 ulp de cada medio, 400.000 al azar y los bordes (65504, 65520, subnormales, 2⁻²⁵…); y = `astype(float16)`
+  de NumPy 2.5 en 300.000 más. Los 65.536 patrones de 16 bits van y vuelven.
+- `nenFmaf` = `fmaf()` de C en **3 millones** de casos (cancelaciones, empates, resultados subnormales, desbordes).
+- La aritmética de la VM (+ − × ÷ raíz) sobre 200.000 pares, **igual al bit** al `float` de C en real32 y al
+  `_Float16` de C en real16, pasando por los archivos binarios de 4 y 2 bytes.
+- `por` en real32 y real16 y `paralelo` sobre real32: **los mismos bits en jit, nativo y GPU (simulada)**, iguales a la
+  referencia. `pruebas/nen-nucleos.js`: `nen_sgemm` bit a bit contra su respaldo, con AVX2 y sin AVX.
+- Los tipos que salen de cada mezcla, la impresión, `a[i] = v` en real16, y los mensajes de error.
+- Batería entera: 25 de 26 (la de siempre: `apps/ecosim5`).
+
+### Qué cambió
+
+- El mensaje de `leerArregloBinario` con un tipo que no existe nombra los cuatro tipos (`pruebas/fuera.js` lo sigue).
+- `c1en/comparar` gana la prueba **`matmul32`** (Ñ nativo y gpu, y PyTorch en CPU y GPU; `referencia.py` le da su
+  huella, con la tolerancia de float32 que el cuaderno ya tenía), y el cuaderno de Kaggle corre además
+  `exp-precision.js --gpu` en la T4 antes de medir: es lo que confirma los bits en la GPU de verdad.
+- El simulador de GPU (`pruebas/c1en-sim`) declara `fmaf`, `sqrtf` y `fabsf`.
+- El ejecutable sin runtime (N4.1) todavía no trae arreglos: entran con los tipos de máquina (N4.5).
+
+## Fase N4.3 · Trabajo asíncrono en la GPU: colas, eventos y lanzar sin esperar (20-oct-2026)
+
+Hasta N4.2 cada núcleo hacía `cuLaunchKernel` y en seguida `cuCtxSynchronize`: la CPU esperaba a la GPU tras cada
+operación, aunque el resultado se quedara en la GPU. Ahora:
+
+### 1. Sin esperar tras cada núcleo (para todos los programas, sin cambiar nada)
+
+Los núcleos se encolan y la CPU sigue. Solo espera cuando de verdad tiene que hacerlo: cuando lee un arreglo que está en
+la GPU, cuando un argumento no podía quedarse en la GPU (una vista) y hay que bajarlo, o cuando un núcleo de `paralelo`
+puede fallar y el error tiene que salir en su línea. Una cadena de NEÑ sobre lo residente (`y = senoA(y) * 2.0 + 1.0`
+seis veces) son 21 lanzamientos, **3 subidas y 2 bajadas** en total; antes cada `* 2.0` subía y bajaba la marca de
+«división entre cero», que ahora solo se mira al dividir.
+
+### 2. Colas para el programa (eDSL `nen`)
+
+```
+fijo a = colaGpu()
+fijo b = colaGpu()
+enCola(a, fn() { paralelo(N, masUno, x, y) })      # a: y = x + 1
+enCola(b, fn() { paralelo(N, doble, y, z) })       # b: z = 2y — espera a «a» sola, sin parar a la CPU
+enCola(b, fn() { subirGpu(siguiente) })            # copiar mientras «a» calcula
+esperarCola(a)                                     # aquí sale el error de un núcleo de «a», si lo hubo
+```
+
+| función | qué hace |
+|---|---|
+| `colaGpu()` | una cola nueva (un `CUstream` no bloqueante) |
+| `enCola(c, fn)` | lo que `fn` lance en la GPU va a `c`; devuelve lo que devuelva `fn` |
+| `esperarCola(c)` · `colaLista(c)` · `soltarCola(c)` | esperar, preguntar sin esperar, y liberarla |
+| `promesaCola(c)` | una promesa que se cumple cuando `c` termina: `esperar promesaCola(c)` dentro de una función asíncrona deja correr lo demás |
+| `subirGpu(a)` | sube el arreglo ya, en la cola actual, sin esperar (un «prefetch») |
+| `medirGpu(fn)` | los milisegundos de GPU de lo que `fn` lanza, con eventos de CUDA (en jit y nativo, el reloj) |
+
+- **El orden entre colas lo pone C1EÑ, no el programa.** Cada arreglo residente recuerda qué cola lo escribió por
+  última vez y qué colas lo leen; un núcleo en otra cola espera a esas con un evento (`cuStreamWaitEvent`) antes de leer
+  (lectura tras escritura) o de escribir (escritura tras lectura). La memoria que se reutiliza de la reserva también
+  espera a la cola que la usó. Mientras el programa no crea colas, nada de esto cuesta: todo va por la cola de siempre.
+- **Los errores de un núcleo en una cola salen al esperarla**, con la línea del núcleo (como en CUDA). En jit y nativo
+  las colas existen igual (todo corre en el acto) y el error se guarda para `esperarCola` también: el mismo programa
+  dice lo mismo en el mismo sitio en los tres dispositivos.
+- En `util/c1en-cuda.js`: colas, eventos y copias asíncronas de la Driver API (`cuStreamCreate`, `cuStreamWaitEvent`,
+  `cuEventRecord`, `cuEventElapsedTime`, `cuMemcpyHtoDAsync_v2`…). Si el driver no los trae, todo sigue por la cola de
+  siempre.
+
+### 3. El simulador de GPU, perezoso (`pruebas/c1en-sim/libcuda-falsa.c`)
+
+Ahora tiene colas, eventos y copias asíncronas, y con `C1EN_SIM_PEREZOSO=1` **no ejecuta nada hasta que alguien lo
+necesita** (sincronizar, preguntar por una cola o un evento, o una copia síncrona en la cola de siempre); entonces lo
+ejecuta en orden y respetando las esperas entre colas. Las colas son no bloqueantes, como en CUDA. Es lo que hace que
+una sincronización o una espera que falte se note SIEMPRE en las pruebas (en una GPU de verdad saldría una vez de cada
+mil). `c1en.js`, `exp-nen-gpu.js` y `exp-precision.js` pasan también con el simulador perezoso.
+
+### Qué se probó (`pruebas/exp-asincrono.js`, 15 pruebas, en `todas.js`)
+
+En jit, nativo y GPU simulada perezosa: dos colas con las dos dependencias (lectura tras escritura y escritura tras
+lectura) sin que el programa diga nada; la cadena de NEÑ (al bit igual en los tres, y en la GPU 3 subidas y 2 bajadas);
+un fallo en una cola sale al esperarla con su línea y en la cola de siempre en el acto; `promesaCola` en una asíncrona
+mientras la CPU sigue (mismo orden de salida en los tres), `subirGpu`, `medirGpu`, `colaLista` y `soltarCola`.
+Batería entera: 26 de 27 (`apps/ecosim5`, la de siempre). El cuaderno de Kaggle corre `exp-asincrono.js --gpu` en la T4.
+
+### Qué cambió
+
+- `paralelo` en la cola de siempre se comporta igual que antes (el error sale en su línea). Lo nuevo solo cambia
+  cuándo espera la CPU, no los resultados.
+- `liberarResidentes` y vaciar la reserva sincronizan el contexto si hay colas.
+
+## Fase N4.4 · El modelo de la GPU en manos del programa: `paraleloBloques` (20-oct-2026)
+
+`paralelo(n, f, …)` le daba a cada hilo un índice `i` y escondía la cuadrícula. Ahora el programa puede verla, como en
+CUDA: bloques, hilos dentro del bloque, memoria compartida del bloque y barreras.
+
+```
+fn sumaBloque(b, t, x, parciales) {
+  fijo s = compartido(256)                 # memoria del bloque: la ven sus 256 hilos (empieza a cero)
+  fijo g = b * hilosPorBloque() + t
+  si g < longitud(x) { s[t] = x[g] }
+  barrera()                                # __syncthreads
+  var paso = hilosPorBloque() // 2
+  mientras paso > 0 {
+    si t < paso { s[t] = s[t] + s[t + paso] }
+    barrera()
+    paso = paso // 2
+  }
+  si t == 0 { parciales[b] = s[0] }
+}
+paraleloBloques((N + 255) // 256, 256, sumaBloque, x, parciales)
+```
+
+| dentro de un núcleo de bloques | qué es |
+|---|---|
+| `b`, `t` (los dos primeros parámetros) | `blockIdx.x`, `threadIdx.x` |
+| `hilosPorBloque()`, `numeroBloques()` | `blockDim.x`, `gridDim.x` |
+| `fijo s = compartido(256)` · `compartidoEntero(256)` | `__shared__ double s[256]` (o `int`): al principio del núcleo, con el tamaño escrito; hasta 48 KB por bloque |
+| `barrera()` | `__syncthreads()` (también dentro de un `mientras`) |
+| `sumarAtomico(s, k, 1)` | `atomicAdd`, también sobre la compartida |
+
+### Los tres dispositivos, los mismos bits
+
+- **GPU:** tal cual (`__shared__`, `__syncthreads`), un bloque de CUDA por bloque. Compilado a PTX de sm_75 con clang:
+  `bar.sync`, `.shared`, sin FMA. La compartida se pone a cero al empezar (como en jit y nativo).
+- **jit:** cada hilo es un **generador** de JavaScript y la barrera es `yield`; el bloque corre por rondas.
+- **nativo:** lo mismo con **corrutinas** (ucontext en Linux y macOS, fibras en Windows —compila con mingw—); cada
+  bloque en un hilo del sistema y los bloques repartidos con OpenMP.
+
+**Vigila las barreras (jit y nativo).** Si un hilo termina mientras otros esperan en una barrera, o dos hilos esperan en
+barreras distintas —lo que en una GPU se cuelga o da basura—, el núcleo falla con la línea de la barrera y el hilo:
+«el hilo 4 del bloque 0 falló en la línea 6: no todos los hilos del bloque llegaron a esta barrera». Los demás fallos
+también dicen bloque e hilo. Funciona dentro de una cola (`enCola`, N4.3), y `codigoCuda`/`codigoC` reconocen un núcleo
+de bloques solos.
+
+### Qué se probó (`pruebas/exp-bloques.js`, 34 pruebas, en `todas.js`)
+
+Una reducción en árbol (391 bloques), una traspuesta por mosaicos de 16×17, una suma prefija Hillis-Steele y un
+histograma con atómicos en la compartida: **jit = nativo = GPU (simulada, cooperativa y perezosa) al bit**, y los
+resultados contra JavaScript plano. El fallo de índice en la compartida, igual en los tres; las dos barreras mal puestas,
+cazadas en jit y nativo; seis usos indebidos dichos al compilar; el PTX. El C de un núcleo de bloques compila para
+Windows con mingw. Batería entera: 27 de 28 (`apps/ecosim5`). El cuaderno de Kaggle corre `exp-bloques.js --gpu`.
+
+### Qué cambió
+
+- `paralelo` no cambia. `codigoCuda`/`codigoC` saben de los núcleos de bloques.
+- En la GPU de verdad una barrera mal puesta no se puede detectar (se cuelga o da basura): por eso conviene probar
+  antes en jit o nativo.
+
+## Fase N4.5 · Tipos de máquina: `i8` `u8` `i16` `u16` `u32` `i64` `u64` (20-oct-2026)
+
+Los enteros de C, con su tamaño, como arreglos (los dtypes de NumPy). Guardar en uno **envuelve** —200 en un `i8` es
+−56—, que es lo que hace el hardware y lo que hacen C, CUDA y NumPy. `entero` sigue siendo el de siempre (32 bits con
+signo) y ahora también se escribe `i32`; `f64`, `f32` y `f16` son otros nombres de `real`, `real32` y `real16`.
+
+```
+fijo pix = ceros([480, 640], "u8")                    # una imagen: un byte por punto
+fijo a = arreglo([100, 120, -128], "i8")
+imprimir(a + a)                                        # [-56, -16, 0]: envuelve en 8 bits
+imprimir(tipoArreglo(a + arreglo([200, 1, 2], "u8")))  # i16: el que cabe los dos, como NumPy
+fijo h = unos(3, "i64") * desplazarIzq(1, 62)         # exacto en 64 bits (BigInt64Array)
+imprimir(suma(h))                                      # 13835058055282163712, exacto (un grande)
+imprimir(bitsXor(arreglo([12], "u8"), 10), bitsNo(5), desplazarIzq(1, 70))   # [6] · −6 · 2^70 exacto
+```
+
+### La regla
+
+| caso | resultado |
+|---|---|
+| dos enteros del mismo signo | el más ancho (`i8 + i16 → i16`) |
+| con y sin signo | el con signo que cabe los dos (`i8 + u8 → i16`, `i32 + u32 → i64`); `i64` con `u64` no cabe: `real` |
+| un número suelto entero | el tipo del arreglo (`u8 * 3 → u8`); uno con decimales da `real` |
+| con un arreglo de coma flotante | ese (`i8 * real16 → real16`, `i64 + real32 → real32`): la regla de N4.2 para `entero` (la de PyTorch), igual para todos |
+| `/` y `**` | `real` |
+| `//` y `%` | hacia abajo, como siempre en Ñ (`−7 // 2 = −4`); entre cero es un error de Ñ, no un 0 |
+
+La cuenta es **exacta** y luego se envuelve: hasta 16 bits en un double (es exacto), el `*` de 32 bits con `Math.imul`, y
+los de 64 con BigInt. Los bits salen iguales a NumPy (ver abajo). Lo único en que se aparta: con un arreglo de coma
+flotante, NumPy ensancha el real según el entero (`i16 + f16 → f32`) y Ñ se queda en el real del arreglo.
+
+**De 64 bits.** Un elemento se lee como un número si cabe exacto (±2^53) y si no como un **grande exacto**; un grande
+entero se puede guardar (`g[0] = desplazarIzq(1, 64) - 1`) y operar con el arreglo. `suma` es exacta. Las funciones que
+todavía no saben de ellos lo dicen, con la salida: «`media` todavía no trabaja con arreglos i64 — pásalo antes con
+aTipo(a, "real")».
+
+**Conversiones.** `aTipo(a, "u8")` desde un real trunca y envuelve (`300.7 → 44`, `−1.5 → 255`), como el `(uint8_t)` de
+un `int64_t` en C; NaN e infinito no caben y se dice. `leerArregloBinario` / `escribirArregloBinario` leen y escriben
+todos los tipos (int8 … uint64, el formato `.tofile()` de NumPy).
+
+### Bits (`numerico`)
+
+`bitsY`, `bitsO`, `bitsXor`, `bitsNo`, `desplazarIzq`, `desplazarDer`, `contarBits`. Con **números sueltos** son
+enteros de verdad, como en Python: complemento a dos con infinitos unos a la izquierda (`bitsNo(5) = −6`,
+`desplazarIzq(1, 70)` es 2^70 exacto). Con **arreglos**, en su tipo, como C: lo que sale por la izquierda se pierde, y
+`desplazarDer` es aritmético en los tipos con signo y lógico en los sin signo.
+
+### En los núcleos de C1EÑ
+
+`paralelo` y `paraleloBloques` aceptan arreglos `i8 u8 i16 u16 u32` (`int8_t*` … `uint32_t*` en C, `unsigned char*` …
+en CUDA): leen como el entero de 64 bits del núcleo y escriben envolviendo, igual en jit, nativo y GPU. `sumarAtomico`
+sobre un `u32` sí (hay `atomicAdd` de `unsigned int`); en 8 y 16 bits no, y se dice al compilar. Dentro del núcleo
+también están las funciones de bits, sobre enteros de 64 bits: el resultado tiene que caber exacto en un número de Ñ
+(si no, el núcleo falla con su línea; así jit, nativo y GPU dan siempre lo mismo) y un desplazamiento va de 0 a 63. Los
+de 64 bits todavía no entran en un núcleo: se dice, con la salida.
+
+```
+fn mezcla(i, x, y) {                          # x, y: u32
+  var h = x[i] * 40503 + i
+  h = bitsXor(h, desplazarDer(h, 13))
+  y[i] = bitsY(h, 4294967295)                 # los 32 bits de abajo
+}
+```
+
+### Medido (nube, 2 vCPU, un millón de elementos)
+
+`i8 + i8` 3 ms · `entero * entero` 6 ms (la LTS: 6 ms, pero daba bits mal al pasarse de 2^53) · `u32 * u32` 11 ms ·
+`bitsXor` de u32 5 ms · `i64 + i64` 59 ms (BigInt: exacto, no rápido).
+
+### Qué se probó (`pruebas/exp-tipos.js`, 27 pruebas, en `todas.js`)
+
+- **Contra NumPy, al bit:** 848 operaciones (`+ − * // % /`, los bits y los desplazamientos, con números sueltos, con
+  real16/real32/real y `aTipo` entre todos) entre los 8 enteros, con datos al azar y los extremos de cada tipo. Los
+  datos llegan por `leerArregloBinario` y los resultados vuelven por `escribirArregloBinario`, y se comparan los bytes y
+  el tipo. Las únicas excluidas: `//` y `%` con `u64` y un entero con signo (ahí el resultado es real y son los de los
+  reales de Ñ).
+- Lo exacto de 64 bits (suma por encima de 2^63, 2^64 − 1 en un u64, el grande al leer), `aTipo` truncando y
+  envolviendo, los nombres de NumPy.
+- Un núcleo con u32, i8 y u16 y las funciones de bits en **jit, nativo y GPU (simulada): lo mismo que BigInt**;
+  `sumarAtomico` en u32 envolviendo; los fallos (desplazamiento fuera, resultado sin caber) con su línea; lo que se
+  rechaza al compilar. El C del núcleo compila para Windows con mingw.
+- Batería entera: 27 de 29 en verde (`apps/ecosim5`, la de siempre; las saltadas por falta de herramientas).
+
+### Qué cambió
+
+- **`entero * entero` ahora envuelve bien** al pasarse de 32 bits (antes se multiplicaba en double y, por encima de
+  2^53, los bits de abajo salían mal). Es lo único que cambia para los programas que ya había; `+` y `−` no cambian.
+- Los mensajes de «el tipo es …» listan los tipos nuevos (`pruebas/fuera.js` y `exp-precision.js` actualizadas).
+- El simulador de GPU (`cuda-falsa.h`) tiene `atomicAdd` de `float` y `unsigned int`, como CUDA.
+- Pendiente: los de 64 bits en los núcleos; `contarBits` y los bits de arreglos en NEÑ (GPU); y en el ejecutable sin
+  runtime (N4.1), que todavía no trae arreglos.
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -892,5 +1386,17 @@ copia, calentamiento antes de medir ECOSIM-G y la huella calculada fuera del tie
 | W1 | Windows: C1EÑ nativo enlaza (sin `-z nodelete`), sonda del compilador, rutas en `fuera`, tolerancia y limpieza de NEÑ, `errorC` con `ucrtbase.dll` | anfitrión de Node, pruebas | **hecha** (`errorC` por confirmar en Windows) |
 | N1 | NEÑ: numerico y datos dentro, tipo `grande` y enteros exactos, 43 funciones de amplitud, volumen (reducciones, `por` por bloques), cuaderno de velocidad en GPU | verificador, VM, JIT, NEÑ, C1EÑ | **hecha** (tiempos de la T4 por medir en Kaggle) |
 | N2 | NEÑ en la GPU de verdad: residencia y entrada/salida en `kernel()`, memoria reutilizable, aritmética de arreglos y suma/media/varianza por C1EÑ, `fourier` por los núcleos (sin divisiones), `por` 4×4 en GPU y por bloques en CPU | C1EÑ, NEÑ, numerico, VM | **hecha** (tiempos de la T4 por medir) |
+| N3 | BLAS propio: `nen_dgemm` con FMA (GPU memoria compartida, CPU AVX2 empaquetado), FMA exacta en JS, núcleos con fuente propia y barreras (simulador cooperativo), FFT de 5 pasadas residente | C1EÑ, NEÑ, numerico, simulador | **hecha** (tiempos de la T4 por medir) |
+| N4.1 | **Cero runtime**: `n-compilar` → ejecutable nativo sin Node ni VM (bytecode → C + `aot/nrt`), conteo de referencias, errores sin `setjmp`, igual al bit que la VM; núcleo + texto, numerico (escalar), formato, probar, fecha | `aot/` (nuevo), util, pruebas | **primera tanda hecha** · faltan arreglos (siguiente), datos, generadores |
+| N4.2 | **precisión simple y media**: arreglos `real32` y `real16` (una operación, un redondeo), `nen_sgemm` con FFMA en GPU/AVX2/jit, `f32*` y `paralelo` sobre real32, archivos float32/float16 | VM, numerico, NEÑ, C1EÑ, stdlib | **hecha** (bits en la T4 por confirmar en Kaggle) |
+| N4.3 | **trabajo asíncrono en la GPU**: lanzar sin esperar, `colaGpu`/`enCola`/`esperarCola`/`promesaCola`/`subirGpu`/`medirGpu`, dependencias entre colas automáticas con eventos, errores al esperar, simulador perezoso | C1EÑ, puente CUDA, simulador | **hecha** (por confirmar en la T4) |
+| N4.4 | **el modelo de la GPU en manos del programa**: `paraleloBloques(bloques, hilos, f(b, t, …))`, `compartido`, `barrera`, `hilosPorBloque`, `numeroBloques`; jit con generadores, nativo con corrutinas, GPU tal cual; barreras vigiladas | C1EÑ | **hecha** (por confirmar en la T4) |
+| N4.5 | **tipos de máquina**: arreglos `i8 u8 i16 u16 u32 i64 u64` (envuelven como C; promoción de NumPy; 64 bits exactos con BigInt), alias `i32 f64 f32 f16`, bits (`bitsY`… `desplazarDer`, `contarBits`), E/S binaria de todos, núcleos de C1EÑ con enteros de 8–32 bits y bits | VM, numerico, stdlib, C1EÑ | **hecha** (al bit contra NumPy) |
+| N4.6 | ser la lengua franca (exportar funciones de Ñ con la ABI de C) | AOT | pendiente |
+| N4.7 | hilos y memoria compartida con control fino | AOT (`N_RC_ATOMICO`), VM | pendiente |
+| N4.8 | varias GPU desde un solo programa | C1EÑ | pendiente |
+| N4.9 | plantillas (genéricos) en los núcleos | C1EÑ, verificador | pendiente |
+| N4.10 | interoperabilidad directa (C y C++ sin capa) | AOT, FFI | pendiente |
+| N4.11 | quitar la seguridad donde uno quiere (zonas sin comprobaciones) | AOT, verificador | pendiente |
 
 Cada fase deja su sección en este archivo: qué se tocó, qué se probó, qué se rompió.

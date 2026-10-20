@@ -430,6 +430,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         if ((a.k === 'grande' || b.k === 'grande') && ['+', '-', '*', '/', '//', '%', '**'].includes(op)) {
           const otro = a.k === 'grande' ? b : a;
           if (otro.k === 'grande' || esNum(otro)) return T.grande;
+          if (otro.k === 'arreglo') return T.arreglo;   // (motor-exp N4.5) con un i64/u64, exacto
           err(n, `«${op}»: un grande se opera con otro grande o con un número, y llegó ${tipoATexto(otro)}`,
             'para pasar un texto a grande: grande("3.14159")');
           return T.grande;

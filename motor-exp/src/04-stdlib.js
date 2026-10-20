@@ -944,26 +944,39 @@ function instalarBiblioteca(vm, host) {
   // (tofile / fromfile), y por eso existe: es el puente entre Ñ y Python sin
   // pasar millones de números por JSON. La forma y el tipo no van en el
   // archivo; quien lee los conoce (el puente los manda aparte).
+  const TIPOS_BINARIOS = ['real', 'entero', 'real32', 'real16', 'i8', 'u8', 'i16', 'u16', 'u32', 'i64', 'u64'];
   def('leerArregloBinario', 'texto, texto, lista -> arreglo', a => {
     const r = txt(a[0], 1, 'leerArregloBinario');
-    const tipo = txt(a[1], 2, 'leerArregloBinario');
-    if (tipo !== 'real' && tipo !== 'entero') vm.error(`«leerArregloBinario»: el tipo es «real» o «entero», no «${tipo}»`);
+    const tipo0 = txt(a[1], 2, 'leerArregloBinario'), tipo = ALIAS_TIPO[tipo0] || tipo0;
+    // (motor-exp N4.5) y los enteros de máquina: i8 u8 i16 u16 u32 i64 u64
+    if (!TIPOS_BINARIOS.includes(tipo))
+      vm.error(`«leerArregloBinario»: el tipo es uno de ${TIPOS_BINARIOS.map(t => '«' + t + '»').join(', ')}, no «${tipo0}»`);
     const forma = lst(a[2], 3, 'leerArregloBinario').items.map(x => num(x, 3, 'leerArregloBinario') | 0);
     if (!arch || !arch.leerBytes) faltaArch('leerArregloBinario');
     const bytes = conArchivo('leerArregloBinario', r, () => arch.leerBytes(r));
     const out = vm.arrNuevo(forma, tipo);
+    // (motor-exp N4.2) un real16 son 2 bytes por número en el archivo (float16 de NumPy)
+    if (tipo === 'real16') {
+      if (bytes.byteLength !== out.tamano * 2)
+        vm.error(`«leerArregloBinario»: el archivo tiene ${bytes.byteLength} bytes y la forma ${forma.join('×')} de real16 pide ${out.tamano * 2}`);
+      const h = new Uint16Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+      for (let i = 0; i < h.length; i++) out.datos[i] = deBits16(h[i]);
+      vm.cobrar(out.tamano);
+      return out;
+    }
     const esperado = out.datos.byteLength;
     if (bytes.byteLength !== esperado)
       vm.error(`«leerArregloBinario»: el archivo tiene ${bytes.byteLength} bytes y la forma ${forma.join('×')} de ${tipo} pide ${esperado}`);
     new Uint8Array(out.datos.buffer, out.datos.byteOffset, esperado).set(new Uint8Array(bytes.buffer, bytes.byteOffset, esperado));
     vm.cobrar(out.tamano);
     return out;
-  }, 'leerArregloBinario(ruta, tipo, forma) — un arreglo desde bytes crudos (float64 o int32), el formato de NumPy');
+  }, 'leerArregloBinario(ruta, tipo, forma) — un arreglo desde bytes crudos (float64, int32, float32, float16 o los enteros int8 … uint64), el formato de NumPy');
   def('escribirArregloBinario', 'texto, arreglo -> nulo', a => {
     const r = txt(a[0], 1, 'escribirArregloBinario');
     const arr = a[1];
     if (!(arr instanceof ObjArreglo)) vm.error(`«escribirArregloBinario»: el argumento 2 debe ser un arreglo y es ${tipoDe(arr)}`);
-    if (arr.tipo !== 'real' && arr.tipo !== 'entero') vm.error(`«escribirArregloBinario»: solo arreglos real o entero, no ${arr.tipo}`);
+    if (!TIPOS_BINARIOS.includes(arr.tipo))
+      vm.error(`«escribirArregloBinario»: solo arreglos ${TIPOS_BINARIOS.join(', ')}, no ${arr.tipo}`);
     if (!arch || !arch.escribirBytes) faltaArch('escribirArregloBinario');
     // Una vista no contigua se copia primero en orden lógico: lo que se escribe
     // es lo que el programa ve, no lo que hay en memoria.
@@ -974,10 +987,11 @@ function instalarBiblioteca(vm, host) {
       let i = 0;
       for (const q of arr.posiciones()) plano[i++] = arr.datos[q];
     }
+    if (arr.tipo === 'real16') { const h = new Uint16Array(plano.length); for (let i = 0; i < h.length; i++) h[i] = bitsDe16(plano[i]); plano = h; }
     conArchivo('escribirArregloBinario', r, () => arch.escribirBytes(r, new Uint8Array(plano.buffer, plano.byteOffset, plano.byteLength)));
     vm.cobrar(arr.tamano);
     return null;
-  }, 'escribirArregloBinario(ruta, arreglo) — lo guarda como bytes crudos (float64 o int32), el formato de NumPy');
+  }, 'escribirArregloBinario(ruta, arreglo) — lo guarda como bytes crudos (float64, int32, float32, float16 o los enteros int8 … uint64), el formato de NumPy');
 
   // ── (motor-exp, S2) el eDSL «sistema»: usar servir, leerLineas, unirRuta de "sistema"
   // Nombres nuevos en un eDSL, no globales: lección de X4 («todas» y
@@ -1767,7 +1781,7 @@ function instalarBiblioteca(vm, host) {
   // registran núcleos en él al instalarse (si no existiera se quedarían con su
   // respaldo en JavaScript). Luego cálculo, fórmulas y tensores.
   const regNen = instalarEdsl(vm, 'nen', def => {
-    instalarNenC1en(vm, def);
+    instalarNenC1en(vm, def, host);
     instalarNenCalculo(vm, def);
     instalarNenFormulas(vm, def);
     instalarNenTensores(vm, def);

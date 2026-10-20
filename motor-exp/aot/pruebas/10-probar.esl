@@ -1,0 +1,74 @@
+usar probar, saltar, soloEsta, grupo, antesDeTodo, despuesDeTodo, antesDeCada, despuesDeCada de "probar"
+usar debeSer, noDebeSer, debeSerCierto, debeSerFalso, debeSerCerca, debeSerMayor, debeSerMenor, debeSerAlMenos, debeSerComoMucho de "probar"
+usar debeContener, noDebeContener, debeEmpezarCon, debeTerminarCon, debeEstarVacio, debeTener, debeSerTipo de "probar"
+usar debeFallar, noDebeFallar, debeFallarCon, espia, llamadasDe, vecesLlamada, soloFallos, semillaPruebas, afirmaciones, correrPruebas, resumenPruebas de "probar"
+
+fn ident(v) { devolver v }
+var cuenta = 0
+antesDeTodo(fn() { imprimir("arranca") })
+despuesDeTodo(fn() { imprimir("termina") })
+antesDeCada(fn() { cuenta = cuenta + 1 })
+
+probar("suma", fn() { debeSer(1 + 1, 2) })
+probar("listas en profundidad", fn() { debeSer([1, [2, 3]], [1, [2, 3]]) })
+probar("falla a propósito", fn() { debeSer(ident(0.1) + 0.2, 0.3) })
+probar("distintos", fn() { debeSer("a", "b") })
+grupo("comparaciones", fn() {
+  probar("mayor", fn() { debeSerMayor(3, 2) })
+  probar("menor falla", fn() { debeSerMenor(5, 2) })
+  probar("textos", fn() { debeSerAlMenos("b", "a"); debeSerComoMucho("a", "a") })
+  probar("mezcla", fn() { debeSerMayor(ident(1), ident("x")) })
+  grupo("anidado", fn() {
+    probar("cerca", fn() { debeSerCerca(0.1 + 0.2, 0.3) })
+    probar("lejos", fn() { debeSerCerca(1, 1.5, 0.1) })
+  })
+})
+probar("contener", fn() { debeContener([1, 2, 3], 2); debeContener("hola", "ol"); noDebeContener({"a": 1}, "b") })
+probar("contener falla", fn() { debeContener("hola", ident(5)) })
+probar("textos", fn() { debeEmpezarCon("hola", "ho"); debeTerminarCon("hola", "la"); debeEmpezarCon("hola", "x") })
+probar("vacío y tamaño", fn() { debeEstarVacio([]); debeEstarVacio(""); debeTener([1, 2], 2); debeTener("abc", 4) })
+probar("tipos", fn() { debeSerTipo(3, "entero"); debeSerTipo(2.5, "real"); debeSerTipo([], "texto") })
+probar("cierto/falso", fn() { debeSerCierto(1); debeSerFalso(0); debeSerFalso([1]) })
+probar("noDebeSer", fn() { noDebeSer(1, 2); noDebeSer([1], [1]) })
+probar("debeFallar", fn() {
+  var m = debeFallar(fn() { var x = ident(1) / 0 })
+  imprimir("    mensaje:", m)
+  debeFallarCon(fn() { lanzar "uy" }, "uy")
+  noDebeFallar(fn() { var y = 1 })
+  debeFallarCon(fn() { var x = ident(1) / 0 }, "otra cosa")
+})
+probar("noDebeFallar falla", fn() { noDebeFallar(fn() { lanzar error("roto") }) })
+probar("debeFallar sin fallo", fn() { debeFallar(fn() { var y = 1 }) })
+probar("lanzar sin capturar", fn() { lanzar [1, 2] })
+saltar("esta no", fn() { debeSer(1, 2) })
+probar("espía", fn() {
+  var e = espia(fn(a, b) { devolver a * b })
+  debeSer(e(2, 3), 6)
+  e(4, 5)
+  debeSer(vecesLlamada(e), 2)
+  debeSer(llamadasDe(e), [[2, 3], [4, 5]])
+  imprimir("    ", e)
+})
+probar("no es espía", fn() { vecesLlamada(fn() { devolver 1 }) })
+fijo r = correrPruebas()
+imprimir(r)
+imprimir(resumenPruebas())
+imprimir("cuenta", cuenta, "afirmaciones", afirmaciones())
+
+# segunda tanda: soloEsta, soloFallos, semilla
+soloEsta("la única", fn() { debeSer(2, 2) })
+probar("no corre", fn() { debeSer(1, 2) })
+imprimir(correrPruebas())
+soloFallos(cierto)
+semillaPruebas(7)
+para i en rango(8) { probar("p" + texto(i), fn() { debeSer(i % 3, 0) }) }
+imprimir(correrPruebas())
+soloFallos(falso)
+semillaPruebas(12345)
+para i en rango(6) { probar("q" + texto(i), fn() { debeSerCierto(verdadero) }) }
+imprimir(correrPruebas())
+imprimir(resumenPruebas())
+intentar { probar(ident(1), fn() { devolver 1 }) } capturar (e) { imprimir(e.mensaje) }
+intentar { probar("x", ident(3)) } capturar (e) { imprimir(e.mensaje) }
+intentar { grupo("g", fn() { lanzar "en el grupo" }) } capturar (e) { imprimir(e) }
+debeSer(1, 2)

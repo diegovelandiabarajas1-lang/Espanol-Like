@@ -17,19 +17,21 @@ print(f'# torch {torch.__version__} · hilos CPU {torch.get_num_threads()} · ' 
 for dev in dispositivos:
     sync = torch.cuda.synchronize if dev == 'cuda' else (lambda: None)
     nombre = 'gpu' if dev == 'cuda' else 'cpu'
-    def medir(prueba, tam, f, h):
+    def medir(prueba, tam, f, h, prec='f64'):
         r = f(); sync()
         mejor = float('inf')
         for _ in range(3):
             t0 = time.perf_counter(); r = f(); sync()
             mejor = min(mejor, (time.perf_counter() - t0) * 1000)
-        print(f'RES,{prueba},{tam},{nombre},{mejor:.6f},{float(h(r))!r},f64', flush=True)
+        print(f'RES,{prueba},{tam},{nombre},{mejor:.6f},{float(h(r))!r},{prec}', flush=True)
     for n in NS:
         i = torch.arange(n, device=dev).view(-1, 1); j = torch.arange(n, device=dev).view(1, -1)
         A = ((i * 7 + j * 3) % 13).double() / 13 - 0.5
         B = ((i * 5 + j * 11) % 17).double() / 17 - 0.5
         medir('matmul', str(n), lambda: A @ B, lambda C: C.sum())
-        del A, B
+        A32, B32 = A.float(), B.float()                    # (N4.2) en simple: sgemm de cuBLAS / MKL
+        medir('matmul32', str(n), lambda: A32 @ B32, lambda C: C.double().sum(), 'f32')
+        del A, B, A32, B32
     x = (torch.arange(NV, device=dev) % 1000).double() / 1000
     medir('seno', str(NV), lambda: torch.sin(x), lambda y: y.sum())
     medir('x*2+1', str(NV), lambda: x * 2 + 1, lambda y: y.sum())

@@ -83,8 +83,13 @@ if (envGpu) {
       t => t.mbSub <= 8.1 && t.mbBaj < 0.1],
     ['por(por(A, A), A): A sube una vez, solo baja la suma', 'usar azarArreglo, semilla, por, suma de "nen"\nsemilla(1)\nfijo A = azarArreglo([512, 512])\nimprimir(suma(por(por(A, A), A)) > 0)\n',
       t => t.subidas === 1 && t.mbBaj < 0.1],
-    ['fourier de 2^20: los datos suben y bajan una vez, no en cada etapa', 'usar reparto, fourier, parteReal de "nen"\nfijo f = fourier(reparto(0.0, 1.0, 1048576))\nimprimir(tipo(f))\n',
-      t => t.bajadas === 1 && t.mbSub < 30],
+    // (motor-exp N3) la entrada real sube una vez (8 MB) con las tablas (12 MB),
+    // se hace complejo en la GPU, 5 pasadas (cargar, trozos, 3 de r8) y el
+    // resultado se queda allí: no baja hasta que alguien lo lee
+    ['fourier de 2^20: 5 pasadas, la entrada sube una vez y el resultado no baja', 'usar reparto, fourier, parteReal de "nen"\nfijo f = fourier(reparto(0.0, 1.0, 1048576))\nimprimir(tipo(f))\n',
+      t => t.bajadas === 0 && t.mbSub <= 20.1 && t.lanz <= 6],
+    ['fourier y luego leerlo: el resultado (16 MB) baja una vez', 'usar reparto, fourier, absolutoA, suma de "nen"\nfijo f = fourier(reparto(0.0, 1.0, 1048576))\nimprimir(suma(absolutoA(f)) > 0)\n',
+      t => t.mbBaj >= 15.9 && t.mbBaj <= 16.1],   // los 16 MB una sola vez (más la suma, unos bytes)
   ];
   for (const [nombre, src, ok] of casos) {
     const r = correr('gpu', prog(nombre.slice(0, 5).replace(/\W/g, '_') + '.esl', src), [], Object.assign({ C1EN_ESTADISTICAS: '1' }, envGpu));
@@ -109,11 +114,21 @@ if (envGpu) {
       try { return JSON.parse(r.stdout); } catch (_) { return { error: (r.stderr || '').slice(0, 300) }; }
     };
     const base = una(lts, 'jit');
+    // (motor-exp N3) «por» ya no suma como el LTS: va por nen_dgemm, con FMA
+    // (un redondeo por paso en vez de dos). Al bit tiene que ser igual en los
+    // tres dispositivos de motor-exp; contra el LTS, a unos pocos ulp.
+    let porJit = null;
     for (const [d, env] of [['jit', {}]].concat(dispositivos)) {
       const otro = una(R.bundle, d, env);
-      const distintos = Object.keys(base).filter(k => JSON.stringify(base[k]) !== JSON.stringify(otro[k]));
-      comprobar(`${d}: fourier, inversa, espectro, convolución, por y x*2+1 iguales al LTS, al bit`, !distintos.length && !otro.error,
+      const distintos = Object.keys(base).filter(k => k !== 'por' && JSON.stringify(base[k]) !== JSON.stringify(otro[k]));
+      comprobar(`${d}: fourier, inversa, espectro, convolución y x*2+1 iguales al LTS, al bit`, !distintos.length && !otro.error,
         otro.error || 'distintos: ' + distintos.join(', '));
+      if (otro.error || !otro.por) continue;
+      const escala = Math.max(...base.por.map(Math.abs));
+      const dif = Math.max(...base.por.map((v, i) => Math.abs(v - otro.por[i])));
+      comprobar(`${d}: por (con FMA) a menos de 1e-14 relativo del LTS (sin FMA)`, dif <= 1e-14 * escala, `diferencia ${dif / escala}`);
+      if (d === 'jit') porJit = otro.por;
+      else comprobar(`${d}: por da los mismos bits que en jit (la FMA emulada)`, porJit && JSON.stringify(porJit) === JSON.stringify(otro.por));
     }
   }
 }
