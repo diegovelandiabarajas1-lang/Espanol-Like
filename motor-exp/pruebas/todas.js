@@ -2,6 +2,21 @@
 // para que sirva igual a mano que dentro de otro script.
 const { execFileSync } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+
+// (motor-exp N4.6) Varias suites (nativo, aislado, ejemplos) miran el IDE YA
+// construido, que vive en salida/, fuera de git: en un clon recién hecho no
+// existe, y la suite caía con un ENOENT que no decía qué faltaba. Se construye
+// aquí si no está.
+{
+  const R = require('../rutas.js');
+  for (const [archivo, args] of [['espanol-like-v4.html', []], ['c1en.html', ['--c1en']]]) {
+    if (!fs.existsSync(R.entrega(archivo))) {
+      console.log(`(construyendo ${archivo}: hace falta para las pruebas y no estaba)`);
+      execFileSync(process.execPath, [path.join(__dirname, '..', 'util', 'construir-ide.js')].concat(args), { stdio: 'ignore' });
+    }
+  }
+}
 
 const SUITES = [
   ['motor',       'motor.js',        'el lenguaje, la máquina, el recolector y el JIT'],
@@ -35,6 +50,7 @@ const SUITES = [
   ['exp: colas GPU', 'exp-asincrono.js', 'motor-exp N4.3: colas, eventos y lanzar sin esperar, con la GPU simulada perezosa (nada corre hasta que hace falta)'],
   ['exp: bloques', 'exp-bloques.js', 'motor-exp N4.4: paraleloBloques — bloques, hilos, memoria compartida y barreras, igual en jit, nativo y GPU (simulada)'],
   ['exp: tipos de máquina', 'exp-tipos.js', 'motor-exp N4.5: i8 u8 i16 u16 u32 i64 u64 — aritmética y bits al bit contra NumPy, 64 bits exactos, y en los núcleos de jit, nativo y GPU (simulada)'],
+  ['exp: lengua franca', 'exp-lengua-franca.js', 'motor-exp N4.6: Ñ como biblioteca de C (n-compilar --biblioteca), llamada desde C, C++, Python, Rust y Go; tres a la vez; valgrind; la DLL de Windows'],
   ['exp: sin runtime', 'exp-aot.js --rapida', 'motor-exp N4.1: el programa como ejecutable nativo, igual a la VM letra por letra (la completa: exp-aot.js)'],
 ];
 

@@ -1368,6 +1368,106 @@ fn mezcla(i, x, y) {                          # x, y: u32
 - Pendiente: los de 64 bits en los núcleos; `contarBits` y los bits de arreglos en NEÑ (GPU); y en el ejecutable sin
   runtime (N4.1), que todavía no trae arreglos.
 
+## Fase N4.6 · Ser la lengua franca: Ñ como biblioteca de C (21-oct-2026)
+
+Un programa de Ñ se compila a una **biblioteca compartida** con sus funciones `publico` y la ABI de
+C, y desde ahí la llama cualquier lenguaje: C, C++, Rust, Go, Python, C#, Julia, Zig…
+
+```
+publico fn hipotenusa(a: real, b: real): real { devolver raiz(a * a + b * b) }
+publico fn resumen(xs: lista<real>) { … devolver {"suma": s, "media": s / longitud(xs)} }
+```
+```
+node motor-exp/util/n-compilar.js mates.esl --biblioteca [-o carpeta] [--prefijo p_] [--cc gcc]
+   → libmates.so (mates.dll, libmates.dylib) · mates.h · mates.py
+```
+```c
+#include "mates.h"
+double h = mates_hipotenusa(3, 4);                 /* 5 */
+if (mates_error()) puts(mates_error());            /* NULL si fue bien */
+```
+```python
+import mates
+mates.resumen([1, 2, 3.5])      # {'suma': 6.5, 'media': 2.1666…}  — una lista de Ñ llega como list y un dic como dict
+f = mates.sumador(2.5); f(1)    # 3.5 — una función de Ñ se llama desde Python
+```
+
+### La ABI
+
+| Ñ | C |
+|---|---|
+| `real` | `double` |
+| `entero` | `int64_t` (±2^53 exacto; uno más grande es un error, no un redondeo) |
+| `bool` | `int` |
+| `texto` | `const char*` en UTF-8. El que devuelve una función es de quien llama: `<p>liberar` |
+| `nulo` (retorno) | `void` |
+| lo demás (listas, dic, registros, funciones, sin anotar) | `<p>valor*`, un **asa** opaca |
+
+Con las asas se mira (`valor_tipo/real/bool/texto/repr/largo/en/clave/de/reales/copiar/soltar`),
+se construye (`nuevo_nulo/bool/real/texto/lista/lista_reales/dic`, `lista_agregar`, `dic_poner`)
+y se llama a una función de Ñ que llegó en un asa (`<p>llamar`): un cierre que devolvió Ñ se puede
+llamar desde C. Las asas que te da la biblioteca son tuyas y se sueltan con `valor_soltar`.
+
+**Errores, como errno.** Una llamada que falla devuelve 0, NaN o NULL, y `<p>error()` da el
+mensaje de la VM, con la pista y la línea. Una llamada que va bien lo deja en NULL. El puntero vale
+hasta la siguiente llamada, y el error es por hilo. Es la razón de que N4.1 no usara setjmp:
+ningún error salta por encima de quien llama.
+
+**El arranque.** Lo de nivel superior del programa corre una vez, en la primera llamada o en
+`<p>iniciar()`, sin tocar la salida ni la consola del anfitrión. Si falla, cada llamada lo dice.
+`salir()` dentro de una biblioteca es un error: no cierra el programa que la usa.
+
+**Varias en un proceso.** La biblioteca se compila con `-fvisibility=hidden` y solo exporta lo que
+lleva su prefijo, así que tres bibliotecas de Ñ conviven en el mismo proceso, cada una con lo
+suyo. En Windows se exporta con `__declspec(dllexport)` y se enlaza con `-static-libgcc`, y la DLL
+solo depende de KERNEL32 y msvcrt.
+
+**Se dice al compilar**: si no hay ningún `publico`, si un nombre chocaría con la API, o si se
+intenta exportar un generador.
+
+**Un hilo a la vez**: el conteo de referencias todavía no es atómico. Eso es N4.7.
+
+### Arreglos de Windows que salieron de las pruebas de Claude Code en el PC
+
+- **`paraleloBloques` en nativo tumbaba el proceso sin mensaje.** Cada núcleo es su propia DLL con
+  su propio `c1en_plan`, y el segundo núcleo encontraba el hilo ya convertido en fibra por el
+  primero: `ConvertThreadToFiber` daba NULL y `SwitchToFiber(NULL)` tumbaba todo. Ahora se
+  pregunta antes (`IsThreadAFiber`/`GetCurrentFiber`), y el hilo vuelve a ser hilo al terminar si
+  lo convirtió ese núcleo. También pasó a `CreateFiberEx`, con la pila reservada justa. Arreglado
+  sin poderlo correr en Windows desde aquí: **está por confirmar en el PC.**
+- **El SGEMM en real32 «daba −1,18e21» en jit y en nativo.** No era el SGEMM, era la prueba:
+  `leer32` leía `buffer` entero sin su desplazamiento, y el Node del PC devuelve el archivo como un
+  trozo de un bloque compartido. Arreglado como ya estaba `leer16`.
+- **`nenFmaf` contra el `fmaf()` de C.** El `fmaf` de la biblioteca de mingw no es exacto:
+  `fmaf(3.4e38, 2, −3.4e38)` le da infinito, y la respuesta es 3.4e38. Ñ tenía razón. La prueba
+  compara ahora en Windows contra la instrucción del procesador (`vfmadd`, exacta). Y de paso, los
+  núcleos de CPU sin AVX2 ya no dependen de la libm: la FMA de simple se hace exacta en C, con el
+  mismo método que `nenFmaf`, y la de doble usa la instrucción cuando el procesador la tiene.
+- `salida/` no va en git, así que en un clon recién hecho no existe. `construir-ide.js` y
+  `referencia.js` ahora la crean, y `pruebas/todas.js` construye el IDE si falta: antes `nativo.js`
+  caía con un ENOENT que no decía qué faltaba.
+
+### Qué se probó (`pruebas/exp-lengua-franca.js`, 18 pruebas, en `todas.js`)
+
+- Desde **C**: números, enteros, textos UTF-8, bools, listas, dic, cierres de ida y vuelta y la
+  API de asas, con los mensajes de error exactos. **valgrind**: ni una fuga ni un acceso inválido.
+- Desde **C++**: tres bibliotecas a la vez, una con un módulo propio y otra cuyo nivel superior
+  falla.
+- Desde **Python** (el `.py` generado), **Rust** (`extern "C"`) y **Go** (cgo).
+- Lo que da la biblioteca es lo que da la VM.
+- La DLL de Windows compilada con mingw: exporta solo lo suyo y enlaza con la cabecera generada.
+- La prueba corre también **en Windows**: la DLL de verdad, con objdump, el Python de Windows y
+  UTF-8. En Windows no prueba Rust, que necesita el enlazador de MSVC.
+- `exp-aot.js` completo sigue en 307 iguales.
+- Batería entera: **29 de 30 suites en verde** (solo `apps/ecosim5`, la de siempre).
+
+### Qué cambió
+
+- Para los programas no cambia nada: `n-compilar` sin `--biblioteca` hace lo de siempre.
+- `nrt.c` gana `nrt_biblioteca.inc` (el arranque, el último error y las asas).
+- Pendiente: pasar `lista<real>` como `(const double*, n)` sin asas, y los arreglos de Ñ por la
+  ABI. Para eso faltan los arreglos en el AOT.
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -1392,7 +1492,7 @@ fn mezcla(i, x, y) {                          # x, y: u32
 | N4.3 | **trabajo asíncrono en la GPU**: lanzar sin esperar, `colaGpu`/`enCola`/`esperarCola`/`promesaCola`/`subirGpu`/`medirGpu`, dependencias entre colas automáticas con eventos, errores al esperar, simulador perezoso | C1EÑ, puente CUDA, simulador | **hecha** (por confirmar en la T4) |
 | N4.4 | **el modelo de la GPU en manos del programa**: `paraleloBloques(bloques, hilos, f(b, t, …))`, `compartido`, `barrera`, `hilosPorBloque`, `numeroBloques`; jit con generadores, nativo con corrutinas, GPU tal cual; barreras vigiladas | C1EÑ | **hecha** (por confirmar en la T4) |
 | N4.5 | **tipos de máquina**: arreglos `i8 u8 i16 u16 u32 i64 u64` (envuelven como C; promoción de NumPy; 64 bits exactos con BigInt), alias `i32 f64 f32 f16`, bits (`bitsY`… `desplazarDer`, `contarBits`), E/S binaria de todos, núcleos de C1EÑ con enteros de 8–32 bits y bits | VM, numerico, stdlib, C1EÑ | **hecha** (al bit contra NumPy) |
-| N4.6 | ser la lengua franca (exportar funciones de Ñ con la ABI de C) | AOT | pendiente |
+| N4.6 | **ser la lengua franca**: `n-compilar --biblioteca` → `.so`/`.dll`/`.dylib` + `.h` + `.py`, ABI de C con asas para lo que no es escalar, errores como errno, varias bibliotecas por proceso; probado desde C, C++, Python, Rust y Go | AOT, util | **hecha** (por confirmar en Windows) |
 | N4.7 | hilos y memoria compartida con control fino | AOT (`N_RC_ATOMICO`), VM | pendiente |
 | N4.8 | varias GPU desde un solo programa | C1EÑ | pendiente |
 | N4.9 | plantillas (genéricos) en los núcleos | C1EÑ, verificador | pendiente |

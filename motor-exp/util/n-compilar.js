@@ -6,6 +6,9 @@
 //   node motor-exp/util/n-compilar.js programa.esl -o salida
 //   node motor-exp/util/n-compilar.js programa.esl --c programa.c     (además, deja el C)
 //   node motor-exp/util/n-compilar.js programa.esl --ejecutar [args…] (compila y lo corre)
+//   node motor-exp/util/n-compilar.js mates.esl --biblioteca [-o carpeta] [--prefijo p_]
+//        (motor-exp N4.6) una BIBLIOTECA de C: libmates.so (mates.dll, libmates.dylib) con las
+//        funciones «publico», más mates.h (C, C++, Rust, Go…) y mates.py (Python, con ctypes)
 //
 // El compilador de C (gcc, clang o el de mingw en Windows) solo hace falta
 // AQUÍ, al construir; quien reciba el ejecutable no necesita nada. Se elige con
@@ -21,29 +24,49 @@ const { spawnSync } = require('child_process');
 const R = require('../rutas.js');
 require(R.bundle);
 const EL = globalThis.EspanolLike;
-const { compilarAOT, ErrorAOT } = require('../aot/compilador.js');
+const { compilarAOT, ErrorAOT, exportacionesBiblioteca } = require('../aot/compilador.js');
 const AOT = path.join(__dirname, '..', 'aot');
 
 function uso() {
   console.log('uso: node motor-exp/util/n-compilar.js programa.esl [-o salida] [--c archivo.c] [--cc compilador] [--ejecutar [args…]]');
+  console.log('     node motor-exp/util/n-compilar.js biblioteca.esl --biblioteca [-o carpeta] [--prefijo p_] [--c archivo.c] [--cc compilador]');
   process.exit(2);
 }
 const args = process.argv.slice(2);
 let entrada = null, salida = null, archC = null, cc = process.env.C1EN_CC || null, ejecutar = false, argsProg = [], banderas = [];
+let biblioteca = false, prefijo = null;
 while (args.length) {
   const a = args.shift();
   if (a === '-o') salida = args.shift();
   else if (a === '--c') archC = args.shift();
   else if (a === '--cc') cc = args.shift();
   else if (a === '--ejecutar') { ejecutar = true; argsProg = args.splice(0); }
+  else if (a === '--biblioteca') biblioteca = true;
+  else if (a === '--prefijo') prefijo = args.shift();
   else if (a.startsWith('--cflag=')) banderas.push(a.slice(8));
   else if (a.startsWith('-')) uso();
   else if (!entrada) entrada = a;
   else uso();
 }
 if (!entrada) uso();
-const win = process.platform === 'win32';
-if (!salida) salida = path.join(path.dirname(entrada), path.basename(entrada).replace(/\.esl$/i, '')) + (win ? '.exe' : '');
+// (motor-exp N4.6) para quién se compila: con el gcc de mingw, para Windows aunque se esté en Linux
+const ccPedido = cc || '';
+const win = process.platform === 'win32' || /mingw|w64/i.test(ccPedido);
+const mac = !win && process.platform === 'darwin';
+if (ejecutar && biblioteca) { console.log('--ejecutar no va con --biblioteca: una biblioteca la llama otro programa'); process.exit(2); }
+const nombreBase = path.basename(entrada).replace(/\.esl$/i, '');
+const identC = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9_]/g, '_').replace(/^(\d)/, '_$1');
+let archivosBib = null;
+if (biblioteca) {
+  const dir = salida || path.dirname(entrada);
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (_) { /* nada */ }
+  const nb = identC(nombreBase);
+  archivosBib = { so: `lib${nb}.so`, dll: `${nb}.dll`, dylib: `lib${nb}.dylib`, h: `${nb}.h`, py: `${nb}.py`, dir };
+  if (prefijo === null) prefijo = nb + '_';
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(prefijo)) { console.log(`[biblioteca] el prefijo «${prefijo}» no es un nombre de C`); process.exit(2); }
+  salida = path.join(dir, win ? archivosBib.dll : mac ? archivosBib.dylib : archivosBib.so);
+}
+if (!salida) salida = path.join(path.dirname(entrada), nombreBase) + (win ? '.exe' : '');
 
 let fuente;
 try { fuente = fs.readFileSync(entrada, 'utf8'); } catch (_) { console.log('no se pudo abrir ' + entrada); process.exit(2); }
@@ -69,7 +92,11 @@ if (!a.ok) {
   process.exit(1);
 }
 let res;
-try { res = compilarAOT(a.fn, { globalesMotor: new Set(m.vm.globals.keys()), modulos: a.modulos }); }
+try {
+  const op = { globalesMotor: new Set(m.vm.globals.keys()), modulos: a.modulos };
+  if (biblioteca) op.biblioteca = { nombre: identC(nombreBase), prefijo, exporta: exportacionesBiblioteca(a.ast), archivos: archivosBib };
+  res = compilarAOT(a.fn, op);
+}
 catch (e) {
   if (e instanceof ErrorAOT) { console.log('[ejecutable] ' + e.message); process.exit(1); }
   throw e;
@@ -87,7 +114,9 @@ function buscarCC() {
 }
 const comp = buscarCC();
 if (!comp) { console.log('[ejecutable] no hay compilador de C (gcc o clang); se puede indicar con --cc o C1EN_CC'); process.exit(1); }
-const BASE = ['-std=gnu11', '-O2', '-ffp-contract=off', '-fno-fast-math', '-fwrapv', '-w', '-I', AOT].concat(banderas);
+const BASE = ['-std=gnu11', '-O2', '-ffp-contract=off', '-fno-fast-math', '-fwrapv', '-w', '-I', AOT].concat(banderas)
+  // (motor-exp N4.6) una biblioteca: código reubicable, y de nrt no se ve nada desde fuera
+  .concat(biblioteca ? (win ? ['-fvisibility=hidden'] : ['-fPIC', '-fvisibility=hidden']) : []);
 // La biblioteca de apoyo se compila una vez y se guarda (por la huella de su
 // código, del compilador y de las banderas): compilar un programa es entonces
 // compilar solo su C.
@@ -110,7 +139,9 @@ function objetoNrt() {
   fs.renameSync(t, o);
   return o;
 }
-const flags = BASE.concat(['-o', salida, c, objetoNrt(), '-lm']).concat(win ? ['-Wl,--stack,67108864'] : []);
+const flags = biblioteca
+  ? BASE.concat([mac ? '-dynamiclib' : '-shared', '-o', salida, c, objetoNrt(), '-lm']).concat(win ? ['-static-libgcc'] : [])
+  : BASE.concat(['-o', salida, c, objetoNrt(), '-lm']).concat(win ? ['-Wl,--stack,67108864'] : []);
 const r = spawnSync(comp, flags, { encoding: 'utf8' });
 if (r.status !== 0) {
   console.log(`[ejecutable] ${comp} no lo compiló (el C está en ${c}):`);
@@ -118,6 +149,12 @@ if (r.status !== 0) {
   process.exit(1);
 }
 if (!archC) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) { /* nada */ } }
+if (biblioteca) {
+  fs.writeFileSync(path.join(archivosBib.dir, archivosBib.h), res.h);
+  fs.writeFileSync(path.join(archivosBib.dir, archivosBib.py), res.py);
+  console.log(`${salida} · ${archivosBib.h} · ${archivosBib.py} · ${res.exporta.length} funciones exportadas (${res.exporta.map(e => e.c).join(', ')}) · ${(fs.statSync(salida).size / 1024).toFixed(0)} KB`);
+  process.exit(0);
+}
 if (!ejecutar) {
   console.log(`${salida} · ${res.funciones} funciones · ${(fs.statSync(salida).size / 1024).toFixed(0)} KB · sin runtime`);
   process.exit(0);

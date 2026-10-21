@@ -237,6 +237,11 @@ function compilarAOT(fnPrincipal, opciones) {
     else if (VALORES_C[g] && !definidos.has(g)) E(`  G[${k}] = ${VALORES_C[g]}; GD[${k}] = 1;`);
   }
   E('}');
+  // (motor-exp N4.6) una biblioteca de C en vez de un programa
+  if (opciones.biblioteca) {
+    const b = emitirBiblioteca(opciones.biblioteca, { E, idGlobal, modulos, idFn, cTexto });
+    return { c: out.join('\n') + '\n', h: b.h, py: b.py, exporta: b.exporta, funciones: fns.length, textos: textos.size, globales: globales.size };
+  }
   E('int main(int argc, char** argv) {');
   E('  n_iniciar(argc, argv);');
   E('  iniciar_constantes();');
@@ -446,4 +451,367 @@ function compilarAOT(fnPrincipal, opciones) {
   }
 }
 
-module.exports = { compilarAOT, ErrorAOT, NATIVAS_C };
+// ── (motor-exp N4.6) Ser la lengua franca: la biblioteca de C ──────────────
+// Las funciones «publico» del programa salen con la ABI de C. Sus tipos, de la
+// anotación: real → double, entero → int64_t, bool → int, texto → const char*
+// (UTF-8; el que se devuelve es char* y se suelta con <p>liberar), nulo → void;
+// lo demás (listas, diccionarios, registros, funciones, sin anotar) viaja como
+// un ASA opaca, <p>valor*, con una API pequeña para mirarla y hacerla.
+const API_SUFIJOS = ['iniciar', 'error', 'liberar', 'valor_tipo', 'valor_real', 'valor_bool', 'valor_texto', 'valor_repr',
+  'valor_largo', 'valor_en', 'valor_clave', 'valor_de', 'valor_reales', 'valor_soltar', 'valor_copiar', 'nuevo_nulo', 'nuevo_bool',
+  'nuevo_real', 'nuevo_texto', 'nuevo_lista', 'nuevo_lista_reales', 'nuevo_dic', 'lista_agregar', 'dic_poner', 'llamar'];
+const PALABRAS_C = new Set(('auto break case char const continue default do double else enum extern float for goto if inline int long ' +
+  'register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while bool true false ' +
+  'class new delete template this namespace private public protected operator').split(' '));
+const identC = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9_]/g, '_').replace(/^(\d)/, '_$1');
+const PY_RESERVADAS = new Set(('False None True and as assert async await break class continue def del elif else except finally for ' +
+  'from global if import in is lambda nonlocal not or pass raise return try while with yield').split(' '));
+
+function tipoABI(t, esRet) {
+  const k = t ? t.k : 'cualquiera';
+  if (k === 'real') return { c: 'double', clase: 'real' };
+  if (k === 'entero') return { c: 'int64_t', clase: 'entero' };
+  if (k === 'bool') return { c: 'int', clase: 'bool' };
+  if (k === 'texto') return { c: esRet ? 'char*' : 'const char*', clase: 'texto' };
+  if (k === 'nulo' && esRet) return { c: 'void', clase: 'nulo' };
+  return { c: null, clase: 'asa' };
+}
+const nombreTipo = t => {
+  if (!t) return 'cualquiera';
+  if (t.k === 'lista') return `lista<${nombreTipo(t.elem)}>`;
+  if (t.k === 'dic') return `dic<${nombreTipo(t.clave)}, ${nombreTipo(t.valor)}>`;
+  if (t.k === 'registro') return t.nombre;
+  if (t.k === 'funcion') return 'funcion';
+  return t.k;
+};
+
+// Las funciones que se exportan, sacadas del árbol del archivo principal.
+function exportacionesBiblioteca(ast) {
+  const out = [];
+  for (const s of ast.cuerpo) {
+    if (!s.publico || s.tipo !== 'DeclFuncion' || s.metodo) continue;
+    if (s.corrutina) throw new ErrorAOT(`«${s.nombre}» es un generador o una función asíncrona: todavía no se puede exportar a C`);
+    out.push({ nombre: s.nombre, params: s.params.map(p => ({ nombre: p.nombre, tipo: p.anotacion || null })), ret: s.retorno || null, linea: s.linea });
+  }
+  return out;
+}
+
+function emitirBiblioteca(bib, ctx) {
+  const { E, idGlobal, modulos, idFn, cTexto } = ctx;
+  const P = bib.prefijo;
+  const VT = `${P}valor`;
+  const exp = bib.exporta;
+  if (!exp.length) throw new ErrorAOT('la biblioteca no exporta nada: marca con «publico» las funciones que se tienen que ver desde fuera (publico fn sumar(a: real, b: real): real)');
+  const vistos = new Map();
+  for (const f of exp) {
+    const suf = identC(f.nombre);
+    f.c = P + suf;
+    if (API_SUFIJOS.includes(suf)) throw new ErrorAOT(`la función «${f.nombre}» se llamaría ${f.c}, que es un nombre de la API de la biblioteca: cámbiale el nombre`);
+    if (vistos.has(f.c)) throw new ErrorAOT(`«${f.nombre}» y «${vistos.get(f.c)}» se llamarían igual en C (${f.c})`);
+    vistos.set(f.c, f.nombre);
+    f.abiRet = tipoABI(f.ret, true);
+    f.abiPs = f.params.map((p, i) => Object.assign({ nom: identC(p.nombre), cc: `p${i}` }, tipoABI(p.tipo, false)));
+    for (const p of f.abiPs) if (PALABRAS_C.has(p.nom)) p.nom += '_';
+  }
+  const tyP = a => (a.clase === 'asa' ? `const ${VT}*` : a.c);
+  const tyR = a => (a.clase === 'asa' ? `${VT}*` : a.c);
+  const firma = (f, conNombres) => {
+    const ps = f.abiPs.map(p => `${tyP(p)} ${conNombres ? p.nom : p.cc}`);
+    return `${tyR(f.abiRet)} ${f.c}(${ps.length ? ps.join(', ') : 'void'})`;
+  };
+  const porDefecto = f => ({ real: 'NAN', entero: '0', bool: '0', texto: 'NULL', asa: 'NULL', nulo: '' })[f.abiRet.clase];
+  const firmaN = f => `fn ${f.nombre}(${f.params.map(p => `${p.nombre}: ${nombreTipo(p.tipo)}`).join(', ')}): ${nombreTipo(f.ret)}`;
+  const comentario = s => s.replace(/\*\//g, '* /');
+
+  E('');
+  E('/* ═══════════ (motor-exp N4.6) la biblioteca: las funciones «publico» con la ABI de C ═══════════ */');
+  E('#if defined(_WIN32)');
+  E('#define N_EXPORTA __declspec(dllexport)');
+  E('#else');
+  E('#define N_EXPORTA __attribute__((visibility("default")))');
+  E('#endif');
+  E(`typedef struct ${VT} ${VT};`);
+  E('static int lib_estado = 0;   /* 0 sin arrancar · 1 bien · 2 falló el arranque */');
+  E('static char* lib_error_inicio = NULL;');
+  E('static int lib_iniciar(void) {');
+  E('  if (lib_estado == 1) return 1;');
+  E('  if (lib_estado == 2) { n_api_poner_error(lib_error_inicio); return 0; }');
+  E('  n_iniciar_biblioteca();');
+  E('  iniciar_constantes();');
+  if (modulos.length) {
+    E(`  static const char* const claves[] = { ${modulos.map(m => cTexto(m.clave)).join(', ')} };`);
+    E(`  static const NFn* const fns[] = { ${modulos.map(m => '&FN' + idFn.get(m.fn)).join(', ')} };`);
+    E(`  n_registrar_modulos(claves, fns, ${modulos.length});`);
+  }
+  E('  NV c = n_cierre_nuevo(&FN0);');
+  E('  NV r = F0((NCierre*)c.u.o, NULL, 0);');
+  E('  n_dec(c); fflush(stdout);');
+  E('  if (N_FALLO(r)) { n_api_guardar_error(); lib_error_inicio = strdup(n_api_error()); lib_estado = 2; return 0; }');
+  E('  n_dec(r); lib_estado = 1; return 1;');
+  E('}');
+  E(`N_EXPORTA int ${P}iniciar(void) { n_api_limpiar_error(); return lib_iniciar(); }`);
+  E(`N_EXPORTA const char* ${P}error(void) { return n_api_error(); }`);
+  E(`N_EXPORTA void ${P}liberar(void* p) { free(p); }`);
+  // la API de las asas
+  const api = [
+    [`const char* ${P}valor_tipo(const ${VT}* v)`, 'return n_api_tipo(v);', 'mirar', '"nulo", "bool", "entero", "real", "texto", "lista", "dic", "registro", "funcion", "error", "fecha"'],
+    [`double ${P}valor_real(const ${VT}* v)`, 'return n_api_real(v);', 'mirar', 'el número (NaN si no lo es)'],
+    [`int ${P}valor_bool(const ${VT}* v)`, 'return n_api_bool(v);', 'mirar', 'si es verdad, como en un «si» de Ñ'],
+    [`char* ${P}valor_texto(const ${VT}* v)`, 'return n_api_texto(v);', 'mirar', 'el texto (UTF-8, tuyo) o NULL si no es un texto'],
+    [`char* ${P}valor_repr(const ${VT}* v)`, 'return n_api_repr(v);', 'mirar', 'cómo lo imprimiría Ñ (UTF-8, tuyo)'],
+    [`int64_t ${P}valor_largo(const ${VT}* v)`, 'return n_api_largo(v);', 'mirar', 'cuántos elementos (lista, dic) o letras (texto); −1 si no tiene'],
+    [`${VT}* ${P}valor_en(const ${VT}* v, int64_t i)`, `return (${VT}*)n_api_en(v, i);`, 'mirar', 'el elemento i de una lista (un asa nueva) o NULL'],
+    [`${VT}* ${P}valor_clave(const ${VT}* v, int64_t i)`, `return (${VT}*)n_api_clave(v, i);`, 'mirar', 'la clave i de un dic o registro, en orden de inserción'],
+    [`${VT}* ${P}valor_de(const ${VT}* v, int64_t i)`, `return (${VT}*)n_api_valor_en(v, i);`, 'mirar', 'el valor i de un dic o registro'],
+    [`int64_t ${P}valor_reales(const ${VT}* v, double* destino, int64_t n)`, 'return n_api_copiar_reales(v, destino, n);', 'mirar', 'copia hasta n números de una lista; devuelve su largo, o −1'],
+    [`${VT}* ${P}valor_copiar(const ${VT}* v)`, `return v ? (${VT}*)n_api_asa(n_inc(n_api_valor(v))) : NULL;`, 'mirar', 'otra asa del mismo valor (también hay que soltarla)'],
+    [`void ${P}valor_soltar(${VT}* v)`, 'n_api_soltar(v);', 'mirar', 'suelta un asa (NULL no hace nada)'],
+    [`${VT}* ${P}nuevo_nulo(void)`, `if (!lib_iniciar()) return NULL; return (${VT}*)n_api_asa(n_nulo());`, 'hacer', ''],
+    [`${VT}* ${P}nuevo_bool(int b)`, `if (!lib_iniciar()) return NULL; return (${VT}*)n_api_asa(n_bool(b));`, 'hacer', ''],
+    [`${VT}* ${P}nuevo_real(double x)`, `if (!lib_iniciar()) return NULL; return (${VT}*)n_api_asa(n_num(x));`, 'hacer', ''],
+    [`${VT}* ${P}nuevo_texto(const char* s)`, `if (!lib_iniciar()) return NULL; return (${VT}*)n_api_asa(s ? n_texto_utf8(s) : n_nulo());`, 'hacer', 'UTF-8'],
+    [`${VT}* ${P}nuevo_lista(void)`, `if (!lib_iniciar()) return NULL; return (${VT}*)n_api_lista();`, 'hacer', 'vacía'],
+    [`${VT}* ${P}nuevo_lista_reales(const double* x, int64_t n)`, `if (!lib_iniciar()) return NULL; return (${VT}*)n_api_lista_reales(x, n);`, 'hacer', 'una lista con n números'],
+    [`${VT}* ${P}nuevo_dic(void)`, `if (!lib_iniciar()) return NULL; return (${VT}*)n_api_dic();`, 'hacer', 'vacío'],
+    [`int ${P}lista_agregar(${VT}* lista, const ${VT}* x)`, 'return n_api_agregar(lista, x);', 'hacer', 'x sigue siendo tuyo'],
+    [`int ${P}dic_poner(${VT}* dic, const ${VT}* clave, const ${VT}* x)`, 'return n_api_poner(dic, clave, x);', 'hacer', 'clave y x siguen siendo tuyos'],
+    [`${VT}* ${P}llamar(const ${VT}* f, const ${VT}* const* args, int n)`, `n_api_limpiar_error(); if (!lib_iniciar()) return NULL; return (${VT}*)n_api_llamar(f, (const void* const*)args, n);`, 'llamar', 'una función de Ñ que te llegó en un asa'],
+  ];
+  for (const [f, cuerpo] of api) E(`N_EXPORTA ${f} { ${cuerpo} }`);
+  // cada función exportada
+  for (const f of exp) {
+    const g = idGlobal(f.nombre);
+    const n = f.params.length, d = porDefecto(f), ret = d === '' ? 'return;' : `return ${d};`;
+    E('');
+    E(`/* Ñ: ${comentario(firmaN(f))} */`);
+    E(`N_EXPORTA ${firma(f, false)} {`);
+    E('  n_api_limpiar_error();');
+    E(`  if (!lib_iniciar()) ${ret}`);
+    E(`  if (!GD[${g}]) { n_api_poner_error(${cTexto(`«${f.nombre}» no está definida`)}); ${ret} }`);
+    E(`  NV a_[${Math.max(1, n)}];`);
+    // los enteros primero: son lo único que puede fallar al entrar
+    f.abiPs.forEach((p, i) => { if (p.clase === 'entero') E(`  if (!n_api_de_entero(${p.cc}, &a_[${i}])) { n_api_guardar_error(); ${ret} }`); });
+    f.abiPs.forEach((p, i) => {
+      if (p.clase === 'real') E(`  a_[${i}] = n_num(${p.cc});`);
+      else if (p.clase === 'bool') E(`  a_[${i}] = n_bool(${p.cc});`);
+      else if (p.clase === 'texto') E(`  n_api_de_texto(${p.cc}, &a_[${i}]);`);
+      else if (p.clase === 'asa') E(`  a_[${i}] = n_api_valor(${p.cc});`);
+    });
+    E(`  NV r_ = n_llamar(G[${g}], a_, ${n});`);
+    f.abiPs.forEach((p, i) => { if (p.clase === 'texto') E(`  n_dec(a_[${i}]);`); });
+    E('  fflush(stdout);');
+    E(`  if (N_FALLO(r_)) { n_api_guardar_error(); ${ret} }`);
+    const q = cTexto(f.nombre);
+    switch (f.abiRet.clase) {
+      case 'real': E(`  double x_; if (!n_api_a_real(r_, &x_, ${q})) { n_dec(r_); n_api_guardar_error(); return NAN; }`); E('  n_dec(r_); return x_;'); break;
+      case 'entero': E(`  int64_t x_; if (!n_api_a_entero(r_, &x_, ${q})) { n_dec(r_); n_api_guardar_error(); return 0; }`); E('  n_dec(r_); return x_;'); break;
+      case 'bool': E(`  int x_; if (!n_api_a_bool(r_, &x_, ${q})) { n_dec(r_); n_api_guardar_error(); return 0; }`); E('  n_dec(r_); return x_;'); break;
+      case 'texto': E(`  char* x_; if (!n_api_a_texto(r_, &x_, ${q})) { n_dec(r_); n_api_guardar_error(); return NULL; }`); E('  n_dec(r_); return x_;'); break;
+      case 'nulo': E('  n_dec(r_);'); break;
+      default: E(`  return (${VT}*)n_api_asa(r_);`);
+    }
+    E('}');
+  }
+
+  // ── la cabecera ──
+  const GU = identC(bib.nombre).toUpperCase() + '_H';
+  const h = [];
+  const H = s => h.push(s);
+  H(`/* ${bib.nombre}.h — generado por motor-exp/util/n-compilar.js --biblioteca (Ñ, N4.6). No editar a mano.`);
+  H(' *');
+  H(' * Las funciones «publico» de un programa de Ñ, con la ABI de C. Sirve tal cual desde C, C++,');
+  H(' * Rust (extern "C"), Go (cgo), Python (ctypes; hay un .py al lado), C#, Julia, Zig…');
+  H(' *');
+  H(' * Los tipos: real → double · entero → int64_t (hasta ±2^53, exacto) · bool → int · texto → const char*');
+  H(` * en UTF-8 (el que devuelve una función es tuyo: suéltalo con ${P}liberar) · nulo → void · lo demás`);
+  H(` * (listas, diccionarios, registros, funciones) → ${VT}*, un asa: la que te devuelve la biblioteca es`);
+  H(` * tuya y se suelta con ${P}valor_soltar; la que le pasas sigue siendo tuya.`);
+  H(' *');
+  H(` * Errores: si una llamada falla devuelve 0, NaN o NULL, y ${P}error() dice por qué (el mismo mensaje`);
+  H(` * que la VM de Ñ, con la línea); si va bien, ${P}error() es NULL. Lo de nivel superior del programa`);
+  H(` * corre una vez, en la primera llamada (o en ${P}iniciar()). Un hilo a la vez.`);
+  H(' */');
+  H(`#ifndef ${GU}`);
+  H(`#define ${GU}`);
+  H('#include <stdint.h>');
+  H('#ifdef __cplusplus');
+  H('extern "C" {');
+  H('#endif');
+  H('');
+  H(`typedef struct ${VT} ${VT};`);
+  H('');
+  for (const f of exp) { H(`/* ${comentario(firmaN(f))} */`); H(`${firma(f, true)};`); }
+  H('');
+  H('/* ── la biblioteca ── */');
+  H(`int ${P}iniciar(void);                 /* 1 si arrancó bien (si no, mira ${P}error()) */`);
+  H(`const char* ${P}error(void);           /* el error de la última llamada, o NULL (vale hasta la siguiente llamada) */`);
+  H(`void ${P}liberar(void* p);             /* un char* que te dio la biblioteca */`);
+  for (const [grupo, titulo] of [['mirar', 'las asas: mirar'], ['hacer', 'las asas: hacer (también son tuyas: suéltalas)'], ['llamar', 'llamar']]) {
+    H('');
+    H(`/* ── ${titulo} ── */`);
+    for (const [f, , g, doc] of api) if (g === grupo) H(`${f};${doc ? `   /* ${doc} */` : ''}`);
+  }
+  H('');
+  H('#ifdef __cplusplus');
+  H('}');
+  H('#endif');
+  H('#endif');
+
+  // ── el módulo de Python (ctypes, sin nada que instalar) ──
+  const py = [];
+  const Y = s => py.push(s);
+  const pyNombre = s => (PY_RESERVADAS.has(s) ? s + '_' : s);
+  const CT = { real: 'ctypes.c_double', entero: 'ctypes.c_int64', bool: 'ctypes.c_int', texto: 'ctypes.c_char_p', asa: 'ctypes.c_void_p', nulo: 'None' };
+  const mod = identC(bib.nombre);
+  Y(`# ${bib.nombre}.py — generado por motor-exp/util/n-compilar.js --biblioteca (Ñ, N4.6). No editar a mano.`);
+  Y('#');
+  Y(`# Las funciones «publico» de ${bib.nombre}.esl, para Python, sin nada que instalar (ctypes):`);
+  Y('#');
+  Y(`#     import ${mod}`);
+  Y(`#     ${mod}.${pyNombre(exp[0].nombre)}(…)`);
+  Y('#');
+  Y('# Las listas, los diccionarios y los registros llegan como list y dict de Python; una función de Ñ');
+  Y('# llega como algo que se puede llamar. Un error de Ñ es una excepción ErrorÑ con el mensaje de la VM.');
+  Y('import ctypes, os, sys');
+  Y('');
+  Y('_aqui = os.path.dirname(os.path.abspath(__file__))');
+  Y(`_nombres = {'win32': ${JSON.stringify(bib.archivos.dll)}, 'darwin': ${JSON.stringify(bib.archivos.dylib)}}`);
+  Y(`_lib = ctypes.CDLL(os.path.join(_aqui, _nombres.get(sys.platform, ${JSON.stringify(bib.archivos.so)})))`);
+  Y('');
+  Y('class ErrorÑ(Exception):');
+  Y("    'Un error de Ñ: el mensaje es el de la VM, con su línea.'");
+  Y('ErrorN = ErrorÑ');
+  Y('');
+  Y('def _f(nombre, args, ret):');
+  Y('    f = getattr(_lib, nombre)');
+  Y('    f.argtypes = args');
+  Y('    f.restype = ret');
+  Y('    return f');
+  const vp = 'ctypes.c_void_p';
+  const decl = [
+    ['_error', 'error', '[]', 'ctypes.c_char_p'], ['_liberar', 'liberar', `[${vp}]`, 'None'],
+    ['_tipo', 'valor_tipo', `[${vp}]`, 'ctypes.c_char_p'], ['_real', 'valor_real', `[${vp}]`, 'ctypes.c_double'],
+    ['_bool', 'valor_bool', `[${vp}]`, 'ctypes.c_int'], ['_texto', 'valor_texto', `[${vp}]`, vp], ['_repr', 'valor_repr', `[${vp}]`, vp],
+    ['_largo', 'valor_largo', `[${vp}]`, 'ctypes.c_int64'], ['_en', 'valor_en', `[${vp}, ctypes.c_int64]`, vp],
+    ['_clave', 'valor_clave', `[${vp}, ctypes.c_int64]`, vp], ['_de', 'valor_de', `[${vp}, ctypes.c_int64]`, vp],
+    ['_copiar', 'valor_copiar', `[${vp}]`, vp], ['_soltar', 'valor_soltar', `[${vp}]`, 'None'],
+    ['_n_nulo', 'nuevo_nulo', '[]', vp], ['_n_bool', 'nuevo_bool', '[ctypes.c_int]', vp], ['_n_real', 'nuevo_real', '[ctypes.c_double]', vp],
+    ['_n_texto', 'nuevo_texto', '[ctypes.c_char_p]', vp], ['_n_lista', 'nuevo_lista', '[]', vp], ['_n_dic', 'nuevo_dic', '[]', vp],
+    ['_agregar', 'lista_agregar', `[${vp}, ${vp}]`, 'ctypes.c_int'], ['_poner', 'dic_poner', `[${vp}, ${vp}, ${vp}]`, 'ctypes.c_int'],
+    ['_llamar', 'llamar', `[${vp}, ctypes.POINTER(${vp}), ctypes.c_int]`, vp], ['_iniciar', 'iniciar', '[]', 'ctypes.c_int'],
+  ];
+  for (const [py0, c, a, r] of decl) Y(`${py0} = _f('${P}${c}', ${a}, ${r})`);
+  Y(`
+def _comprobar():
+    e = _error()
+    if e is not None:
+        raise ErrorÑ(e.decode('utf-8'))
+
+def _cadena(p):
+    if not p:
+        return None
+    s = ctypes.string_at(p).decode('utf-8')
+    _liberar(p)
+    return s
+
+class FuncionÑ:
+    'Una función de Ñ que llegó de la biblioteca: se llama como cualquier otra.'
+    def __init__(self, asa):
+        self._asa = asa
+    def __call__(self, *args):
+        asas = [_a_asa(x) for x in args]
+        try:
+            arr = (ctypes.c_void_p * max(1, len(asas)))(*asas)
+            r = _llamar(self._asa, arr, len(asas))
+            _comprobar()
+            return _de_asa(r)
+        finally:
+            for a in asas:
+                _soltar(a)
+    def __del__(self):
+        try:
+            _soltar(self._asa)
+        except Exception:
+            pass
+
+def _de_asa(a):
+    'De un asa de Ñ a un valor de Python; el asa se suelta (salvo la de una función, que se queda dentro).'
+    if not a:
+        return None
+    t = _tipo(a).decode('utf-8')
+    if t == 'funcion':
+        return FuncionÑ(a)
+    try:
+        if t == 'nulo': return None
+        if t == 'bool': return bool(_bool(a))
+        if t == 'entero': return int(_real(a))
+        if t == 'real': return _real(a)
+        if t == 'texto': return _cadena(_texto(a))
+        if t == 'lista': return [_de_asa(_en(a, i)) for i in range(_largo(a))]
+        if t in ('dic', 'registro'): return {_de_asa(_clave(a, i)): _de_asa(_de(a, i)) for i in range(_largo(a))}
+        return _cadena(_repr(a))
+    finally:
+        _soltar(a)
+
+def _a_asa(x):
+    'De un valor de Python a un asa de Ñ nueva (quien la pide la suelta).'
+    if isinstance(x, FuncionÑ): return _copiar(x._asa)
+    if x is None: return _n_nulo()
+    if isinstance(x, bool): return _n_bool(1 if x else 0)
+    if isinstance(x, int):
+        if abs(x) > 2 ** 53:
+            raise ErrorÑ('el entero %d no cabe exacto en un número de Ñ (más de 2^53)' % x)
+        return _n_real(float(x))
+    if isinstance(x, float): return _n_real(x)
+    if isinstance(x, str): return _n_texto(x.encode('utf-8'))
+    if isinstance(x, (list, tuple)):
+        l = _n_lista()
+        for e in x:
+            a = _a_asa(e); _agregar(l, a); _soltar(a)
+        return l
+    if isinstance(x, dict):
+        d = _n_dic()
+        for k, v in x.items():
+            ak, av = _a_asa(k), _a_asa(v); _poner(d, ak, av); _soltar(ak); _soltar(av)
+        return d
+    raise TypeError('un %s de Python no tiene un valor de Ñ que le corresponda' % type(x).__name__)
+
+def iniciar():
+    'Corre lo de nivel superior del programa (si no, se hace en la primera llamada).'
+    if not _iniciar():
+        _comprobar()
+`);
+  const pyArg = (p, nombre) => {
+    if (p.clase === 'real') return `float(${nombre})`;
+    if (p.clase === 'entero') return `int(${nombre})`;
+    if (p.clase === 'bool') return `(1 if ${nombre} else 0)`;
+    if (p.clase === 'texto') return `(None if ${nombre} is None else str(${nombre}).encode('utf-8'))`;
+    return null;
+  };
+  for (const f of exp) {
+    const nombres = f.params.map(p => pyNombre(p.nombre));
+    const args = f.abiPs.map(p => CT[p.clase]);
+    const res = f.abiRet.clase === 'texto' ? vp : CT[f.abiRet.clase];
+    const ic = identC(f.nombre);
+    Y(`_c_${ic} = _f('${f.c}', [${args.join(', ')}], ${res})`);
+    Y(`def ${pyNombre(f.nombre)}(${nombres.join(', ')}):`);
+    Y(`    ${JSON.stringify('Ñ: ' + firmaN(f))}`);
+    const asas = f.abiPs.map((p, i) => (p.clase === 'asa' ? i : -1)).filter(i => i >= 0);
+    const llam = f.abiPs.map((p, i) => (p.clase === 'asa' ? `_a${i}` : pyArg(p, nombres[i])));
+    let ind = '    ';
+    for (const i of asas) Y(`${ind}_a${i} = _a_asa(${nombres[i]})`);
+    if (asas.length) { Y(`${ind}try:`); ind += '    '; }
+    Y(`${ind}r = _c_${ic}(${llam.join(', ')})`);
+    Y(`${ind}_comprobar()`);
+    if (f.abiRet.clase === 'texto') Y(`${ind}return _cadena(r)`);
+    else if (f.abiRet.clase === 'bool') Y(`${ind}return bool(r)`);
+    else if (f.abiRet.clase === 'asa') Y(`${ind}return _de_asa(r)`);
+    else if (f.abiRet.clase === 'nulo') Y(`${ind}return None`);
+    else Y(`${ind}return r`);
+    if (asas.length) { Y('    finally:'); for (const i of asas) Y(`        _soltar(_a${i})`); }
+    Y('');
+  }
+  return { h: h.join('\n') + '\n', py: py.join('\n') + '\n', exporta: exp.map(f => ({ nombre: f.nombre, c: f.c, firma: firma(f, true) })) };
+}
+
+module.exports = { compilarAOT, ErrorAOT, NATIVAS_C, exportacionesBiblioteca };

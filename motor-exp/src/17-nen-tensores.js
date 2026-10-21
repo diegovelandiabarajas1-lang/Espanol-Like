@@ -694,6 +694,17 @@ static void nen_mk_escalar(long long kc, const double* Ap, const double* Bp, dou
   }
 }
 #ifdef NEN_X86
+/* (Windows) sin AVX2 pero con FMA, la instrucción del procesador y no el fma()
+   de la biblioteca de C (el de mingw no se puede dar por exacto) */
+__attribute__((target("fma")))
+static void nen_mk_fma(long long kc, const double* Ap, const double* Bp, double* t) {
+  for (long long k = 0; k < kc; k++) {
+    const double* ak = Ap + k * NEN_MR; const double* bk = Bp + k * NEN_NR;
+    for (int r = 0; r < NEN_MR; r++) { double x = ak[r]; for (int q = 0; q < NEN_NR; q++) t[r * NEN_NR + q] = __builtin_fma(x, bk[q], t[r * NEN_NR + q]); }
+  }
+}
+#endif
+#ifdef NEN_X86
 __attribute__((target("avx2,fma")))
 static void nen_mk_avx2(long long kc, const double* Ap, const double* Bp, double* t) {
   __m256d c00 = _mm256_loadu_pd(t + 0), c01 = _mm256_loadu_pd(t + 4);
@@ -724,6 +735,8 @@ static nen_mk_t nen_mk_elegir(void) {
     __builtin_cpu_init();
     if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) return nen_mk_avx2;
   }
+  __builtin_cpu_init();
+  if (__builtin_cpu_supports("fma")) return nen_mk_fma;
 #endif
   return nen_mk_escalar;
 }
@@ -876,10 +889,24 @@ extern "C" __global__ void nen_dgemm(long long n, long long m, long long K, long
 #define NEN_S_KC 256
 #define NEN_S_MC 96
 #define NEN_S_NC 2048
+/* (Windows) el fmaf() de la biblioteca de mingw no es exacto en todos los casos
+   (fmaf(3.4e38, 2, -3.4e38) le da infinito): sin AVX2, la FMA de simple se hace
+   aquí, exacta, con el mismo método que nenFmaf en JavaScript (el producto de dos
+   floats es exacto en un double, TwoSum, y redondeo a impar antes de bajar a 24
+   bits). Así el camino sin AVX2 da los mismos bits en Linux y en Windows. */
+static inline float nen_fmaf_exacta(float a, float b, float c) {
+  double p = (double)a * (double)b, s = p + (double)c;
+  double bb = s - p, e = (p - (s - bb)) + ((double)c - bb);
+  if (e == 0 || !(s - s == 0)) return (float)s;
+  unsigned long long u; memcpy(&u, &s, 8);
+  if ((e < 0) != (s < 0)) u -= 1;
+  u |= 1; memcpy(&s, &u, 8);
+  return (float)s;
+}
 static void nen_smk_escalar(long long kc, const float* Ap, const float* Bp, float* t) {
   for (long long k = 0; k < kc; k++) {
     const float* ak = Ap + k * NEN_S_MR; const float* bk = Bp + k * NEN_S_NR;
-    for (int r = 0; r < NEN_S_MR; r++) { float x = ak[r]; for (int q = 0; q < NEN_S_NR; q++) t[r * NEN_S_NR + q] = fmaf(x, bk[q], t[r * NEN_S_NR + q]); }
+    for (int r = 0; r < NEN_S_MR; r++) { float x = ak[r]; for (int q = 0; q < NEN_S_NR; q++) t[r * NEN_S_NR + q] = nen_fmaf_exacta(x, bk[q], t[r * NEN_S_NR + q]); }
   }
 }
 #ifdef NEN_S_X86
