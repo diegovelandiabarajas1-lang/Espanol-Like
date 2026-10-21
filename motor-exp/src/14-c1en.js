@@ -255,7 +255,9 @@ const C1EN_ATOMICOS = {
   atomicoEscribir: { v: 1, s: true }, abrirCandado: { v: 0, s: true }, despertar: { v: 0, s: true },
   cerrarCandado: { v: 0, s: true, b: true }, esperarMientras: { v: 1, s: true, b: true },
 };
-const C1EN_MAX_HILOS_SO = 256;     // (motor-exp N4.7) hilos del sistema en un núcleo de «hilos»
+const C1EN_MAX_HILOS_SO = 256;
+// (motor-exp N4.11) las comprobaciones que «sinComprobar» quita en nativo y en la GPU
+const C1EN_QUITABLES = new Set(['idx', 'div', 'mod', 'raiz', 'log', 'piso', 'bits', 'despl', 'paso']);     // (motor-exp N4.7) hilos del sistema en un núcleo de «hilos»
 // (motor-exp N4.5) «&», «|» y «^» en JavaScript: con enteros de 32 bits, los
 // operadores de siempre (dan lo mismo que en 64); si no, con BigInt. NaN si el
 // resultado no cabe exacto en un número de Ñ (más de 2^53), y el núcleo falla.
@@ -1868,13 +1870,17 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
     else M.params.push(Object.assign(nuevaVar(ps[k].nombre), { tipo: t, tipoEntrada: t, entrada: `p${k}` }));
   }
 
+  let sinComprobar = 0;            // (motor-exp N4.11) dentro de cuántos «sinComprobar» se está
   const sitio = (n, clase, texto, pista) => {
     let porClase = M.sitioDe.get(n);
     if (!porClase) { porClase = new Map(); M.sitioDe.set(n, porClase); }
     if (!porClase.has(clase)) {
       const id = M.sitios.length;
       if (id >= 0xffffff) no(n, 'el núcleo es demasiado largo (más de 16 millones de sitios que pueden fallar)');
-      M.sitios.push({ linea: n.linea || ast.linea, texto, pista });
+      // (motor-exp N4.11) dentro de «sinComprobar», los que cuestan en cada acceso
+      // se quitan en nativo y en la GPU; las barreras, las esperas y el tope de
+      // vueltas se quedan (sin ellos, un fallo es un cuelgue)
+      M.sitios.push({ linea: n.linea || ast.linea, texto, pista, sin: sinComprobar > 0 && C1EN_QUITABLES.has(clase) });
       porClase.set(clase, id);
     }
     return porClase.get(clase);
@@ -2261,6 +2267,13 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
       case 'ExprSent': {
         const e = n.expr;
         if (e.tipo === 'Asignacion') return asignacion(e);
+        // (motor-exp N4.11) las marcas de «sinComprobar { … }»
+        if (e.tipo === 'Llamada' && e.callee.tipo === 'Variable' && e.callee.nombre === ' sinComprobar' && !buscar(' sinComprobar')) {
+          M.llamadas.set(e, ' sinComprobar');
+          sinComprobar += e.args[0] && e.args[0].valor === 1 ? 1 : -1;
+          if (sinComprobar < 0) sinComprobar = 0;
+          return;
+        }
         if (e.tipo === 'Llamada') {
           const f = resolverLlamada(e);
           M.llamadas.set(e, f);
@@ -2399,6 +2412,7 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
   // puede pasar de ent a real, así que son dos o tres vueltas).
   for (let vuelta = 0; ; vuelta++) {
     cambio = false;
+    sinComprobar = 0;
     scopes = [new Map()];
     for (const p of M.params) scopes[0].set(p.nombre, p);
     // Un parámetro escalar se copia a una local al entrar: se puede reasignar,
@@ -2425,8 +2439,12 @@ function c1enEmitir(M, destino) {
   const temps = [];
   const tmp = t => { const nm = `t${temps.length}`; temps.push([nm, t]); return nm; };
   let fallas = 0;
-  const FALLA = id => { fallas++; return js ? `((f === 0 || ${id} < f) ? (f = ${id}) : 0, 0)` : `c1en_falla(&f, ${id})`; };
-  const FALLA_S = id => js ? `{ if (f === 0 || ${id} < f) f = ${id}; return f; }` : `{ c1en_falla(&f, ${id}); return f; }`;
+  // (motor-exp N4.11) un sitio dentro de «sinComprobar»: en C y en CUDA se le dice
+  // al compilador que no pasa (__builtin_unreachable), y quita la comprobación
+  // entera; en jit la comprobación se queda, porque jit es donde se depura
+  const sinCom = id => !js && M.sitios[id] && M.sitios[id].sin;
+  const FALLA = id => { if (sinCom(id)) return '(__builtin_unreachable(), 0)'; fallas++; return js ? `((f === 0 || ${id} < f) ? (f = ${id}) : 0, 0)` : `c1en_falla(&f, ${id})`; };
+  const FALLA_S = id => (sinCom(id) ? '{ __builtin_unreachable(); }' : js ? `{ if (f === 0 || ${id} < f) f = ${id}; return f; }` : `{ c1en_falla(&f, ${id}); return f; }`);
   const MATH = f => (js ? 'Math.' + f : f);
   const aReal = (c, t) => (t === 'real' ? c : (js ? `(${c} + 0)` : `((double)(${c}))`));
   const conv = (c, de, a) => (a === 'real' ? aReal(c, de) : c);
@@ -2635,6 +2653,7 @@ function c1enEmitir(M, destino) {
         }
         if (e.tipo === 'Llamada') {
           const f = M.llamadas.get(e);
+          if (f === ' sinComprobar') return;                     // (motor-exp N4.11) una marca: nada que emitir
           if (C1EN_ATOMICOS[f] !== undefined || f === 'vallaMemoria' || f === 'barreraHilos') return atomicoSentencia(e, f);   // (motor-exp N4.7)
           return sumarAtomico(e);
         }

@@ -986,6 +986,21 @@ function parser(toks, fuenteNombre, opciones) {
       saltarPuntoYComa();
       return { tipo: 'Producir', valor: v, linea: t.linea, col: t.col };
     }
+    // (motor-exp N4.11) «sinComprobar { … }»: la puerta de atrás con nombre propio.
+    // No es palabra reservada (var sinComprobar = 1 sigue valiendo): solo cuenta
+    // un nombre suelto seguido de «{». Se escribe como un bloque con dos marcas,
+    // llamadas a « sinComprobar» (1 al entrar, 0 al salir), así que todo lo que
+    // recorre el árbol o el bytecode lo ve sin saber nada nuevo; quien quiere
+    // quitar comprobaciones (el ejecutable, C1EÑ en nativo y en la GPU) mira las marcas.
+    if (esClave(t, 'sinComprobar') && ver(1).tipo === '{') {
+      p++;
+      const b = bloque();
+      const L = t.linea, C = t.col;
+      const marca = (v, l) => ({ tipo: 'ExprSent', linea: l, col: C, expr: { tipo: 'Llamada', linea: l, col: C,
+        callee: { tipo: 'Variable', nombre: ' sinComprobar', linea: l, col: C }, args: [{ tipo: 'Literal', valor: v, tipoLit: T.entero, linea: l, col: C }] } });
+      const ultima = b.cuerpo.length ? (b.cuerpo[b.cuerpo.length - 1].linea || L) : L;
+      return { tipo: 'Bloque', cuerpo: [marca(1, L)].concat(b.cuerpo, [marca(0, ultima)]), linea: L, col: C, sinComprobar: true };
+    }
     if (comprobar('SI')) return sentSi();
     if (comprobar('MIENTRAS')) return sentMientras();
     if (comprobar('PARA')) return sentPara();
@@ -1537,7 +1552,12 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
             'añade un «devolver» al final de la función');
         return;
       }
-      case 'Bloque': return bloqueTipos(n, new Ambito(amb));
+      case 'Bloque':
+        // (motor-exp N4.11) la ley 7: la puerta de atrás es explícita, visible y avisada
+        if (n.sinComprobar) avisos.push(new ErrorFuente('seguridad',
+          '«sinComprobar»: aquí, en el ejecutable (n-compilar) y en los núcleos de C1EÑ en nativo y en la GPU, un índice fuera de rango o una división entre cero NO se dicen: el resultado es indefinido',
+          n.linea, n.col, 'la VM y C1EÑ en jit siguen comprobando: pruébalo ahí antes; quita el bloque si algo no cuadra'));
+        return bloqueTipos(n, new Ambito(amb));
       case 'DeclTipo': return;   // ya registrado al empezar
       case 'Producir': expr(n.valor, amb); return;
       case 'Si': {
@@ -7183,6 +7203,10 @@ function instalarBiblioteca(vm, host) {
   // Aquí solo se ejecuta: encontrar y compilar el módulo ya pasó al analizar.
   // Y aquí es donde se cumplen las dos reglas de ejecución: una sola vez, y los
   // ciclos no desbordan la pila.
+  // (motor-exp N4.11) las marcas de «sinComprobar { … }»: en la VM no hacen nada,
+  // porque la VM comprueba siempre (es donde se depura). Las miran el ejecutable
+  // de n-compilar y C1EÑ en nativo y en la GPU, que ahí quitan las comprobaciones.
+  vm.definirNativa(' sinComprobar', 'entero -> nulo', () => null);
   vm.definirNativa(' usar', 'cualquiera -> nulo', a => {
     const clave = a[0];
     // Un eDSL nativo se instala al crear el motor, así que cuando el programa
@@ -14139,7 +14163,9 @@ const C1EN_ATOMICOS = {
   atomicoEscribir: { v: 1, s: true }, abrirCandado: { v: 0, s: true }, despertar: { v: 0, s: true },
   cerrarCandado: { v: 0, s: true, b: true }, esperarMientras: { v: 1, s: true, b: true },
 };
-const C1EN_MAX_HILOS_SO = 256;     // (motor-exp N4.7) hilos del sistema en un núcleo de «hilos»
+const C1EN_MAX_HILOS_SO = 256;
+// (motor-exp N4.11) las comprobaciones que «sinComprobar» quita en nativo y en la GPU
+const C1EN_QUITABLES = new Set(['idx', 'div', 'mod', 'raiz', 'log', 'piso', 'bits', 'despl', 'paso']);     // (motor-exp N4.7) hilos del sistema en un núcleo de «hilos»
 // (motor-exp N4.5) «&», «|» y «^» en JavaScript: con enteros de 32 bits, los
 // operadores de siempre (dan lo mismo que en 64); si no, con BigInt. NaN si el
 // resultado no cabe exacto en un número de Ñ (más de 2^53), y el núcleo falla.
@@ -15752,13 +15778,17 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
     else M.params.push(Object.assign(nuevaVar(ps[k].nombre), { tipo: t, tipoEntrada: t, entrada: `p${k}` }));
   }
 
+  let sinComprobar = 0;            // (motor-exp N4.11) dentro de cuántos «sinComprobar» se está
   const sitio = (n, clase, texto, pista) => {
     let porClase = M.sitioDe.get(n);
     if (!porClase) { porClase = new Map(); M.sitioDe.set(n, porClase); }
     if (!porClase.has(clase)) {
       const id = M.sitios.length;
       if (id >= 0xffffff) no(n, 'el núcleo es demasiado largo (más de 16 millones de sitios que pueden fallar)');
-      M.sitios.push({ linea: n.linea || ast.linea, texto, pista });
+      // (motor-exp N4.11) dentro de «sinComprobar», los que cuestan en cada acceso
+      // se quitan en nativo y en la GPU; las barreras, las esperas y el tope de
+      // vueltas se quedan (sin ellos, un fallo es un cuelgue)
+      M.sitios.push({ linea: n.linea || ast.linea, texto, pista, sin: sinComprobar > 0 && C1EN_QUITABLES.has(clase) });
       porClase.set(clase, id);
     }
     return porClase.get(clase);
@@ -16145,6 +16175,13 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
       case 'ExprSent': {
         const e = n.expr;
         if (e.tipo === 'Asignacion') return asignacion(e);
+        // (motor-exp N4.11) las marcas de «sinComprobar { … }»
+        if (e.tipo === 'Llamada' && e.callee.tipo === 'Variable' && e.callee.nombre === ' sinComprobar' && !buscar(' sinComprobar')) {
+          M.llamadas.set(e, ' sinComprobar');
+          sinComprobar += e.args[0] && e.args[0].valor === 1 ? 1 : -1;
+          if (sinComprobar < 0) sinComprobar = 0;
+          return;
+        }
         if (e.tipo === 'Llamada') {
           const f = resolverLlamada(e);
           M.llamadas.set(e, f);
@@ -16283,6 +16320,7 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
   // puede pasar de ent a real, así que son dos o tres vueltas).
   for (let vuelta = 0; ; vuelta++) {
     cambio = false;
+    sinComprobar = 0;
     scopes = [new Map()];
     for (const p of M.params) scopes[0].set(p.nombre, p);
     // Un parámetro escalar se copia a una local al entrar: se puede reasignar,
@@ -16309,8 +16347,12 @@ function c1enEmitir(M, destino) {
   const temps = [];
   const tmp = t => { const nm = `t${temps.length}`; temps.push([nm, t]); return nm; };
   let fallas = 0;
-  const FALLA = id => { fallas++; return js ? `((f === 0 || ${id} < f) ? (f = ${id}) : 0, 0)` : `c1en_falla(&f, ${id})`; };
-  const FALLA_S = id => js ? `{ if (f === 0 || ${id} < f) f = ${id}; return f; }` : `{ c1en_falla(&f, ${id}); return f; }`;
+  // (motor-exp N4.11) un sitio dentro de «sinComprobar»: en C y en CUDA se le dice
+  // al compilador que no pasa (__builtin_unreachable), y quita la comprobación
+  // entera; en jit la comprobación se queda, porque jit es donde se depura
+  const sinCom = id => !js && M.sitios[id] && M.sitios[id].sin;
+  const FALLA = id => { if (sinCom(id)) return '(__builtin_unreachable(), 0)'; fallas++; return js ? `((f === 0 || ${id} < f) ? (f = ${id}) : 0, 0)` : `c1en_falla(&f, ${id})`; };
+  const FALLA_S = id => (sinCom(id) ? '{ __builtin_unreachable(); }' : js ? `{ if (f === 0 || ${id} < f) f = ${id}; return f; }` : `{ c1en_falla(&f, ${id}); return f; }`);
   const MATH = f => (js ? 'Math.' + f : f);
   const aReal = (c, t) => (t === 'real' ? c : (js ? `(${c} + 0)` : `((double)(${c}))`));
   const conv = (c, de, a) => (a === 'real' ? aReal(c, de) : c);
@@ -16519,6 +16561,7 @@ function c1enEmitir(M, destino) {
         }
         if (e.tipo === 'Llamada') {
           const f = M.llamadas.get(e);
+          if (f === ' sinComprobar') return;                     // (motor-exp N4.11) una marca: nada que emitir
           if (C1EN_ATOMICOS[f] !== undefined || f === 'vallaMemoria' || f === 'barreraHilos') return atomicoSentencia(e, f);   // (motor-exp N4.7)
           return sumarAtomico(e);
         }

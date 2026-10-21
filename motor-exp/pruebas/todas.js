@@ -55,6 +55,7 @@ const SUITES = [
   ['exp: varias GPU', 'exp-varias-gpu.js', 'motor-exp N4.8: paraleloRepartido entre las GPU (= paralelo al bit), colaGpu(k), enGpu(k, f) y copias de GPU a GPU (simulador de 1, 2 y 3 GPU)'],
   ['exp: plantillas', 'exp-plantillas.js', 'motor-exp N4.9: núcleos genéricos (arreglo<T>, k: T), tipoArreglo y los límites del tipo como constantes, la rama que toca de cada «si» constante (jit = nativo = GPU simulada = VM)'],
   ['exp: interop', 'exp-interop.js', 'motor-exp N4.10: cabeceraNativa lee un .h entero (estructuras, enum, opacos, retrollamadas) y el ejecutable llama a C sin capa, igual que la VM; Ñ → C → Ñ; el .exe de Windows'],
+  ['exp: sinComprobar', 'exp-sin-comprobar.js', 'motor-exp N4.11: sinComprobar { … } — avisado; la VM y jit comprueban, nativo, GPU y el ejecutable no (los mismos resultados si el programa es correcto; las esperas se quedan)'],
   ['exp: sin runtime', 'exp-aot.js --rapida', 'motor-exp N4.1: el programa como ejecutable nativo, igual a la VM letra por letra (la completa: exp-aot.js)'],
 ];
 

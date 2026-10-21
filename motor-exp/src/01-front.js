@@ -984,6 +984,21 @@ function parser(toks, fuenteNombre, opciones) {
       saltarPuntoYComa();
       return { tipo: 'Producir', valor: v, linea: t.linea, col: t.col };
     }
+    // (motor-exp N4.11) «sinComprobar { … }»: la puerta de atrás con nombre propio.
+    // No es palabra reservada (var sinComprobar = 1 sigue valiendo): solo cuenta
+    // un nombre suelto seguido de «{». Se escribe como un bloque con dos marcas,
+    // llamadas a « sinComprobar» (1 al entrar, 0 al salir), así que todo lo que
+    // recorre el árbol o el bytecode lo ve sin saber nada nuevo; quien quiere
+    // quitar comprobaciones (el ejecutable, C1EÑ en nativo y en la GPU) mira las marcas.
+    if (esClave(t, 'sinComprobar') && ver(1).tipo === '{') {
+      p++;
+      const b = bloque();
+      const L = t.linea, C = t.col;
+      const marca = (v, l) => ({ tipo: 'ExprSent', linea: l, col: C, expr: { tipo: 'Llamada', linea: l, col: C,
+        callee: { tipo: 'Variable', nombre: ' sinComprobar', linea: l, col: C }, args: [{ tipo: 'Literal', valor: v, tipoLit: T.entero, linea: l, col: C }] } });
+      const ultima = b.cuerpo.length ? (b.cuerpo[b.cuerpo.length - 1].linea || L) : L;
+      return { tipo: 'Bloque', cuerpo: [marca(1, L)].concat(b.cuerpo, [marca(0, ultima)]), linea: L, col: C, sinComprobar: true };
+    }
     if (comprobar('SI')) return sentSi();
     if (comprobar('MIENTRAS')) return sentMientras();
     if (comprobar('PARA')) return sentPara();
