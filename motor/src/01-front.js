@@ -76,7 +76,9 @@ const PISTA_PALABRA = Object.assign(Object.create(null), {
 // comunes del idioma habría roto cualquier programa que las use de nombre.
 // «var y = 1» compila.
 
-const TIPOS_BASE = new Set(['entero', 'real', 'texto', 'bool', 'nulo', 'lista', 'dic', 'funcion', 'nodo', 'estilo', 'error', 'fecha', 'tabla', 'arreglo', 'cualquiera']);
+// (motor-exp N4.9) los tipos de los números de un arreglo, con los alias de NumPy y de C
+const ELEM_ARREGLO = new Set(['real', 'entero', 'bool', 'complejo', 'real32', 'real16', 'i8', 'u8', 'i16', 'u16', 'u32', 'i64', 'u64', 'i32', 'f64', 'f32', 'f16']);
+const TIPOS_BASE = new Set(['entero', 'real', 'texto', 'bool', 'nulo', 'lista', 'dic', 'funcion', 'nodo', 'estilo', 'error', 'fecha', 'tabla', 'arreglo', 'grande', 'cualquiera']);
 
 function lexer(fuente) {
   const toks = [];
@@ -203,7 +205,7 @@ function lexer(fuente) {
     const tres = fuente.substr(i, 3);
     const dos = fuente.substr(i, 2);
     const OP3 = ['**='];
-    // «??» y «?.» (4.1): el nulo como valor por defecto y el acceso
+    // «??» y «?.» (motor-exp): el nulo como valor por defecto y el acceso
     // que no revienta si el objeto es nulo.
     const OP2 = ['**', '//', '==', '!=', '<=', '>=', '+=', '-=', '*=', '/=', '->', '..', '??'];
     if (dos === '?.') { avanzar(); avanzar(); push('?.', '?.', L, C); continue; }
@@ -256,7 +258,9 @@ const T = {
   // después de guardarla y volverla a leer.
   tabla: { k: 'tabla' },
   arreglo: { k: 'arreglo' },
-  // (4.1) Un registro declarado con «tipo Nombre { … }». Lo que lleva
+  // (motor-exp N1) Un decimal de precisión arbitraria, de NEÑ (18-nen-precision.js).
+  grande: { k: 'grande' },
+  // (motor-exp) Un registro declarado con «tipo Nombre { … }». Lo que lleva
   // —campos y métodos— lo sabe el verificador; aquí solo viaja el nombre.
   registro: (nombre) => ({ k: 'registro', nombre }),
   lista: (e) => ({ k: 'lista', elem: e || T.cualquiera }),
@@ -285,6 +289,8 @@ function tipoATexto(t) {
     case 'modulo': return `módulo «${t.ruta || t.clave}»`;
     case 'registro': return t.nombre;
     case 'var': return t.nombre;
+    case 'elem': return t.nombre;
+    case 'arreglo': return t.elem ? `arreglo<${tipoATexto(t.elem)}>` : 'arreglo';
     default: return t.k;
   }
 }
@@ -300,7 +306,7 @@ function tipoATexto(t) {
 // Falla al instalar la biblioteca, no al llamar a la función: una firma mal
 // escrita revienta la creación del motor y por tanto la primera prueba que
 // corra, en vez de dejar un nombre mal tipado suelto.
-const BASICOS = ['entero', 'real', 'texto', 'bool', 'nulo', 'cualquiera', 'nodo', 'error', 'estilo', 'fecha', 'tabla', 'arreglo'];
+const BASICOS = ['entero', 'real', 'texto', 'bool', 'nulo', 'cualquiera', 'nodo', 'error', 'estilo', 'fecha', 'tabla', 'arreglo', 'grande'];
 
 // Parte por comas de primer nivel: 'lista<real>, dic<texto,real>' → dos trozos.
 function partirNivel(s) {
@@ -368,7 +374,7 @@ function firma(s) {
 const aridadDe = t => (t && t.k === 'funcion' && t.params === null ? -1
   : t && t.k === 'funcion' ? t.params.length : 0);
 
-// (4.1) El tipo de una función declarada, con lo que hace falta para
+// (motor-exp) El tipo de una función declarada, con lo que hace falta para
 // llamarla bien: los nombres de sus parámetros (argumentos con nombre), cuántos
 // son obligatorios (los demás tienen valor por defecto) y sus variables de tipo
 // (genéricos). Lo usan el verificador y los módulos: un solo sitio.
@@ -388,7 +394,7 @@ function tipoDeFuncion(n, quitarYo) {
 function compatible(destino, origen) {
   if (!destino || !origen) return true;
   if (destino.k === 'cualquiera' || origen.k === 'cualquiera') return true;
-  // (4.1) Una variable de tipo (la T de un genérico) dentro del cuerpo
+  // (motor-exp) Una variable de tipo (la T de un genérico) dentro del cuerpo
   // de la función vale lo que valga: se comprueba en cada LLAMADA, donde se
   // sabe qué es T.
   if (destino.k === 'var' || origen.k === 'var') return true;
@@ -430,12 +436,12 @@ function reubicar(nodo, linea, col) {
 
 function parser(toks, fuenteNombre, opciones) {
   let p = 0;
-  // (4.1) «soloExpresion»: lo que va entre las llaves de un texto se lee
+  // (motor-exp) «soloExpresion»: lo que va entre las llaves de un texto se lee
   // como UNA expresión, no como un programa. Antes daba igual; ahora no, porque
   // «si … entonces … sino …» empieza por «si», que como programa sería la
   // sentencia.
   const soloExpresion = !!(opciones && opciones.soloExpresion);
-  // (4.1) Los nombres de los registros del archivo se buscan ANTES de
+  // (motor-exp) Los nombres de los registros del archivo se buscan ANTES de
   // analizar nada, para que «fn f(p: Punto)» se entienda aunque «tipo Punto»
   // esté más abajo, igual que una función se puede llamar antes de declararla.
   const tiposDeclarados = new Set();
@@ -446,7 +452,7 @@ function parser(toks, fuenteNombre, opciones) {
   // Llevan un espacio: el léxico no deja escribirlo, así que no chocan con nada.
   let sigTmp = 0;
   const tmpNombre = () => ' t' + (sigTmp++);
-  // (4.1) Corrutinas. «producir» y «esperar» no son palabras
+  // (motor-exp) Corrutinas. «producir» y «esperar» no son palabras
   // reservadas: si el archivo declara algo con ese nombre, se respeta y no se
   // leen como corrutina.
   const tapadas = new Set();
@@ -533,6 +539,23 @@ function parser(toks, fuenteNombre, opciones) {
         `tipos válidos: ${[...TIPOS_BASE].join(', ')}`);
     if (nombre === 'lista' && comprobar('OP', '<')) {
       p++; const e = parseTipo(); exigir('OP', '>', 'falta «>» al cerrar lista<…>'); return T.lista(e);
+    }
+    // (motor-exp N4.9) arreglo<real32>, arreglo<T>: el tipo de sus números. El
+    // verificador no lo puede saber (un arreglo no lleva su tipo de elemento en
+    // el tipo estático); lo comprueba C1EÑ al lanzar un núcleo, y la T se une
+    // con lo que llegue, como en una plantilla.
+    if (nombre === 'arreglo' && comprobar('OP', '<')) {
+      p++;
+      const e = ver();
+      if (e.tipo !== 'IDENT') throw new ErrorFuente('sintaxis', `se esperaba el tipo de los números del arreglo y llegó «${e.valor}»`, e.linea, e.col);
+      p++;
+      let elem;
+      if (esVarTipo(e.valor)) elem = { k: 'var', nombre: e.valor };
+      else if (ELEM_ARREGLO.has(e.valor)) elem = { k: 'elem', nombre: e.valor };
+      else throw new ErrorFuente('tipos', `«${e.valor}» no es un tipo de los números de un arreglo`, e.linea, e.col,
+        `los que hay: ${[...ELEM_ARREGLO].join(', ')}, o una variable de tipo (fn f<T>(a: arreglo<T>))`);
+      exigir('OP', '>', 'falta «>» al cerrar arreglo<…>');
+      return { k: 'arreglo', elem };
     }
     if (nombre === 'dic' && comprobar('OP', '<')) {
       p++; const c = parseTipo(); exigir(',', ','); const v = parseTipo();
@@ -670,7 +693,7 @@ function parser(toks, fuenteNombre, opciones) {
     const t = ver();
     if (!esPalabra(t, 'publico') && !esPalabra(t, 'público')) return null;
     const sig = ver(1);
-    // (4.1) «publico tipo Punto { … }»: se exporta el constructor, y con
+    // (motor-exp) «publico tipo Punto { … }»: se exporta el constructor, y con
     // él el registro entero (los métodos viajan dentro de cada valor).
     if (esPalabra(sig, 'tipo') && esNombre(ver(2)) && ver(3).tipo === '{') {
       if (!esTop)
@@ -680,7 +703,7 @@ function parser(toks, fuenteNombre, opciones) {
       d[0].publico = true; d[1].publico = true;
       return d;
     }
-    // (4.1) «publico fn Punto.m()»: se acepta, aunque sobra — los
+    // (motor-exp) «publico fn Punto.m()»: se acepta, aunque sobra — los
     // métodos viajan dentro de cada valor del registro, públicos o no.
     if (sig.tipo === 'FUNCION' && esNombre(ver(2)) && ver(3).tipo === '.' && tiposDeclarados.has(ver(2).valor)) {
       p++;
@@ -696,7 +719,7 @@ function parser(toks, fuenteNombre, opciones) {
     return d;
   }
 
-  // ── (4.1) registros ──────────────────────────────────────────────
+  // ── (motor-exp) registros ──────────────────────────────────────────────
   //   tipo Punto {
   //     x: real
   //     y: real
@@ -723,7 +746,7 @@ function parser(toks, fuenteNombre, opciones) {
         throw new ErrorFuente('sintaxis', `el campo «${c.valor}» está dos veces en «${nom.valor}»`, c.linea, c.col);
       vistos.add(c.valor);
       const anot = tipoOpcional();
-      // (4.1) Valor por defecto del campo: «y: real = 0.0».
+      // (motor-exp) Valor por defecto del campo: «y: real = 0.0».
       let defecto = null;
       if (igualar('OP', '=')) defecto = expresion();
       else if (campos.some(q => q.defecto))
@@ -768,7 +791,7 @@ function parser(toks, fuenteNombre, opciones) {
       linea: t.linea, col: t.col };
   }
 
-  // ── (4.1) desestructurar ──────────────────────────────────────────
+  // ── (motor-exp) desestructurar ──────────────────────────────────────────
   //   var [a, b] = lista       →  var a = lista[0]   var b = lista[1]
   //   fijo {x, y} = punto      →  fijo x = punto.x   fijo y = punto.y
   // La expresión se evalúa UNA vez, en una variable interna.
@@ -802,7 +825,7 @@ function parser(toks, fuenteNombre, opciones) {
     return out;
   }
 
-  // ── (4.1) segun ───────────────────────────────────────────────────
+  // ── (motor-exp) segun ───────────────────────────────────────────────────
   //   segun x {
   //     caso 1, 2 { … }
   //     caso "a"  { … }
@@ -881,7 +904,7 @@ function parser(toks, fuenteNombre, opciones) {
   }
 
   function restoFuncion(nombre) {
-    // (4.1) fn primero<T>(xs: lista<T>): T — las variables de tipo.
+    // (motor-exp) fn primero<T>(xs: lista<T>): T — las variables de tipo.
     const genericos = [];
     if (comprobar('OP', '<')) {
       p++;
@@ -900,7 +923,7 @@ function parser(toks, fuenteNombre, opciones) {
         do {
           const pn = exigirNombre('se esperaba el nombre de un parámetro');
           const pt = tipoOpcional();
-          // (4.1) Valor por defecto: «fn f(a, b = 2)».
+          // (motor-exp) Valor por defecto: «fn f(a, b = 2)».
           let defecto = null;
           if (igualar('OP', '=')) defecto = expresion();
           else if (params.some(q => q.defecto))
@@ -952,7 +975,7 @@ function parser(toks, fuenteNombre, opciones) {
 
   function sentencia() {
     const t = ver();
-    // (4.1) «producir v»: entrega un valor y la función se queda en
+    // (motor-exp) «producir v»: entrega un valor y la función se queda en
     // pausa hasta que le pidan el siguiente.
     if (esClave(t, 'producir') && !(ver(1).tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(ver(1).valor)) && ver(1).tipo !== '.' && ver(1).tipo !== '[') {
       p++;
@@ -960,6 +983,21 @@ function parser(toks, fuenteNombre, opciones) {
       const v = (comprobar('}') || comprobar(';') || fin() || inicioDeLineaNueva(t)) ? { tipo: 'Literal', valor: null, tipoLit: T.nulo, linea: t.linea, col: t.col } : expresion();
       saltarPuntoYComa();
       return { tipo: 'Producir', valor: v, linea: t.linea, col: t.col };
+    }
+    // (motor-exp N4.11) «sinComprobar { … }»: la puerta de atrás con nombre propio.
+    // No es palabra reservada (var sinComprobar = 1 sigue valiendo): solo cuenta
+    // un nombre suelto seguido de «{». Se escribe como un bloque con dos marcas,
+    // llamadas a « sinComprobar» (1 al entrar, 0 al salir), así que todo lo que
+    // recorre el árbol o el bytecode lo ve sin saber nada nuevo; quien quiere
+    // quitar comprobaciones (el ejecutable, C1EÑ en nativo y en la GPU) mira las marcas.
+    if (esClave(t, 'sinComprobar') && ver(1).tipo === '{') {
+      p++;
+      const b = bloque();
+      const L = t.linea, C = t.col;
+      const marca = (v, l) => ({ tipo: 'ExprSent', linea: l, col: C, expr: { tipo: 'Llamada', linea: l, col: C,
+        callee: { tipo: 'Variable', nombre: ' sinComprobar', linea: l, col: C }, args: [{ tipo: 'Literal', valor: v, tipoLit: T.entero, linea: l, col: C }] } });
+      const ultima = b.cuerpo.length ? (b.cuerpo[b.cuerpo.length - 1].linea || L) : L;
+      return { tipo: 'Bloque', cuerpo: [marca(1, L)].concat(b.cuerpo, [marca(0, ultima)]), linea: L, col: C, sinComprobar: true };
     }
     if (comprobar('SI')) return sentSi();
     if (comprobar('MIENTRAS')) return sentMientras();
@@ -1087,7 +1125,7 @@ function parser(toks, fuenteNombre, opciones) {
     if (sig.tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(sig.valor)) return false;
     return true;
   }
-  // (4.1) «a ?? b»: a, salvo que sea nulo; entonces b. Más flojo que «o».
+  // (motor-exp) «a ?? b»: a, salvo que sea nulo; entonces b. Más flojo que «o».
   const coalescer = () => binarioIzq(oLogico, t => t.tipo === 'OP' && t.valor === '??');
   const oLogico = () => binarioIzq(yLogico, t => esOperadorLogico(t, 'O'));
   const yLogico = () => binarioIzq(igualdad, t => esOperadorLogico(t, 'Y'));
@@ -1098,7 +1136,7 @@ function parser(toks, fuenteNombre, opciones) {
 
   function unario() {
     const t = ver();
-    // (4.1) «esperar x»: si x es una promesa, la función se pausa hasta
+    // (motor-exp) «esperar x»: si x es una promesa, la función se pausa hasta
     // que esté lista y sigue con su valor; si no, sigue con x tal cual.
     if (esClave(t, 'esperar')) {
       const sig = ver(1);
@@ -1133,7 +1171,7 @@ function parser(toks, fuenteNombre, opciones) {
       if (comprobar('(')) {
         p++;
         const args = [], nombrados = [];
-        // (4.1) Argumentos con nombre: «f(1, tasa: 0.5)». Van después de
+        // (motor-exp) Argumentos con nombre: «f(1, tasa: 0.5)». Van después de
         // los posicionales. El verificador los coloca en su sitio.
         if (!comprobar(')')) do {
           if (esNombre(ver()) && ver(1).tipo === ':') {
@@ -1161,7 +1199,7 @@ function parser(toks, fuenteNombre, opciones) {
         const nom = exigirNombre('se esperaba un nombre tras «.»');
         e = { tipo: 'Propiedad', obj: e, nombre: nom.valor, linea: nom.linea, col: nom.col };
       } else if (comprobar('?.')) {
-        // (4.1) «a?.b»: nulo si a es nulo, a.b si no. Vale para ESE paso.
+        // (motor-exp) «a?.b»: nulo si a es nulo, a.b si no. Vale para ESE paso.
         p++;
         const nom = exigirNombre('se esperaba un nombre tras «?.»');
         e = { tipo: 'Propiedad', obj: e, nombre: nom.valor, opcional: true, linea: nom.linea, col: nom.col };
@@ -1197,7 +1235,7 @@ function parser(toks, fuenteNombre, opciones) {
         });
         return { tipo: 'Interpolacion', partes, linea: t.linea, col: t.col };
       }
-      // (4.1) «si c entonces a sino b» como expresión. Como sentencia,
+      // (motor-exp) «si c entonces a sino b» como expresión. Como sentencia,
       // «si» sigue siendo el de siempre: esto solo aparece donde va un valor.
       case 'SI': {
         p++;

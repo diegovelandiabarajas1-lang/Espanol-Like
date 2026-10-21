@@ -37,7 +37,7 @@ cli = cli.replace(/^import .*$/gm, '');
 const salida = path.join(R.motor, 'n-completo.js');
 fs.writeFileSync(salida, `${imports}\n\n/* ── el motor ── */\n${bundle}\n/* ── el intérprete ── */\n${cli}\n`, 'utf8');
 
-const destino = path.join(R.proyecto, process.platform === 'win32' ? 'n.exe' : 'n');
+const destino = R.salida(process.platform === 'win32' ? 'n.exe' : 'n');   // clon: a salida/, no a la raíz
 try {
   execFileSync('qjsc', ['-o', destino, salida], { stdio: 'inherit' });
 } catch (e) {

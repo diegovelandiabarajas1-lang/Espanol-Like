@@ -161,7 +161,7 @@ function crearAnfitrion(op) {
   // la página. El texto entra como nodo de texto de verdad: por construcción no
   // puede convertirse en marcado.
   // ═══════════════════════════════════════════════════════════════════════
-  //  4.1 · LA PÁGINA SE RECONCILIA, NO SE REPINTA
+  //  motor-exp · LA PÁGINA SE RECONCILIA, NO SE REPINTA
   // ═══════════════════════════════════════════════════════════════════════
   // Antes: cada limpiarPagina() hacía «innerHTML = ''» y cada pintar() volvía a
   // crear TODOS los elementos. Con un reloj de un segundo, una lista de 300
@@ -592,7 +592,7 @@ function crearAnfitrion(op) {
         conectarAccion(campo, 'change', e => [e.value]);
         // Y con Enter, aparte del «change»: en una caja gobernada el repintado
         // le escribe el valor y eso puede hacer que el navegador no mande el
-        // «change» (ver la historia en ARQUITECTURA.md, fase 3).
+        // «change» (ver la historia en el LTS).
         if (d.forma === 'entrada') conectarEnter(campo);
         break;
       }

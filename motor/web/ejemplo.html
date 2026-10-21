@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ñ en la web</title>
+<!-- El motor de Ñ, con una sola etiqueta. Desde GitHub (jsDelivr), cuando el repositorio es público:
+     <script src="https://cdn.jsdelivr.net/gh/diegovelandiabarajas1-lang/Espanol-Like@c1en/motor/n-web.js"></script>
+     Aquí, el del propio repositorio (sirve con GitHub Pages o con «npx serve» desde la raíz): -->
+<script src="../n-web.js"></script>
+<style>body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 16px; }</style>
+</head>
+<body>
+<h1>Una página de HTML que habla Ñ</h1>
+<p>Lo de abajo no es JavaScript: el navegador lee las etiquetas <code>&lt;script type="text/ñ"&gt;</code> con el motor de Ñ.</p>
+
+<script type="text/ñ">
+  var clics = 0
+  fn ver() {
+    limpiarPagina()
+    pintar(etiqueta("h2", "Hola desde Ñ"))
+    pintar(etiqueta("p", "Llevas {clics} clic(s)."))
+    pintar(boton("Otro más", fn() { clics = clics + 1  ver() }))
+  }
+  ver()
+  imprimir("listo: esto sale en la consola del navegador y aquí debajo")
+</script>
+</body>
+</html>

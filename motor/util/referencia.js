@@ -26,6 +26,9 @@ const inventario = [];
     // corto, que es el que se escribe, y la clave solo sirve para saber de qué
     // eDSL son y con qué «usar» se traen.
     if (v instanceof ObjNativa && v.edsl) {
+      // (motor-exp N1) «nen» reexporta numerico y datos con el MISMO objeto: el
+      // alias no es otra función, y se documenta una sola vez, donde nació.
+      if (nombre !== EL.nombreGlobalModulo(EL.claveEdsl(v.edsl), v.nombreCorto)) continue;
       const e = { nombre: v.nombreCorto, edsl: v.edsl, seccion: v.edsl,
         doc: v.doc || null, aridad: v.aridad, firma: tipoATexto(v.firma) };
       inventario.push(e);
@@ -120,7 +123,8 @@ const corridos = {};
   // parte se escribió y se probó por separado; aquí se juntan en una sola tabla.
   const ejemplos = Object.assign({}, require('./ejemplos-biblioteca.js'),
     require('./ejemplos-nen-c1en.js'), require('./ejemplos-nen-calculo.js'),
-    require('./ejemplos-nen-formulas.js'), require('./ejemplos-nen-tensores.js'));
+    require('./ejemplos-nen-formulas.js'), require('./ejemplos-nen-tensores.js'),
+    require('./ejemplos-nen-precision.js'));   // (motor-exp N1) grande, exactos, amplitud y unión
   const clave = e => (e.edsl ? e.edsl + '.' + e.nombre : e.nombre);
   const faltan = inventario.filter(e => !(clave(e) in ejemplos)).map(clave);
   if (faltan.length) throw new Error('sin ejemplo: ' + faltan.join(', '));
@@ -382,7 +386,8 @@ const CIFRAS = (() => {
   let edsl = 0, enEdsl = 0, clasico = 0;
   for (const [, r] of m.vm.edsls) {
     if (r.globalDe) { clasico = r.exporta.size; continue; }
-    edsl++; enEdsl += r.exporta.size;
+    // (motor-exp N1) lo que «nen» reexporta de numerico y datos ya se cuenta allí
+    edsl++; enEdsl += r.exporta.size - (r.reexporta ? r.reexporta.size : 0);
   }
   // Con el mismo filtro que el inventario, o la portada dice 94 y la tabla 93:
   // « usar» lo emite el compilador y el léxico no puede escribirlo, así que no
@@ -888,6 +893,7 @@ pre{margin:0; overflow-x:auto}
 fs.writeFileSync(R.motor + '/publicar-referencia.html', html);
 {
   const corte = html.indexOf('</style>') + '</style>'.length;
+  fs.mkdirSync(require('path').dirname(R.entrega('referencia-stdlib.html')), { recursive: true });   // (salida/ no va en git: puede no existir)
   fs.writeFileSync(R.entrega('referencia-stdlib.html'),
     '<!DOCTYPE html>\n<html lang="es">\n<head>\n<meta charset="utf-8">\n' +
     '<meta name="viewport" content="width=device-width,initial-scale=1">\n' +

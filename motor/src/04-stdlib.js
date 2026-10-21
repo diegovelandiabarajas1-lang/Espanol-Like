@@ -5,10 +5,10 @@
 'use strict';
 
 function instalarBiblioteca(vm, host) {
-  let cuerpoCorrutinas = null;     // (4.1) se llena abajo; se instala como eDSL
-  let cuerpoNativo = null;         // (4.1, S1) ídem, el eDSL «nativo»
-  let cuerpoSistema = null;        // (4.1, S2) ídem, el eDSL «sistema»
-  // (4.1, S1) Lo que llega de fuera cuando ya no corre nada —una llamada
+  let cuerpoCorrutinas = null;     // (motor-exp) se llena abajo; se instala como eDSL
+  let cuerpoNativo = null;         // (motor-exp, S1) ídem, el eDSL «nativo»
+  let cuerpoSistema = null;        // (motor-exp, S2) ídem, el eDSL «sistema»
+  // (motor-exp, S1) Lo que llega de fuera cuando ya no corre nada —una llamada
   // nativa en segundo plano que acaba, una retrollamada registrada que C
   // dispara— es un turno nuevo, como un clic. Si falla, el anfitrión decide
   // cómo enseñarlo (la consola lo imprime); si no dice nada, se lanza.
@@ -41,6 +41,13 @@ function instalarBiblioteca(vm, host) {
     if (typeof v === 'number') return Math.trunc(v);
     if (typeof v === 'boolean') return v ? 1 : 0;
     if (typeof v === 'string') { const n = parseInt(v.trim(), 10); if (Number.isNaN(n)) vm.error(`«entero»: «${v}» no es un número`); return n; }
+    // (motor-exp N1) de un grande: la parte entera, si cabe en un entero de Ñ
+    if (v instanceof ObjGrande) {
+      const n = Number(grAEnteroBig(v));
+      if (!Number.isSafeInteger(n)) vm.error(`«entero»: ${grATexto(v, 20)} no cabe en un entero (el máximo exacto es 2^53)`,
+        'déjalo como grande, o sácalo como texto con cifrasExactas(g)');
+      return n;
+    }
     vm.error(`«entero»: no se puede convertir ${tipoDe(v)}`);
   }, 'convierte a número entero');
   def('real', 'cualquiera -> real', (a) => {
@@ -48,6 +55,7 @@ function instalarBiblioteca(vm, host) {
     if (typeof v === 'number') return v;
     if (typeof v === 'boolean') return v ? 1 : 0;
     if (typeof v === 'string') { const n = parseFloat(v.trim()); if (Number.isNaN(n)) vm.error(`«real»: «${v}» no es un número`); return n; }
+    if (v instanceof ObjGrande) return grAReal(v);          // (motor-exp N1) el real más cercano
     vm.error(`«real»: no se puede convertir ${tipoDe(v)}`);
   }, 'convierte a número con decimales');
   def('bool', 'cualquiera -> bool', (a) => verdad(a[0]), 'convierte a verdadero/falso');
@@ -56,7 +64,7 @@ function instalarBiblioteca(vm, host) {
   if (!FALTANTE.firma) { FALTANTE.firma = firma('-> nulo'); FALTANTE.firmaTxt = '-> nulo'; }
   vm.globals.set(' faltante', FALTANTE);
 
-  // (4.1) corrutinas. « producir» y « esperar» los emite el compilador.
+  // (motor-exp) corrutinas. « producir» y « esperar» los emite el compilador.
   const corrutinaActual = () => vm.corrutinas.length ? vm.corrutinas[vm.corrutinas.length - 1] : null;
   def(' producir', 'cualquiera -> nulo', a => {
     const g = corrutinaActual();
@@ -119,7 +127,7 @@ function instalarBiblioteca(vm, host) {
     return p;
   }, 'todas(promesas) — una promesa con la lista de resultados, cuando estén todas');
   };
-  // (4.1) Lo que hay detrás de «tipo Punto { x, y }». La llama el
+  // (motor-exp) Lo que hay detrás de «tipo Punto { x, y }». La llama el
   // compilador, no el programa: el nombre lleva un espacio y no se puede
   // escribir. Devuelve el constructor, que queda como el global «Punto».
   def(' registro', 'texto, lista, dic -> cualquiera', a => {
@@ -147,7 +155,7 @@ function instalarBiblioteca(vm, host) {
     out.length = n;
     return L(out);
   }, 'rango(n) · rango(ini,fin) · rango(ini,fin,paso)');
-  // Marcas para el JIT (4.1): son ESTAS funciones y no otras con el
+  // Marcas para el JIT (motor-exp): son ESTAS funciones y no otras con el
   // mismo nombre. Si un programa las tapa con su propio «fn», la marca no está
   // y el JIT no toma el atajo.
   vm.globals.get('rango').puro = 'rango';
@@ -781,7 +789,7 @@ function instalarBiblioteca(vm, host) {
       if (x === null) continue;
       vm.error(`«pedir» no sabe qué hacer con ${tipoDe(x)} en la posición ${i + 1}`);
     }
-    // (4.1) Sin función, «pedir» devuelve una promesa: dentro de una
+    // (motor-exp) Sin función, «pedir» devuelve una promesa: dentro de una
     // función asíncrona se escribe «var r = esperar pedir(url)».
     let promesa = null;
     if (!fn) {
@@ -936,26 +944,39 @@ function instalarBiblioteca(vm, host) {
   // (tofile / fromfile), y por eso existe: es el puente entre Ñ y Python sin
   // pasar millones de números por JSON. La forma y el tipo no van en el
   // archivo; quien lee los conoce (el puente los manda aparte).
+  const TIPOS_BINARIOS = ['real', 'entero', 'real32', 'real16', 'i8', 'u8', 'i16', 'u16', 'u32', 'i64', 'u64'];
   def('leerArregloBinario', 'texto, texto, lista -> arreglo', a => {
     const r = txt(a[0], 1, 'leerArregloBinario');
-    const tipo = txt(a[1], 2, 'leerArregloBinario');
-    if (tipo !== 'real' && tipo !== 'entero') vm.error(`«leerArregloBinario»: el tipo es «real» o «entero», no «${tipo}»`);
+    const tipo0 = txt(a[1], 2, 'leerArregloBinario'), tipo = ALIAS_TIPO[tipo0] || tipo0;
+    // (motor-exp N4.5) y los enteros de máquina: i8 u8 i16 u16 u32 i64 u64
+    if (!TIPOS_BINARIOS.includes(tipo))
+      vm.error(`«leerArregloBinario»: el tipo es uno de ${TIPOS_BINARIOS.map(t => '«' + t + '»').join(', ')}, no «${tipo0}»`);
     const forma = lst(a[2], 3, 'leerArregloBinario').items.map(x => num(x, 3, 'leerArregloBinario') | 0);
     if (!arch || !arch.leerBytes) faltaArch('leerArregloBinario');
     const bytes = conArchivo('leerArregloBinario', r, () => arch.leerBytes(r));
     const out = vm.arrNuevo(forma, tipo);
+    // (motor-exp N4.2) un real16 son 2 bytes por número en el archivo (float16 de NumPy)
+    if (tipo === 'real16') {
+      if (bytes.byteLength !== out.tamano * 2)
+        vm.error(`«leerArregloBinario»: el archivo tiene ${bytes.byteLength} bytes y la forma ${forma.join('×')} de real16 pide ${out.tamano * 2}`);
+      const h = new Uint16Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+      for (let i = 0; i < h.length; i++) out.datos[i] = deBits16(h[i]);
+      vm.cobrar(out.tamano);
+      return out;
+    }
     const esperado = out.datos.byteLength;
     if (bytes.byteLength !== esperado)
       vm.error(`«leerArregloBinario»: el archivo tiene ${bytes.byteLength} bytes y la forma ${forma.join('×')} de ${tipo} pide ${esperado}`);
     new Uint8Array(out.datos.buffer, out.datos.byteOffset, esperado).set(new Uint8Array(bytes.buffer, bytes.byteOffset, esperado));
     vm.cobrar(out.tamano);
     return out;
-  }, 'leerArregloBinario(ruta, tipo, forma) — un arreglo desde bytes crudos (float64 o int32), el formato de NumPy');
+  }, 'leerArregloBinario(ruta, tipo, forma) — un arreglo desde bytes crudos (float64, int32, float32, float16 o los enteros int8 … uint64), el formato de NumPy');
   def('escribirArregloBinario', 'texto, arreglo -> nulo', a => {
     const r = txt(a[0], 1, 'escribirArregloBinario');
     const arr = a[1];
     if (!(arr instanceof ObjArreglo)) vm.error(`«escribirArregloBinario»: el argumento 2 debe ser un arreglo y es ${tipoDe(arr)}`);
-    if (arr.tipo !== 'real' && arr.tipo !== 'entero') vm.error(`«escribirArregloBinario»: solo arreglos real o entero, no ${arr.tipo}`);
+    if (!TIPOS_BINARIOS.includes(arr.tipo))
+      vm.error(`«escribirArregloBinario»: solo arreglos ${TIPOS_BINARIOS.join(', ')}, no ${arr.tipo}`);
     if (!arch || !arch.escribirBytes) faltaArch('escribirArregloBinario');
     // Una vista no contigua se copia primero en orden lógico: lo que se escribe
     // es lo que el programa ve, no lo que hay en memoria.
@@ -966,12 +987,13 @@ function instalarBiblioteca(vm, host) {
       let i = 0;
       for (const q of arr.posiciones()) plano[i++] = arr.datos[q];
     }
+    if (arr.tipo === 'real16') { const h = new Uint16Array(plano.length); for (let i = 0; i < h.length; i++) h[i] = bitsDe16(plano[i]); plano = h; }
     conArchivo('escribirArregloBinario', r, () => arch.escribirBytes(r, new Uint8Array(plano.buffer, plano.byteOffset, plano.byteLength)));
     vm.cobrar(arr.tamano);
     return null;
-  }, 'escribirArregloBinario(ruta, arreglo) — lo guarda como bytes crudos (float64 o int32), el formato de NumPy');
+  }, 'escribirArregloBinario(ruta, arreglo) — lo guarda como bytes crudos (float64, int32, float32, float16 o los enteros int8 … uint64), el formato de NumPy');
 
-  // ── (4.1, S2) el eDSL «sistema»: usar servir, leerLineas, unirRuta de "sistema"
+  // ── (motor-exp, S2) el eDSL «sistema»: usar servir, leerLineas, unirRuta de "sistema"
   // Nombres nuevos en un eDSL, no globales: lección de X4 («todas» y
   // «siguiente» globales rompieron dos programas que ya existían).
   cuerpoSistema = def => {
@@ -1217,7 +1239,7 @@ function instalarBiblioteca(vm, host) {
     const r = conSistema('ejecutar', () => sis.ejecutar(orden, args, op));
     return resultadoProceso(r);
   }, 'ejecutar(orden, argumentos?, opciones?) — lanza un programa y espera; devuelve {codigo, salida, error}. Opciones: entrada, carpeta, entorno, espera (ms)');
-  // (4.1, S2) Las opciones de un proceso, comprobadas aquí: un nombre mal
+  // (motor-exp, S2) Las opciones de un proceso, comprobadas aquí: un nombre mal
   // escrito («carpta») se diría como error y no se ignoraría en silencio.
   function opcionesProceso(v, quien) {
     if (v === undefined || v === null) return null;
@@ -1244,7 +1266,7 @@ function instalarBiblioteca(vm, host) {
   }
   def('leerLinea', '... -> cualquiera', a => {
     if (!sis) faltaSis('leerLinea');
-    // (4.1, S2) Si el anfitrión sabe escribir sin salto de línea, la
+    // (motor-exp, S2) Si el anfitrión sabe escribir sin salto de línea, la
     // pregunta queda en la misma línea que la respuesta, como en cualquier consola.
     if (a.length && a[0] !== null) { if (sis.indicar) sis.indicar(repr(a[0], 0)); else vm.salida(repr(a[0], 0)); }
     const l = sis.leerLinea();
@@ -1371,7 +1393,7 @@ function instalarBiblioteca(vm, host) {
     return n;
   }, 'estructuraNativa(nombre, {campo: tipo, …}) — declara una estructura de C; devuelve su nombre para usarlo como tipo');
 
-  // ── (4.1, S1) la llamada, con lo que el anfitrión sabe de cada parámetro
+  // ── (motor-exp, S1) la llamada, con lo que el anfitrión sabe de cada parámetro
   // Si el anfitrión describe los parámetros (koffi lo hace), la conversión los
   // mira: un arreglo solo va a un puntero de SU tipo de número, un parámetro de
   // salida no se pasa y se devuelve, y una función de Ñ que va a un puntero a
@@ -1461,7 +1483,7 @@ function instalarBiblioteca(vm, host) {
       if (d.dir === 'sale') { const c = [null]; crudos[j] = c; cajas.push({ c, d }); continue; }
       const v = aNativo(args[k], d, ctx, quien, k + 1);
       k++;
-      if (d.dir === 'entra y sale') { const c = [v]; crudos[j] = c; cajas.push({ c, d }); }
+      if (d.dir === 'entra y sale') { const c = [v]; crudos[j] = c; cajas.push({ c, d, orig: args[k - 1] }); }
       else crudos[j] = v;
     }
     return { ctx, crudos, cajas };
@@ -1469,6 +1491,18 @@ function instalarBiblioteca(vm, host) {
   // Y lo que vuelve: el resultado y, detrás, lo que dejaron los de salida.
   // Uno solo va tal cual; varios, en una lista: «fijo [q, r] = dividir(17, 5)».
   function terminarNativa(llamar, r, cajas, quien) {
+    // (motor-exp N4.10) las de una cabecera: un puntero a estructura que entra y
+    // sale escribe en el MISMO diccionario de Ñ que se pasó (como en C)
+    if (cajas && cajas.length && llamar.enSitio) {
+      const quedan = [];
+      for (const cj of cajas) {
+        if (cj.orig instanceof ObjDic && cj.c[0] && typeof cj.c[0] === 'object') {
+          const nuevo = deCrudo(cj.c[0], quien);
+          for (const [k, v] of nuevo.mapa) cj.orig.mapa.set(k, v);
+        } else quedan.push(cj);
+      }
+      cajas = quedan;
+    }
     if (!cajas || !cajas.length) return deNativo(r, llamar.resultado, quien);
     const vals = [];
     if (!llamar.resultado || llamar.resultado.clase !== 'nulo') vals.push(deNativo(r, llamar.resultado, quien));
@@ -1541,10 +1575,32 @@ function instalarBiblioteca(vm, host) {
     return hacerNativa(llamar, sim, bib, tipos.length, `${sim}() de ${bib} — declarada con nativa()`);
   }, 'nativa(biblioteca, "double cos(double)") o nativa(biblioteca, simbolo, devuelve, argumentos?) — declara una función compilada y la devuelve como función de Ñ');
 
-  // (4.1, S1) Lo demás del FFI va en el eDSL «nativo»: usar retrollamada,
+  // (motor-exp, S1) Lo demás del FFI va en el eDSL «nativo»: usar retrollamada,
   // memoria, leerMemoria de "nativo". No son globales para no quitarle nombres a nadie.
   cuerpoNativo = def => {
     const exigeNat = q => { if (!nat || !nat.tipoC) faltaNat(q); };
+    // (motor-exp N4.10) toda una cabecera de C de una vez: sus funciones, sus
+    // constantes (#define y enum) y sus estructuras, sin escribir ninguna firma
+    def('cabeceraNativa', 'texto, texto -> dic', a => {
+      if (!nat || !nat.cabecera) faltaNat('cabeceraNativa');
+      const bib = txt(a[0], 1, 'cabeceraNativa');
+      const ruta = txt(a[1], 2, 'cabeceraNativa');
+      vm.cobrar(500);
+      const h = conNativo('cabeceraNativa', () => nat.cabecera(bib, ruta));
+      if (nDeclaradas + h.funciones.length > MAX_NATIVAS)
+        vm.error(`«cabeceraNativa»: no se declaran más de ${MAX_NATIVAS} funciones nativas en una ejecución, y «${ruta}» trae ${h.funciones.length}`,
+          'léela una vez y guarda el resultado', false, 'nativo');
+      nDeclaradas += h.funciones.length;
+      const d = D();
+      for (const [n, v] of h.constantes) d.mapa.set(n, v);
+      for (const { nombre, llamar } of h.funciones) {
+        const ar = contarEntradas(llamar);
+        if (ar > MAX_ARGS_NAT) { h.omitidas.push([nombre, `tiene ${ar} argumentos y el máximo es ${MAX_ARGS_NAT}`]); continue; }
+        d.mapa.set(nombre, hacerNativa(llamar, nombre, bib, ar, `${llamar.firmaC} — de ${bib} (${ruta})`));
+      }
+      d.mapa.set('_omitidas', L(h.omitidas.map(([n, por]) => `${n}: ${por}`)));
+      return d;
+    }, 'cabeceraNativa(biblioteca, "geo.h") — lee la cabecera de C y devuelve un diccionario con sus funciones y sus constantes, listas para llamar: m.geo_area(caja); lo que no se pudo, en m._omitidas');
     def('tipoNativo', 'texto -> texto', a => {
       exigeNat('tipoNativo');
       return conNativo('tipoNativo', () => nat.tipoC(txt(a[0], 1, 'tipoNativo')));
@@ -1680,6 +1736,10 @@ function instalarBiblioteca(vm, host) {
   // Aquí solo se ejecuta: encontrar y compilar el módulo ya pasó al analizar.
   // Y aquí es donde se cumplen las dos reglas de ejecución: una sola vez, y los
   // ciclos no desbordan la pila.
+  // (motor-exp N4.11) las marcas de «sinComprobar { … }»: en la VM no hacen nada,
+  // porque la VM comprueba siempre (es donde se depura). Las miran el ejecutable
+  // de n-compilar y C1EÑ en nativo y en la GPU, que ahí quitan las comprobaciones.
+  vm.definirNativa(' sinComprobar', 'entero -> nulo', () => null);
   vm.definirNativa(' usar', 'cualquiera -> nulo', a => {
     const clave = a[0];
     // Un eDSL nativo se instala al crear el motor, así que cuando el programa
@@ -1740,9 +1800,9 @@ function instalarBiblioteca(vm, host) {
   // «datos» no lleva «enClasico»: ninguno de sus nombres estuvo en el ámbito
   // global, así que nada viejo los espera ahí.
   instalarEdsl(vm, 'datos', instalarDatos(vm));
-  instalarEdsl(vm, 'corrutinas', cuerpoCorrutinas);     // (4.1) fase X4
-  instalarEdsl(vm, 'nativo', cuerpoNativo);             // (4.1) fase S1
-  instalarEdsl(vm, 'sistema', cuerpoSistema);           // (4.1) fase S2
+  instalarEdsl(vm, 'corrutinas', cuerpoCorrutinas);     // (motor-exp) fase X4
+  instalarEdsl(vm, 'nativo', cuerpoNativo);             // (motor-exp) fase S1
+  instalarEdsl(vm, 'sistema', cuerpoSistema);           // (motor-exp) fase S2
   // De «estilo» sí eran globales 22 nombres. «pares» es el único que NO se
   // reexporta en «clasico»: su sitio en el ámbito global ya está ocupado por el
   // «pares» de los diccionarios, que es quien debía tenerlo desde el principio.
@@ -1758,12 +1818,16 @@ function instalarBiblioteca(vm, host) {
   // orden a propósito: C1EÑ primero, porque crea «vm.c1en» y las otras partes
   // registran núcleos en él al instalarse (si no existiera se quedarían con su
   // respaldo en JavaScript). Luego cálculo, fórmulas y tensores.
-  instalarEdsl(vm, 'nen', def => {
-    instalarNenC1en(vm, def);
+  const regNen = instalarEdsl(vm, 'nen', def => {
+    instalarNenC1en(vm, def, host);
     instalarNenCalculo(vm, def);
     instalarNenFormulas(vm, def);
     instalarNenTensores(vm, def);
+    instalarNenPrecision(vm, def);      // (motor-exp N1) el tipo «grande» y los enteros exactos
+    instalarNenAmplitud(vm, def);       // (motor-exp N1) especiales, distribuciones y muestreo (1.ª tanda)
+    instalarNenUnion(vm, def);          // (motor-exp N1) fila, donde y apilar para arreglos Y tablas
   });
+  reexportarEnNen(vm, regNen);          // (motor-exp N1) todo numerico y todo datos, también desde «nen»
   // El interruptor va al final: es la unión de los de arriba.
   instalarClasico(vm);
   // Y los eDSL que este motor trae ABIERTOS: en el ámbito global, sin «usar».
@@ -1796,6 +1860,14 @@ function abrirEdsls(vm, nombres) {
     for (const [corto] of r.exporta) {
       const largo = nombreGlobalModulo(r.clave, corto);
       const obj = vm.globals.get(largo);
+      // (motor-exp N1) «nen» reexporta numerico y datos con EL MISMO objeto: si
+      // ya lo abrió otro eDSL, es el mismo nombre para lo mismo, no un choque.
+      if (origen.has(corto) && vm.globals.get(corto) === obj) continue;
+      // Y las tres de NEÑ que valen para arreglos y tablas (fila, donde, apilar)
+      // pueden ocupar el sitio de la de numerico o datos: hacen lo mismo y más.
+      if (origen.has(corto) && obj && obj.despacha && obj.despacha.includes(vm.globals.get(corto))) {
+        vm.globals.set(corto, obj); origen.set(corto, nombre); continue;
+      }
       if (vm.globals.has(corto)) {
         const quien = origen.get(corto);
         throw new Error(quien

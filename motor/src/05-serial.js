@@ -276,7 +276,7 @@ function leerFn(r, prof) {
     }
   }
 
-  // (4.1) La marca de los parámetros con valor por defecto.
+  // (motor-exp) La marca de los parámetros con valor por defecto.
   for (const c of fn.chunk.consts) {
     if (typeof c === 'string' && c.startsWith(' minimos:')) {
       const m = +c.slice(9);

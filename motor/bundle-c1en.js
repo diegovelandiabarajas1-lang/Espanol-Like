@@ -78,7 +78,9 @@ const PISTA_PALABRA = Object.assign(Object.create(null), {
 // comunes del idioma habría roto cualquier programa que las use de nombre.
 // «var y = 1» compila.
 
-const TIPOS_BASE = new Set(['entero', 'real', 'texto', 'bool', 'nulo', 'lista', 'dic', 'funcion', 'nodo', 'estilo', 'error', 'fecha', 'tabla', 'arreglo', 'cualquiera']);
+// (motor-exp N4.9) los tipos de los números de un arreglo, con los alias de NumPy y de C
+const ELEM_ARREGLO = new Set(['real', 'entero', 'bool', 'complejo', 'real32', 'real16', 'i8', 'u8', 'i16', 'u16', 'u32', 'i64', 'u64', 'i32', 'f64', 'f32', 'f16']);
+const TIPOS_BASE = new Set(['entero', 'real', 'texto', 'bool', 'nulo', 'lista', 'dic', 'funcion', 'nodo', 'estilo', 'error', 'fecha', 'tabla', 'arreglo', 'grande', 'cualquiera']);
 
 function lexer(fuente) {
   const toks = [];
@@ -205,7 +207,7 @@ function lexer(fuente) {
     const tres = fuente.substr(i, 3);
     const dos = fuente.substr(i, 2);
     const OP3 = ['**='];
-    // «??» y «?.» (4.1): el nulo como valor por defecto y el acceso
+    // «??» y «?.» (motor-exp): el nulo como valor por defecto y el acceso
     // que no revienta si el objeto es nulo.
     const OP2 = ['**', '//', '==', '!=', '<=', '>=', '+=', '-=', '*=', '/=', '->', '..', '??'];
     if (dos === '?.') { avanzar(); avanzar(); push('?.', '?.', L, C); continue; }
@@ -258,7 +260,9 @@ const T = {
   // después de guardarla y volverla a leer.
   tabla: { k: 'tabla' },
   arreglo: { k: 'arreglo' },
-  // (4.1) Un registro declarado con «tipo Nombre { … }». Lo que lleva
+  // (motor-exp N1) Un decimal de precisión arbitraria, de NEÑ (18-nen-precision.js).
+  grande: { k: 'grande' },
+  // (motor-exp) Un registro declarado con «tipo Nombre { … }». Lo que lleva
   // —campos y métodos— lo sabe el verificador; aquí solo viaja el nombre.
   registro: (nombre) => ({ k: 'registro', nombre }),
   lista: (e) => ({ k: 'lista', elem: e || T.cualquiera }),
@@ -287,6 +291,8 @@ function tipoATexto(t) {
     case 'modulo': return `módulo «${t.ruta || t.clave}»`;
     case 'registro': return t.nombre;
     case 'var': return t.nombre;
+    case 'elem': return t.nombre;
+    case 'arreglo': return t.elem ? `arreglo<${tipoATexto(t.elem)}>` : 'arreglo';
     default: return t.k;
   }
 }
@@ -302,7 +308,7 @@ function tipoATexto(t) {
 // Falla al instalar la biblioteca, no al llamar a la función: una firma mal
 // escrita revienta la creación del motor y por tanto la primera prueba que
 // corra, en vez de dejar un nombre mal tipado suelto.
-const BASICOS = ['entero', 'real', 'texto', 'bool', 'nulo', 'cualquiera', 'nodo', 'error', 'estilo', 'fecha', 'tabla', 'arreglo'];
+const BASICOS = ['entero', 'real', 'texto', 'bool', 'nulo', 'cualquiera', 'nodo', 'error', 'estilo', 'fecha', 'tabla', 'arreglo', 'grande'];
 
 // Parte por comas de primer nivel: 'lista<real>, dic<texto,real>' → dos trozos.
 function partirNivel(s) {
@@ -370,7 +376,7 @@ function firma(s) {
 const aridadDe = t => (t && t.k === 'funcion' && t.params === null ? -1
   : t && t.k === 'funcion' ? t.params.length : 0);
 
-// (4.1) El tipo de una función declarada, con lo que hace falta para
+// (motor-exp) El tipo de una función declarada, con lo que hace falta para
 // llamarla bien: los nombres de sus parámetros (argumentos con nombre), cuántos
 // son obligatorios (los demás tienen valor por defecto) y sus variables de tipo
 // (genéricos). Lo usan el verificador y los módulos: un solo sitio.
@@ -390,7 +396,7 @@ function tipoDeFuncion(n, quitarYo) {
 function compatible(destino, origen) {
   if (!destino || !origen) return true;
   if (destino.k === 'cualquiera' || origen.k === 'cualquiera') return true;
-  // (4.1) Una variable de tipo (la T de un genérico) dentro del cuerpo
+  // (motor-exp) Una variable de tipo (la T de un genérico) dentro del cuerpo
   // de la función vale lo que valga: se comprueba en cada LLAMADA, donde se
   // sabe qué es T.
   if (destino.k === 'var' || origen.k === 'var') return true;
@@ -432,12 +438,12 @@ function reubicar(nodo, linea, col) {
 
 function parser(toks, fuenteNombre, opciones) {
   let p = 0;
-  // (4.1) «soloExpresion»: lo que va entre las llaves de un texto se lee
+  // (motor-exp) «soloExpresion»: lo que va entre las llaves de un texto se lee
   // como UNA expresión, no como un programa. Antes daba igual; ahora no, porque
   // «si … entonces … sino …» empieza por «si», que como programa sería la
   // sentencia.
   const soloExpresion = !!(opciones && opciones.soloExpresion);
-  // (4.1) Los nombres de los registros del archivo se buscan ANTES de
+  // (motor-exp) Los nombres de los registros del archivo se buscan ANTES de
   // analizar nada, para que «fn f(p: Punto)» se entienda aunque «tipo Punto»
   // esté más abajo, igual que una función se puede llamar antes de declararla.
   const tiposDeclarados = new Set();
@@ -448,7 +454,7 @@ function parser(toks, fuenteNombre, opciones) {
   // Llevan un espacio: el léxico no deja escribirlo, así que no chocan con nada.
   let sigTmp = 0;
   const tmpNombre = () => ' t' + (sigTmp++);
-  // (4.1) Corrutinas. «producir» y «esperar» no son palabras
+  // (motor-exp) Corrutinas. «producir» y «esperar» no son palabras
   // reservadas: si el archivo declara algo con ese nombre, se respeta y no se
   // leen como corrutina.
   const tapadas = new Set();
@@ -535,6 +541,23 @@ function parser(toks, fuenteNombre, opciones) {
         `tipos válidos: ${[...TIPOS_BASE].join(', ')}`);
     if (nombre === 'lista' && comprobar('OP', '<')) {
       p++; const e = parseTipo(); exigir('OP', '>', 'falta «>» al cerrar lista<…>'); return T.lista(e);
+    }
+    // (motor-exp N4.9) arreglo<real32>, arreglo<T>: el tipo de sus números. El
+    // verificador no lo puede saber (un arreglo no lleva su tipo de elemento en
+    // el tipo estático); lo comprueba C1EÑ al lanzar un núcleo, y la T se une
+    // con lo que llegue, como en una plantilla.
+    if (nombre === 'arreglo' && comprobar('OP', '<')) {
+      p++;
+      const e = ver();
+      if (e.tipo !== 'IDENT') throw new ErrorFuente('sintaxis', `se esperaba el tipo de los números del arreglo y llegó «${e.valor}»`, e.linea, e.col);
+      p++;
+      let elem;
+      if (esVarTipo(e.valor)) elem = { k: 'var', nombre: e.valor };
+      else if (ELEM_ARREGLO.has(e.valor)) elem = { k: 'elem', nombre: e.valor };
+      else throw new ErrorFuente('tipos', `«${e.valor}» no es un tipo de los números de un arreglo`, e.linea, e.col,
+        `los que hay: ${[...ELEM_ARREGLO].join(', ')}, o una variable de tipo (fn f<T>(a: arreglo<T>))`);
+      exigir('OP', '>', 'falta «>» al cerrar arreglo<…>');
+      return { k: 'arreglo', elem };
     }
     if (nombre === 'dic' && comprobar('OP', '<')) {
       p++; const c = parseTipo(); exigir(',', ','); const v = parseTipo();
@@ -672,7 +695,7 @@ function parser(toks, fuenteNombre, opciones) {
     const t = ver();
     if (!esPalabra(t, 'publico') && !esPalabra(t, 'público')) return null;
     const sig = ver(1);
-    // (4.1) «publico tipo Punto { … }»: se exporta el constructor, y con
+    // (motor-exp) «publico tipo Punto { … }»: se exporta el constructor, y con
     // él el registro entero (los métodos viajan dentro de cada valor).
     if (esPalabra(sig, 'tipo') && esNombre(ver(2)) && ver(3).tipo === '{') {
       if (!esTop)
@@ -682,7 +705,7 @@ function parser(toks, fuenteNombre, opciones) {
       d[0].publico = true; d[1].publico = true;
       return d;
     }
-    // (4.1) «publico fn Punto.m()»: se acepta, aunque sobra — los
+    // (motor-exp) «publico fn Punto.m()»: se acepta, aunque sobra — los
     // métodos viajan dentro de cada valor del registro, públicos o no.
     if (sig.tipo === 'FUNCION' && esNombre(ver(2)) && ver(3).tipo === '.' && tiposDeclarados.has(ver(2).valor)) {
       p++;
@@ -698,7 +721,7 @@ function parser(toks, fuenteNombre, opciones) {
     return d;
   }
 
-  // ── (4.1) registros ──────────────────────────────────────────────
+  // ── (motor-exp) registros ──────────────────────────────────────────────
   //   tipo Punto {
   //     x: real
   //     y: real
@@ -725,7 +748,7 @@ function parser(toks, fuenteNombre, opciones) {
         throw new ErrorFuente('sintaxis', `el campo «${c.valor}» está dos veces en «${nom.valor}»`, c.linea, c.col);
       vistos.add(c.valor);
       const anot = tipoOpcional();
-      // (4.1) Valor por defecto del campo: «y: real = 0.0».
+      // (motor-exp) Valor por defecto del campo: «y: real = 0.0».
       let defecto = null;
       if (igualar('OP', '=')) defecto = expresion();
       else if (campos.some(q => q.defecto))
@@ -770,7 +793,7 @@ function parser(toks, fuenteNombre, opciones) {
       linea: t.linea, col: t.col };
   }
 
-  // ── (4.1) desestructurar ──────────────────────────────────────────
+  // ── (motor-exp) desestructurar ──────────────────────────────────────────
   //   var [a, b] = lista       →  var a = lista[0]   var b = lista[1]
   //   fijo {x, y} = punto      →  fijo x = punto.x   fijo y = punto.y
   // La expresión se evalúa UNA vez, en una variable interna.
@@ -804,7 +827,7 @@ function parser(toks, fuenteNombre, opciones) {
     return out;
   }
 
-  // ── (4.1) segun ───────────────────────────────────────────────────
+  // ── (motor-exp) segun ───────────────────────────────────────────────────
   //   segun x {
   //     caso 1, 2 { … }
   //     caso "a"  { … }
@@ -883,7 +906,7 @@ function parser(toks, fuenteNombre, opciones) {
   }
 
   function restoFuncion(nombre) {
-    // (4.1) fn primero<T>(xs: lista<T>): T — las variables de tipo.
+    // (motor-exp) fn primero<T>(xs: lista<T>): T — las variables de tipo.
     const genericos = [];
     if (comprobar('OP', '<')) {
       p++;
@@ -902,7 +925,7 @@ function parser(toks, fuenteNombre, opciones) {
         do {
           const pn = exigirNombre('se esperaba el nombre de un parámetro');
           const pt = tipoOpcional();
-          // (4.1) Valor por defecto: «fn f(a, b = 2)».
+          // (motor-exp) Valor por defecto: «fn f(a, b = 2)».
           let defecto = null;
           if (igualar('OP', '=')) defecto = expresion();
           else if (params.some(q => q.defecto))
@@ -954,7 +977,7 @@ function parser(toks, fuenteNombre, opciones) {
 
   function sentencia() {
     const t = ver();
-    // (4.1) «producir v»: entrega un valor y la función se queda en
+    // (motor-exp) «producir v»: entrega un valor y la función se queda en
     // pausa hasta que le pidan el siguiente.
     if (esClave(t, 'producir') && !(ver(1).tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(ver(1).valor)) && ver(1).tipo !== '.' && ver(1).tipo !== '[') {
       p++;
@@ -962,6 +985,21 @@ function parser(toks, fuenteNombre, opciones) {
       const v = (comprobar('}') || comprobar(';') || fin() || inicioDeLineaNueva(t)) ? { tipo: 'Literal', valor: null, tipoLit: T.nulo, linea: t.linea, col: t.col } : expresion();
       saltarPuntoYComa();
       return { tipo: 'Producir', valor: v, linea: t.linea, col: t.col };
+    }
+    // (motor-exp N4.11) «sinComprobar { … }»: la puerta de atrás con nombre propio.
+    // No es palabra reservada (var sinComprobar = 1 sigue valiendo): solo cuenta
+    // un nombre suelto seguido de «{». Se escribe como un bloque con dos marcas,
+    // llamadas a « sinComprobar» (1 al entrar, 0 al salir), así que todo lo que
+    // recorre el árbol o el bytecode lo ve sin saber nada nuevo; quien quiere
+    // quitar comprobaciones (el ejecutable, C1EÑ en nativo y en la GPU) mira las marcas.
+    if (esClave(t, 'sinComprobar') && ver(1).tipo === '{') {
+      p++;
+      const b = bloque();
+      const L = t.linea, C = t.col;
+      const marca = (v, l) => ({ tipo: 'ExprSent', linea: l, col: C, expr: { tipo: 'Llamada', linea: l, col: C,
+        callee: { tipo: 'Variable', nombre: ' sinComprobar', linea: l, col: C }, args: [{ tipo: 'Literal', valor: v, tipoLit: T.entero, linea: l, col: C }] } });
+      const ultima = b.cuerpo.length ? (b.cuerpo[b.cuerpo.length - 1].linea || L) : L;
+      return { tipo: 'Bloque', cuerpo: [marca(1, L)].concat(b.cuerpo, [marca(0, ultima)]), linea: L, col: C, sinComprobar: true };
     }
     if (comprobar('SI')) return sentSi();
     if (comprobar('MIENTRAS')) return sentMientras();
@@ -1089,7 +1127,7 @@ function parser(toks, fuenteNombre, opciones) {
     if (sig.tipo === 'OP' && ['=', '+=', '-=', '*=', '/='].includes(sig.valor)) return false;
     return true;
   }
-  // (4.1) «a ?? b»: a, salvo que sea nulo; entonces b. Más flojo que «o».
+  // (motor-exp) «a ?? b»: a, salvo que sea nulo; entonces b. Más flojo que «o».
   const coalescer = () => binarioIzq(oLogico, t => t.tipo === 'OP' && t.valor === '??');
   const oLogico = () => binarioIzq(yLogico, t => esOperadorLogico(t, 'O'));
   const yLogico = () => binarioIzq(igualdad, t => esOperadorLogico(t, 'Y'));
@@ -1100,7 +1138,7 @@ function parser(toks, fuenteNombre, opciones) {
 
   function unario() {
     const t = ver();
-    // (4.1) «esperar x»: si x es una promesa, la función se pausa hasta
+    // (motor-exp) «esperar x»: si x es una promesa, la función se pausa hasta
     // que esté lista y sigue con su valor; si no, sigue con x tal cual.
     if (esClave(t, 'esperar')) {
       const sig = ver(1);
@@ -1135,7 +1173,7 @@ function parser(toks, fuenteNombre, opciones) {
       if (comprobar('(')) {
         p++;
         const args = [], nombrados = [];
-        // (4.1) Argumentos con nombre: «f(1, tasa: 0.5)». Van después de
+        // (motor-exp) Argumentos con nombre: «f(1, tasa: 0.5)». Van después de
         // los posicionales. El verificador los coloca en su sitio.
         if (!comprobar(')')) do {
           if (esNombre(ver()) && ver(1).tipo === ':') {
@@ -1163,7 +1201,7 @@ function parser(toks, fuenteNombre, opciones) {
         const nom = exigirNombre('se esperaba un nombre tras «.»');
         e = { tipo: 'Propiedad', obj: e, nombre: nom.valor, linea: nom.linea, col: nom.col };
       } else if (comprobar('?.')) {
-        // (4.1) «a?.b»: nulo si a es nulo, a.b si no. Vale para ESE paso.
+        // (motor-exp) «a?.b»: nulo si a es nulo, a.b si no. Vale para ESE paso.
         p++;
         const nom = exigirNombre('se esperaba un nombre tras «?.»');
         e = { tipo: 'Propiedad', obj: e, nombre: nom.valor, opcional: true, linea: nom.linea, col: nom.col };
@@ -1199,7 +1237,7 @@ function parser(toks, fuenteNombre, opciones) {
         });
         return { tipo: 'Interpolacion', partes, linea: t.linea, col: t.col };
       }
-      // (4.1) «si c entonces a sino b» como expresión. Como sentencia,
+      // (motor-exp) «si c entonces a sino b» como expresión. Como sentencia,
       // «si» sigue siendo el de siempre: esto solo aparece donde va un valor.
       case 'SI': {
         p++;
@@ -1377,7 +1415,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       nodo.linea, nodo.col, `a partir de aquí «${nombre}» ya no es la de Ñ; si es a propósito, ponle otro nombre para que se lea`));
   }
 
-  // (4.1) Los registros del archivo: nombre → { campos, metodos }.
+  // (motor-exp) Los registros del archivo: nombre → { campos, metodos }.
   const registros = new Map();
   // Los registros que llegan de otro archivo con su constructor importado.
   if (enlace) for (const [, i] of enlace.nombres) {
@@ -1385,6 +1423,21 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
     if (f && !registros.has(f.nombre)) registros.set(f.nombre, f);
   }
   const tipoReg = nombre => registros.get(nombre) || null;
+  // (motor-exp N1) ¿«arreglo» es el de numerico (o NEÑ), y no uno del programa?
+  function esArregloDeNumerico(amb) {
+    const v = amb.buscar('arreglo');
+    if (!v) return false;
+    const imp = enlace && enlace.nombres.get('arreglo');
+    if (imp) return v === raiz.vars.get('arreglo') &&
+      (imp.global === nombreGlobalModulo(claveEdsl('numerico'), 'arreglo') || imp.global === nombreGlobalModulo(claveEdsl('nen'), 'arreglo'));
+    return v === raiz.vars.get('arreglo') && Object.prototype.hasOwnProperty.call(globalesTipos, 'arreglo');
+  }
+  function llevaLiteralReal(n) {
+    if (n.tipo === 'Literal') return n.tipoLit === T.real;
+    if (n.tipo === 'Unario' && n.op === '-') return llevaLiteralReal(n.expr);
+    if (n.tipo === 'ListaLit') return n.items.some(llevaLiteralReal);
+    return false;
+  }
   function campoDe(r, nombre) { return r.campos.find(c => c.nombre === nombre) || null; }
   function sinCampo(n, r, nombre) {
     const lista = r.campos.map(c => c.nombre).concat([...r.metodos.keys()]);
@@ -1392,7 +1445,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
     return err(n, `«${r.nombre}» no tiene «${nombre}»`,
       cerca ? `¿querías decir «${cerca}»? tiene: ${lista.join(', ')}` : `tiene: ${lista.join(', ')}`);
   }
-  // (4.1) Genéricos. «unificar» aprende qué es cada variable de tipo a
+  // (motor-exp) Genéricos. «unificar» aprende qué es cada variable de tipo a
   // partir de un argumento y devuelve un mensaje si choca con lo aprendido.
   function unificar(param, arg, vinc) {
     if (!param || !arg) return null;
@@ -1499,7 +1552,12 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
             'añade un «devolver» al final de la función');
         return;
       }
-      case 'Bloque': return bloqueTipos(n, new Ambito(amb));
+      case 'Bloque':
+        // (motor-exp N4.11) la ley 7: la puerta de atrás es explícita, visible y avisada
+        if (n.sinComprobar) avisos.push(new ErrorFuente('seguridad',
+          '«sinComprobar»: aquí, en el ejecutable (n-compilar) y en los núcleos de C1EÑ en nativo y en la GPU, un índice fuera de rango o una división entre cero NO se dicen: el resultado es indefinido',
+          n.linea, n.col, 'la VM y C1EÑ en jit siguen comprobando: pruébalo ahí antes; quita el bloque si algo no cuadra'));
+        return bloqueTipos(n, new Ambito(amb));
       case 'DeclTipo': return;   // ya registrado al empezar
       case 'Producir': expr(n.valor, amb); return;
       case 'Si': {
@@ -1579,6 +1637,9 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           return err(n, `«${n.nombre}» es un módulo, no un valor`,
             `sirve para «${n.nombre}.algo»; si necesitas pasar una de sus funciones, tráela con «usar … de …»`);
         marcarUso(v);
+        // (motor-exp N4.9) dentro de un genérico, un valor de tipo T vale lo que
+        // valga (se indexa, se suma…): se sabe qué es en cada llamada
+        if (v.tipo && v.tipo.k === 'var') return T.cualquiera;
         return v.tipo;
       }
       case 'Asignacion': {
@@ -1624,6 +1685,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         // «-a» sobre un arreglo le cambia el signo a todos sus números.
         if (n.op === '-') {
           if (t.k === 'arreglo') return T.arreglo;
+          if (t.k === 'grande') return T.grande;
           if (!esNum(t)) err(n, `«-» necesita un número y recibió ${tipoATexto(t)}`);
           return t;
         }
@@ -1632,7 +1694,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       case 'Binario': {
         const a = expr(n.izq, amb), b = expr(n.der, amb);
         const op = n.op;
-        // (4.1) «a ?? b»: si a puede ser nulo, sale b; el tipo es el de
+        // (motor-exp) «a ?? b»: si a puede ser nulo, sale b; el tipo es el de
         // los dos si coinciden.
         if (op === '??') {
           if (a.k === 'nulo') return b;
@@ -1647,7 +1709,10 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           // sea un tipo. La VM lo vuelve a comprobar para lo que llegue como
           // «cualquiera», y las dos reglas tienen que decir lo mismo.
           const dosFechas = a.k === 'fecha' && b.k === 'fecha';
-          if (!(dosFechas || (esNum(a) && esNum(b)) || (a.k === 'texto' && b.k === 'texto') ||
+          // (motor-exp N1) un grande se compara con otro grande o con un número
+          const conGrande = (a.k === 'grande' || b.k === 'grande') &&
+            (a.k === 'grande' || esNum(a)) && (b.k === 'grande' || esNum(b));
+          if (!(dosFechas || conGrande || (esNum(a) && esNum(b)) || (a.k === 'texto' && b.k === 'texto') ||
                 a.k === 'cualquiera' || b.k === 'cualquiera'))
             err(n, `no se pueden comparar ${tipoATexto(a)} y ${tipoATexto(b)} con «${op}»`,
               // La misma pista que da la VM. Si las dos reglas dicen cosas
@@ -1662,6 +1727,15 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         // Un arreglo se opera con otro arreglo o con un número, y el resultado
         // es un arreglo. Esto es lo que deja escribir «a * 2 + b» en vez de un
         // bucle, y que el verificador lo tipe sin ejecutar nada.
+        // (motor-exp N1) un grande con otro grande o con un número es un grande
+        if ((a.k === 'grande' || b.k === 'grande') && ['+', '-', '*', '/', '//', '%', '**'].includes(op)) {
+          const otro = a.k === 'grande' ? b : a;
+          if (otro.k === 'grande' || esNum(otro)) return T.grande;
+          if (otro.k === 'arreglo') return T.arreglo;   // (motor-exp N4.5) con un i64/u64, exacto
+          err(n, `«${op}»: un grande se opera con otro grande o con un número, y llegó ${tipoATexto(otro)}`,
+            'para pasar un texto a grande: grande("3.14159")');
+          return T.grande;
+        }
         if (a.k === 'arreglo' || b.k === 'arreglo') {
           if (['+', '-', '*', '/', '//', '%', '**'].includes(op)) {
             const otro = a.k === 'arreglo' ? b : a;
@@ -1695,9 +1769,16 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       }
       case 'Llamada': {
         const ft = expr(n.callee, amb);
+        // (motor-exp N1) «arreglo([1.0, 2.0])»: el «.0» se pierde al ejecutar
+        // (1.0 y 1 son el mismo número), así que el arreglo salía de enteros. El
+        // verificador sí lo ve en el texto: si la lista literal lleva un real
+        // escrito con punto o exponente, se le pasa «"real"» como tipo.
+        if (n.callee.tipo === 'Variable' && n.callee.nombre === 'arreglo' && n.args.length === 1 &&
+            n.args[0].tipo === 'ListaLit' && esArregloDeNumerico(amb) && llevaLiteralReal(n.args[0]))
+          n.args.push({ tipo: 'Literal', valor: 'real', tipoLit: T.texto, linea: n.linea, col: n.col });
         const nom = n.callee.tipo === 'Variable' ? `«${n.callee.nombre}»`
           : n.callee.tipo === 'Propiedad' ? `«${n.callee.nombre}»` : 'la función';
-        // (4.1) Argumentos con nombre y valores por defecto. Se resuelven
+        // (motor-exp) Argumentos con nombre y valores por defecto. Se resuelven
         // AQUÍ, donde se sabe a qué función se llama, y se reescriben los
         // argumentos del nodo en su orden: el compilador y el JIT no se enteran.
         // Lo que no llega y tiene defecto viaja como « faltante».
@@ -1736,7 +1817,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
             err(n, `${nom} espera ${rango} argumento(s) y recibió ${args.length}`);
             return ft.ret;
           }
-          // (4.1) Genéricos: cada variable de tipo toma el tipo de lo que
+          // (motor-exp) Genéricos: cada variable de tipo toma el tipo de lo que
           // llega, y tiene que ser el MISMO en todas partes.
           const vinc = ft.genericos ? new Map() : null;
           for (let i = 0; i < args.length; i++) {
@@ -1763,7 +1844,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         if (o.k === 'lista') { if (!esNum(i)) err(n, `el índice de una lista debe ser entero y es ${tipoATexto(i)}`); return o.elem; }
         if (o.k === 'texto') return T.texto;
         if (o.k === 'dic') return o.valor;
-        // a[i] sobre un arreglo (4.1): un número si es de 1 dimensión, una
+        // a[i] sobre un arreglo (motor-exp): un número si es de 1 dimensión, una
         // vista de la fila si tiene más. El número de dimensiones no está en el
         // tipo, así que el resultado es «cualquiera»; el índice sí se comprueba.
         if (o.k === 'arreglo') { if (!esNum(i)) err(n, `el índice de un arreglo debe ser entero y es ${tipoATexto(i)}`); return T.cualquiera; }
@@ -1786,7 +1867,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         const o = expr(n.obj, amb);
         // dic<texto,real> accedido con «.» debe seguir siendo real, no «cualquiera»
         if (o.k === 'dic') return o.valor;
-        // (4.1) Un registro: el verificador SABE qué campos tiene. Es la
+        // (motor-exp) Un registro: el verificador SABE qué campos tiene. Es la
         // razón de que existan: «p.nombre» mal escrito se para aquí, no al
         // ejecutar.
         if (o.k === 'registro') {
@@ -2037,7 +2118,7 @@ function compilar(ast, nombreScript, enlace) {
     if (!ctx.padre) return -1;
     const l = buscarLocal(ctx.padre, nombre);
     if (l !== -1) {
-      // (4.1) Al pausar una corrutina su pila se guarda aparte; un
+      // (motor-exp) Al pausar una corrutina su pila se guarda aparte; un
       // cierre que apuntara a una de sus variables quedaría mirando a otra
       // cosa. Hasta que eso tenga solución, se dice aquí y no se adivina.
       if (ctx.padre.fn.corrutina)
@@ -2066,7 +2147,7 @@ function compilar(ast, nombreScript, enlace) {
         return;
       }
       case 'Bloque': ambitoAbrir(); for (const s of n.cuerpo) sent(s); ambitoCerrar(n.linea); return;
-      // (4.1) Un registro. No hay opcode nuevo: se llama a la nativa
+      // (motor-exp) Un registro. No hay opcode nuevo: se llama a la nativa
       // interna « registro» con el nombre, los campos y los métodos (que ya
       // están definidos, porque las funciones van primero), y lo que devuelve
       // —el constructor— queda como global con el nombre del tipo. Todo son
@@ -2288,12 +2369,12 @@ function compilar(ast, nombreScript, enlace) {
     sub.fn.enlace = enl;
     sub.fn.ast = n;
     sub.fn.nombresParams = n.params.map(p => p.nombre);
-    // (4.1) Cuántos argumentos son obligatorios. Viaja en el .elb como una
+    // (motor-exp) Cuántos argumentos son obligatorios. Viaja en el .elb como una
     // constante marcadora (« minimos:N»): así el formato no cambia y un .elb
-    // sin valores por defecto es idéntico al de la 4.0.
+    // sin valores por defecto es idéntico al del LTS.
     const primero = n.params.findIndex(p => p.defecto);
     if (primero >= 0) { sub.fn.minimos = primero; sub.fn.chunk.cte(' minimos:' + primero); }
-    // (4.1) Generador o asíncrona: viaja igual, como constante marcadora.
+    // (motor-exp) Generador o asíncrona: viaja igual, como constante marcadora.
     if (n.corrutina) { sub.fn.corrutina = n.corrutina; sub.fn.chunk.cte(' corrutina:' + n.corrutina); }
     c = sub;
     ambitoAbrir();
@@ -2409,7 +2490,7 @@ function compilar(ast, nombreScript, enlace) {
         return emit(m[n.op], n.linea);
       }
       case 'Llamada': {
-        // (4.1) «a?.m(x)»: si a es nulo, nulo, y la llamada no ocurre.
+        // (motor-exp) «a?.m(x)»: si a es nulo, nulo, y la llamada no ocurre.
         if (n.callee.tipo === 'Propiedad' && n.callee.opcional) {
           expr(n.callee.obj);
           emit(OP.DUP, n.linea); emit(OP.NULO, n.linea); emit(OP.EQ, n.linea);
@@ -2468,7 +2549,7 @@ function compilar(ast, nombreScript, enlace) {
   // cuando A importa B y B importa A, A ya tiene definidas todas sus funciones
   // antes de que empiece B, así que B las ve. Lo que B no ve son los valores que
   // A calcula después, y eso se dice con un mensaje que nombra el ciclo.
-  // (4.1) Los registros van justo después de las funciones —sus
+  // (motor-exp) Los registros van justo después de las funciones —sus
   // métodos son funciones y tienen que existir ya— y antes que todo lo demás:
   // así «Punto(1, 2)» funciona aunque el «tipo» esté más abajo.
   for (const s of ast.cuerpo) if (s.tipo === 'DeclTipo')
@@ -2635,8 +2716,161 @@ const TIPOS_ARR = {
   // difusión y «trozo» funcionan sin tocar nada, y solo quien de verdad lee o
   // escribe un número multiplica por la anchura.
   complejo: { ctor: Float64Array, ent: false, anchura: 2 },
+  // (motor-exp N4.2) PRECISIÓN SIMPLE Y MEDIA. «real32» es el float de C, el de
+  // las GPU: la mitad de memoria, y en una GPU de consumo hasta 32 veces más
+  // rápido que «real». «real16» es el half (IEEE binary16): 11 bits de mantisa,
+  // hasta 65504. La regla, la misma en jit, nativo y GPU: cada operación se
+  // hace en 64 bits y el resultado se REDONDEA una vez al tipo del arreglo.
+  // Para + − × ÷ y la raíz eso es exactamente la aritmética de 32 (o de 16)
+  // bits de verdad, porque 53 ≥ 2·24 + 2: redondear dos veces no cambia nada.
+  // En la VM un real16 ocupa 4 bytes (Node 22 no trae Float16Array); en un
+  // archivo binario y en la GPU, los suyos.
+  real32: { ctor: Float32Array, ent: false, bits: 32 },
+  real16: { ctor: Float32Array, ent: false, bits: 16 },
+  // (motor-exp N4.5) TIPOS DE MÁQUINA: los enteros de C con su tamaño, como los
+  // dtypes de NumPy. Guardar en uno lo ENVUELVE (200 en un i8 es −56): es lo
+  // que hace el hardware y lo que hacen C, CUDA y NumPy. «entero» sigue siendo
+  // el de siempre (i32, y se escribe también así). i64 y u64 viven en
+  // BigInt64Array: sus cuentas son exactas en los 64 bits, y un elemento que no
+  // cabe en 2^53 se lee como un «grande» exacto.
+  i8:  { ctor: Int8Array,   ent: true, bits: 8,  signo: true },
+  u8:  { ctor: Uint8Array,  ent: true, bits: 8,  signo: false },
+  i16: { ctor: Int16Array,  ent: true, bits: 16, signo: true },
+  u16: { ctor: Uint16Array, ent: true, bits: 16, signo: false },
+  u32: { ctor: Uint32Array, ent: true, bits: 32, signo: false },
+  i64: { ctor: BigInt64Array,  ent: true, bits: 64, signo: true,  big: true },
+  u64: { ctor: BigUint64Array, ent: true, bits: 64, signo: false, big: true },
 };
+// los nombres de NumPy y de C que son otro nombre de uno que ya hay
+const ALIAS_TIPO = { i32: 'entero', f64: 'real', f32: 'real32', f16: 'real16' };
+// bits y signo de los enteros, «entero» incluido
+const ENT_INFO = { i8: [8, true], u8: [8, false], i16: [16, true], u16: [16, false], entero: [32, true], u32: [32, false], i64: [64, true], u64: [64, false] };
+const esEntMaq = t => ENT_INFO[t] !== undefined;
+const esBig = t => t === 'i64' || t === 'u64';
+// el entero con signo de b bits, o sin signo
+const ENT_DE = (b, s) => ({ '8,true': 'i8', '8,false': 'u8', '16,true': 'i16', '16,false': 'u16', '32,true': 'entero', '32,false': 'u32', '64,true': 'i64', '64,false': 'u64' })[`${b},${s}`];
 const ANCHO = t => (TIPOS_ARR[t] && TIPOS_ARR[t].anchura) || 1;
+// (motor-exp N4.2) Los tipos de coma flotante, del más ancho al más estrecho.
+const TIPOS_FLOT = ['real', 'real32', 'real16'];
+const esFlot = t => t === 'real' || t === 'real32' || t === 'real16';
+// El tipo de una operación entre dos arreglos (o un arreglo y un número), como
+// en PyTorch: un número suelto no ensancha un arreglo (x32 * 2.5 sigue siendo
+// real32), un entero con un real32 da real32, y entre dos de coma flotante gana
+// el más ancho. «/» y «**» nunca dan entero.
+function tipoAritmetico(tA, tB, op, esA, esB) {
+  // (motor-exp N4.5) los enteros de máquina, como NumPy: entre dos, el que cabe
+  // los dos (i8 + u8 → i16, i32 + u32 → i64; i64 + u64 no cabe y da real); un
+  // número suelto entero adopta el tipo del arreglo (y uno con decimales da
+  // real); con un arreglo de coma flotante, ese. «/» y «**» dan real.
+  const mA = esA && esEntMaq(tA) && tA !== 'entero', mB = esB && esEntMaq(tB) && tB !== 'entero';
+  if (mA || mB) {
+    const flA = esA && esFlot(tA), flB = esB && esFlot(tB);
+    // con un arreglo de coma flotante gana el de coma flotante, sea cual sea el
+    // entero: la regla de N4.2 para «entero» (la de PyTorch), igual para todos;
+    // así i8 + real16 e i32 + real16 dan lo mismo (real16). NumPy, en cambio,
+    // ensancha el real según el entero (i16 + f16 → f32): ver EXPERIMENTAL.md.
+    if (flA || flB) return flA ? tA : tB;
+    if (op === '/' || op === '**') return 'real';
+    const ia = esA ? ENT_INFO[tA] : null, ib = esB ? ENT_INFO[tB] : null;
+    if (!esA || !esB) {                                  // con un número suelto
+      const s = esA ? b0(tB) : b0(tA);
+      if (s === 'real') return 'real';
+      return mA ? tA : tB;
+    }
+    if (!ia || !ib) return 'real';                       // con bool (o algo que no es entero)
+    if (ia[1] === ib[1]) return ENT_DE(Math.max(ia[0], ib[0]), ia[1]);
+    const [bs, bu] = ia[1] ? [ia[0], ib[0]] : [ib[0], ia[0]];
+    if (bs > bu) return ENT_DE(bs, true);
+    if (bu === 64) return 'real';
+    return ENT_DE(bu * 2, true);
+  }
+  const fA = esA && esFlot(tA) ? tA : null, fB = esB && esFlot(tB) ? tB : null;
+  if (fA || fB) {
+    for (const t of TIPOS_FLOT) if (fA === t || fB === t) return t;
+  }
+  const entero = tA === 'entero' && tB === 'entero' && op !== '/' && op !== '**';
+  return entero ? 'entero' : 'real';
+}
+// el «tipo» de un número suelto
+const b0 = t => (t === 'entero' ? 'entero' : 'real');
+// Redondear al half más cercano (empates a par), lo que hace Math.f16round en
+// los JavaScript que lo tienen: subnormales desde 2^-24, y de 65520 en adelante
+// infinito. Todo exacto: dividir y multiplicar por una potencia de dos no
+// redondea.
+// El exponente sale de los bits del double (sin Math.log2: diez veces más rápido).
+const R16_F = new Float64Array(1), R16_U = new Uint32Array(R16_F.buffer), R16_ALTO = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1 ? 1 : 0;
+const R16_Q = Array.from({ length: 41 }, (_, k) => 2 ** Math.max(k - 25 - 10, -24));   // el cuanto para el exponente k − 25
+function redondear16(x) {
+  if (x !== x || x === 0) return x;
+  R16_F[0] = x;
+  const E = ((R16_U[R16_ALTO] >>> 20) & 0x7ff) - 1023;
+  if (E >= 16) return x > 0 ? Infinity : -Infinity;      // 65536 o más (o infinito)
+  if (E < -25) return x > 0 ? 0 : -0;                    // por debajo de 2^-25: a cero
+  const a = x < 0 ? -x : x;
+  if (a >= 65520) return x > 0 ? Infinity : -Infinity;
+  const q = R16_Q[E + 25];
+  const y = a / q;
+  let r = Math.floor(y);
+  const f = y - r;
+  if (f > 0.5 || (f === 0.5 && r % 2 === 1)) r += 1;
+  const v = r * q;
+  return x < 0 ? -v : v;
+}
+// Los 16 bits IEEE de un half (x ya redondeado con redondear16) y al revés: para
+// los archivos binarios, que llevan los 2 bytes de verdad (float16 de NumPy).
+function bitsDe16(x) {
+  if (x !== x) return 0x7e00;
+  const sg = (x < 0 || Object.is(x, -0)) ? 0x8000 : 0, a = Math.abs(x);
+  if (a === Infinity) return sg | 0x7c00;
+  if (a === 0) return sg;
+  if (a < 6.103515625e-05) return sg | Math.round(a / 5.960464477539063e-08);
+  let e = Math.floor(Math.log2(a));
+  if (2 ** e > a) e--; else if (2 ** (e + 1) <= a) e++;
+  return sg | ((e + 15) << 10) | Math.round((a / 2 ** e - 1) * 1024);
+}
+function deBits16(h) {
+  const sg = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, m = h & 1023;
+  if (e === 0) return sg * m * 5.960464477539063e-08;
+  if (e === 31) return m ? NaN : sg * Infinity;
+  return sg * (1 + m / 1024) * 2 ** (e - 15);
+}
+// Lo que se guarda en un arreglo de ese tipo (real32 lo redondea Float32Array solo).
+const guardable = (tipo, x) => (tipo === 'i64' || tipo === 'u64') ? aBig64(x)
+  : typeof x === 'bigint' ? deBigA(tipo, x)
+  : (x && x.clase === 'grande') ? guardable(tipo, ENT_INFO[tipo] ? aBig64(x) : Number(x.m) * Math.pow(10, x.e))
+  : (tipo === 'real16' ? redondear16(x) : x);
+// un BigInt (de un i64/u64) guardado en otro tipo: a un entero, sus bits de abajo
+// (como el «(int8_t)» de C); a coma flotante, el real más cercano
+function deBigA(tipo, x) {
+  if (ENT_INFO[tipo]) return Number(BigInt.asUintN(32, x));      // el arreglo envuelve el resto
+  if (tipo === 'bool') return x !== 0n ? 1 : 0;
+  return tipo === 'real16' ? redondear16(Number(x)) : Number(x);
+}
+// (motor-exp N4.5) un número (o un grande exacto) a BigInt para un i64/u64:
+// se trunca como al guardar en cualquier entero; infinito o NaN no caben
+function aBig64(x) {
+  if (typeof x === 'bigint') return x;
+  if (x && x.clase === 'grande') {
+    if (x.e >= 0) return x.m * (10n ** BigInt(x.e));
+    return x.m / (10n ** BigInt(-x.e));
+  }
+  if (!Number.isFinite(x)) throw new ErrorTiempoEjecucion(`${x} no cabe en un entero de 64 bits`);
+  return BigInt(Math.trunc(x));
+}
+// y al revés: lo que se lee de un i64/u64 es un número si cabe exacto, y si no un grande exacto
+function deBig64(v) {
+  if (typeof v !== 'bigint') return v;
+  if (v >= -9007199254740992n && v <= 9007199254740992n) return Number(v);
+  return new ObjGrande(v, 0, Math.max(50, grCifras(v)), true);
+}
+// Los dígitos más cortos que vuelven al mismo número EN ESE TIPO: un real32 con
+// 0.1 dentro se imprime «0.1» y no «0.100000001490116», como en NumPy.
+function cortoFlot(x, tipo) {
+  if (!Number.isFinite(x) || Number.isInteger(x)) return x;
+  const r = tipo === 'real16' ? redondear16 : Math.fround, hasta = tipo === 'real16' ? 5 : 9;
+  for (let p = 1; p <= hasta; p++) { const v = Number(x.toPrecision(p)); if (r(v) === x) return v; }
+  return x;
+}
 
 function zancadasDe(forma) {
   const z = new Array(forma.length);
@@ -2744,7 +2978,7 @@ class ObjNativa {
 
 const esObj = v => v !== null && typeof v === 'object';
 
-// ── (4.1) corrutinas ────────────────────────────────────────────────
+// ── (motor-exp) corrutinas ────────────────────────────────────────────────
 // Un generador o una función asíncrona en pausa. Mientras está en pausa, su
 // trozo de pila y sus marcos viven aquí, con posiciones relativas; al
 // reanudarla se copian encima de la pila de la VM y se sigue donde se quedó.
@@ -2772,7 +3006,7 @@ class ObjLongitudGen {
   constructor(vm, g) { this.vm = vm; this.g = g; }
   valueOf() { return this.vm.genAvanzar(this.g) ? Infinity : -Infinity; }
 }
-// (4.1, fase S1) Lo que viene de C y no es un número ni un texto: un
+// (motor-exp, fase S1) Lo que viene de C y no es un número ni un texto: un
 // puntero, un bloque de memoria o una retrollamada registrada. Ñ no puede
 // hacer cuentas con ellos —no hay aritmética de punteros por accidente—, solo
 // guardarlos, compararlos y devolvérselos al mismo C.
@@ -2793,7 +3027,7 @@ class ObjOpaco {
 }
 // La señal que devuelve el bucle de despacho cuando una corrutina se pausa.
 const SUSPENDIDO = { suspendido: true };
-// (4.1) El valor que recibe un parámetro con defecto cuando no llega. Es
+// (motor-exp) El valor que recibe un parámetro con defecto cuando no llega. Es
 // único y el programa no lo puede escribir (su global es « faltante»).
 const FALTANTE = new ObjNativa(' faltante', 0, () => null, '');
 const aridadTexto = fn => (fn.minimos !== undefined && fn.minimos < fn.aridad ? `entre ${fn.minimos} y ${fn.aridad}` : String(fn.aridad));
@@ -2820,6 +3054,24 @@ const aridadTexto = fn => (fn.minimos !== undefined && fn.minimos < fn.aridad ? 
 // «switch» dentro del bucle, V8 no puede especializar la operación y se queda a
 // la mitad de velocidad. Son seis líneas repetidas seis veces, y se midió que
 // vale la pena.
+// (motor-exp N1) Una copia de aplicarOp/aplicarOpEsc por cada combinación de
+// tipos (Float64Array o Int32Array en el destino y en los operandos). Con una
+// sola función, V8 ve los dos tipos en el mismo bucle y lo compila genérico:
+// la mitad de rápido (5,2 ms contra 2,6 por millón, medido). Cada copia es una
+// función nueva con su propia información de tipos. Si el entorno no deja
+// compilar en caliente (CSP), se usa la de siempre.
+const _copiasOp = new Map();
+function opMonomorfa(fn, d, x, y) {
+  if (!jitPermitido()) return fn;
+  const t = v => (v instanceof Float64Array ? 'F' : v instanceof Int32Array ? 'I' : 'O');
+  const clave = fn.name + t(d) + t(x) + (y && typeof y === 'object' ? t(y) : 'n');
+  let f = _copiasOp.get(clave);
+  if (!f) {
+    try { f = new Function('unaOp', 'return ' + fn.toString())(unaOp); } catch (e) { f = fn; }
+    _copiasOp.set(clave, f);
+  }
+  return f;
+}
 function aplicarOp(d, x, y, n, op, vm) {
   switch (op) {
     case '+': for (let i = 0; i < n; i++) d[i] = x[i] + y[i]; return;
@@ -2937,7 +3189,8 @@ function reprArreglo(v, prof) {
     }
     const x = v.datos[p];
     if (v.tipo === 'bool') return x ? 'cierto' : 'falso';
-    return v.tipo === 'entero' ? String(x) : repr(x, 1);
+    if (v.tipo === 'real32' || v.tipo === 'real16') return repr(cortoFlot(x, v.tipo), 1);
+    return v.tipo === 'entero' || esEntMaq(v.tipo) ? String(x) : repr(x, 1);
   };
   const BORDE = 3, MAX = 1000;
   // Recursivo por ejes, que es lo que hace que una matriz se lea como una
@@ -2990,7 +3243,7 @@ function repr(v, prof) {
     return '[' + v.items.map(x => repr(x, prof + 1)).join(', ') + ']';
   }
   if (v instanceof ObjDic && v.tipoReg) {
-    // (4.1) Un registro se imprime con su tipo: Punto{x: 1, y: 2}.
+    // (motor-exp) Un registro se imprime con su tipo: Punto{x: 1, y: 2}.
     if (prof > 4) return v.tipoReg.nombre + '{…}';
     return v.tipoReg.nombre + '{' + [...v.mapa].map(([k, x]) => `${k}: ${repr(x, prof + 1)}`).join(', ') + '}';
   }
@@ -3010,6 +3263,7 @@ function repr(v, prof) {
   if (v instanceof ObjTabla)
     return `<tabla ${v.filas}×${v.cols.length}: ${v.cols.map(c => c.nombre).join(', ')}>`;
   if (v instanceof ObjArreglo) return reprArreglo(v, prof);
+  if (v instanceof ObjGrande) return grATexto(v);
   if (v instanceof ObjNodo) {
     if (v.forma === 'texto') return `<nodo texto ${JSON.stringify(String(v.valor).slice(0, 24))}>`;
     if (v.forma === 'elemento') return `<nodo ${v.etiqueta}${v.hijos.length ? ' · ' + v.hijos.length + ' hijo' + (v.hijos.length > 1 ? 's' : '') : ''}>`;
@@ -3045,13 +3299,15 @@ function tipoDe(v) {
   if (v instanceof ObjFecha) return 'fecha';
   if (v instanceof ObjTabla) return 'tabla';
   if (v instanceof ObjArreglo) return 'arreglo';
+  if (v instanceof ObjGrande) return 'grande';
   if (v instanceof ObjGenerador) return v.clase;
   if (v instanceof ObjPromesa) return 'promesa';
   if (v instanceof ObjOpaco) return v.clase;
   return 'funcion';
 }
 const verdad = v => !(v === null || v === undefined || v === false || v === 0 || v === '' ||
-                      (v instanceof ObjLista && v.items.length === 0));
+                      (v instanceof ObjLista && v.items.length === 0) ||
+                      (v instanceof ObjGrande && v.m === 0n));
 // Compara en profundidad. El tercer parámetro lleva los pares que ya se están
 // comparando más arriba en la recursión: sin él, dos listas que se contienen a
 // sí mismas hacen que la recursión no termine nunca.
@@ -3065,6 +3321,8 @@ function iguales(a, b, enCurso) {
   // el mismo instante son iguales, como dos listas con los mismos elementos.
   if (a instanceof ObjFecha || b instanceof ObjFecha)
     return a instanceof ObjFecha && b instanceof ObjFecha && a.ms === b.ms;
+  // (motor-exp N1) un grande es igual a otro grande o a un número del mismo valor
+  if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeIgual(a, b);
   if (a instanceof ObjArreglo || b instanceof ObjArreglo) {
     if (!(a instanceof ObjArreglo) || !(b instanceof ObjArreglo)) return false;
     if (a.forma.length !== b.forma.length) return false;
@@ -3086,7 +3344,7 @@ function iguales(a, b, enCurso) {
     }
     return true;
   }
-  // (4.1) Dos registros de tipos distintos no son iguales aunque
+  // (motor-exp) Dos registros de tipos distintos no son iguales aunque
   // tengan los mismos campos; un registro tampoco es igual a un diccionario.
   if (a instanceof ObjDic && b instanceof ObjDic && (a.tipoReg || null) !== (b.tipoReg || null)) return false;
   const dosListas = a instanceof ObjLista && b instanceof ObjLista;
@@ -3164,7 +3422,7 @@ class VM {
     this.stack = new Array(65536);
     this.sp = 0;
     this.frames = [];
-    this.pausa = null;         // (4.1) una corrutina pidió pausarse
+    this.pausa = null;         // (motor-exp) una corrutina pidió pausarse
     this.corrutinas = [];      // las que están corriendo ahora, la de dentro al final
     this.globals = new Map();
     this.upAbiertas = [];
@@ -3382,7 +3640,7 @@ class VM {
       if (o.marca) { o.marca = false; nuevo.push(o); vivos++; }
       else {
         this.stats.liberados++;
-        // (4.1, S2) Un leerLineas que nadie terminó de recorrer (se cortó
+        // (motor-exp, S2) Un leerLineas que nadie terminó de recorrer (se cortó
         // con «romper») cierra aquí su archivo, cuando ya no lo ve nadie.
         if (o instanceof ObjGenerador && o.alAcabar && o.estado !== 'terminado') { o.estado = 'terminado'; try { o.alAcabar(); } catch (_) {} }
       }
@@ -3466,7 +3724,7 @@ class VM {
         return;
       }
       if (fn.aridad !== nArgs) {
-        // (4.1) Los que faltan y tienen valor por defecto llegan como
+        // (motor-exp) Los que faltan y tienen valor por defecto llegan como
         // « faltante»; la propia función pone el defecto al empezar.
         if (fn.minimos !== undefined && nArgs >= fn.minimos && nArgs < fn.aridad) {
           while (nArgs < fn.aridad) { this.empujar(FALTANTE); nArgs++; }
@@ -3566,10 +3824,10 @@ class VM {
     let r;
     try { r = this.correr(framesGuardados); }
     catch (e) {
-      // (4.1) Un «lanzar» que nadie capturó dentro de la función llamada
+      // (motor-exp) Un «lanzar» que nadie capturó dentro de la función llamada
       // desde una nativa (mapear, filtrar, una retrollamada de C) sigue hacia
       // fuera: el «intentar» que rodea a la nativa todavía puede capturarlo.
-      // En la 4.0 se quedaba «fatal» y no lo capturaba nadie.
+      // En el LTS se quedaba «fatal» y no lo capturaba nadie.
       if (e instanceof ErrorTiempoEjecucion && e.valorLanzado !== undefined) e.fatal = false;
       this.frames.length = framesGuardados;
       this.sp = spGuardado;
@@ -3717,6 +3975,7 @@ class VM {
         case 20 /*NEG*/: {
           const a = this.sacar();
           if (a instanceof ObjArreglo) { this.empujar(this.arrArit(a, -1, '*')); break; }
+          if (a instanceof ObjGrande) { this.empujar(grNeg(a)); break; }
           if (typeof a !== 'number') this.error(`«-» necesita un número y recibió ${tipoDe(a)}`);
           this.empujar(-a); break;
         }
@@ -3724,10 +3983,10 @@ class VM {
 
         case 22 /*EQ*/: { const b = this.sacar(), a = this.sacar(); this.empujar(iguales(a, b)); break; }
         case 23 /*NEQ*/: { const b = this.sacar(), a = this.sacar(); this.empujar(!iguales(a, b)); break; }
-        case 24 /*LT*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '<'); this.empujar(a < b); break; }
-        case 25 /*LE*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '<='); this.empujar(a <= b); break; }
-        case 26 /*GT*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '>'); this.empujar(a > b); break; }
-        case 27 /*GE*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '>='); this.empujar(a >= b); break; }
+        case 24 /*LT*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '<') ? grandeCmp(this, a, b, '<') < 0 : a < b); break; }
+        case 25 /*LE*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '<=') ? grandeCmp(this, a, b, '<=') <= 0 : a <= b); break; }
+        case 26 /*GT*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '>') ? grandeCmp(this, a, b, '>') > 0 : a > b); break; }
+        case 27 /*GE*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '>=') ? grandeCmp(this, a, b, '>=') >= 0 : a >= b); break; }
 
         case 28 /*JMP*/: f.ip += code[f.ip] + 1; break;
         case 29 /*JMP_FALSE*/: { const off = code[f.ip++]; if (!verdad(this.mirar(0))) f.ip += off; break; }
@@ -3737,7 +3996,7 @@ class VM {
         case 32 /*CALL*/: {
           const n = code[f.ip++];
           this.llamarValor(this.stack[this.sp - n - 1], n);
-          // (4.1) « producir» o « esperar» pidieron pausar la corrutina.
+          // (motor-exp) « producir» o « esperar» pidieron pausar la corrutina.
           if (this.pausa !== null) return SUSPENDIDO;
           recargar(); break;
         }
@@ -3803,7 +4062,7 @@ class VM {
             v instanceof ObjError ? v.mensaje : `error sin capturar: ${repr(v, 1)}`);
           e.fatal = true;            // ya se desenrolló; no volver a buscarle sitio
           e.linea = this.lineaActual;
-          e.valorLanzado = v;        // (4.1) por si cruza el borde de una corrutina
+          e.valorLanzado = v;        // (motor-exp) por si cruza el borde de una corrutina
           throw e;
         }
 
@@ -3822,6 +4081,9 @@ class VM {
   // alguno es otra cosa. Así añadir arreglos no cuesta un microsegundo en el
   // 99% de los programas, que no los usan.
   aritOtro(a, b, op) {
+    // (motor-exp N4.5) un grande entero con un arreglo i64/u64: la cuenta exacta del arreglo
+    if ((a instanceof ObjArreglo && b instanceof ObjGrande) || (b instanceof ObjArreglo && a instanceof ObjGrande)) return this.arrArit(a, b, op);
+    if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeArit(this, a, b, op);
     if (a instanceof ObjArreglo || b instanceof ObjArreglo) return this.arrArit(a, b, op);
     if (op === '+') return this.sumar(a, b);
     this.error(`«${op}» necesita dos números y recibió ${tipoDe(a)} y ${tipoDe(b)}`);
@@ -3832,6 +4094,17 @@ class VM {
   // de «mapear(lista, fn(x) { … })», donde cada elemento paga una llamada.
   arrArit(a, b, op) {
     const esA = a instanceof ObjArreglo, esB = b instanceof ObjArreglo;
+    // (motor-exp N4.5) un grande suelto con un i64/u64: tiene que ser un entero exacto
+    if ((esA && b instanceof ObjGrande) || (esB && a instanceof ObjGrande)) {
+      const x = esA ? a : b, g = esA ? b : a;
+      if (!esBig(x.tipo))
+        this.error(`«${op}»: un grande se opera con arreglos i64 o u64, y este es ${x.tipo}`, 'pásalo a número con aNumero(g), o el arreglo a "i64"');
+      const v = aBig64(g);
+      if (!g.exacto || (g.e < 0 && v * (10n ** BigInt(-g.e)) !== g.m))
+        this.error(`«${op}»: con un arreglo ${x.tipo} el grande tiene que ser un entero exacto`);
+      if (op === '/' || op === '**') this.error(`«${op}» de un arreglo ${x.tipo} con un grande todavía no`, 'pásalos a real con aTipo(a, "real")');
+      return this.arrAritEnt(esA ? a : v, esA ? v : b, op, esA, esB, x.tipo);
+    }
     if (esA && !esB && typeof b !== 'number')
       this.error(`«${op}»: un arreglo se opera con otro arreglo o con un número, y llegó ${tipoDe(b)}`);
     if (esB && !esA && typeof a !== 'number')
@@ -3843,10 +4116,125 @@ class VM {
 
     // El tipo del resultado: entero solo si los dos lo son y la operación lo
     // conserva. Dividir siempre da real, como en el resto del lenguaje.
+    // (motor-exp N4.2) real32 y real16 se conservan: ver «tipoAritmetico».
     const tA = esA ? a.tipo : (Number.isInteger(a) ? 'entero' : 'real');
     const tB = esB ? b.tipo : (Number.isInteger(b) ? 'entero' : 'real');
-    const entero = tA === 'entero' && tB === 'entero' && op !== '/' && op !== '**';
-    const tipo = entero ? 'entero' : 'real';
+    const tipo = tipoAritmetico(tA, tB, op, esA, esB);
+    const entero = tipo === 'entero';
+    // (motor-exp N4.5) un resultado real con un i64/u64 dentro: se pasa a real antes
+    if (!esEntMaq(tipo) && ((esA && esBig(a.tipo)) || (esB && esBig(b.tipo)))) {
+      const aR = esA && esBig(a.tipo) ? this.arrAReal(a) : a, bR = esB && esBig(b.tipo) ? this.arrAReal(b) : b;
+      const out = this.arrAritR(aR, bR, op, esA, esB, tipo);
+      if (tipo === 'real16') this.arrRedondear(out);
+      return out;
+    }
+    // (motor-exp N2) grande y con C1EÑ: por los núcleos de NEÑ (GPU si la hay)
+    if (!entero && !esEntMaq(tipo) && this.nenArit) { const r = this.nenArit(a, b, op, tipo); if (r) return r; }
+    // (motor-exp N4.5) los enteros (de máquina y «entero») van por su camino exacto
+    // («entero» sigue por el camino de siempre, que es el rápido; los de hasta 16
+    // bits también, porque en un double sus cuentas son exactas; el «*» de 32 bits
+    // y todo lo de 64 necesitan el camino exacto)
+    if (tipo === 'entero' && op === '*') return this.arrAritEnt(a, b, op, esA, esB, tipo);
+    if (esEntMaq(tipo) && tipo !== 'entero') {
+      if (esBig(tipo) || (op === '*' && ENT_INFO[tipo][0] === 32) ||
+        (esA && esBig(a.tipo)) || (esB && esBig(b.tipo))) return this.arrAritEnt(a, b, op, esA, esB, tipo);
+      if (!esA && !Number.isInteger(a)) this.error(`«${op}»: un arreglo ${tipo} se opera con enteros y llegó ${a}`);
+      if (!esB && !Number.isInteger(b)) this.error(`«${op}»: un arreglo ${tipo} se opera con enteros y llegó ${b}`);
+      return this.arrAritR(a, b, op, esA, esB, tipo);
+    }
+    const out = this.arrAritR(a, b, op, esA, esB, tipo);
+    if (tipo === 'real16') this.arrRedondear(out);
+    return out;
+  }
+  // (motor-exp N4.5) un i64/u64 como real (exacto hasta 2^53)
+  arrAReal(x) {
+    const o = this.arrNuevo(x.forma, 'real'), d = o.datos; let i = 0;
+    for (const p of x.posiciones()) d[i++] = Number(x.datos[p]);
+    this.cobrar(x.tamano);
+    return o;
+  }
+  // (motor-exp N4.5) Aritmética de enteros, EXACTA y con el envoltorio del tipo:
+  // hasta 32 bits con números (el producto de 32 con Math.imul, que da los 32
+  // bits de abajo exactos), los de 64 con BigInt. // y % redondean hacia abajo,
+  // como siempre en Ñ.
+  arrAritEnt(a, b, op, esA, esB, tipo) {
+    const f = esA && esB ? difundir(a.forma, b.forma) : (esA ? a.forma.slice() : b.forma.slice());
+    if (f === null)
+      this.error(`«${op}»: las formas ${a.forma.join('×')} y ${b.forma.join('×')} no se pueden difundir`,
+        'de derecha a izquierda, cada par de ejes tiene que ser igual o uno de los dos ser 1');
+    if (!esA && typeof a !== 'bigint' && !Number.isInteger(a)) this.error(`«${op}»: un arreglo ${tipo} se opera con enteros y llegó ${a}`);
+    if (!esB && typeof b !== 'bigint' && !Number.isInteger(b)) this.error(`«${op}»: un arreglo ${tipo} se opera con enteros y llegó ${b}`);
+    const out = this.arrNuevo(f, tipo);
+    const n = out.tamano, d = out.datos, [bits] = ENT_INFO[tipo];
+    this.cobrar(n);
+    // el camino rápido del «*» de 32 bits (Math.imul da los 32 bits de abajo exactos)
+    if (bits === 32 && op === '*' && !(esA && esBig(a.tipo)) && !(esB && esBig(b.tipo))) {
+      if (esA && esB && a.seguida && b.seguida && a.tamano === n && b.tamano === n) {
+        const x = a.datos, y = b.datos, oa = a.desp || 0, ob = b.desp || 0;
+        for (let i = 0; i < n; i++) d[i] = Math.imul(x[oa + i], y[ob + i]);
+        return out;
+      }
+      if (esA !== esB && (esA ? a : b).seguida) {
+        const v = esA ? a : b, x = v.datos, o = v.desp || 0, k = Number(esA ? b : a);
+        for (let i = 0; i < n; i++) d[i] = Math.imul(x[o + i], k);
+        return out;
+      }
+    }
+    const za = esA ? zancadasDifundidas(a, f) : null, zb = esB ? zancadasDifundidas(b, f) : null;
+    const nd = f.length, ix = new Array(nd).fill(0);
+    const big = bits === 64;
+    const sa = !esA ? (big ? BigInt(a) : a) : 0, sb = !esB ? (big ? BigInt(b) : b) : 0;
+    for (let k = 0; k < n; k++) {
+      let pa = esA ? a.desp : 0, pb = esB ? b.desp : 0;
+      for (let q = 0; q < nd; q++) { if (esA) pa += ix[q] * za[q]; if (esB) pb += ix[q] * zb[q]; }
+      let x = esA ? a.datos[pa] : sa, y = esB ? b.datos[pb] : sb;
+      if (big) {
+        if (typeof x !== 'bigint') x = BigInt(x);
+        if (typeof y !== 'bigint') y = BigInt(y);
+        let r;
+        switch (op) {
+          case '+': r = x + y; break;
+          case '-': r = x - y; break;
+          case '*': r = x * y; break;
+          case '//': case '%': {
+            if (y === 0n) this.error(op === '//' ? 'división entre cero' : 'módulo entre cero');
+            let q = x / y;
+            if ((x % y !== 0n) && ((x < 0n) !== (y < 0n))) q -= 1n;
+            r = op === '//' ? q : x - q * y;
+            break;
+          }
+          default: this.error(`«${op}» no se puede aplicar a un arreglo ${tipo}`);
+        }
+        d[k] = r;                                   // BigInt64Array y BigUint64Array envuelven a 64 bits
+      } else {
+        if (typeof x === 'bigint') x = Number(x);
+        if (typeof y === 'bigint') y = Number(y);
+        let r;
+        switch (op) {
+          case '+': r = x + y; break;
+          case '-': r = x - y; break;
+          case '*': r = bits === 32 ? Math.imul(x, y) : x * y; break;
+          case '//': if (y === 0) this.error('división entre cero'); r = Math.floor(x / y); break;
+          case '%': if (y === 0) this.error('módulo entre cero'); r = x - y * Math.floor(x / y); break;
+          default: this.error(`«${op}» no se puede aplicar a un arreglo ${tipo}`);
+        }
+        d[k] = r;                                   // el arreglo del tipo lo envuelve al guardar
+      }
+      for (let q = nd - 1; q >= 0; q--) { if (++ix[q] < f[q]) break; ix[q] = 0; }
+    }
+    return out;
+  }
+  // (motor-exp N4.2) Un arreglo real16 vive en un Float32Array: tras escribir
+  // en él se redondea cada número a 16 bits. Es lo que hace que «guardar»
+  // signifique lo mismo que en un half de verdad.
+  arrRedondear(o) {
+    if (o.tipo !== 'real16') return o;
+    const d = o.datos;   // «datos» y no «_d»: si estaba en la GPU, baja primero
+    for (let i = 0; i < d.length; i++) d[i] = redondear16(d[i]);
+    return o;
+  }
+  tipoFlotante(t) { return t === 'real32' || t === 'real16' ? t : 'real'; }
+  arrAritR(a, b, op, esA, esB, tipo) {
 
     const f = esA && esB ? difundir(a.forma, b.forma) : (esA ? a.forma.slice() : b.forma.slice());
     if (f === null)
@@ -3865,11 +4253,11 @@ class VM {
       a.forma.length === b.forma.length && a.forma.every((x, i) => x === b.forma[i]);
     if (mismaForma) {
       const x = a.datos, y = b.datos;
-      aplicarOp(d, x, y, n, op, this);
+      opMonomorfa(aplicarOp, d, x, y)(d, x, y, n, op, this);
       return out;
     }
-    if (esA && !esB && a.seguida) { aplicarOpEsc(d, a.datos, b, n, op, false, this); return out; }
-    if (esB && !esA && b.seguida) { aplicarOpEsc(d, b.datos, a, n, op, true, this); return out; }
+    if (esA && !esB && a.seguida) { const x = a.datos; opMonomorfa(aplicarOpEsc, d, x, null)(d, x, b, n, op, false, this); return out; }
+    if (esB && !esA && b.seguida) { const x = b.datos; opMonomorfa(aplicarOpEsc, d, x, null)(d, x, a, n, op, true, this); return out; }
 
     // El camino general: vistas, transpuestas y difusión de verdad. Recorre por
     // zancadas, que es lo único que vale para cualquier forma.
@@ -3959,6 +4347,11 @@ class VM {
   // no haya podido romper en silencio ninguna de las ciento cincuenta funciones
   // que ya había: ninguna lo acepta hasta que se la enseña a propósito.
   nadaDeComplejos(x, f) {
+    // (motor-exp N4.5) los de 64 bits van por las funciones que los conocen (aritmética,
+    // comparar, aTipo, bits, suma, aListaA, a[i], archivos); el resto, después de aTipo
+    if (x instanceof ObjArreglo && (x.tipo === 'i64' || x.tipo === 'u64'))
+      this.error(f ? `«${f}» todavía no trabaja con arreglos ${x.tipo}` : `esta operación todavía no trabaja con arreglos ${x.tipo}`,
+        'pásalo antes con aTipo(a, "real") —exacto hasta 2^53— o a un entero más pequeño');
     if (x instanceof ObjArreglo && x.tipo === 'complejo')
       this.error(f ? `«${f}» todavía no sabe trabajar con arreglos complejos`
                    : 'esta operación todavía no sabe trabajar con arreglos complejos',
@@ -3974,13 +4367,15 @@ class VM {
   // «seno(x)» en «seno(arreglo)» sin escribir nada nuevo.
   arrUnaria(x, fn, tipo) {
     this.nadaDeComplejos(x, null);
+    // (motor-exp N4.2) un resultado real de un real32 (o real16) se queda en su tipo
+    if (tipo === 'real') tipo = this.tipoFlotante(x.tipo);
     const out = this.arrNuevo(x.forma, tipo || (x.tipo === 'bool' ? 'real' : x.tipo));
     const d = out.datos, n = out.tamano;
     this.cobrar(n);
-    if (x.seguida) { const s = x.datos; for (let i = 0; i < n; i++) d[i] = fn(s[i]); return out; }
+    if (x.seguida) { const s = x.datos; for (let i = 0; i < n; i++) d[i] = fn(s[i]); return this.arrRedondear(out); }
     let i = 0;
     for (const p of x.posiciones()) d[i++] = fn(x.datos[p]);
-    return out;
+    return this.arrRedondear(out);
   }
 
   // Comparar elemento a elemento da un arreglo de «bool», que es la mitad del
@@ -4027,8 +4422,14 @@ class VM {
     const out = this.arrNuevo(f, 'bool');
     const d = out.datos, n = out.tamano;
     this.cobrar(n);
-    const cmp = CMP_ARR[op];
+    let cmp = CMP_ARR[op];
     if (!cmp) this.error(`«${op}» no es una comparación`);
+    // (motor-exp N4.5) un i64/u64 guarda BigInt: «<» entre BigInt y número ya es
+    // exacto en JavaScript; la igualdad necesita la suelta (1n == 1)
+    if ((esA && esBig(a.tipo)) || (esB && esBig(b.tipo))) {
+      // eslint-disable-next-line eqeqeq
+      if (op === '==') cmp = (x, y) => x == y; else if (op === '!=') cmp = (x, y) => x != y;
+    }
     if (esA && esB && a.seguida && b.seguida && a.tamano === n && b.tamano === n) {
       const x = a.datos, y = b.datos;
       for (let i = 0; i < n; i++) d[i] = cmp(x[i], y[i]) ? 1 : 0;
@@ -4060,10 +4461,22 @@ class VM {
   // puente que usan las reducciones que ya existían para listas.
   arrValores(x) {
     this.nadaDeComplejos(x, null);
-    const out = new Array(x.tamano);
-    let i = 0;
-    for (const p of x.posiciones()) out[i++] = x.datos[p];
-    this.cobrar(x.tamano);
+    const n = x.tamano, out = new Array(n), d = x.datos;
+    this.cobrar(n);
+    if (n === 0) return out;
+    // (motor-exp N1) seguido: un bucle; si no, un odómetro sobre las zancadas.
+    // El generador «posiciones» costaba 40 ns por número: suma() de un millón
+    // tardaba 43 ms.
+    if (x.seguida) { const o = x.desp || 0; for (let i = 0; i < n; i++) out[i] = d[o + i]; return out; }
+    const f = x.forma, z = x.zancadas, nd = f.length, ix = new Array(nd).fill(0);
+    let p = x.desp;
+    for (let k = 0; k < n; k++) {
+      out[k] = d[p];
+      for (let q = nd - 1; q >= 0; q--) {
+        if (++ix[q] < f[q]) { p += z[q]; break; }
+        p -= (f[q] - 1) * z[q]; ix[q] = 0;
+      }
+    }
     return out;
   }
 
@@ -4116,6 +4529,8 @@ class VM {
     if (typeof a === 'string' && typeof b === 'string') return a + b;
     if (a instanceof ObjLista && b instanceof ObjLista) return this.nuevaLista(a.items.concat(b.items));
     if (a instanceof ObjArreglo || b instanceof ObjArreglo) return this.arrArit(a, b, '+');
+    if ((a instanceof ObjArreglo && b instanceof ObjGrande) || (b instanceof ObjArreglo && a instanceof ObjGrande)) return this.arrArit(a, b, '+');
+    if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeArit(this, a, b, '+');
     if (typeof a === 'string' || typeof b === 'string')
       this.error(`no se puede sumar ${tipoDe(a)} y ${tipoDe(b)}`,
         `convierte con texto(...): por ejemplo "total: " + texto(${repr(typeof a === 'string' ? b : a, 1)})`);
@@ -4125,7 +4540,14 @@ class VM {
     if (typeof a !== 'number' || typeof b !== 'number')
       this.error(`«${op}» necesita dos números y recibió ${tipoDe(a)} y ${tipoDe(b)}`);
   }
+  // Devuelve cierto si es una comparación con un grande (la hace quien llama con
+  // grandeCmp); si no, valida y devuelve falso, y la hace JavaScript.
   cmp(a, b, op) {
+    if (a instanceof ObjGrande || b instanceof ObjGrande) {
+      const ok = x => x instanceof ObjGrande || typeof x === 'number';
+      if (!ok(a) || !ok(b)) this.error(`no se pueden comparar ${tipoDe(a)} y ${tipoDe(b)} con «${op}»`);
+      return true;
+    }
     // Dos fechas sí: es la razón de que «fecha» sea un tipo y no un texto ni un
     // número. Una fecha con un número NO, aunque por dentro sea un número:
     // dejarlo pasar es justo el error que el tipo viene a quitar.
@@ -4157,7 +4579,7 @@ class VM {
     }
     this.error(`no se puede recorrer ni medir un valor de tipo ${tipoDe(o)}`);
   }
-  // ── (4.1) corrutinas ──────────────────────────────────────────────
+  // ── (motor-exp) corrutinas ──────────────────────────────────────────────
   nuevaCorrutina(cierre, args) {
     const asinc = cierre.fn.corrutina === 'asincrona';
     const g = this.registrar(new ObjGenerador(cierre, args, asinc));
@@ -4173,7 +4595,7 @@ class VM {
   // termine con un error en vez de con un valor (una promesa que falló).
   reanudar(g, enviado, lanzar) {
     if (g.estado === 'terminado') return { fin: true, valor: null };
-    // (4.1, S2) Un generador hecho en la biblioteca (leerLineas): no hay
+    // (motor-exp, S2) Un generador hecho en la biblioteca (leerLineas): no hay
     // pila que guardar, solo una función que da el siguiente valor.
     if (g.nativo) {
       const x = g.nativo();
@@ -4274,13 +4696,13 @@ class VM {
     for (const f of cola) f(ok, valor);
   }
 
-  // (4.1) «p.distancia» sin llamar: una función que ya lleva su «yo».
+  // (motor-exp) «p.distancia» sin llamar: una función que ya lleva su «yo».
   // Se crea al pedirla; «p.distancia(q)» la crea y la llama en el acto.
   metodoAtado(o, nombre, m) {
     const ar = m instanceof ObjCierre ? m.fn.aridad - 1 : -1;
     return new ObjNativa(o.tipoReg.nombre + '.' + nombre, ar, (args, vm) => vm.invocar(m, [o, ...args]));
   }
-  // ── a[i] sobre un arreglo (4.1) ──────────────────────────────────
+  // ── a[i] sobre un arreglo (motor-exp) ──────────────────────────────────
   // Hasta ahora un arreglo solo se leía con elemento(a, i, j) y se escribía con
   // ponerElemento(a, i, j, v). a[i] hace lo mismo con la sintaxis de una lista:
   //   · 1 dimensión  → el número de esa posición (lo mismo que elemento)
@@ -4310,7 +4732,7 @@ class VM {
     if (o instanceof ObjGenerador) return o.actual;
     if (o instanceof ObjArreglo) {
       const k = this.arrIndice(o, i);
-      if (o.forma.length === 1) return o.datos[o.desp + k * o.zancadas[0]];
+      if (o.forma.length === 1) return deBig64(o.datos[o.desp + k * o.zancadas[0]]);
       return this.arrFila(o, k);
     }
     if (o instanceof ObjError) {
@@ -4332,7 +4754,7 @@ class VM {
       return o[k];
     }
     if (o instanceof ObjDic && o.tipoReg) {
-      // (4.1) Un registro: un campo, o un método ya atado a este registro.
+      // (motor-exp) Un registro: un campo, o un método ya atado a este registro.
       if (o.mapa.has(i)) return o.mapa.get(i);
       const m = o.tipoReg.metodos.get(i);
       if (m) return this.metodoAtado(o, i, m);
@@ -4353,8 +4775,9 @@ class VM {
         this.error(`a[${i}] = … solo vale en un arreglo de 1 dimensión y este tiene ${o.forma.length}`,
           'baja hasta el número: a[i][j] = v');
       // Mismo control que ponerElemento: en un arreglo solo entran números.
-      const x = (typeof v === 'boolean' && o.tipo === 'bool') ? (v ? 1 : 0) : this.exigeNum(v, 2, 'a[i] =');
-      o.datos[o.desp + k * o.zancadas[0]] = x;
+      const x = (typeof v === 'boolean' && o.tipo === 'bool') ? (v ? 1 : 0)
+        : (esBig(o.tipo) && v instanceof ObjGrande) ? v : this.exigeNum(v, 2, 'a[i] =');
+      o.datos[o.desp + k * o.zancadas[0]] = guardable(o.tipo, x);
       return;
     }
     if (o instanceof ObjLista) {
@@ -4402,7 +4825,7 @@ class VM {
       // eslint-disable-next-line no-new-func
       const cie = (typeof gen === 'string' ? null : gen.cierres) || [];
       // «LI» es la clase ObjLista: el código generado la usa para el camino
-      // rápido de a[i] y de «para x en lista» sin pasar por rt (4.1).
+      // rápido de a[i] y de «para x en lista» sin pasar por rt (motor-exp).
       const factoria = new Function('rt', 'nt', 'pr', 'cf', 'LI', '"use strict";return ' + src);
       fn.jit = factoria(rt, nat.map(x => x.nat.fn), (typeof gen === 'string' ? null : gen.protos) || [],
                         cie.map(x => x.cl), ObjLista);
@@ -4485,7 +4908,7 @@ function crearRT(vm) {
     // «call» y argumentos sueltos cuesta mucho menos, porque no se asigna el
     // array y V8 puede meter la llamada en línea. La nativa atada, que es una
     // llamada directa de toda la vida, cuesta 1,25 ns: ese es el suelo.
-    // (4.1) Para la autollamada directa: el tope y el error, sin pasar
+    // (motor-exp) Para la autollamada directa: el tope y el error, sin pasar
     // por yaN. Es el mismo mensaje que da yaN.
     MAX: MAX_FRAMES,
     desborde() { vm.profJS--; vm.error('desbordamiento de pila: demasiadas llamadas anidadas', 'suele indicar una recursión sin caso base'); },
@@ -4543,11 +4966,12 @@ function crearRT(vm) {
     pow(a, b) { if (typeof a === 'number' && typeof b === 'number') return Math.pow(a, b);
                 return vm.aritOtro(a, b, '**'); },
     neg(a) { if (a instanceof ObjArreglo) return vm.arrArit(a, -1, '*');
+             if (a instanceof ObjGrande) return grNeg(a);
              if (typeof a !== 'number') vm.error(`«-» necesita un número y recibió ${tipoDe(a)}`); return -a; },
-    lt(a, b) { vm.cmp(a, b, '<'); return a < b; },
-    le(a, b) { vm.cmp(a, b, '<='); return a <= b; },
-    gt(a, b) { vm.cmp(a, b, '>'); return a > b; },
-    ge(a, b) { vm.cmp(a, b, '>='); return a >= b; },
+    lt(a, b) { return vm.cmp(a, b, '<') ? grandeCmp(vm, a, b, '<') < 0 : a < b; },
+    le(a, b) { return vm.cmp(a, b, '<=') ? grandeCmp(vm, a, b, '<=') <= 0 : a <= b; },
+    gt(a, b) { return vm.cmp(a, b, '>') ? grandeCmp(vm, a, b, '>') > 0 : a > b; },
+    ge(a, b) { return vm.cmp(a, b, '>=') ? grandeCmp(vm, a, b, '>=') >= 0 : a >= b; },
     // La red contra bucles infinitos, dentro del código traducido. El JS que
     // genera el JIT no pasa por el bucle de despacho, así que no contaba nada:
     // «mientras cierto» dentro de una función se colgaba para siempre, y una
@@ -4579,7 +5003,7 @@ function generarJS(fn, vm) {
   // acabar en «new Function». Se comprueba de las dos maneras —por la bandera
   // y por la ausencia de AST— para que quitar una sin querer no abra la puerta.
   if (fn.deDisco) { fn.jitEstado = 'rechazada'; return null; }
-  // (4.1) Una corrutina se pausa a mitad, y una función de JavaScript
+  // (motor-exp) Una corrutina se pausa a mitad, y una función de JavaScript
   // no: se queda en el intérprete, que sí sabe guardar dónde iba.
   if (fn.corrutina) { fn.jitEstado = 'rechazada'; return null; }
   const ast = fn.ast;
@@ -4615,7 +5039,7 @@ function generarJS(fn, vm) {
   // nombre aparece aquí igual. Una local capturada se compila como una CAJA
   // —un ObjUpvalue cerrado— para que la función y el cierre compartan la misma
   // variable y no dos copias: si el cierre le escribe, el de fuera lo ve.
-  // El nombre de la función de JavaScript que se está generando (4.1:
+  // El nombre de la función de JavaScript que se está generando (motor-exp:
   // lo usa la autollamada directa).
   // Lleva prefijo propio: un parámetro o una local del programa nunca empieza
   // por «_yo$», así que no puede taparlo.
@@ -4713,7 +5137,7 @@ function generarJS(fn, vm) {
   }
   const nativas = [];
   const iNativa = new Map();
-  // (4.1) Una nativa de la biblioteca que el JIT conoce por dentro
+  // (motor-exp) Una nativa de la biblioteca que el JIT conoce por dentro
   // —«rango», «agregar»— y para la que emite código propio en vez de llamarla.
   // Se ata igual que las demás aunque su aridad sea variable, por dos razones:
   // queda en la lista de invalidación (si alguien redefine el nombre, se tira
@@ -4780,7 +5204,7 @@ function generarJS(fn, vm) {
       }
       case 'Para': {
         const it = '_it$' + (nTmp++), i = '_i$' + (nTmp++);
-        // (4.1) «para i en rango(…)» sin construir la lista. Antes,
+        // (motor-exp) «para i en rango(…)» sin construir la lista. Antes,
         // rango(2000000) llenaba dos millones de casillas para recorrerlas una
         // vez. Los argumentos se validan con la misma función que usa la
         // nativa, así que los errores —y el tope de 5 millones— son los mismos.
@@ -4857,7 +5281,7 @@ function generarJS(fn, vm) {
         const d = n.destino;
         if (d.tipo === 'Variable') return escribirVar(d.nombre, ex(n.valor));
         if (d.tipo === 'Indice') {
-          // (4.1) El mismo camino rápido para escribir. El orden de
+          // (motor-exp) El mismo camino rápido para escribir. El orden de
           // evaluación no cambia: objeto, índice, valor.
           const x = tmp(), y = tmp(), z = tmp();
           return `((${x}=${ex(d.obj)}, ${y}=${ex(d.indice)}, ${z}=${ex(n.valor)}, ${x} instanceof LI && typeof ${y} === 'number' && ${y} >= 0 && ${y} < ${x}.items.length && (${y} | 0) === ${y})` +
@@ -4867,7 +5291,7 @@ function generarJS(fn, vm) {
         return rendirse();
       }
       case 'Unario': return n.op === '-' ? `rt.neg(${ex(n.expr)})` : `(!rt.verdad(${ex(n.expr)}))`;
-      // (4.1) las tres formas nuevas de expresión
+      // (motor-exp) las tres formas nuevas de expresión
       case 'SiExpr': return `(${verdadJS(ex(n.cond))} ? ${ex(n.entonces)} : ${ex(n.sino)})`;
       case 'Binario': {
         const a = () => ex(n.izq), b = () => ex(n.der);
@@ -4929,7 +5353,7 @@ function generarJS(fn, vm) {
                  ` : rt.call(${v}, [${as.join(',')}]))`;
         }
         if (n.callee.tipo === 'Variable' && !declarada(n.callee.nombre) && n.args.length === 2) {
-          // (4.1) agregar(lista, x): un push. Si el primero no es una
+          // (motor-exp) agregar(lista, x): un push. Si el primero no es una
           // lista, la nativa de siempre da el error de siempre.
           const k = conocida(gl(n.callee.nombre), 'agregar');
           if (k >= 0) {
@@ -4947,7 +5371,7 @@ function generarJS(fn, vm) {
           // dos cosas se arreglan solas: mientras no haya código se va por el
           // camino de siempre, y en cuanto lo hay se va derecho.
           const j = n.args.length <= 4 ? atarCierre(gl(n.callee.nombre), n.args.length) : -1;
-          // (4.1) La función se llama a sí misma por su nombre —fib(n-1)—:
+          // (motor-exp) La función se llama a sí misma por su nombre —fib(n-1)—:
           // el código que se está generando ES el destino, así que se llama
           // derecho a sí mismo, sin guardia de «jit» ni yaN. Lo que no se salta
           // es el control de profundidad. Si el nombre se reasigna después, el
@@ -4974,7 +5398,7 @@ function generarJS(fn, vm) {
         return `rt.call(${ex(n.callee)}, [${n.args.map(ex).join(',')}])`;
       }
       case 'Indice': {
-        // (4.1) Camino rápido de a[i] para una lista con un índice entero
+        // (motor-exp) Camino rápido de a[i] para una lista con un índice entero
         // dentro de rango, que es casi siempre. Todo lo demás —negativos,
         // textos, diccionarios, arreglos, errores— sigue yendo a idxg, que es
         // el mismo código del intérprete.
@@ -5048,10 +5472,10 @@ function generarJS(fn, vm) {
 // ============================================================================
 
 function instalarBiblioteca(vm, host) {
-  let cuerpoCorrutinas = null;     // (4.1) se llena abajo; se instala como eDSL
-  let cuerpoNativo = null;         // (4.1, S1) ídem, el eDSL «nativo»
-  let cuerpoSistema = null;        // (4.1, S2) ídem, el eDSL «sistema»
-  // (4.1, S1) Lo que llega de fuera cuando ya no corre nada —una llamada
+  let cuerpoCorrutinas = null;     // (motor-exp) se llena abajo; se instala como eDSL
+  let cuerpoNativo = null;         // (motor-exp, S1) ídem, el eDSL «nativo»
+  let cuerpoSistema = null;        // (motor-exp, S2) ídem, el eDSL «sistema»
+  // (motor-exp, S1) Lo que llega de fuera cuando ya no corre nada —una llamada
   // nativa en segundo plano que acaba, una retrollamada registrada que C
   // dispara— es un turno nuevo, como un clic. Si falla, el anfitrión decide
   // cómo enseñarlo (la consola lo imprime); si no dice nada, se lanza.
@@ -5084,6 +5508,13 @@ function instalarBiblioteca(vm, host) {
     if (typeof v === 'number') return Math.trunc(v);
     if (typeof v === 'boolean') return v ? 1 : 0;
     if (typeof v === 'string') { const n = parseInt(v.trim(), 10); if (Number.isNaN(n)) vm.error(`«entero»: «${v}» no es un número`); return n; }
+    // (motor-exp N1) de un grande: la parte entera, si cabe en un entero de Ñ
+    if (v instanceof ObjGrande) {
+      const n = Number(grAEnteroBig(v));
+      if (!Number.isSafeInteger(n)) vm.error(`«entero»: ${grATexto(v, 20)} no cabe en un entero (el máximo exacto es 2^53)`,
+        'déjalo como grande, o sácalo como texto con cifrasExactas(g)');
+      return n;
+    }
     vm.error(`«entero»: no se puede convertir ${tipoDe(v)}`);
   }, 'convierte a número entero');
   def('real', 'cualquiera -> real', (a) => {
@@ -5091,6 +5522,7 @@ function instalarBiblioteca(vm, host) {
     if (typeof v === 'number') return v;
     if (typeof v === 'boolean') return v ? 1 : 0;
     if (typeof v === 'string') { const n = parseFloat(v.trim()); if (Number.isNaN(n)) vm.error(`«real»: «${v}» no es un número`); return n; }
+    if (v instanceof ObjGrande) return grAReal(v);          // (motor-exp N1) el real más cercano
     vm.error(`«real»: no se puede convertir ${tipoDe(v)}`);
   }, 'convierte a número con decimales');
   def('bool', 'cualquiera -> bool', (a) => verdad(a[0]), 'convierte a verdadero/falso');
@@ -5099,7 +5531,7 @@ function instalarBiblioteca(vm, host) {
   if (!FALTANTE.firma) { FALTANTE.firma = firma('-> nulo'); FALTANTE.firmaTxt = '-> nulo'; }
   vm.globals.set(' faltante', FALTANTE);
 
-  // (4.1) corrutinas. « producir» y « esperar» los emite el compilador.
+  // (motor-exp) corrutinas. « producir» y « esperar» los emite el compilador.
   const corrutinaActual = () => vm.corrutinas.length ? vm.corrutinas[vm.corrutinas.length - 1] : null;
   def(' producir', 'cualquiera -> nulo', a => {
     const g = corrutinaActual();
@@ -5162,7 +5594,7 @@ function instalarBiblioteca(vm, host) {
     return p;
   }, 'todas(promesas) — una promesa con la lista de resultados, cuando estén todas');
   };
-  // (4.1) Lo que hay detrás de «tipo Punto { x, y }». La llama el
+  // (motor-exp) Lo que hay detrás de «tipo Punto { x, y }». La llama el
   // compilador, no el programa: el nombre lleva un espacio y no se puede
   // escribir. Devuelve el constructor, que queda como el global «Punto».
   def(' registro', 'texto, lista, dic -> cualquiera', a => {
@@ -5190,7 +5622,7 @@ function instalarBiblioteca(vm, host) {
     out.length = n;
     return L(out);
   }, 'rango(n) · rango(ini,fin) · rango(ini,fin,paso)');
-  // Marcas para el JIT (4.1): son ESTAS funciones y no otras con el
+  // Marcas para el JIT (motor-exp): son ESTAS funciones y no otras con el
   // mismo nombre. Si un programa las tapa con su propio «fn», la marca no está
   // y el JIT no toma el atajo.
   vm.globals.get('rango').puro = 'rango';
@@ -5824,7 +6256,7 @@ function instalarBiblioteca(vm, host) {
       if (x === null) continue;
       vm.error(`«pedir» no sabe qué hacer con ${tipoDe(x)} en la posición ${i + 1}`);
     }
-    // (4.1) Sin función, «pedir» devuelve una promesa: dentro de una
+    // (motor-exp) Sin función, «pedir» devuelve una promesa: dentro de una
     // función asíncrona se escribe «var r = esperar pedir(url)».
     let promesa = null;
     if (!fn) {
@@ -5979,26 +6411,39 @@ function instalarBiblioteca(vm, host) {
   // (tofile / fromfile), y por eso existe: es el puente entre Ñ y Python sin
   // pasar millones de números por JSON. La forma y el tipo no van en el
   // archivo; quien lee los conoce (el puente los manda aparte).
+  const TIPOS_BINARIOS = ['real', 'entero', 'real32', 'real16', 'i8', 'u8', 'i16', 'u16', 'u32', 'i64', 'u64'];
   def('leerArregloBinario', 'texto, texto, lista -> arreglo', a => {
     const r = txt(a[0], 1, 'leerArregloBinario');
-    const tipo = txt(a[1], 2, 'leerArregloBinario');
-    if (tipo !== 'real' && tipo !== 'entero') vm.error(`«leerArregloBinario»: el tipo es «real» o «entero», no «${tipo}»`);
+    const tipo0 = txt(a[1], 2, 'leerArregloBinario'), tipo = ALIAS_TIPO[tipo0] || tipo0;
+    // (motor-exp N4.5) y los enteros de máquina: i8 u8 i16 u16 u32 i64 u64
+    if (!TIPOS_BINARIOS.includes(tipo))
+      vm.error(`«leerArregloBinario»: el tipo es uno de ${TIPOS_BINARIOS.map(t => '«' + t + '»').join(', ')}, no «${tipo0}»`);
     const forma = lst(a[2], 3, 'leerArregloBinario').items.map(x => num(x, 3, 'leerArregloBinario') | 0);
     if (!arch || !arch.leerBytes) faltaArch('leerArregloBinario');
     const bytes = conArchivo('leerArregloBinario', r, () => arch.leerBytes(r));
     const out = vm.arrNuevo(forma, tipo);
+    // (motor-exp N4.2) un real16 son 2 bytes por número en el archivo (float16 de NumPy)
+    if (tipo === 'real16') {
+      if (bytes.byteLength !== out.tamano * 2)
+        vm.error(`«leerArregloBinario»: el archivo tiene ${bytes.byteLength} bytes y la forma ${forma.join('×')} de real16 pide ${out.tamano * 2}`);
+      const h = new Uint16Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+      for (let i = 0; i < h.length; i++) out.datos[i] = deBits16(h[i]);
+      vm.cobrar(out.tamano);
+      return out;
+    }
     const esperado = out.datos.byteLength;
     if (bytes.byteLength !== esperado)
       vm.error(`«leerArregloBinario»: el archivo tiene ${bytes.byteLength} bytes y la forma ${forma.join('×')} de ${tipo} pide ${esperado}`);
     new Uint8Array(out.datos.buffer, out.datos.byteOffset, esperado).set(new Uint8Array(bytes.buffer, bytes.byteOffset, esperado));
     vm.cobrar(out.tamano);
     return out;
-  }, 'leerArregloBinario(ruta, tipo, forma) — un arreglo desde bytes crudos (float64 o int32), el formato de NumPy');
+  }, 'leerArregloBinario(ruta, tipo, forma) — un arreglo desde bytes crudos (float64, int32, float32, float16 o los enteros int8 … uint64), el formato de NumPy');
   def('escribirArregloBinario', 'texto, arreglo -> nulo', a => {
     const r = txt(a[0], 1, 'escribirArregloBinario');
     const arr = a[1];
     if (!(arr instanceof ObjArreglo)) vm.error(`«escribirArregloBinario»: el argumento 2 debe ser un arreglo y es ${tipoDe(arr)}`);
-    if (arr.tipo !== 'real' && arr.tipo !== 'entero') vm.error(`«escribirArregloBinario»: solo arreglos real o entero, no ${arr.tipo}`);
+    if (!TIPOS_BINARIOS.includes(arr.tipo))
+      vm.error(`«escribirArregloBinario»: solo arreglos ${TIPOS_BINARIOS.join(', ')}, no ${arr.tipo}`);
     if (!arch || !arch.escribirBytes) faltaArch('escribirArregloBinario');
     // Una vista no contigua se copia primero en orden lógico: lo que se escribe
     // es lo que el programa ve, no lo que hay en memoria.
@@ -6009,12 +6454,13 @@ function instalarBiblioteca(vm, host) {
       let i = 0;
       for (const q of arr.posiciones()) plano[i++] = arr.datos[q];
     }
+    if (arr.tipo === 'real16') { const h = new Uint16Array(plano.length); for (let i = 0; i < h.length; i++) h[i] = bitsDe16(plano[i]); plano = h; }
     conArchivo('escribirArregloBinario', r, () => arch.escribirBytes(r, new Uint8Array(plano.buffer, plano.byteOffset, plano.byteLength)));
     vm.cobrar(arr.tamano);
     return null;
-  }, 'escribirArregloBinario(ruta, arreglo) — lo guarda como bytes crudos (float64 o int32), el formato de NumPy');
+  }, 'escribirArregloBinario(ruta, arreglo) — lo guarda como bytes crudos (float64, int32, float32, float16 o los enteros int8 … uint64), el formato de NumPy');
 
-  // ── (4.1, S2) el eDSL «sistema»: usar servir, leerLineas, unirRuta de "sistema"
+  // ── (motor-exp, S2) el eDSL «sistema»: usar servir, leerLineas, unirRuta de "sistema"
   // Nombres nuevos en un eDSL, no globales: lección de X4 («todas» y
   // «siguiente» globales rompieron dos programas que ya existían).
   cuerpoSistema = def => {
@@ -6260,7 +6706,7 @@ function instalarBiblioteca(vm, host) {
     const r = conSistema('ejecutar', () => sis.ejecutar(orden, args, op));
     return resultadoProceso(r);
   }, 'ejecutar(orden, argumentos?, opciones?) — lanza un programa y espera; devuelve {codigo, salida, error}. Opciones: entrada, carpeta, entorno, espera (ms)');
-  // (4.1, S2) Las opciones de un proceso, comprobadas aquí: un nombre mal
+  // (motor-exp, S2) Las opciones de un proceso, comprobadas aquí: un nombre mal
   // escrito («carpta») se diría como error y no se ignoraría en silencio.
   function opcionesProceso(v, quien) {
     if (v === undefined || v === null) return null;
@@ -6287,7 +6733,7 @@ function instalarBiblioteca(vm, host) {
   }
   def('leerLinea', '... -> cualquiera', a => {
     if (!sis) faltaSis('leerLinea');
-    // (4.1, S2) Si el anfitrión sabe escribir sin salto de línea, la
+    // (motor-exp, S2) Si el anfitrión sabe escribir sin salto de línea, la
     // pregunta queda en la misma línea que la respuesta, como en cualquier consola.
     if (a.length && a[0] !== null) { if (sis.indicar) sis.indicar(repr(a[0], 0)); else vm.salida(repr(a[0], 0)); }
     const l = sis.leerLinea();
@@ -6414,7 +6860,7 @@ function instalarBiblioteca(vm, host) {
     return n;
   }, 'estructuraNativa(nombre, {campo: tipo, …}) — declara una estructura de C; devuelve su nombre para usarlo como tipo');
 
-  // ── (4.1, S1) la llamada, con lo que el anfitrión sabe de cada parámetro
+  // ── (motor-exp, S1) la llamada, con lo que el anfitrión sabe de cada parámetro
   // Si el anfitrión describe los parámetros (koffi lo hace), la conversión los
   // mira: un arreglo solo va a un puntero de SU tipo de número, un parámetro de
   // salida no se pasa y se devuelve, y una función de Ñ que va a un puntero a
@@ -6504,7 +6950,7 @@ function instalarBiblioteca(vm, host) {
       if (d.dir === 'sale') { const c = [null]; crudos[j] = c; cajas.push({ c, d }); continue; }
       const v = aNativo(args[k], d, ctx, quien, k + 1);
       k++;
-      if (d.dir === 'entra y sale') { const c = [v]; crudos[j] = c; cajas.push({ c, d }); }
+      if (d.dir === 'entra y sale') { const c = [v]; crudos[j] = c; cajas.push({ c, d, orig: args[k - 1] }); }
       else crudos[j] = v;
     }
     return { ctx, crudos, cajas };
@@ -6512,6 +6958,18 @@ function instalarBiblioteca(vm, host) {
   // Y lo que vuelve: el resultado y, detrás, lo que dejaron los de salida.
   // Uno solo va tal cual; varios, en una lista: «fijo [q, r] = dividir(17, 5)».
   function terminarNativa(llamar, r, cajas, quien) {
+    // (motor-exp N4.10) las de una cabecera: un puntero a estructura que entra y
+    // sale escribe en el MISMO diccionario de Ñ que se pasó (como en C)
+    if (cajas && cajas.length && llamar.enSitio) {
+      const quedan = [];
+      for (const cj of cajas) {
+        if (cj.orig instanceof ObjDic && cj.c[0] && typeof cj.c[0] === 'object') {
+          const nuevo = deCrudo(cj.c[0], quien);
+          for (const [k, v] of nuevo.mapa) cj.orig.mapa.set(k, v);
+        } else quedan.push(cj);
+      }
+      cajas = quedan;
+    }
     if (!cajas || !cajas.length) return deNativo(r, llamar.resultado, quien);
     const vals = [];
     if (!llamar.resultado || llamar.resultado.clase !== 'nulo') vals.push(deNativo(r, llamar.resultado, quien));
@@ -6584,10 +7042,32 @@ function instalarBiblioteca(vm, host) {
     return hacerNativa(llamar, sim, bib, tipos.length, `${sim}() de ${bib} — declarada con nativa()`);
   }, 'nativa(biblioteca, "double cos(double)") o nativa(biblioteca, simbolo, devuelve, argumentos?) — declara una función compilada y la devuelve como función de Ñ');
 
-  // (4.1, S1) Lo demás del FFI va en el eDSL «nativo»: usar retrollamada,
+  // (motor-exp, S1) Lo demás del FFI va en el eDSL «nativo»: usar retrollamada,
   // memoria, leerMemoria de "nativo". No son globales para no quitarle nombres a nadie.
   cuerpoNativo = def => {
     const exigeNat = q => { if (!nat || !nat.tipoC) faltaNat(q); };
+    // (motor-exp N4.10) toda una cabecera de C de una vez: sus funciones, sus
+    // constantes (#define y enum) y sus estructuras, sin escribir ninguna firma
+    def('cabeceraNativa', 'texto, texto -> dic', a => {
+      if (!nat || !nat.cabecera) faltaNat('cabeceraNativa');
+      const bib = txt(a[0], 1, 'cabeceraNativa');
+      const ruta = txt(a[1], 2, 'cabeceraNativa');
+      vm.cobrar(500);
+      const h = conNativo('cabeceraNativa', () => nat.cabecera(bib, ruta));
+      if (nDeclaradas + h.funciones.length > MAX_NATIVAS)
+        vm.error(`«cabeceraNativa»: no se declaran más de ${MAX_NATIVAS} funciones nativas en una ejecución, y «${ruta}» trae ${h.funciones.length}`,
+          'léela una vez y guarda el resultado', false, 'nativo');
+      nDeclaradas += h.funciones.length;
+      const d = D();
+      for (const [n, v] of h.constantes) d.mapa.set(n, v);
+      for (const { nombre, llamar } of h.funciones) {
+        const ar = contarEntradas(llamar);
+        if (ar > MAX_ARGS_NAT) { h.omitidas.push([nombre, `tiene ${ar} argumentos y el máximo es ${MAX_ARGS_NAT}`]); continue; }
+        d.mapa.set(nombre, hacerNativa(llamar, nombre, bib, ar, `${llamar.firmaC} — de ${bib} (${ruta})`));
+      }
+      d.mapa.set('_omitidas', L(h.omitidas.map(([n, por]) => `${n}: ${por}`)));
+      return d;
+    }, 'cabeceraNativa(biblioteca, "geo.h") — lee la cabecera de C y devuelve un diccionario con sus funciones y sus constantes, listas para llamar: m.geo_area(caja); lo que no se pudo, en m._omitidas');
     def('tipoNativo', 'texto -> texto', a => {
       exigeNat('tipoNativo');
       return conNativo('tipoNativo', () => nat.tipoC(txt(a[0], 1, 'tipoNativo')));
@@ -6723,6 +7203,10 @@ function instalarBiblioteca(vm, host) {
   // Aquí solo se ejecuta: encontrar y compilar el módulo ya pasó al analizar.
   // Y aquí es donde se cumplen las dos reglas de ejecución: una sola vez, y los
   // ciclos no desbordan la pila.
+  // (motor-exp N4.11) las marcas de «sinComprobar { … }»: en la VM no hacen nada,
+  // porque la VM comprueba siempre (es donde se depura). Las miran el ejecutable
+  // de n-compilar y C1EÑ en nativo y en la GPU, que ahí quitan las comprobaciones.
+  vm.definirNativa(' sinComprobar', 'entero -> nulo', () => null);
   vm.definirNativa(' usar', 'cualquiera -> nulo', a => {
     const clave = a[0];
     // Un eDSL nativo se instala al crear el motor, así que cuando el programa
@@ -6783,9 +7267,9 @@ function instalarBiblioteca(vm, host) {
   // «datos» no lleva «enClasico»: ninguno de sus nombres estuvo en el ámbito
   // global, así que nada viejo los espera ahí.
   instalarEdsl(vm, 'datos', instalarDatos(vm));
-  instalarEdsl(vm, 'corrutinas', cuerpoCorrutinas);     // (4.1) fase X4
-  instalarEdsl(vm, 'nativo', cuerpoNativo);             // (4.1) fase S1
-  instalarEdsl(vm, 'sistema', cuerpoSistema);           // (4.1) fase S2
+  instalarEdsl(vm, 'corrutinas', cuerpoCorrutinas);     // (motor-exp) fase X4
+  instalarEdsl(vm, 'nativo', cuerpoNativo);             // (motor-exp) fase S1
+  instalarEdsl(vm, 'sistema', cuerpoSistema);           // (motor-exp) fase S2
   // De «estilo» sí eran globales 22 nombres. «pares» es el único que NO se
   // reexporta en «clasico»: su sitio en el ámbito global ya está ocupado por el
   // «pares» de los diccionarios, que es quien debía tenerlo desde el principio.
@@ -6801,12 +7285,16 @@ function instalarBiblioteca(vm, host) {
   // orden a propósito: C1EÑ primero, porque crea «vm.c1en» y las otras partes
   // registran núcleos en él al instalarse (si no existiera se quedarían con su
   // respaldo en JavaScript). Luego cálculo, fórmulas y tensores.
-  instalarEdsl(vm, 'nen', def => {
-    instalarNenC1en(vm, def);
+  const regNen = instalarEdsl(vm, 'nen', def => {
+    instalarNenC1en(vm, def, host);
     instalarNenCalculo(vm, def);
     instalarNenFormulas(vm, def);
     instalarNenTensores(vm, def);
+    instalarNenPrecision(vm, def);      // (motor-exp N1) el tipo «grande» y los enteros exactos
+    instalarNenAmplitud(vm, def);       // (motor-exp N1) especiales, distribuciones y muestreo (1.ª tanda)
+    instalarNenUnion(vm, def);          // (motor-exp N1) fila, donde y apilar para arreglos Y tablas
   });
+  reexportarEnNen(vm, regNen);          // (motor-exp N1) todo numerico y todo datos, también desde «nen»
   // El interruptor va al final: es la unión de los de arriba.
   instalarClasico(vm);
   // Y los eDSL que este motor trae ABIERTOS: en el ámbito global, sin «usar».
@@ -6839,6 +7327,14 @@ function abrirEdsls(vm, nombres) {
     for (const [corto] of r.exporta) {
       const largo = nombreGlobalModulo(r.clave, corto);
       const obj = vm.globals.get(largo);
+      // (motor-exp N1) «nen» reexporta numerico y datos con EL MISMO objeto: si
+      // ya lo abrió otro eDSL, es el mismo nombre para lo mismo, no un choque.
+      if (origen.has(corto) && vm.globals.get(corto) === obj) continue;
+      // Y las tres de NEÑ que valen para arreglos y tablas (fila, donde, apilar)
+      // pueden ocupar el sitio de la de numerico o datos: hacen lo mismo y más.
+      if (origen.has(corto) && obj && obj.despacha && obj.despacha.includes(vm.globals.get(corto))) {
+        vm.globals.set(corto, obj); origen.set(corto, nombre); continue;
+      }
       if (vm.globals.has(corto)) {
         const quien = origen.get(corto);
         throw new Error(quien
@@ -7371,7 +7867,7 @@ function leerFn(r, prof) {
     }
   }
 
-  // (4.1) La marca de los parámetros con valor por defecto.
+  // (motor-exp) La marca de los parámetros con valor por defecto.
   for (const c of fn.chunk.consts) {
     if (typeof c === 'string' && c.startsWith(' minimos:')) {
       const m = +c.slice(9);
@@ -7603,7 +8099,7 @@ function exportacionesDe(ast) {
     if (!s.publico) continue;
     if (s.tipo === 'DeclFuncion') {
       const t = tipoDeFuncion(s);
-      // (4.1) El constructor de un «publico tipo» lleva la forma del
+      // (motor-exp) El constructor de un «publico tipo» lleva la forma del
       // registro —campos y métodos— para que el archivo que lo importa pueda
       // comprobar «p.x» igual que el que lo declara.
       if (s.esConstructor) {
@@ -8664,8 +9160,10 @@ function instalarProbar(vm) {
     }, 'debeSerCerca(a, b, tolerancia?) — para números con decimales');
     const comparar = (nombre, ok, texto) => def(nombre, 'cualquiera, cualquiera -> nulo', a => {
       cuenta();
-      vm.cmp(a[0], a[1], nombre);
-      if (!ok(a[0], a[1])) falla(`${v(a[0])} no es ${texto} ${v(a[1])}`);
+      // (motor-exp N1) con un grande, la comparación la hace grandeCmp
+      const conGrande = vm.cmp(a[0], a[1], nombre);
+      const s = conGrande ? grandeCmp(vm, a[0], a[1], nombre) : 0;
+      if (!(conGrande ? ok(s, 0) : ok(a[0], a[1]))) falla(`${v(a[0])} no es ${texto} ${v(a[1])}`);
       return null;
     }, `que el primero sea ${texto} el segundo · también vale para fechas`);
     comparar('debeSerMayor', (x, y) => x > y, 'mayor que');
@@ -9226,12 +9724,41 @@ function instalarTexto(vm) {
 //                         son genéricos como «contiene» — se quedan en el núcleo.
 // ============================================================================
 
+// (motor-exp N4.9) Los límites de cada tipo de número de un arreglo:
+// [épsilon, el más bajo, el más alto]. El épsilon es la distancia de 1 al
+// siguiente número del tipo (en los enteros, 1). Los de 64 bits van en BigInt
+// (salen como «grande» exacto). Los usan epsilonTipo, minimoTipo y maximoTipo
+// aquí y dentro de los núcleos de C1EÑ, donde son constantes del núcleo.
+const LIMITES_TIPO = {
+  real: [2 ** -52, -1.7976931348623157e308, 1.7976931348623157e308],
+  real32: [2 ** -23, -3.4028234663852886e38, 3.4028234663852886e38],
+  real16: [2 ** -10, -65504, 65504],
+  entero: [1, -2147483648, 2147483647], i8: [1, -128, 127], u8: [1, 0, 255],
+  i16: [1, -32768, 32767], u16: [1, 0, 65535], u32: [1, 0, 4294967295],
+  i64: [1, -(2n ** 63n), 2n ** 63n - 1n], u64: [1, 0n, 2n ** 64n - 1n],
+  bool: [1, 0, 1],
+};
+
 function instalarNumerico(vm) {
   const L = items => vm.nuevaLista(items);
   const D = () => vm.nuevoDic();
   const num = (v, n, f) => vm.exigeNum(v, n, f);
   const lst = (v, n, f) => vm.exigeLista(v, n, f);
   const nums = (v, n, f) => vm.exigeNums(v, n, f);
+  // (motor-exp N1) Los números para REDUCIR (suma, media, varianza…): de un
+  // arreglo seguido, sus propios datos, sin copiarlos a una lista (suma() de un
+  // millón bajó de 43 a ~1 ms). Las sumas van en el mismo orden, de izquierda a
+  // derecha y desde 0, así que dan exactamente lo mismo que antes.
+  const numsPlanos = (v, n, f) => {
+    if (v instanceof ObjArreglo && esBig(v.tipo)) vm.nadaDeComplejos(v, f);
+    if (v instanceof ObjArreglo && v.seguida && v.tipo !== 'complejo') { vm.cobrar(v.tamano); return v.datos.subarray(v.desp || 0, (v.desp || 0) + v.tamano); }
+    return nums(v, n, f);
+  };
+  const sumaDe = xs => { let s = 0; for (let i = 0; i < xs.length; i++) s += xs[i]; return s; };
+  // (motor-exp N2) un arreglo REAL se reduce con NEÑ (por trozos de 4096 en
+  // orden, igual en jit, nativo y GPU; con datos en la GPU solo baja el número)
+  const porNen = x => x instanceof ObjArreglo && x.tipo === 'real' && x.tamano > 0 && typeof vm.nenReducir === 'function';
+  const sumaCuad = (xs, m) => { let s = 0; for (let i = 0; i < xs.length; i++) { const d = xs[i] - m; s += d * d; } return s; };
   const ent = (v, n, f) => vm.exigeEnt(v, n, f);
 
   // ── el azar ────────────────────────────────────────────────────────────────
@@ -9273,13 +9800,22 @@ function instalarNumerico(vm) {
     vm.nadaDeComplejos(v, f);
     return v;
   };
+  // (motor-exp N4.5) «arrB»: la puerta de las que saben de i64/u64 (y no de complejos)
+  const arrB = (v, n, f) => {
+    if (!(v instanceof ObjArreglo)) vm.error(`«${f}»: el argumento ${n} debe ser un arreglo y es ${tipoDe(v)}`);
+    if (v.tipo === 'complejo') vm.nadaDeComplejos(v, f);
+    return v;
+  };
   const arrC = (v, n, f) => {
     if (!(v instanceof ObjArreglo)) vm.error(`«${f}»: el argumento ${n} debe ser un arreglo y es ${tipoDe(v)}`);
     return v;
   };
   // «bool» está desde que existen las máscaras: es lo que devuelven las
   // comparaciones, así que tiene que poder pedirse y convertirse como los otros.
-  const TIPOS_OK = ['real', 'entero', 'bool'];
+  // (motor-exp N4.2) «real32» y «real16»: precisión simple y media (ver TIPOS_ARR)
+  // (motor-exp N4.5) y los enteros de máquina: i8 u8 i16 u16 u32 i64 u64 (con
+  // i32, f64, f32 y f16 como otros nombres de entero, real, real32 y real16)
+  const TIPOS_OK = ['real', 'entero', 'bool', 'real32', 'real16', 'i8', 'u8', 'i16', 'u16', 'u32', 'i64', 'u64'];
   // Una forma puede venir como número —arreglo de una dimensión— o como lista.
   const formaDe = (v, f) => {
     const xs = typeof v === 'number' ? [v] : lst(v, 1, f).items;
@@ -9295,7 +9831,7 @@ function instalarNumerico(vm) {
   };
   const tipoArg = (v, f) => {
     if (v === undefined || v === null) return 'real';
-    const t = txtA(v, f);
+    const t0 = txtA(v, f), t = ALIAS_TIPO[t0] || t0;
     // El mensaje sale de la lista, no de una copia a mano: cuando se añadió
     // «bool» el mensaje siguió diciendo que solo había dos tipos.
     if (!TIPOS_OK.includes(t))
@@ -9335,7 +9871,9 @@ function instalarNumerico(vm) {
     })(l, 0);
     return { forma, plano };
   }
-  const todoEntero = xs => xs.every(x => Number.isInteger(x));
+  // (motor-exp N1) entero solo si cabe en 32 bits: arreglo([3e200, 4e200]) daba
+  // ceros sin avisar porque 3e200 es «entero» para JavaScript
+  const todoEntero = xs => xs.every(x => Number.isInteger(x) && x >= -2147483648 && x <= 2147483647);
   const tamanoDeF = f => f.reduce((a, b) => a * b, 1);
 
   // ── la transformada de Fourier ─────────────────────────────────────────────
@@ -9724,9 +10262,13 @@ function instalarNumerico(vm) {
   // Llenar un arreglo nuevo desde una lista plana.
   const cargar = (forma, plano, tipo) => {
     const a = vm.arrNuevo(forma, tipo);
+    if (esBig(tipo)) { for (let i = 0; i < plano.length; i++) a.datos[i] = aBig64(plano[i]); return a; }
     for (let i = 0; i < plano.length; i++) a.datos[i] = plano[i];
-    return a;
+    return vm.arrRedondear(a);
   };
+  // (motor-exp N4.2) el tipo común de varios arreglos (pegarlos, elegir entre
+  // ellos): el mismo que da la aritmética entre ellos
+  const tipoComunDe = ts => ts.reduce((acc, t) => (acc === null ? t : (acc === t ? t : tipoAritmetico(acc, t, '+', true, true))), null);
 
   return function (def) {
     // Una línea extiende TRECE funciones a los arreglos. El tipo de la firma es
@@ -9771,17 +10313,26 @@ function instalarNumerico(vm) {
     // Sin eje suma todo y devuelve un número, que es lo que ya hacía.
     def('suma', '... -> cualquiera', a => {
       const x = a[0];
+      // (motor-exp N4.5) la suma de un i64/u64 es EXACTA (BigInt): sale un número
+      // si cabe en 2^53 y si no un grande exacto
+      if (x instanceof ObjArreglo && esBig(x.tipo) && a.length === 1) {
+        let s = 0n; for (const p of x.posiciones()) s += x.datos[p];
+        vm.cobrar(x.tamano);
+        return deBig64(s);
+      }
       if (x instanceof ObjArreglo && a.length > 1)
         return vm.arrReducir(x, ent(a[1], 2, 'suma'), 0, (acc, v) => acc + v, null,
           x.tipo === 'entero' ? 'entero' : 'real');
-      return nums(x, 1, 'suma').reduce((p, c) => p + c, 0);
+      if (porNen(x)) return vm.nenReducir('suma', x);
+      return sumaDe(numsPlanos(x, 1, 'suma'));
     }, 'suma(lista) · suma(arreglo) · suma(arreglo, eje) — con eje da un arreglo');
-    const media = xs => xs.reduce((p, c) => p + c, 0) / xs.length;
+    const media = xs => sumaDe(xs) / xs.length;
     def('media', '... -> cualquiera', a => {
       const x = a[0];
       if (x instanceof ObjArreglo && a.length > 1)
         return vm.arrReducir(x, ent(a[1], 2, 'media'), 0, (acc, v) => acc + v, (acc, n) => acc / n, 'real');
-      const v = nums(x, 1, 'media');
+      if (porNen(x)) return vm.nenReducir('media', x);
+      const v = numsPlanos(x, 1, 'media');
       if (!v.length) vm.error('«media» de una lista vacía');
       return media(v);
     }, 'media(lista) · media(arreglo) · media(arreglo, eje)');
@@ -9797,8 +10348,8 @@ function instalarNumerico(vm) {
       for (const v of x) { const k = (c.get(v) || 0) + 1; c.set(v, k); if (k > mc) { mc = k; mejor = v; } }
       return mejor;
     });
-    def('varianza', 'lista<real>|arreglo -> real', a => { const x = nums(a[0], 1, 'varianza'); if (x.length < 2) vm.error('«varianza» necesita al menos 2 datos'); const m = media(x); return x.reduce((p, c) => p + (c - m) * (c - m), 0) / (x.length - 1); }, 'varianza muestral');
-    def('desviacion', 'lista<real>|arreglo -> real', a => { const x = nums(a[0], 1, 'desviacion'); if (x.length < 2) vm.error('«desviacion» necesita al menos 2 datos'); const m = media(x); return Math.sqrt(x.reduce((p, c) => p + (c - m) * (c - m), 0) / (x.length - 1)); });
+    def('varianza', 'lista<real>|arreglo -> real', a => { if (porNen(a[0]) && a[0].tamano >= 2) return vm.nenReducir('varianza', a[0]); const x = numsPlanos(a[0], 1, 'varianza'); if (x.length < 2) vm.error('«varianza» necesita al menos 2 datos'); const m = media(x); return sumaCuad(x, m) / (x.length - 1); }, 'varianza muestral');
+    def('desviacion', 'lista<real>|arreglo -> real', a => { if (porNen(a[0]) && a[0].tamano >= 2) return vm.nenReducir('desviacion', a[0]); const x = numsPlanos(a[0], 1, 'desviacion'); if (x.length < 2) vm.error('«desviacion» necesita al menos 2 datos'); const m = media(x); return Math.sqrt(sumaCuad(x, m) / (x.length - 1)); });
     def('percentil', 'lista<real>|arreglo, real -> real', a => {
       const x = nums(a[0], 1, 'percentil').slice().sort((p, q) => p - q);
       const p = num(a[1], 2, 'percentil');
@@ -9874,6 +10425,17 @@ function instalarNumerico(vm) {
       // multiplica. Sacarlas fuera y acumular la fila en un Float64Array —sin
       // números en caja— pasó 400×400 de 228 ms a 108 ms. La misma cuenta, el
       // mismo orden ikj; solo dónde están las cargas.
+      // (motor-exp N1) con NEÑ instalado, el producto de NEÑ: en C con OpenMP o en
+      // la GPU si es grande (y si no, el mismo bucle i-k-j en JavaScript)
+      if (vm.nenMatmul) {
+        const pa = new Float64Array(nf * nm), pb = new Float64Array(nm * nc);
+        for (let i = 0; i < nf; i++) { const r = A[i]; for (let k = 0; k < nm; k++) pa[i * nm + k] = r[k]; }
+        for (let k = 0; k < nm; k++) { const r = B[k]; for (let j = 0; j < nc; j++) pb[k * nc + j] = r[j]; }
+        const c = vm.nenMatmul(pa, pb, nf, nm, nc);
+        const out = new Array(nf);
+        for (let i = 0; i < nf; i++) out[i] = L(Array.from(c.subarray(i * nc, i * nc + nc)));
+        return L(out);
+      }
       const out = new Array(nf);
       for (let i = 0; i < nf; i++) {
         const Ai = A[i];
@@ -10187,11 +10749,14 @@ function instalarNumerico(vm) {
       const n = ent(a[0], 1, 'factorial');
       if (n < 0) vm.error('«factorial» de un negativo no existe');
       // Más de 170 y el resultado es infinito: se dice en vez de devolverlo.
-      if (n > 170) vm.error(`«factorial»: ${n}! no cabe en un número`, 'el máximo exacto es 170!');
+      // (motor-exp N1) el mensaje decía «el máximo exacto es 170!», y 170! no es
+      // exacto en un real: lo exacto llega hasta 22!. Ahora lo dice, y dónde está lo exacto.
+      if (n > 170) vm.error(`«factorial»: ${n}! no cabe en un número real (el más grande que cabe es 170!)`,
+        'para el número exacto, con todas sus cifras: factorialExacto(n) de "nen"');
       let r = 1;
       for (let i = 2; i <= n; i++) r *= i;
       return r;
-    }, 'factorial(5) → 120 · hasta 170');
+    }, 'factorial(5) → 120 · exacto hasta 22!, aproximado hasta 170! (para más, factorialExacto de "nen")');
     def('combinaciones', 'entero, entero -> real', a => {
       const n = ent(a[0], 1, 'combinaciones'), k = ent(a[1], 2, 'combinaciones');
       if (n < 0 || k < 0) vm.error('«combinaciones» no admite negativos');
@@ -10300,13 +10865,13 @@ function instalarNumerico(vm) {
       'ceros(forma, tipo?) — ceros(3) o ceros([2, 4])');
     def('unos', '... -> arreglo', a => {
       const x = vm.arrNuevo(formaDe(a[0], 'unos'), tipoArg(a[1], 'unos'));
-      x.datos.fill(1);
+      x.datos.fill(guardable(x.tipo, 1));
       return x;
     }, 'unos(forma, tipo?)');
     def('lleno', '... -> arreglo', a => {
       const v = num(a[1], 2, 'lleno');
-      const x = vm.arrNuevo(formaDe(a[0], 'lleno'), a.length > 2 ? tipoArg(a[2], 'lleno') : (Number.isInteger(v) ? 'entero' : 'real'));
-      x.datos.fill(v);
+      const x = vm.arrNuevo(formaDe(a[0], 'lleno'), a.length > 2 ? tipoArg(a[2], 'lleno') : (todoEntero([v]) ? 'entero' : 'real'));
+      x.datos.fill(guardable(x.tipo, v));
       return x;
     }, 'lleno(forma, valor, tipo?) — todo el arreglo con el mismo valor');
     def('secuencia', '... -> arreglo', a => {
@@ -10356,7 +10921,26 @@ function instalarNumerico(vm) {
     def('tamano', 'arreglo -> entero', a => arrC(a[0], 1, 'tamano').tamano,
       'cuántos números tiene en total');
     def('tipoArreglo', 'arreglo -> texto', a => arrC(a[0], 1, 'tipoArreglo').tipo,
-      '"real" o "entero" — el tipo de TODOS sus números');
+      '"real", "entero", "bool", "complejo", "real32", "real16" o un entero de máquina ("i8" … "u64") — el tipo de TODOS sus números');
+    // (motor-exp N4.9) los límites del tipo de los números de un arreglo (o de un
+    // tipo dicho por su nombre): para escribir un núcleo genérico que valga igual
+    // con real, real32 o entero. Dentro de un núcleo son constantes.
+    const limite = (a, k, f) => {
+      let t = a[0];
+      if (t instanceof ObjArreglo) t = t.tipo;
+      else if (typeof t === 'string') t = ALIAS_TIPO[t] || t;
+      else vm.error(`«${f}»: el argumento 1 debe ser un arreglo o el nombre de un tipo y es ${tipoDe(a[0])}`, `${f}(a) · ${f}("real32")`);
+      const l = LIMITES_TIPO[t];
+      if (!l) vm.error(`«${f}»: ${t === 'complejo' ? 'los complejos no tienen un orden' : `no conozco el tipo «${t}»`}`,
+        `los que hay: ${Object.keys(LIMITES_TIPO).join(', ')}`);
+      return deBig64(l[k]);
+    };
+    def('epsilonTipo', 'arreglo|texto -> real', a => limite(a, 0, 'epsilonTipo'),
+      'epsilonTipo(a) · epsilonTipo("real32") — la distancia de 1 al siguiente número del tipo: 2^−52 en real, 2^−23 en real32, 2^−10 en real16, 1 en los enteros');
+    def('minimoTipo', 'arreglo|texto -> cualquiera', a => limite(a, 1, 'minimoTipo'),
+      'minimoTipo(a) · minimoTipo("i16") — el número más bajo que cabe en el tipo (−32768 en i16, el real más negativo en real)');
+    def('maximoTipo', 'arreglo|texto -> cualquiera', a => limite(a, 2, 'maximoTipo'),
+      'maximoTipo(a) · maximoTipo("u8") — el número más alto que cabe en el tipo (255 en u8, 3,4·10^38 en real32)');
     def('esVista', 'arreglo -> bool', a => arrC(a[0], 1, 'esVista').base !== null,
       'dice si comparte memoria con otro arreglo en vez de tener la suya');
 
@@ -10364,7 +10948,7 @@ function instalarNumerico(vm) {
     def('redimensionar', '... -> arreglo', a => {
       // Cambia la forma sin tocar los números. Si la memoria está seguida, la
       // nueva forma es una VISTA y no copia nada.
-      const x = arr(a[0], 1, 'redimensionar');
+      const x = arrB(a[0], 1, 'redimensionar');
       const f = formaDe(a[1], 'redimensionar');
       if (tamanoDeF(f) !== x.tamano)
         vm.error(`«redimensionar»: ${x.forma.join('×')} son ${x.tamano} números y ${f.join('×')} son ${tamanoDeF(f)}`,
@@ -10393,7 +10977,7 @@ function instalarNumerico(vm) {
         x.desp + i * x.zancadas[0], x.base || x);
     }, 'fila(a, i) — una VISTA de la fila i, sin copiar');
     def('copia', 'arreglo -> arreglo', a => {
-      const x = arr(a[0], 1, 'copia');
+      const x = arrB(a[0], 1, 'copia');
       const y = vm.arrNuevo(x.forma, x.tipo);
       let i = 0;
       for (const p of x.posiciones()) y.datos[i++] = x.datos[p];
@@ -10403,23 +10987,23 @@ function instalarNumerico(vm) {
 
     // ── entrar y salir ──────────────────────────────────────────────────────
     def('aListaA', 'arreglo -> lista', a => {
-      const x = arr(a[0], 1, 'aListaA');
+      const x = arrB(a[0], 1, 'aListaA');
       // Esta lee «datos» a mano en vez de pasar por arrValores, así que la
       // negativa para complejos hay que ponerla aquí: sin ella devolvía las
       // partes reales e imaginarias revueltas como si fueran números sueltos,
       // sin quejarse. Lo encontró una prueba que esperaba que fallara.
-      vm.nadaDeComplejos(x, 'aListaA');
+      if (!esBig(x.tipo)) vm.nadaDeComplejos(x, 'aListaA');
       vm.cobrar(x.tamano);
       const sube = (d, base) => {
         const n = x.forma[d], z = x.zancadas[d], out = new Array(n);
         for (let i = 0; i < n; i++)
-          out[i] = d === x.forma.length - 1 ? x.datos[base + i * z] : sube(d + 1, base + i * z);
+          out[i] = d === x.forma.length - 1 ? deBig64(x.datos[base + i * z]) : sube(d + 1, base + i * z);
         return L(out);
       };
       return sube(0, x.desp);
     }, 'aListaA(a) — de arreglo a lista anidada');
     def('elemento', '... -> real', a => {
-      const x = arr(a[0], 1, 'elemento');
+      const x = arrB(a[0], 1, 'elemento');
       const ix = [];
       for (let k = 1; k < a.length; k++) ix.push(ent(a[k], k + 1, 'elemento'));
       if (ix.length !== x.dimensiones)
@@ -10428,11 +11012,12 @@ function instalarNumerico(vm) {
       for (let d = 0; d < ix.length; d++)
         if (ix[d] < 0 || ix[d] >= x.forma[d])
           vm.error(`«elemento»: el índice ${ix[d]} se sale del eje ${d}, que mide ${x.forma[d]}`);
-      return x.datos[x.pos(ix)];
+      return deBig64(x.datos[x.pos(ix)]);
     }, 'elemento(a, i, j, …) — un solo número');
     def('ponerElemento', '... -> arreglo', a => {
-      const x = arr(a[0], 1, 'ponerElemento');
-      const v = num(a[a.length - 1], a.length, 'ponerElemento');
+      const x = arrB(a[0], 1, 'ponerElemento');
+      const ult = a[a.length - 1];
+      const v = esBig(x.tipo) && ult instanceof ObjGrande ? ult : num(ult, a.length, 'ponerElemento');
       const ix = [];
       for (let k = 1; k < a.length - 1; k++) ix.push(ent(a[k], k + 1, 'ponerElemento'));
       if (ix.length !== x.dimensiones)
@@ -10440,7 +11025,7 @@ function instalarNumerico(vm) {
       for (let d = 0; d < ix.length; d++)
         if (ix[d] < 0 || ix[d] >= x.forma[d])
           vm.error(`«ponerElemento»: el índice ${ix[d]} se sale del eje ${d}, que mide ${x.forma[d]}`);
-      x.datos[x.pos(ix)] = v;
+      x.datos[x.pos(ix)] = guardable(x.tipo, v);
       return x;
     }, 'ponerElemento(a, i, j, …, valor) — cambia un número · MODIFICA el arreglo');
 
@@ -10520,16 +11105,15 @@ function instalarNumerico(vm) {
           vm.error(`«donde»: el argumento ${k} debe ser un arreglo o un número y es ${tipoDe(v)}`);
       let f = m.forma.slice();
       for (const v of [si, no]) if (v instanceof ObjArreglo) f = difundirF(f, v.forma, 'donde');
-      const entero = (si instanceof ObjArreglo ? si.tipo === 'entero' : Number.isInteger(si)) &&
-                     (no instanceof ObjArreglo ? no.tipo === 'entero' : Number.isInteger(no));
-      const out = vm.arrNuevo(f, entero ? 'entero' : 'real');
+      const tipoV = v => (v instanceof ObjArreglo ? v.tipo : (Number.isInteger(v) ? 'entero' : 'real'));
+      const out = vm.arrNuevo(f, tipoAritmetico(tipoV(si), tipoV(no), '+', si instanceof ObjArreglo, no instanceof ObjArreglo));
       const vm_ = vm.arrValores(difundirVista(m, f));
       const vs = si instanceof ObjArreglo ? vm.arrValores(difundirVista(si, f)) : null;
       const vn = no instanceof ObjArreglo ? vm.arrValores(difundirVista(no, f)) : null;
       const n = out.tamano;
       vm.cobrar(n);
       for (let i = 0; i < n; i++) out.datos[i] = vm_[i] ? (vs ? vs[i] : si) : (vn ? vn[i] : no);
-      return out;
+      return vm.arrRedondear(out);
     }, 'donde(mascara, siCierto, siFalso) — elige elemento a elemento · el «si» de los arreglos');
 
     def('enMascara', 'arreglo, arreglo -> arreglo', a => {
@@ -10559,7 +11143,7 @@ function instalarNumerico(vm) {
       const vm2 = vm.arrValores(m);
       let i = 0, j = 0;
       for (const p of x.posiciones()) {
-        if (vm2[i]) x.datos[p] = esArr ? vv[j++ % vv.length] : v;
+        if (vm2[i]) x.datos[p] = guardable(x.tipo, esArr ? vv[j++ % vv.length] : v);
         i++;
       }
       vm.cobrar(x.tamano);
@@ -10575,10 +11159,10 @@ function instalarNumerico(vm) {
       const x = arr(a[0], 1, nombre), y = a[1];
       if (y instanceof ObjArreglo) {
         const f = difundirF(x.forma, y.forma, nombre);
-        const out = vm.arrNuevo(f, x.tipo === 'entero' && y.tipo === 'entero' ? 'entero' : 'real');
+        const out = vm.arrNuevo(f, tipoAritmetico(x.tipo, y.tipo, '+', true, true));
         const vx = vm.arrValores(difundirVista(x, f)), vy = vm.arrValores(difundirVista(y, f));
         for (let i = 0; i < out.tamano; i++) out.datos[i] = fn(vx[i], vy[i]);
-        return out;
+        return vm.arrRedondear(out);
       }
       const k = num(y, 2, nombre);
       return vm.arrUnaria(x, v => fn(v, k));
@@ -10785,7 +11369,7 @@ function instalarNumerico(vm) {
       }
       const f = xs[0].forma.slice();
       f[e] = xs.reduce((n, x) => n + x.forma[e], 0);
-      const tipo = xs.every(x => x.tipo === 'entero') ? 'entero' : (xs.every(x => x.tipo === 'bool') ? 'bool' : 'real');
+      const tipo = xs.every(x => x.tipo === 'bool') ? 'bool' : tipoComunDe(xs.map(x => (x.tipo === 'bool' ? 'real' : x.tipo)));
       const out = vm.arrNuevo(f, tipo);
       let off = 0;
       for (const x of xs) {
@@ -10797,7 +11381,7 @@ function instalarNumerico(vm) {
         for (let c = 0; c < x.tamano; c++) {
           let pos = 0;
           for (let q = 0; q < nd; q++) pos += (q === e ? ix[q] + off : ix[q]) * out.zancadas[q];
-          out.datos[pos] = vx[k++];
+          out.datos[pos] = guardable(tipo, vx[k++]);
           for (let q = nd - 1; q >= 0; q--) { if (++ix[q] < x.forma[q]) break; ix[q] = 0; }
         }
         off += x.forma[e];
@@ -10817,7 +11401,7 @@ function instalarNumerico(vm) {
       if (eje < 0) eje += xs[0].dimensiones + 1;
       if (eje < 0 || eje > xs[0].dimensiones) vm.error(`«apilar»: el eje no cabe · puede ir de 0 a ${xs[0].dimensiones}`);
       const f = xs[0].forma.slice(); f.splice(eje, 0, xs.length);
-      const tipo = xs.every(x => x.tipo === 'entero') ? 'entero' : 'real';
+      const tipo = tipoComunDe(xs.map(x => (x.tipo === 'bool' ? 'real' : x.tipo)));
       const out = vm.arrNuevo(f, tipo);
       const nd = f.length;
       for (let i = 0; i < xs.length; i++) {
@@ -10827,7 +11411,7 @@ function instalarNumerico(vm) {
         for (let c = 0; c < xs[i].tamano; c++) {
           let pos = 0, q2 = 0;
           for (let q = 0; q < nd; q++) pos += (q === eje ? i : ix[q2++]) * out.zancadas[q];
-          out.datos[pos] = vx[k++];
+          out.datos[pos] = guardable(tipo, vx[k++]);
           for (let q = ix.length - 1; q >= 0; q--) { if (++ix[q] < xs[i].forma[q]) break; ix[q] = 0; }
         }
       }
@@ -10915,15 +11499,150 @@ function instalarNumerico(vm) {
     como('cerosComo', 0, 'cerosComo(a, tipo?) — ceros con la forma y el tipo de otro');
     como('unosComo', 1, 'unosComo(a, tipo?)');
     como('vacioComo', null, 'vacioComo(a, tipo?) — sin inicializar');
+    // ══════════════════════════════════════════════ (motor-exp N4.5) bits
+    // Las operaciones de bits de C. Con NÚMEROS sueltos, enteros de verdad (como
+    // en Python: complemento a dos con infinitos unos a la izquierda, así que
+    // bitsNo(5) es −6 y desplazarIzq(1, 70) es 2^70 exacto, un grande). Con
+    // ARREGLOS, en el tipo del arreglo, como C y NumPy: un u8 desplazado se sale
+    // por la izquierda y desplazarDer de un negativo con signo rellena con unos.
+    const aEntBig = (v, n, f) => {
+      if (typeof v === 'number') {
+        if (!Number.isInteger(v)) vm.error(`«${f}»: el argumento ${n} tiene que ser un entero y es ${v}`);
+        return BigInt(v);
+      }
+      if (v instanceof ObjGrande) {
+        const b = aBig64(v);
+        if (!v.exacto || (v.e < 0 && b * (10n ** BigInt(-v.e)) !== v.m))
+          vm.error(`«${f}»: el argumento ${n} tiene que ser un entero exacto`);
+        return b;
+      }
+      vm.error(`«${f}»: el argumento ${n} tiene que ser un entero y es ${tipoDe(v)}`);
+    };
+    const arrEnt = (x, n, f) => {
+      if (!ENT_INFO[x.tipo])
+        vm.error(`«${f}»: las operaciones de bits son de arreglos ENTEROS y el argumento ${n} es ${x.tipo}`,
+          'pásalo antes con aTipo(a, "i32") o al entero que toque');
+      return x;
+    };
+    const DESPL_MAX = 1 << 16;
+    const despl = (v, n, f) => {
+      const k = vm.exigeNum(v, n, f);
+      if (!Number.isInteger(k) || k < 0) vm.error(`«${f}»: el desplazamiento es un entero no negativo y llegó ${k}`);
+      if (k > DESPL_MAX) vm.error(`«${f}»: el desplazamiento llega como mucho a ${DESPL_MAX}`);
+      return k;
+    };
+    // las operaciones, para BigInt y para números de hasta 32 bits (JavaScript
+    // las hace en 32 bits con signo, y el arreglo de destino envuelve al guardar)
+    const OPS_BITS = {
+      bitsY:   [(x, y) => x & y, (x, y) => x & y],
+      bitsO:   [(x, y) => x | y, (x, y) => x | y],
+      bitsXor: [(x, y) => x ^ y, (x, y) => x ^ y],
+      // desplazar por multiplicar o dividir por 2^k: exacto en un double, y el
+      // arreglo se queda con los bits que caben; con BigInt, el desplazamiento
+      // de JavaScript (el de la derecha es aritmético, el «>>» de C con signo)
+      desplazarIzq: [(x, k) => x << BigInt(k), (x, k) => x * Math.pow(2, Math.min(k, 1100))],
+      desplazarDer: [(x, k) => x >> BigInt(k), (x, k) => Math.floor(x / Math.pow(2, Math.min(k, 1100)))],
+    };
+    const bitsDos = (nombre) => a => {
+      const [fb, fn] = OPS_BITS[nombre], esDespl = nombre.startsWith('desplazar');
+      const x = a[0], y = a[1];
+      const ax = x instanceof ObjArreglo, ay = y instanceof ObjArreglo;
+      if (!ax && !ay) {
+        const bx = aEntBig(x, 1, nombre);
+        const r = esDespl ? fb(bx, despl(y, 2, nombre)) : fb(bx, aEntBig(y, 2, nombre));
+        return deBig64(r);
+      }
+      if (!ax) vm.error(`«${nombre}»: si hay un arreglo, va primero`, `${nombre}(arreglo, número) o ${nombre}(arreglo, arreglo)`);
+      arrEnt(x, 1, nombre);
+      if (ay) arrEnt(y, 2, nombre);
+      else if (esDespl) despl(y, 2, nombre);
+      else if (typeof y !== 'number' || !Number.isInteger(y)) vm.error(`«${nombre}»: el argumento 2 tiene que ser un entero o un arreglo entero`);
+      const tipo = esDespl ? x.tipo : (ay ? tipoAritmetico(x.tipo, y.tipo, '+', true, true) : x.tipo);
+      if (!ENT_INFO[tipo]) vm.error(`«${nombre}»: ${x.tipo} con ${y.tipo} no tiene un entero común`, 'pásalos a un mismo tipo con aTipo');
+      const f = ay ? difundir(x.forma, y.forma) : x.forma.slice();
+      if (f === null) vm.error(`«${nombre}»: las formas ${x.forma.join('×')} y ${y.forma.join('×')} no se pueden difundir`);
+      const out = vm.arrNuevo(f, tipo), d = out.datos, n = out.tamano;
+      vm.cobrar(n);
+      const big = esBig(tipo);
+      // el camino rápido: seguidos (o con un número), hasta 32 bits
+      if (!big && x.seguida && x.tamano === n && (!ay || (y.seguida && y.tamano === n && !esBig(y.tipo)))) {
+        const xd = x.datos, yd = ay ? y.datos : null;
+        if (ay && esDespl) { for (let k = 0; k < n; k++) { const w = yd[k]; if (w < 0 || w > DESPL_MAX) vm.error(`«${nombre}»: el desplazamiento es un entero de 0 a ${DESPL_MAX} y llegó ${w}`); d[k] = fn(xd[k], w); } }
+        else if (ay) for (let k = 0; k < n; k++) d[k] = fn(xd[k], yd[k]);
+        else for (let k = 0; k < n; k++) d[k] = fn(xd[k], y);
+        return out;
+      }
+      const zx = zancadasDifundidas(x, f), zy = ay ? zancadasDifundidas(y, f) : null;
+      const nd = f.length, ix = new Array(nd).fill(0);
+      const ys = ay ? null : (big && !esDespl ? BigInt(y) : y);
+      for (let k = 0; k < n; k++) {
+        let px = x.desp, py = ay ? y.desp : 0;
+        for (let q = 0; q < nd; q++) { px += ix[q] * zx[q]; if (ay) py += ix[q] * zy[q]; }
+        let u = x.datos[px], w = ay ? y.datos[py] : ys;
+        if (esDespl) {
+          if (ay) { w = Number(w); if (w < 0 || w > DESPL_MAX) vm.error(`«${nombre}»: el desplazamiento es un entero de 0 a ${DESPL_MAX} y llegó ${w}`); }
+          d[k] = big ? fb(BigInt(u), w) : fn(Number(u), w);
+        } else if (big) d[k] = fb(BigInt(u), BigInt(w));
+        else d[k] = fn(Number(u), Number(w));
+        for (let q = nd - 1; q >= 0; q--) { if (++ix[q] < f[q]) break; ix[q] = 0; }
+      }
+      return out;
+    };
+    for (const [nombre, ayuda] of [
+      ['bitsY', 'bitsY(a, b) — el «&» de C, bit a bit'],
+      ['bitsO', 'bitsO(a, b) — el «|» de C'],
+      ['bitsXor', 'bitsXor(a, b) — el «^» de C'],
+      ['desplazarIzq', 'desplazarIzq(a, k) — el «<<» de C · en un arreglo, en su tipo (lo que sale por la izquierda se pierde)'],
+      ['desplazarDer', 'desplazarDer(a, k) — el «>>» de C · aritmético en los tipos con signo, lógico en los sin signo'],
+    ]) def(nombre, '... -> cualquiera', bitsDos(nombre), ayuda);
+    def('bitsNo', '... -> cualquiera', a => {
+      const x = a[0];
+      if (!(x instanceof ObjArreglo)) return deBig64(~aEntBig(x, 1, 'bitsNo'));
+      arrEnt(x, 1, 'bitsNo');
+      const out = vm.arrNuevo(x.forma, x.tipo), d = out.datos, big = esBig(x.tipo);
+      let i = 0;
+      for (const p of x.posiciones()) d[i++] = big ? ~x.datos[p] : ~x.datos[p];
+      vm.cobrar(x.tamano);
+      return out;
+    }, 'bitsNo(a) — el «~» de C: bitsNo(5) es −6, y en un u8, 5 da 250');
+    def('contarBits', '... -> cualquiera', a => {
+      const x = a[0];
+      const pop = b => { let c = 0; if (b < 0n) vm.error('«contarBits» de un negativo suelto no tiene fin', 'pásalo a un arreglo de su tipo, o usa bitsY con una máscara'); while (b) { c += Number(b & 1n); b >>= 1n; } return c; };
+      if (!(x instanceof ObjArreglo)) return pop(aEntBig(x, 1, 'contarBits'));
+      arrEnt(x, 1, 'contarBits');
+      const [bits] = ENT_INFO[x.tipo];
+      const out = vm.arrNuevo(x.forma, 'entero'), d = out.datos;
+      let i = 0;
+      for (const p of x.posiciones()) d[i++] = pop(BigInt.asUintN(bits, BigInt(x.datos[p])));
+      vm.cobrar(x.tamano);
+      return out;
+    }, 'contarBits(a) — cuántos bits a 1 (el popcount) · en un arreglo, en los bits de su tipo');
+
     def('aTipo', 'arreglo, texto -> arreglo', a => {
-      const x = arr(a[0], 1, 'aTipo');
+      const x = arrB(a[0], 1, 'aTipo');
       const t = tipoArg(a[1], 'aTipo');
+      if (x.tipo === 'complejo') vm.nadaDeComplejos(x, 'aTipo');
       const y = vm.arrNuevo(x.forma, t);
       let i = 0;
-      for (const p of x.posiciones()) y.datos[i++] = x.datos[p];
+      // (motor-exp N4.5) entre BigInt y número hay que convertir a mano (las
+      // TypedArray no lo hacen): de real a i64 se trunca, como en C
+      if (esBig(t) || esBig(x.tipo)) {
+        for (const p of x.posiciones()) {
+          const v = x.datos[p];
+          y.datos[i++] = t === 'bool' ? ((typeof v === 'bigint' ? v !== 0n : v !== 0) ? 1 : 0) : guardable(t, v);
+        }
+      } else if (ENT_INFO[t] && t !== 'entero' && !ENT_INFO[x.tipo] && x.tipo !== 'bool') {
+        // de coma flotante a un entero de máquina: se trunca y se envuelve (la
+        // TypedArray lo hace exacto); NaN e infinito no son enteros
+        for (const p of x.posiciones()) {
+          const v = x.datos[p];
+          if (!Number.isFinite(v)) vm.error(`«aTipo»: ${v} no cabe en un ${t}`);
+          y.datos[i++] = v;
+        }
+      } else for (const p of x.posiciones()) y.datos[i++] = x.datos[p];
       vm.cobrar(x.tamano);
-      return y;
-    }, 'aTipo(a, "real" | "entero" | "bool") — convierte, copiando');
+      return vm.arrRedondear(y);
+    }, 'aTipo(a, tipo) — convierte, copiando · tipos: real entero bool real32 real16 i8 u8 i16 u16 u32 i64 u64 · a entero se trunca y ENVUELVE (300 en un u8 es 44), como en C');
 
     // ══════════════════════════════════════════════ álgebra lineal
     def('por', 'arreglo, arreglo -> arreglo', a => {
@@ -10938,6 +11657,9 @@ function instalarNumerico(vm) {
         vm.error(`«por»: no se puede multiplicar ${A.forma.join('×')} por ${B.forma.join('×')}`,
           `las columnas del primero (${A.forma[1]}) tienen que ser las filas del segundo (${B.forma[0]})`);
       const nf = A.forma[0], nm = A.forma[1], nc = B.forma[1];
+      // (motor-exp N2) con NEÑ instalado, el producto de NEÑ (GPU, C o JS, mismos
+      // bits), sin copiar los arreglos y con el resultado residente en la GPU
+      if (vm.nenPor && A.tipo !== 'complejo' && B.tipo !== 'complejo') return vm.nenPor(A, B);
       vm.cobrar(nf * nm * nc);
       const out = vm.arrNuevo([nf, nc], 'real');
       const va = vm.arrValores(A), vb = vm.arrValores(B);
@@ -11382,24 +12104,33 @@ function instalarNumerico(vm) {
       if (x.dimensiones !== 1) vm.error(`«fourier» trabaja sobre una dimensión y llegó un arreglo de ${x.dimensiones}`,
         'saca la fila o la columna con fila(a, i) o trozoVarios, y transfórmala');
       if (x.tamano < 1) vm.error('«fourier» de un arreglo vacío');
-      const d = aPlano(x);
-      transformar(d, x.tamano, -1);
+      // (motor-exp N3) potencia de dos y seguido: el resultado lo hacen los
+      // núcleos de NEÑ y se queda en la GPU si la hay (mismos bits)
+      const r = vm.nenFourier ? vm.nenFourier(x, -1) : null;
+      if (r) return r;
+      let d = aPlano(x);
+      if (vm.nenFFT) d = vm.nenFFT(d, x.tamano, -1);        // (motor-exp N2) por los núcleos de NEÑ
+      else transformar(d, x.tamano, -1);
       return vm.arrDesdePlanosC(d, x.forma);
     }, 'fourier(a) — la transformada discreta · acepta reales o complejos y devuelve complejos · O(n log n) para cualquier n, no solo potencias de dos');
     def('fourierInversa', 'arreglo -> arreglo', a => {
       const x = arrC(a[0], 1, 'fourierInversa');
       if (x.dimensiones !== 1) vm.error(`«fourierInversa» trabaja sobre una dimensión y llegó un arreglo de ${x.dimensiones}`);
       if (x.tamano < 1) vm.error('«fourierInversa» de un arreglo vacío');
-      const n = x.tamano, d = aPlano(x);
-      transformar(d, n, 1);
-      for (let i = 0; i < 2 * n; i++) d[i] /= n;
+      const n = x.tamano;
+      const r = vm.nenFourier ? vm.nenFourier(x, 1, n) : null;      // (motor-exp N3)
+      if (r) return r;
+      let d = aPlano(x);
+      if (vm.nenFFT) d = vm.nenFFT(d, n, 1, n);             // (motor-exp N2) dividida allí mismo
+      else { transformar(d, n, 1); for (let i = 0; i < 2 * n; i++) d[i] /= n; }
       return vm.arrDesdePlanosC(d, x.forma);
     }, 'fourierInversa(a) — el camino de vuelta, ya dividida entre n · fourierInversa(fourier(x)) devuelve x');
     def('espectro', 'arreglo -> arreglo', a => {
       const x = arrC(a[0], 1, 'espectro');
       if (x.dimensiones !== 1) vm.error('«espectro» trabaja sobre una dimensión');
-      const n = x.tamano, d = aPlano(x);
-      transformar(d, n, -1);
+      const n = x.tamano;
+      let d = aPlano(x);
+      if (vm.nenFFT) d = vm.nenFFT(d, n, -1); else transformar(d, n, -1);
       const out = vm.arrNuevo([n], 'real');
       for (let i = 0; i < n; i++) out.datos[i] = Math.hypot(d[2 * i], d[2 * i + 1]);
       return out;
@@ -11429,16 +12160,18 @@ function instalarNumerico(vm) {
       // Por Fourier, no con el doble bucle: con 100.000 datos y un filtro de
       // 1000 el bucle son 10⁸ multiplicaciones y esto son 10⁶.
       const t = 1 << Math.ceil(Math.log2(largo));
-      const A = new Float64Array(2 * t), B = new Float64Array(2 * t);
+      let A = new Float64Array(2 * t);
+      const B = new Float64Array(2 * t);
       const vx = vm.arrValores(x), vy = vm.arrValores(y);
       for (let i = 0; i < n; i++) A[2 * i] = vx[i];
       for (let i = 0; i < m; i++) B[2 * i] = vy[i];
-      fft2(A, t, -1); fft2(B, t, -1);
+      let FA = A, FB = B;
+      if (vm.nenFFT) { FA = vm.nenFFT(A, t, -1); FB = vm.nenFFT(B, t, -1); } else { fft2(A, t, -1); fft2(B, t, -1); }
       for (let i = 0; i < t; i++) {
-        const ar = A[2 * i], ai = A[2 * i + 1], br = B[2 * i], bi = B[2 * i + 1];
-        A[2 * i] = ar * br - ai * bi; A[2 * i + 1] = ar * bi + ai * br;
+        const ar = FA[2 * i], ai = FA[2 * i + 1], br = FB[2 * i], bi = FB[2 * i + 1];
+        FA[2 * i] = ar * br - ai * bi; FA[2 * i + 1] = ar * bi + ai * br;
       }
-      fft2(A, t, 1);
+      if (vm.nenFFT) A = vm.nenFFT(FA, t, 1); else fft2(A, t, 1);
       const out = vm.arrNuevo([largo], 'real');
       for (let i = 0; i < largo; i++) out.datos[i] = A[2 * i] / t;
       return out;
@@ -13199,6 +13932,10 @@ function deHsl(h, s, l) {
 //  y las tres están escritas abajo donde se pagan:
 //    · nada de FMA: gcc con -ffp-contract=off y NVRTC con --fmad=false. Una FMA
 //      redondea una vez donde a*b+c redondea dos, y el último bit cambia.
+//      (motor-exp N3) La única excepción es a propósito y en los tres a la
+//      vez: el producto de matrices de NEÑ (nen_dgemm) llama a fma() de forma
+//      EXPLÍCITA en C y en CUDA, y JavaScript la emula exacta (nenFma). Ninguna
+//      bandera cambia: lo generado por «paralelo» sigue sin FMA.
 //    · el mismo orden de operaciones en los tres textos: las expresiones se
 //      emiten con paréntesis explícitos y los temporales en el mismo sitio.
 //    · enteros que JavaScript no tiene: un «entero» de Ñ es un double y en C es
@@ -13403,17 +14140,136 @@ const C1EN_FUNCIONES = {
   // digan lo mismo: piso() de la biblioteca devuelve real para el verificador y
   // entero para C1EÑ; entero(piso(x)) es entero para los dos.
   entero: 1, real: 1,
+  // (motor-exp N4.4) el modelo de la GPU, en los núcleos de paraleloBloques
+  barrera: 0, hilosPorBloque: 0, numeroBloques: 0, compartido: 1, compartidoEntero: 1,
+  // (motor-exp N4.5) las operaciones de bits de C, sobre los enteros del núcleo
+  // (64 bits con signo); el resultado tiene que caber exacto en un número de Ñ
+  bitsY: 2, bitsO: 2, bitsXor: 2, bitsNo: 1, desplazarIzq: 2, desplazarDer: 2,
+  // (motor-exp N4.7) memoria compartida con control fino: atómicos sobre arreglos
+  // enteros (en cualquier núcleo), y candados, esperas y barreras entre hilos de
+  // la CPU (solo en los núcleos de «hilos», donde todos los hilos están vivos a la vez)
+  atomicoLeer: 2, atomicoEscribir: 3, atomicoSumar: 3, atomicoCambiar: 3, atomicoComparar: 4,
+  cerrarCandado: 2, abrirCandado: 2, esperarMientras: 3, despertar: 2, vallaMemoria: 0,
+  barreraHilos: 0, numeroHilos: 0,
+  // (motor-exp N4.9) plantillas: el tipo de los números de un arreglo y sus
+  // límites son CONSTANTES del núcleo (cada tipo de argumento es otro núcleo), así
+  // que «si tipoArreglo(a) == "real32" { … }» se decide al compilar
+  tipoArreglo: 1, epsilonTipo: 1, minimoTipo: 1, maximoTipo: 1,
 };
+// (motor-exp N4.7) los atómicos: «s» = es una sentencia (no devuelve nada), «b» =
+// bloquea (solo en «hilos»), «v» = cuántos valores además del arreglo y el índice
+const C1EN_ATOMICOS = {
+  atomicoLeer: { v: 0 }, atomicoSumar: { v: 1 }, atomicoCambiar: { v: 1 }, atomicoComparar: { v: 2 },
+  atomicoEscribir: { v: 1, s: true }, abrirCandado: { v: 0, s: true }, despertar: { v: 0, s: true },
+  cerrarCandado: { v: 0, s: true, b: true }, esperarMientras: { v: 1, s: true, b: true },
+};
+const C1EN_MAX_HILOS_SO = 256;
+// (motor-exp N4.11) las comprobaciones que «sinComprobar» quita en nativo y en la GPU
+const C1EN_QUITABLES = new Set(['idx', 'div', 'mod', 'raiz', 'log', 'piso', 'bits', 'despl', 'paso']);     // (motor-exp N4.7) hilos del sistema en un núcleo de «hilos»
+// (motor-exp N4.5) «&», «|» y «^» en JavaScript: con enteros de 32 bits, los
+// operadores de siempre (dan lo mismo que en 64); si no, con BigInt. NaN si el
+// resultado no cabe exacto en un número de Ñ (más de 2^53), y el núcleo falla.
+function c1enBits(op, a, b) {
+  if ((a | 0) === a && (b | 0) === b) return op === 0 ? a & b : op === 1 ? a | b : a ^ b;
+  const x = BigInt(a), y = BigInt(b);
+  const r = op === 0 ? x & y : op === 1 ? x | y : x ^ y;
+  return r >= -9007199254740992n && r <= 9007199254740992n ? Number(r) : NaN;
+}
+const C1EN_BITS = { bitsY: 0, bitsO: 1, bitsXor: 2, bitsNo: 3, desplazarIzq: 4, desplazarDer: 5 };
 const C1EN_TRASC = { exp: 'exp', log: 'log', log10: 'log10', seno: 'sin', coseno: 'cos', tangente: 'tan',
   arcoseno: 'asin', arcocoseno: 'acos', arcotangente: 'atan' };
 const C1EN_TRASC_JS = { exp: 'Math.exp', log: 'Math.log', log10: 'Math.log10', seno: 'Math.sin', coseno: 'Math.cos',
   tangente: 'Math.tan', arcoseno: 'Math.asin', arcocoseno: 'Math.acos', arcotangente: 'Math.atan' };
 const C1EN_LISTA = 'raiz, exp, log, log10, seno, coseno, tangente, arcoseno, arcocoseno, arcotangente, ' +
-  'angulo, absoluto, piso, techo, minimo, maximo, entero, real, longitud, tamano, azarHilo y sumarAtomico';
+  'angulo, absoluto, piso, techo, minimo, maximo, entero, real, longitud, tamano, azarHilo y sumarAtomico' +
+  ' (y en paraleloBloques: barrera, hilosPorBloque, numeroBloques, compartido y compartidoEntero;' +
+  ' y de bits: bitsY, bitsO, bitsXor, bitsNo, desplazarIzq y desplazarDer;' +
+  ' y atómicos: atomicoLeer, atomicoEscribir, atomicoSumar, atomicoCambiar, atomicoComparar, vallaMemoria;' +
+  ' y en hilos: barreraHilos, numeroHilos, cerrarCandado, abrirCandado, esperarMientras y despertar;' +
+  ' y constantes del tipo: tipoArreglo (comparado con un texto), epsilonTipo, minimoTipo y maximoTipo)';
 
-function instalarNenC1en(vm, def) {
+function instalarNenC1en(vm, def, host) {
   const c1en = crearC1en(vm);
   vm.c1en = c1en;
+
+  // ── (motor-exp N4.3) trabajo asíncrono en la GPU ───────────────────────────
+  // Una COLA es una fila de trabajo de la GPU (un CUstream): lo que se lanza en
+  // ella va en orden, sin que la CPU espere, y dos colas pueden avanzar a la vez
+  // (una copia mientras la otra calcula). El orden entre colas lo pone C1EÑ solo
+  // (ver «COLAS» arriba). En jit y nativo una cola existe igual, pero todo corre
+  // en el acto: el mismo programa vale en los tres dispositivos.
+  const exigeCola = (v, k, f) => {
+    if (!(v instanceof ObjOpaco) || v.clase !== 'cola') vm.error(`«${f}»: el argumento ${k} debe ser una cola (de colaGpu()) y es ${tipoDe(v)}`);
+    if (!v.cola.viva) vm.error(`«${f}»: esa cola ya se soltó`, 'crea otra con colaGpu()');
+    return v.cola;
+  };
+  // (motor-exp N4.8) colaGpu(k): la cola es de la GPU k, y lo que se lance en ella va a esa GPU
+  const exigeIndiceGpu = (v, k, f) => {
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) vm.error(`«${f}»: el argumento ${k} es el índice de la GPU, un entero desde 0, y es ${typeof v === 'number' ? v : tipoDe(v)}`);
+    return v;
+  };
+  def('colaGpu', '... -> cualquiera', a => {
+    if (a.length > 1) vm.error('«colaGpu» recibe, como mucho, el índice de la GPU', 'colaGpu() · colaGpu(1)');
+    const k = a.length ? exigeIndiceGpu(a[0], 1, 'colaGpu') : null;
+    return new ObjOpaco('cola', null, { cola: c1en.nuevaCola(k) });
+  }, 'colaGpu() · colaGpu(k) — una cola de trabajo de la GPU actual (o de la GPU k): lo que se lance en ella con enCola va a esa GPU y no hace esperar a la CPU');
+  def('enCola', 'cualquiera, funcion -> cualquiera', a => {
+    const c = exigeCola(a[0], 1, 'enCola');
+    vm.exigeFuncion(a[1], 2, 'enCola');
+    return c1en.conCola(c, () => vm.invocar(a[1], []));
+  }, 'enCola(c, fn() { … }) — lo que la función lance en la GPU va a la cola c y la CPU sigue sin esperar; devuelve lo que devuelva la función');
+  def('esperarCola', 'cualquiera -> nulo', a => { c1en.esperarCola(exigeCola(a[0], 1, 'esperarCola')); return null; },
+    'esperarCola(c) — la CPU espera a que la cola termine; si un núcleo de la cola falló, el error sale aquí');
+  def('colaLista', 'cualquiera -> bool', a => c1en.colaLista(exigeCola(a[0], 1, 'colaLista')),
+    'colaLista(c) — si la cola ya terminó todo, sin esperar');
+  def('soltarCola', 'cualquiera -> nulo', a => { c1en.soltarCola(exigeCola(a[0], 1, 'soltarCola')); return null; },
+    'soltarCola(c) — espera a que termine y la libera');
+  def('promesaCola', 'cualquiera -> cualquiera', a => {
+    // Una promesa que se cumple cuando la cola termina: dentro de una función
+    // asíncrona, «esperar promesaCola(c)» deja correr otras cosas mientras tanto.
+    const c = exigeCola(a[0], 1, 'promesaCola');
+    const p = vm.registrar(new ObjPromesa());
+    // se mira desde el bucle de eventos, siempre (también en jit y nativo, donde
+    // ya terminó): así el orden de lo que pasa es el mismo en los tres
+    const luego = f => host.tiempo.luego(1, new ObjNativa(' mirarCola', 0, () => { f(); return null; }), vm);
+    const mirar = () => {
+      if (c.viva && !c1en.colaLista(c)) { luego(mirar); return; }
+      try { if (c.viva) c1en.esperarCola(c); vm.cumplir(p, null, true); }
+      catch (e) { vm.cumplir(p, new ObjError('motor', e.message || String(e), e.linea || 0), false); }
+    };
+    if (host && host.tiempo) luego(mirar);
+    else { c1en.esperarCola(c); vm.cumplir(p, null, true); }
+    return p;
+  }, 'promesaCola(c) — una promesa que se cumple cuando la cola termina: «esperar promesaCola(c)»');
+  def('subirGpu', 'arreglo -> arreglo', a => {
+    const x = a[0];
+    if (!(x instanceof ObjArreglo)) vm.error(`«subirGpu»: el argumento 1 debe ser un arreglo y es ${tipoDe(x)}`);
+    c1en.subir(x);
+    return x;
+  }, 'subirGpu(a) — sube el arreglo a la GPU ya, en la cola actual, sin esperar: para que esté allí cuando lo use un núcleo (copiar mientras se calcula)');
+  def('medirGpu', 'funcion -> real', a => {
+    vm.exigeFuncion(a[0], 1, 'medirGpu');
+    return c1en.medir(() => vm.invocar(a[0], []));
+  }, 'medirGpu(fn() { … }) — los milisegundos que tarda en la GPU lo que la función lanza (con eventos de CUDA); en jit y nativo, el reloj');
+
+  // (motor-exp N4.8) varias GPU desde un solo programa
+  def('numeroGpus', ' -> entero', () => c1en.numeroGpus(),
+    'numeroGpus() — cuántas GPU hay en esta máquina (0 si ninguna), se use o no la GPU');
+  def('enGpu', 'entero, funcion -> cualquiera', a => {
+    const k = exigeIndiceGpu(a[0], 1, 'enGpu');
+    vm.exigeFuncion(a[1], 2, 'enGpu');
+    return c1en.conGpu(k, () => vm.invocar(a[1], []), 'enGpu');
+  }, 'enGpu(k, fn() { … }) — lo que la función lance en la GPU va a la GPU k; al salir vuelve la de antes. En jit y nativo solo corre la función');
+  def('paraleloRepartido', '... -> nulo', a => {
+    if (a.length < 2) vm.error('«paraleloRepartido» necesita al menos el número de hilos y la función',
+      'paraleloRepartido(n, funcion(i, a, b) { … }, a, b)');
+    const n = a[0];
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 0)
+      vm.error(`«paraleloRepartido»: el número de hilos tiene que ser un entero no negativo y es ${typeof n === 'number' ? n : tipoDe(n)}`);
+    vm.exigeFuncion(a[1], 2, 'paraleloRepartido');
+    c1en.paraleloRepartido(n, a[1], a.slice(2), 'paraleloRepartido');
+    return null;
+  }, 'paraleloRepartido(n, funcion(i, a, b) { a[i] = … }, a, b) — como paralelo, pero los n índices se reparten entre todas las GPU de la máquina; da lo mismo que paralelo, al bit');
 
   def('paralelo', '... -> nulo', a => {
     if (a.length < 2) vm.error('«paralelo» necesita al menos el número de hilos y la función',
@@ -13425,6 +14281,45 @@ function instalarNenC1en(vm, def) {
     c1en.paralelo(n, a[1], a.slice(2), 'paralelo');
     return null;
   }, 'paralelo(n, funcion(i, a, b) { a[i] = … }, a, b) — corre el cuerpo para i = 0..n−1 en el dispositivo actual; los arreglos se modifican en el sitio');
+
+  // (motor-exp N4.4) el modelo de la GPU: bloques, hilos, memoria compartida y barreras
+  def('paraleloBloques', '... -> nulo', a => {
+    if (a.length < 3) vm.error('«paraleloBloques» necesita los bloques, los hilos por bloque y la función',
+      'paraleloBloques(bloques, hilos, funcion(b, t, a) { … }, a)');
+    vm.exigeFuncion(a[2], 3, 'paraleloBloques');
+    c1en.paraleloBloques(a[0], a[1], a[2], a.slice(3), 'paraleloBloques');
+    return null;
+  }, 'paraleloBloques(bloques, hilos, funcion(b, t, …) { … }, …) — la cuadrícula de la GPU a la vista: «b» es el bloque, «t» el hilo dentro del bloque; dentro, compartido(n), barrera(), hilosPorBloque() y numeroBloques()');
+  const soloNucleo = nombre => () => vm.error(`«${nombre}» solo tiene sentido dentro de un núcleo de paraleloBloques`,
+    'paraleloBloques(bloques, hilos, funcion(b, t, …) { … barrera() … }, …)');
+  def('barrera', ' -> nulo', soloNucleo('barrera'), 'barrera() — dentro de un núcleo de bloques: cada hilo espera a que todos los del bloque lleguen (__syncthreads)');
+  def('hilosPorBloque', ' -> entero', soloNucleo('hilosPorBloque'), 'hilosPorBloque() — dentro de un núcleo de bloques: cuántos hilos tiene cada bloque');
+  def('numeroBloques', ' -> entero', soloNucleo('numeroBloques'), 'numeroBloques() — dentro de un núcleo de bloques: cuántos bloques tiene la cuadrícula');
+  def('compartido', 'entero -> cualquiera', soloNucleo('compartido'), 'fijo s = compartido(256) — dentro de un núcleo de bloques: memoria del bloque, que ven todos sus hilos (empieza a cero)');
+  def('compartidoEntero', 'entero -> cualquiera', soloNucleo('compartidoEntero'), 'fijo s = compartidoEntero(256) — como compartido, de enteros');
+  // ── (motor-exp N4.7) hilos de la CPU y memoria compartida con control fino ──
+  def('hilos', '... -> nulo', a => {
+    if (a.length < 2) vm.error('«hilos» necesita cuántos hilos y la función', 'hilos(4, funcion(t, a) { … }, a)');
+    vm.exigeFuncion(a[1], 2, 'hilos');
+    c1en.hilos(a[0], a[1], a.slice(2), 'hilos');
+    return null;
+  }, 'hilos(n, funcion(t, …) { … }, …) — n hilos de la CPU A LA VEZ (hasta 256), cada uno con su «t»: pueden esperarse (barreraHilos), cerrar candados (cerrarCandado/abrirCandado), esperar a que algo cambie (esperarMientras) y tocar memoria compartida con atómicos · en jit, los hilos se turnan y un interbloqueo se caza; en nativo son hilos de verdad');
+  const soloEnNucleo = (nombre, donde) => () => vm.error(`«${nombre}» solo tiene sentido dentro de un núcleo${donde ? ' de ' + donde : ''}`,
+    donde === 'hilos' ? 'hilos(n, funcion(t, a) { … }, a)' : 'paralelo(n, funcion(i, a) { … atomicoSumar(a, 0, 1) … }, a), o hilos(n, …)');
+  for (const [nombre, firma, donde, ayuda] of [
+    ['atomicoLeer', 'arreglo, entero -> entero', '', 'atomicoLeer(a, i) — dentro de un núcleo: lee a[i] de un arreglo entero de una vez, sin que otro hilo lo pise a medias'],
+    ['atomicoEscribir', 'arreglo, entero, entero -> nulo', '', 'atomicoEscribir(a, i, v) — dentro de un núcleo: escribe a[i] de una vez'],
+    ['atomicoSumar', 'arreglo, entero, entero -> entero', '', 'atomicoSumar(a, i, v) — dentro de un núcleo: a[i] += v sin carreras; devuelve lo que había'],
+    ['atomicoCambiar', 'arreglo, entero, entero -> entero', '', 'atomicoCambiar(a, i, v) — dentro de un núcleo: pone v y devuelve lo que había'],
+    ['atomicoComparar', 'arreglo, entero, entero, entero -> entero', '', 'atomicoComparar(a, i, esperado, nuevo) — dentro de un núcleo: si a[i] es «esperado» pone «nuevo»; devuelve lo que había (el CAS)'],
+    ['vallaMemoria', ' -> nulo', '', 'vallaMemoria() — dentro de un núcleo: lo escrito antes lo ven los demás hilos antes que lo de después'],
+    ['cerrarCandado', 'arreglo, entero -> nulo', 'hilos', 'cerrarCandado(c, k) — en un núcleo de hilos: espera a que el candado c[k] esté abierto (0) y lo cierra (1)'],
+    ['abrirCandado', 'arreglo, entero -> nulo', 'hilos', 'abrirCandado(c, k) — abre el candado c[k]'],
+    ['esperarMientras', 'arreglo, entero, entero -> nulo', 'hilos', 'esperarMientras(a, i, v) — en un núcleo de hilos: espera mientras a[i] valga v'],
+    ['despertar', 'arreglo, entero -> nulo', 'hilos', 'despertar(a, i) — avisa a quien espera en a[i] (opcional: esperarMientras mira solo)'],
+    ['barreraHilos', ' -> nulo', 'hilos', 'barreraHilos() — en un núcleo de hilos: cada hilo espera a que lleguen todos'],
+    ['numeroHilos', ' -> entero', 'hilos', 'numeroHilos() — en un núcleo de hilos: cuántos son'],
+  ]) def(nombre, firma, soloEnNucleo(nombre, donde), ayuda);
 
   def('dispositivo', ' -> texto', () => c1en.describir(),
     'dispositivo() — dónde corre «paralelo» ahora: "gpu: Tesla T4 (0)", "nativo: gcc …" o "jit"');
@@ -13464,7 +14359,7 @@ function instalarNenC1en(vm, def) {
   }, 'azarHilo(semilla, i, canal) — real en [0, 1) que solo depende de sus tres enteros: el mismo en jit, nativo y gpu');
   def('sumarAtomico', 'arreglo, real, real -> nulo', a => {
     const x = a[0];
-    if (!(x instanceof ObjArreglo) || (x.tipo !== 'real' && x.tipo !== 'entero'))
+    if (!(x instanceof ObjArreglo) || (x.tipo !== 'real' && x.tipo !== 'entero' && x.tipo !== 'real32'))
       vm.error(`«sumarAtomico»: el argumento 1 tiene que ser un arreglo real o entero y es ${tipoDe(x)}`);
     const j = vm.exigeNum(a[1], 2, 'sumarAtomico');
     const v = vm.exigeNum(a[2], 3, 'sumarAtomico');
@@ -13489,9 +14384,32 @@ const errLimpio = new Map();
 // abajo). Es del proceso, no de cada motor: la memoria de la GPU es una sola.
 const residentes = new WeakMap();
 const vivos = new Set();                     // WeakRef de cada arreglo residente
-const porLiberar = [];                       // [d, gpu] pendientes de liberar
+const porLiberar = [];                       // [d, gpu, bytes] pendientes de liberar
 const finalizador = typeof FinalizationRegistry === 'function'
-  ? new FinalizationRegistry(({ d, gpu }) => porLiberar.push([d, gpu])) : null;
+  ? new FinalizationRegistry(({ d, gpu, bytes }) => porLiberar.push([d, gpu, bytes])) : null;
+// (motor-exp N2) Memoria de la GPU que se devuelve y se vuelve a pedir. Un
+// programa de NEÑ crea un arreglo nuevo en cada operación (y = senoA(x) * 2…),
+// y cuMemAlloc + cuMemFree por cada uno cuesta más que el núcleo. Lo que se
+// suelta se guarda por tamaño exacto y por GPU, hasta C1EN_POOL_MB (1024 si no
+// se dice); lo que pase de ahí se libera de verdad.
+const poolGpu = new Map();                   // gpu → Map(bytes → [d…])
+let poolBytes = 0;
+const POOL_MAX = (typeof process !== 'undefined' && process.env && Number(process.env.C1EN_POOL_MB) >= 0 && process.env.C1EN_POOL_MB !== undefined
+  && process.env.C1EN_POOL_MB !== '') ? Number(process.env.C1EN_POOL_MB) * 1048576 : 1024 * 1048576;
+// Los registros de residentes que usa el lanzamiento en curso: si falta memoria
+// a mitad de un lanzamiento, a esos no se les puede bajar ni soltar.
+const enUso = new Set();
+// (motor-exp N4.3) COLAS. Todo lo de la GPU va a una cola (un CUstream): la de
+// siempre por GPU (la «legacy», null) o una que el programa creó con colaGpu().
+// Mientras solo existe la de siempre, el orden lo da ella sola y no hace falta
+// nada más; en cuanto hay colas, cada arreglo residente recuerda qué cola lo
+// escribió por última vez («esc») y cuáles lo leen («lectores»), y un núcleo en
+// otra cola espera a esas con un evento (cuStreamWaitEvent): sin parar a la CPU
+// y sin que el programa tenga que pensar en carreras. Cada cola tiene un evento
+// que se vuelve a marcar tras cada cosa que se le encola.
+const colasLegado = new Map();               // gpu → la cola de siempre
+let colasVivas = 0;                          // colas creadas y no soltadas
+const colaLegado = g => { let c = colasLegado.get(g); if (!c) { c = { s: null, gpu: g, ev: null, pendientes: [], legado: true }; colasLegado.set(g, c); } return c; };
 
 // ============================================================================
 //  El motor: compilar, elegir dispositivo y lanzar
@@ -13502,6 +14420,25 @@ function crearC1en(vm) {
   // (gpu, luego nativo, luego jit).
   let actual = null;
   let indiceGpu = 0;
+  // (motor-exp N4.3) la cola en la que se encola lo que se lance ahora
+  let colaActual = null;
+  const colaUsada = () => (colaActual && !colaActual.logica && colaActual.gpu === indiceGpu ? colaActual : colaLegado(indiceGpu));
+  const conColas = cu => cu.asincrono && colasVivas > 0;
+  function eventoDe(cu, c) { if (!c.ev) c.ev = cu.nuevoEvento(false); return c.ev; }
+  // tras encolar algo en «c»: su evento marca hasta aquí
+  function trasEncolar(cu, c) { if (conColas(cu)) cu.marcar(eventoDe(cu, c), c.s); }
+  // antes de que la cola «c» use el arreglo: que espere a las otras colas que lo
+  // escribieron (si lo va a leer) o que lo usan (si lo va a escribir)
+  function usar1(cu, reg, c, escribe) {
+    if (conColas(cu)) {
+      const otras = new Set();
+      if (reg.esc && reg.esc !== c) otras.add(reg.esc);
+      if (escribe && reg.lectores) for (const t of reg.lectores) if (t !== c) otras.add(t);
+      for (const t of otras) if (t.ev) cu.colaEspera(c.s, t.ev);
+    }
+    if (escribe) { reg.esc = c; reg.lectores = new Set([c]); }
+    else { if (!reg.lectores) reg.lectores = new Set(); reg.lectores.add(c); }
+  }
   const elegirInicial = () => {
     if (actual !== null) return;
     const env = c1enEnNode() ? process.env.C1EN_DISPOSITIVO : null;
@@ -13556,14 +14493,26 @@ function crearC1en(vm) {
   // contiguo: si ya lo es, se le pasa su trozo de memoria tal cual (cero copias,
   // y los cambios caen en su sitio); si no, se copia a uno contiguo, se corre y
   // se copia de vuelta.
-  function prepararArreglo(x, quien, k, paraGpu) {
-    if (x.tipo !== 'real' && x.tipo !== 'entero')
-      vm.error(`«${quien}»: el argumento ${k} es un arreglo de tipo ${x.tipo}, y en un núcleo solo entran arreglos real o entero`,
-        x.tipo === 'bool' ? 'conviértelo con aTipo(a, "entero")' : 'separa la parte real y la imaginaria en dos arreglos reales');
+  function prepararArreglo(x, quien, k, paraGpu, complejoOk) {
+    // (motor-exp N3) los núcleos de biblioteca (vm.c1en.kernel) aceptan un
+    // arreglo complejo en un parámetro f64*: lo ven como sus 2n reales
+    // entrelazados (re, im). Así la FFT trabaja sobre el resultado de
+    // «fourier» y este se queda residente en la GPU. Los de «paralelo», no.
+    const w = x.tipo === 'complejo' && complejoOk ? 2 : 1;
+    // (motor-exp N4.2) real32 (y real16, en los núcleos de biblioteca) entran como float*
+    if (x.tipo !== 'real' && x.tipo !== 'entero' && x.tipo !== 'real32' && x.tipo !== 'real16' && !C1EN_ENT_C[x.tipo] && w === 1)
+      vm.error(`«${quien}»: el argumento ${k} es un arreglo de tipo ${x.tipo}, y en un núcleo solo entran arreglos real, real32, entero o enteros de máquina de hasta 32 bits`,
+        x.tipo === 'bool' ? 'conviértelo con aTipo(a, "entero")' : (x.tipo === 'i64' || x.tipo === 'u64') ? 'los de 64 bits todavía no: pásalo a "real" (exacto hasta 2^53) o parte el número en dos u32'
+          : 'separa la parte real y la imaginaria en dos arreglos reales');
     const z = zancadasDe(x.forma);
     let contiguo = true;
     for (let d = 0; d < z.length; d++) if (x.forma[d] > 1 && z[d] !== x.zancadas[d]) contiguo = false;
-    const n = x.tamano;
+    const n = x.tamano * w;
+    if (w === 2) {
+      if (!contiguo) vm.error(`«${quien}»: el argumento ${k} es una vista compleja con zancadas; aquí entra seguido`);
+      return paraGpu && x.base === null ? { vista: x._d.subarray(2 * x.desp, 2 * x.desp + n), devolver: null, residible: true }
+        : { vista: x.datos.subarray(2 * x.desp, 2 * x.desp + n), devolver: null };
+    }
     // Un arreglo dueño de su memoria y contiguo puede quedarse RESIDENTE en la
     // GPU; se toca «_d» a secas para no disparar la bajada que hace «datos».
     // Todo lo demás (vistas, trozos) va por el camino de copiar, y leer
@@ -13588,15 +14537,68 @@ function crearC1en(vm) {
   // finalización), cuando cambia su «datos» o cuando cambia de GPU.
   //   reg = { d, bytes, gpu, enGpu (la GPU tiene la copia buena), tocado }
   function liberarPendientes(cu) {
+    // (motor-exp N4.3) un arreglo que murió pudo dejar núcleos en otra cola
+    if (porLiberar.length && conColas(cu)) cu.sincronizar();
     for (let i = porLiberar.length - 1; i >= 0; i--) {
       if (porLiberar[i][1] !== indiceGpu) continue;
-      try { cu.liberar(porLiberar[i][0]); } catch (_) { /* nada */ }
+      soltarMem(cu, porLiberar[i][0], porLiberar[i][2]);
       porLiberar.splice(i, 1);
+    }
+  }
+  // ── (motor-exp N2) la memoria de la GPU, con reutilización ───────────────
+  function poolDe(g) { let m = poolGpu.get(g); if (!m) { m = new Map(); poolGpu.set(g, m); } return m; }
+  function vaciarPool(cu) {
+    if (conColas(cu)) cu.sincronizar();
+    const m = poolDe(indiceGpu);
+    for (const [bytes, l] of m) for (const e of l) { try { cu.liberar(e.d); } catch (_) { /* nada */ } poolBytes -= bytes; }
+    m.clear();
+  }
+  // (motor-exp N4.3) cada trozo guardado recuerda la cola que lo usó por última
+  // vez: otra cola que lo reutilice espera antes a esa (con su evento)
+  function soltarMem(cu, d, bytes, gpu, c) {
+    if (bytes !== undefined) bytes = Math.max(8, bytes);      // como en reservarMem
+    if (bytes && poolBytes + bytes <= POOL_MAX) {
+      const m = poolDe(gpu === undefined ? indiceGpu : gpu);
+      let l = m.get(bytes);
+      if (!l) { l = []; m.set(bytes, l); }
+      l.push({ d, c: c || null }); poolBytes += bytes;
+      return;
+    }
+    try { cu.liberar(d); } catch (_) { /* nada */ }
+  }
+  // Pedir memoria. Si la GPU dice que no hay: primero se vacía la reserva y lo
+  // pendiente de liberar; si aún no hay, se bajan a la CPU los arreglos
+  // residentes que no están en uso (sus datos no se pierden: vuelven a la CPU)
+  // y se intenta otra vez. Solo si así tampoco cabe, el error es de verdad.
+  function reservarMem(cu, bytes, c) {
+    bytes = Math.max(8, bytes);
+    const l = poolDe(indiceGpu).get(bytes);
+    if (l && l.length) {
+      poolBytes -= bytes;
+      let k = l.length - 1;
+      if (c) for (let j = l.length - 1; j >= 0; j--) if (l[j].c === c) { k = j; break; }
+      const e = l.splice(k, 1)[0];
+      if (c && e.c && e.c !== c && e.c.ev && conColas(cu)) cu.colaEspera(c.s, e.c.ev);
+      return e.d;
+    }
+    try { return cu.reservar(bytes); } catch (e1) {
+      vaciarPool(cu); liberarPendientes(cu); vaciarPool(cu);
+      try { return cu.reservar(bytes); } catch (e2) {
+        if (typeof globalThis.gc === 'function') { globalThis.gc(); liberarPendientes(cu); vaciarPool(cu); try { return cu.reservar(bytes); } catch (_) { /* sigue */ } }
+        for (const ref of [...vivos]) {
+          const x = ref.deref();
+          if (!x) { vivos.delete(ref); continue; }
+          const reg = residentes.get(x);
+          if (reg && !enUso.has(reg) && reg.gpu === indiceGpu) sincronizarHost(x, true, true);
+        }
+        vaciarPool(cu);
+        return cu.reservar(bytes);
+      }
     }
   }
   // Trae la copia de la GPU si está allí (y marca «tocado»); con soltar=true
   // además libera la memoria de la GPU y deja de ser residente.
-  function sincronizarHost(x, soltar) {
+  function sincronizarHost(x, soltar, deVerdad) {
     const reg = residentes.get(x);
     if (!reg) { x.residente = null; return; }
     const cu = c1enCuda();
@@ -13604,11 +14606,16 @@ function crearC1en(vm) {
     try {
       if (otraGpu) cu.usar(reg.gpu);
       if (reg.enGpu) {
-        const vista = x._d.subarray(x.desp, x.desp + x.tamano);
-        if (vista.byteLength === reg.bytes) cu.bajar(vista, reg.d);
+        const w = x.tipo === 'complejo' ? 2 : 1;           // (motor-exp N3) los complejos son 2n reales
+        const vista = x._d.subarray(w * x.desp, w * (x.desp + x.tamano));
+        // (motor-exp N4.3) baja en la cola que lo escribió: espera a que termine
+        if (vista.byteLength === reg.bytes) cu.bajar(vista, reg.d, reg.esc ? reg.esc.s : null);
         reg.enGpu = false;
       }
-      if (soltar) { cu.liberar(reg.d); reg.d = null; }
+      if (soltar) {
+        if (conColas(cu) && reg.lectores) for (const t of reg.lectores) if (t.s) cu.esperarCola(t.s);
+        if (deVerdad) cu.liberar(reg.d); else soltarMem(cu, reg.d, reg.bytes, reg.gpu, reg.esc); reg.d = null;
+      }
     } finally {
       if (otraGpu) cu.usar(indiceGpu);
     }
@@ -13624,24 +14631,56 @@ function crearC1en(vm) {
       if (x) sincronizarHost(x, true); else vivos.delete(ref);
     }
     const cu = c1enCuda();
-    if (cu) liberarPendientes(cu);
+    if (cu) {
+      liberarPendientes(cu);
+      // (motor-exp N2) y la reserva de memoria reutilizable, en todas las GPU
+      const antes = indiceGpu;
+      for (const g of [...poolGpu.keys()]) {
+        if (!poolGpu.get(g).size) continue;
+        try { if (g !== antes) cu.usar(g); indiceGpu = g; vaciarPool(cu); }
+        finally { indiceGpu = antes; if (g !== antes) cu.usar(antes); }
+      }
+    }
   }
   // Deja el arreglo residente en la GPU actual con los datos al día y devuelve
   // el puntero de dispositivo.
-  function asegurarResidente(x, vista, cu) {
+  // (motor-exp N2) «sinSubir»: el núcleo va a escribir el arreglo entero sin
+  // leerlo, así que lo que hay en la CPU no hace falta subirlo.
+  function asegurarResidente(x, vista, cu, sinSubir, c, escribe) {
+    c = c || colaUsada();
     let reg = residentes.get(x);
+    // (motor-exp N4.8) la copia buena está en OTRA GPU: de GPU a GPU, sin pasar por Node
+    if (reg && reg.gpu !== indiceGpu && reg.bytes === vista.byteLength && reg.enGpu && cu.entreGpus && !enUso.has(reg)) moverDeGpu(x, reg, cu, c);
     if (reg && (reg.gpu !== indiceGpu || reg.bytes !== vista.byteLength)) { sincronizarHost(x, true); reg = null; }
     if (!reg) {
-      const d = cu.reservar(Math.max(8, vista.byteLength));
+      const d = reservarMem(cu, vista.byteLength, c);
       reg = { d, bytes: vista.byteLength, gpu: indiceGpu, enGpu: false, tocado: true };
       residentes.set(x, reg);
       reg.ref = new WeakRef(x);
       vivos.add(reg.ref);
       x.residente = soltar => sincronizarHost(x, soltar === true);
-      if (finalizador) finalizador.register(x, { d, gpu: indiceGpu }, x);
+      if (finalizador) finalizador.register(x, { d, gpu: indiceGpu, bytes: reg.bytes }, x);
     }
-    if (reg.tocado) { cu.subir(reg.d, vista); reg.tocado = false; }
+    enUso.add(reg);
+    // subir es escribir en la GPU: espera a las colas que aún lo leen
+    if (reg.tocado) { usar1(cu, reg, c, true); if (!sinSubir) cu.subir(reg.d, vista, c.s); reg.tocado = false; }
+    usar1(cu, reg, c, escribe !== false);
     return reg;
+  }
+
+  // (motor-exp N4.8) Lleva un residente de su GPU a la actual con una copia
+  // directa entre las dos. Antes se espera a todo lo de la GPU de origen (quien
+  // lo escribió o lo lee puede estar en cualquiera de sus colas); la copia vuelve
+  // hecha. La memoria de origen va a la reserva de SU GPU.
+  function moverDeGpu(x, reg, cu, c) {
+    const g0 = reg.gpu;
+    cu.usar(g0);
+    try { cu.sincronizar(); } finally { cu.usar(indiceGpu); }
+    const d = reservarMem(cu, reg.bytes, c);
+    if (!cu.copiarEntre(d, indiceGpu, reg.d, g0, reg.bytes)) { soltarMem(cu, d, reg.bytes, indiceGpu, c); return; }
+    soltarMem(cu, reg.d, reg.bytes, g0, null);
+    reg.d = d; reg.gpu = indiceGpu; reg.esc = null; reg.lectores = null;
+    if (finalizador) { finalizador.unregister(x); finalizador.register(x, { d, gpu: indiceGpu, bytes: reg.bytes }, x); }
   }
 
   // Dos argumentos que comparten memoria sin ser el mismo arreglo (una vista y
@@ -13661,10 +14700,20 @@ function crearC1en(vm) {
   // porque «/» siempre divide en real y los enteros se convierten exactos.
   function tipoDeArg(v, anot, quien, k, nombre) {
     if (v instanceof ObjArreglo) {
-      if (anot && anot.k && anot.k !== 'arreglo' && anot.k !== 'cualquiera')
-        vm.error(`«${quien}»: «${nombre}» está anotado como ${anot.k} y llegó un arreglo`);
-      return v.tipo === 'entero' ? 'i32*' : (v.tipo === 'real' ? 'f64*' : 'otro*');
+      if (anot && anot.k && anot.k !== 'arreglo' && anot.k !== 'cualquiera' && anot.k !== 'var')
+        vm.error(`«${quien}»: «${nombre}» está anotado como ${tipoATexto(anot)} y llegó un arreglo`);
+      // (motor-exp N4.2) un real32 entra como float*: se lee en double, se calcula en
+      // double y se guarda redondeado a float, igual en jit, nativo y GPU. Un real16
+      // todavía no (habría que redondear cada escritura a 16 bits dentro del núcleo).
+      if (v.tipo === 'real16')
+        vm.error(`«${quien}»: «${nombre}» es un arreglo real16, y en «paralelo» todavía no entran`,
+          'pásalo a real32 con aTipo(a, "real32"), y de vuelta con aTipo(r, "real16")');
+      // (motor-exp N4.5) los enteros de máquina de hasta 32 bits entran con su tipo de C
+      if (C1EN_ENT_C[v.tipo]) return `${v.tipo}*`;
+      return v.tipo === 'entero' ? 'i32*' : (v.tipo === 'real' ? 'f64*' : (v.tipo === 'real32' ? 'f32*' : 'otro*'));
     }
+    if (anot && anot.k === 'arreglo' && (typeof v === 'boolean' || typeof v === 'number'))     // (motor-exp N4.9)
+      vm.error(`«${quien}»: «${nombre}» está anotado como ${tipoATexto(anot)} y llegó ${typeof v === 'boolean' ? 'un bool' : 'un número'}`);
     if (typeof v === 'boolean') return 'bool';
     if (typeof v === 'number') {
       if (anot && anot.k === 'real') return 'real';
@@ -13684,34 +14733,174 @@ function crearC1en(vm) {
   // Por prototipo de función y por firma de tipos de los argumentos: la misma
   // función llamada con un arreglo real y luego con uno entero son dos núcleos.
   const cache = new WeakMap();
-  function modeloDe(cierre, tipos, quien) {
+  function modeloDe(cierre, tipos, quien, bloques) {
     const fn = cierre.fn;
     let m = cache.get(fn);
     if (!m) { m = new Map(); cache.set(fn, m); }
-    const clave = tipos.join(',');
+    const clave = (bloques === 'hilos' ? 'H:' : bloques ? 'B:' : '') + tipos.join(',');
     let r = m.get(clave);
     if (!r) {
-      r = { modelo: c1enAnalizar(vm, cierre, tipos, quien), js: null, c: null, cuda: null, fnNativa: null, gpu: new Map() };
+      r = { modelo: c1enAnalizar(vm, cierre, tipos, quien, bloques), js: null, c: null, cuda: null, fnNativa: null, gpu: new Map() };
       m.set(clave, r);
     }
     return r;
   }
 
-  function tiposParaLlamada(cierre, args, quien) {
+  function tiposParaLlamada(cierre, args, quien, nIdx) {
+    nIdx = nIdx || 1;
     const fn = cierre.fn;
     const ast = fn.ast;
     if (!ast || fn.deDisco)
       vm.error(`«${quien}»: esta función vino de bytecode y no trae su código fuente, así que no se puede compilar`,
         'C1EÑ compila desde el árbol sintáctico, igual que el JIT');
-    if (fn.aridad !== args.length + 1)
-      vm.error(`«${quien}»: la función recibe ${fn.aridad} parámetro(s) y le llegan ${args.length + 1} (el índice y ${args.length} argumento(s))`,
-        'el primer parámetro es siempre el índice del hilo: funcion(i, a, b) con paralelo(n, f, a, b)');
-    return args.map((v, k) => tipoDeArg(v, ast.params[k + 1].anotacion, quien, k + 3, ast.params[k + 1].nombre));
+    if (fn.aridad !== args.length + nIdx)
+      vm.error(nIdx === 1
+        ? `«${quien}»: la función recibe ${fn.aridad} parámetro(s) y le llegan ${args.length + 1} (el índice y ${args.length} argumento(s))`
+        : `«${quien}»: la función recibe ${fn.aridad} parámetro(s) y le llegan ${args.length + 2} (el bloque, el hilo y ${args.length} argumento(s))`,
+      nIdx === 1 ? 'el primer parámetro es siempre el índice del hilo: funcion(i, a, b) con paralelo(n, f, a, b)'
+        : 'los dos primeros son el bloque y el hilo dentro del bloque: funcion(b, t, a, x) con paraleloBloques(bloques, hilos, f, a, x)');
+    const tipos = args.map((v, k) => tipoDeArg(v, ast.params[k + nIdx].anotacion, quien, k + 2 + nIdx, ast.params[k + nIdx].nombre));
+    plantilla(ast, args, tipos, quien, nIdx);
+    return tipos;
   }
 
-  function lanzarError(modelo, i, codigo, quien) {
+  // ── (motor-exp N4.9) plantillas: el núcleo genérico se instancia por tipos ──
+  // Un núcleo ya era un núcleo por cada firma de tipos con que se lanza (la caché
+  // va por la firma). Lo que añaden las anotaciones genéricas es la COMPROBACIÓN
+  // y la conversión, como en una plantilla de C++:
+  //   fn f<T>(i, a: arreglo<T>, b: arreglo<T>, k: T)   a y b con números del mismo tipo;
+  //                                                    k es de ese tipo (entero → tiene que
+  //                                                    ser entero; real/real32 → entra como real)
+  //   fn f(i, a: arreglo<real32>)                      a tiene que ser real32
+  //   fn f<T>(i, a: T, b: T)                           a y b del mismo tipo (arreglos o números)
+  // Primero se unen los arreglos y después los números, así que el orden de los
+  // parámetros no importa.
+  function plantilla(ast, args, tipos, quien, nIdx) {
+    const vinc = new Map();               // T → { como: 'elem' | 'arreglo' | 'valor', t, de }
+    const desc = b => b.como === 'elem' ? `números ${b.t}` : b.como === 'arreglo' ? `arreglo ${b.t}` : `número ${b.t === 'ent' ? 'entero' : 'real'}`;
+    const unir = (T, b, nombre) => {
+      const ya = vinc.get(T);
+      if (!ya) { vinc.set(T, Object.assign({ de: nombre }, b)); return; }
+      if (ya.como === b.como && ya.t === b.t) return;
+      vm.error(`«${quien}»: ${T} no puede ser a la vez ${desc(ya)} (por «${ya.de}») y ${desc(b)} (por «${nombre}»)`,
+        b.como === 'elem' || ya.como === 'elem' ? 'pásalos del mismo tipo: aTipo(a, "real32") convierte' : null);
+    };
+    // 1) los arreglos
+    args.forEach((v, k) => {
+      const p = ast.params[k + nIdx], an = p.anotacion;
+      if (!an || !(v instanceof ObjArreglo)) return;
+      if (an.k === 'var') unir(an.nombre, { como: 'arreglo', t: v.tipo }, p.nombre);
+      else if (an.k === 'arreglo' && an.elem) {
+        if (an.elem.k === 'var') unir(an.elem.nombre, { como: 'elem', t: v.tipo }, p.nombre);
+        else {
+          const quiere = ALIAS_TIPO[an.elem.nombre] || an.elem.nombre;
+          if (v.tipo !== quiere)
+            vm.error(`«${quien}»: «${p.nombre}» está anotado como arreglo<${an.elem.nombre}> y llegó un arreglo ${v.tipo}`,
+              `conviértelo antes: aTipo(${p.nombre}, "${quiere}")`);
+        }
+      }
+    });
+    // 2) los números
+    args.forEach((v, k) => {
+      const p = ast.params[k + nIdx], an = p.anotacion;
+      if (!an || an.k !== 'var' || v instanceof ObjArreglo) return;
+      if (typeof v !== 'number') vm.error(`«${quien}»: «${p.nombre}» es de tipo ${an.nombre}, y a un núcleo solo entran números y arreglos con tipo`);
+      const ya = vinc.get(an.nombre);
+      if (ya && ya.como === 'arreglo')
+        vm.error(`«${quien}»: ${an.nombre} no puede ser a la vez arreglo ${ya.t} (por «${ya.de}») y un número (por «${p.nombre}»)`);
+      if (ya && ya.como === 'elem') {
+        // T es el tipo de los números de un arreglo: el número entra como ese tipo
+        if (ENT_INFO[ya.t] || ya.t === 'bool') {
+          if (!Number.isInteger(v)) vm.error(`«${quien}»: «${p.nombre}» es ${an.nombre} = ${ya.t} (el tipo de «${ya.de}») y llegó ${repr(v, 1)}`,
+            'pasa un entero, o el arreglo como real');
+          tipos[k] = 'ent';
+        } else tipos[k] = 'real';
+        return;
+      }
+      const t = Number.isInteger(v) && Math.abs(v) <= 9007199254740992 ? 'ent' : 'real';
+      if (ya && ya.como === 'valor' && (ya.t === 'ent' || ya.t === 'real')) {
+        // varios números con la misma T: entero y real se unen en real, como en Ñ
+        if (ya.t !== t) { ya.t = 'real'; }
+        return;
+      }
+      unir(an.nombre, { como: 'valor', t }, p.nombre);
+    });
+    // los números de una T que acabó en real entran todos como real
+    args.forEach((v, k) => {
+      const an = ast.params[k + nIdx].anotacion;
+      if (an && an.k === 'var' && typeof v === 'number') { const b = vinc.get(an.nombre); if (b && b.como === 'valor' && b.t === 'real') tipos[k] = 'real'; }
+    });
+  }
+
+  function lanzarError(modelo, i, codigo, quien, nh) {
     const s = modelo.sitios[codigo] || { linea: '?', texto: 'fallo desconocido' };
-    vm.error(`«${quien}»: el hilo i = ${i} falló en la línea ${s.linea}: ${s.texto}`, s.pista || null);
+    const quienHilo = nh === 'hilos' ? `el hilo t = ${i}` : nh ? `el hilo ${i % nh} del bloque ${Math.floor(i / nh)}` : `el hilo i = ${i}`;   // (motor-exp N4.4, N4.7)
+    vm.error(`«${quien}»: ${quienHilo} falló en la línea ${s.linea}: ${s.texto}`, s.pista || null);
+  }
+
+  // ── (motor-exp N4.4) el modelo de la GPU en manos del programa ─────────────
+  function paraleloBloques(nb, nh, cierre, args, quien) {
+    if (!Number.isInteger(nb) || nb < 0) vm.error(`«${quien}»: los bloques son un entero no negativo y llegó ${repr(nb, 1)}`);
+    if (!Number.isInteger(nh) || nh < 1 || nh > 1024)
+      vm.error(`«${quien}»: los hilos por bloque van de 1 a 1024 y llegó ${repr(nh, 1)}`, 'es el tope de una GPU; lo usual es 128, 256 o 512');
+    if (nb * nh > C1EN_MAX_HILOS) vm.error(`«${quien}»: ${nb} × ${nh} hilos son demasiados; el máximo es 2^40`);
+    if (!(cierre instanceof ObjCierre)) vm.error(`«${quien}»: el núcleo tiene que ser una función de Ñ, no una de la biblioteca`);
+    const tipos = tiposParaLlamada(cierre, args, quien, 2);
+    tipos.forEach((t, k) => { if (t === 'otro*') prepararArreglo(args[k], quien, k + 4); });
+    const r = modeloDe(cierre, tipos, quien, true);
+    elegirInicial();
+    vm.cobrar(nb * nh);
+    if (nb === 0) return;
+    const preps = [], arrs = [];
+    args.forEach((v, k) => {
+      if (v instanceof ObjArreglo) { arrs.push({ x: v, k: k + 4 }); preps[k] = prepararArreglo(v, quien, k + 4, actual === 'gpu'); }
+    });
+    exigirSinSolape(arrs, quien);
+    const geo = { nb, nh };
+    let fallo = null;
+    try {
+      if (actual === 'jit') fallo = correrJS(r, nb * nh, args, preps, geo);
+      else if (actual === 'nativo') fallo = correrNativo(r, nb * nh, args, preps, quien, geo);
+      else fallo = correrGpu(r, nb * nh, args, preps, quien, geo);
+    } finally {
+      for (const p of preps) if (p && p.devolver) p.devolver();
+    }
+    if (fallo && colaActual && colaActual.logica) { colaActual.errores.push([r.modelo, fallo, quien, nh]); return; }
+    if (fallo) lanzarError(r.modelo, fallo[0], fallo[1], quien, nh);
+  }
+
+  // ── (motor-exp N4.7) hilos de la CPU, todos vivos a la vez ─────────────────
+  // A diferencia de «paralelo» (que puede correr los índices en el orden y con
+  // los hilos que quiera), aquí los n hilos existen A LA VEZ, así que pueden
+  // esperarse unos a otros. Siempre en la CPU: en «nativo», n hilos del sistema
+  // de verdad; en «jit», n generadores que se turnan en un orden fijo, que dan
+  // siempre lo mismo y cazan los interbloqueos. Con la GPU elegida, van a nativo
+  // (o a jit si no hay compilador de C): una GPU no tiene hilos que esperen.
+  function hilos(n, cierre, args, quien) {
+    if (!Number.isInteger(n) || n < 1 || n > C1EN_MAX_HILOS_SO)
+      vm.error(`«${quien}»: los hilos van de 1 a ${C1EN_MAX_HILOS_SO} y llegó ${repr(n, 1)}`,
+        'son hilos del sistema que existen a la vez; para millones de índices está «paralelo»');
+    if (!(cierre instanceof ObjCierre)) vm.error(`«${quien}»: el núcleo tiene que ser una función de Ñ, no una de la biblioteca`);
+    const tipos = tiposParaLlamada(cierre, args, quien);
+    tipos.forEach((t, k) => { if (t === 'otro*') prepararArreglo(args[k], quien, k + 3); });
+    const r = modeloDe(cierre, tipos, quien, 'hilos');
+    elegirInicial();
+    vm.cobrar(n);
+    const preps = [], arrs = [];
+    args.forEach((v, k) => {
+      if (v instanceof ObjArreglo) { arrs.push({ x: v, k: k + 3 }); preps[k] = prepararArreglo(v, quien, k + 3, false); }
+    });
+    exigirSinSolape(arrs, quien);
+    const dondeCorre = actual === 'jit' ? 'jit' : (c1enNativo() ? 'nativo' : 'jit');
+    let fallo = null;
+    try {
+      if (dondeCorre === 'jit') fallo = correrJS(r, n, args, preps, { hilos: n });
+      else fallo = correrNativo(r, n, args, preps, quien, { hilos: n });
+    } finally {
+      for (const p of preps) if (p && p.devolver) p.devolver();
+    }
+    if (fallo && fallo[1] === 0xfffffe) vm.error(`«${quien}»: el sistema no dejó lanzar ${n} hilos`, 'prueba con menos');
+    if (fallo) lanzarError(r.modelo, fallo[0], fallo[1], quien, 'hilos');
   }
 
   // Lo que «paralelo» promete y lo que no:
@@ -13751,7 +14940,137 @@ function crearC1en(vm) {
     } finally {
       for (const p of preps) if (p && p.devolver) p.devolver();
     }
+    // (motor-exp N4.3) en una cola del programa en jit o nativo el núcleo ya
+    // terminó, pero su fallo se guarda para esperarCola: así el mismo programa
+    // dice el error en el mismo sitio en los tres dispositivos
+    if (fallo && colaActual && colaActual.logica) { colaActual.errores.push([r.modelo, fallo, quien]); return; }
     if (fallo) lanzarError(r.modelo, fallo[0], fallo[1], quien);
+  }
+
+  // ── (motor-exp N4.8) un «paralelo» repartido entre todas las GPU ───────────
+  // Cada GPU corre un tramo seguido de los índices, [desde, hasta), con el mismo
+  // núcleo (c1en_tramo: la i es la global, así que el cuerpo, los fallos y su
+  // clave son los de siempre). Cada una recibe una copia ENTERA de los arreglos,
+  // porque el cuerpo puede leer cualquier elemento. De vuelta:
+  //  · un arreglo que el núcleo escribe solo en a[i] (la i del hilo, sin
+  //    reasignarla) baja de cada GPU solo su tramo;
+  //  · uno que se escribe en otros sitios baja entero de cada GPU, y se queda lo
+  //    que cada una cambió, elemento a elemento (comparando los bits con lo que
+  //    había). Es lo mismo que paralelo mientras dos hilos no escriban el mismo
+  //    elemento, que ya es la regla de paralelo;
+  //  · uno que no se escribe no baja.
+  // Los atómicos y las vallas no cruzan de una GPU a otra (cada GPU tendría su
+  // propio contador): un núcleo con ellos no se reparte, y es un error en los
+  // tres dispositivos, para que un programa no valga en jit y falle con dos GPU.
+  // Siempre espera a que todo termine y dice el error enseguida: no va en colas.
+  // Con una GPU (o en jit y nativo) es un «paralelo» normal: los mismos bits.
+  function paraleloRepartido(n, cierre, args, quien) {
+    if (n > C1EN_MAX_HILOS) vm.error(`«${quien}»: ${n} hilos son demasiados; el máximo es 2^40`);
+    if (!(cierre instanceof ObjCierre)) vm.error(`«${quien}»: el núcleo tiene que ser una función de Ñ, no una de la biblioteca`);
+    const tipos = tiposParaLlamada(cierre, args, quien);
+    tipos.forEach((t, k) => { if (t === 'otro*') prepararArreglo(args[k], quien, k + 3); });
+    const r = modeloDe(cierre, tipos, quien);
+    if (r.modelo.atomicos)
+      vm.error(`«${quien}»: el núcleo usa atómicos o vallas, y esos no cruzan de una GPU a otra`,
+        'usa paralelo (en una sola GPU), o reparte tú: enGpu(k, …) con un arreglo de resultados por GPU, y súmalos al final');
+    elegirInicial();
+    vm.cobrar(n);
+    if (n === 0) return;
+    const preps = [], arrs = [];
+    args.forEach((v, k) => {
+      if (v instanceof ObjArreglo) { arrs.push({ x: v, k: k + 3 }); preps[k] = prepararArreglo(v, quien, k + 3, false); }
+    });
+    exigirSinSolape(arrs, quien);
+    let fallo = null;
+    const antesCola = colaActual;
+    colaActual = null;              // no va en colas: la de siempre, y se espera
+    try {
+      if (actual === 'jit') fallo = correrJS(r, n, args, preps);
+      else if (actual === 'nativo') fallo = correrNativo(r, n, args, preps, quien);
+      else if (c1enCuda().dispositivos.length > 1) fallo = correrRepartido(r, n, args, preps, quien);
+      else fallo = correrGpu(r, n, args, preps, quien);
+    } finally {
+      colaActual = antesCola;
+      for (const p of preps) if (p && p.devolver) p.devolver();
+    }
+    if (fallo) lanzarError(r.modelo, fallo[0], fallo[1], quien);
+  }
+
+  function correrRepartido(r, n, args, preps, quien) {
+    const cu = c1enCuda();
+    const G = cu.dispositivos.length;
+    // tramos seguidos, en múltiplos del bloque
+    const porGpu = Math.ceil(Math.ceil(n / G) / C1EN_HILOS_BLOQUE) * C1EN_HILOS_BLOQUE;
+    const tramos = [];
+    for (let g = 0; g < G; g++) {
+      const desde = g * porGpu, hasta = Math.min(n, desde + porGpu);
+      if (desde < hasta) tramos.push({ g, desde, hasta, mem: [], d: [], de: null });
+    }
+    if (!r.cuda) r.cuda = c1enEmitir(r.modelo, 'cuda');
+    if (!r.tramo) r.tramo = new Map();
+    const modo = args.map((v, k) => {
+      if (!(v instanceof ObjArreglo)) return null;
+      const p = r.modelo.params[k + 1];
+      return !p.escrito ? 'nada' : (p.fueraDeI || r.modelo.iReasignado) ? 'cambios' : 'tramo';
+    });
+    const originales = args.map((v, k) => (modo[k] === 'cambios' ? preps[k].vista.slice() : null));
+    const antes = indiceGpu;
+    let clave = 0xffffffffffffffffn;
+    try {
+      // 1) a cada GPU: subir y lanzar. El lanzamiento no espera, así que mientras
+      //    una GPU calcula se sube lo de la siguiente: calculan a la vez.
+      for (const t of tramos) {
+        cu.usar(t.g); indiceGpu = t.g;
+        let fun = r.tramo.get(t.g);
+        if (!fun) {
+          try { fun = cu.compilar(r.cuda, ['c1en_tramo']).c1en_tramo; }
+          catch (e) { vm.error(`«${quien}»: no se pudo compilar el núcleo para la GPU ${t.g}: ${e.message}`, 'esto es un fallo de C1EÑ, no de tu programa: avísalo con el código de codigoCuda(f)'); }
+          r.tramo.set(t.g, fun);
+        }
+        const lanz = [{ t: 'i64', v: t.desde }, { t: 'i64', v: t.hasta }];
+        args.forEach((v, k) => {
+          if (v instanceof ObjArreglo) {
+            const vista = preps[k].vista;
+            const d = cu.reservar(Math.max(8, vista.byteLength));
+            t.mem.push(d); t.d[k] = d;
+            cu.subir(d, vista, null);
+            lanz.push({ t: 'ptr', v: d }, { t: 'i64', v: vista.length });
+          } else if (typeof v === 'boolean') lanz.push({ t: 'i64', v: v ? 1 : 0 });
+          else lanz.push({ t: r.modelo.params[k + 1].tipoEntrada === 'real' ? 'f64' : 'i64', v });
+        });
+        t.de = cu.reservar(8); t.mem.push(t.de);
+        cu.subir(t.de, new BigUint64Array([0xffffffffffffffffn]), null);
+        lanz.push({ t: 'ptr', v: t.de });
+        cu.lanzar(fun, c1enBloques(t.hasta - t.desde, cu), C1EN_HILOS_BLOQUE, lanz, null);
+      }
+      // 2) de cada GPU, lo suyo (bajar espera a su núcleo)
+      for (const t of tramos) {
+        cu.usar(t.g); indiceGpu = t.g;
+        const e = new BigUint64Array(1);
+        cu.bajar(e, t.de, null);
+        if (e[0] < clave) clave = e[0];     // la i es global: el menor de todas es el de paralelo
+        args.forEach((v, k) => {
+          const vista = preps[k] && preps[k].vista;
+          if (modo[k] === 'tramo') {
+            const lo = Math.min(t.desde, vista.length), hi = Math.min(t.hasta, vista.length);
+            if (lo < hi) cu.bajar(vista.subarray(lo, hi), t.d[k] + BigInt(lo * vista.BYTES_PER_ELEMENT), null);
+          } else if (modo[k] === 'cambios') {
+            const tmp = new vista.constructor(vista.length);
+            cu.bajar(tmp, t.d[k], null);
+            c1enMezclarCambios(vista, tmp, originales[k]);
+          }
+        });
+      }
+    } catch (e) {
+      if (e instanceof ErrorTiempoEjecucion) throw e;
+      vm.error(`«${quien}»: la GPU falló: ${e.message}`);
+    } finally {
+      for (const t of tramos) {
+        try { cu.usar(t.g); for (const d of t.mem) cu.liberar(d); } catch (_) { /* nada */ }
+      }
+      indiceGpu = antes; cu.usar(antes);
+    }
+    return c1enLeerClave(clave);
   }
 
   // Los argumentos ya expandidos: un arreglo pasa como (datos, número de
@@ -13766,22 +15085,25 @@ function crearC1en(vm) {
     return out;
   }
 
-  function correrJS(r, n, args, preps) {
+  function correrJS(r, n, args, preps, geo) {
     if (!r.js) {
       const src = c1enEmitir(r.modelo, 'js');
       // eslint-disable-next-line no-new-func
       r.js = new Function('"use strict"; return ' + src)();
     }
+    if (geo && geo.hilos) return r.js(geo.hilos, ...expandir(args, preps, false));   // (motor-exp N4.7)
+    if (geo) return r.js(geo.nb, geo.nh, ...expandir(args, preps, false));
     return r.js(n, ...expandir(args, preps, false));
   }
 
-  function correrNativo(r, n, args, preps, quien) {
+  function correrNativo(r, n, args, preps, quien, geo) {
     const na = c1enNativo();
     if (!r.fnNativa) {
       if (!r.c) r.c = c1enEmitir(r.modelo, 'c');
-      const firma = ['int64_t n'];
-      for (const p of r.modelo.params.slice(1)) {
-        if (p.arr) { firma.push(p.arr === 'real' ? 'double *' : 'int32_t *'); firma.push('int64_t'); }
+      const hilosSO = !!(geo && geo.hilos);
+      const firma = hilosSO ? ['int64_t nh'] : geo ? ['int64_t nb', 'int64_t nh'] : ['int64_t n'];
+      for (const p of r.modelo.params.slice(geo && !hilosSO ? 2 : 1)) {
+        if (p.arr) { firma.push(`${c1enTipoElem(p, false)} *`); firma.push('int64_t'); }
         else firma.push(p.tipoEntrada === 'real' ? 'double' : 'int64_t');
       }
       firma.push('uint64_t *');
@@ -13789,14 +15111,16 @@ function crearC1en(vm) {
       catch (e) { vm.error(`«${quien}»: no se pudo compilar el núcleo en C: ${e.message}`, 'esto es un fallo de C1EÑ, no de tu programa: avísalo con el código de codigoC(f)'); }
     }
     const err = new BigUint64Array([0xffffffffffffffffn]);
-    r.fnNativa(n, ...expandir(args, preps, true), err);
+    if (geo && geo.hilos) r.fnNativa(geo.hilos, ...expandir(args, preps, true), err);
+    else if (geo) r.fnNativa(geo.nb, geo.nh, ...expandir(args, preps, true), err);
+    else r.fnNativa(n, ...expandir(args, preps, true), err);
     return c1enLeerClave(err[0]);
   }
 
   // En la GPU: reservar, subir, lanzar, sincronizar, bajar, liberar. En la v1
   // todo arreglo es de ida y vuelta; el día que haga falta se marcan los de
   // solo lectura y se ahorra la bajada.
-  function correrGpu(r, n, args, preps, quien) {
+  function correrGpu(r, n, args, preps, quien, geo) {
     const cu = c1enCuda();
     let fun = r.gpu.get(indiceGpu);
     if (!fun) {
@@ -13805,46 +15129,60 @@ function crearC1en(vm) {
       catch (e) { vm.error(`«${quien}»: no se pudo compilar el núcleo para la GPU: ${e.message}`, 'esto es un fallo de C1EÑ, no de tu programa: avísalo con el código de codigoCuda(f)'); }
       r.gpu.set(indiceGpu, fun);
     }
-    const lanz = [{ t: 'i64', v: n }];
+    const lanz = geo ? [{ t: 'i64', v: geo.nb }, { t: 'i64', v: geo.nh }] : [{ t: 'i64', v: n }];
     const memorias = [];
     const bajadas = [];
     const residentesAqui = [];
     const err = new BigUint64Array([0xffffffffffffffffn]);
+    // (motor-exp N4.3) Dentro de una cola del programa (enCola) el núcleo NO se
+    // espera: su palabra de error es suya (un trozo de 8 bytes de la reserva) y se
+    // mira al esperar la cola, que es cuando se dice el fallo, si lo hubo. En la
+    // cola de siempre se mira enseguida, como antes: el error sale en su línea.
+    const c = colaUsada();
+    const diferir = !c.legado;
+    let de = null;
     try {
       liberarPendientes(cu);
       args.forEach((v, k) => {
         if (v instanceof ObjArreglo) {
           const vista = preps[k].vista;
           if (preps[k].residible) {
-            const reg = asegurarResidente(v, vista, cu);
+            const reg = asegurarResidente(v, vista, cu, false, c, true);
             residentesAqui.push(reg);
             lanz.push({ t: 'ptr', v: reg.d }, { t: 'i64', v: vista.length });
           } else {
-            const d = cu.reservar(Math.max(8, vista.byteLength));
-            memorias.push(d);
-            cu.subir(d, vista);
+            const d = reservarMem(cu, vista.byteLength, c);
+            memorias.push([d, Math.max(8, vista.byteLength)]);
+            cu.subir(d, vista, c.s);
             bajadas.push([vista, d]);
             lanz.push({ t: 'ptr', v: d }, { t: 'i64', v: vista.length });
           }
         } else if (typeof v === 'boolean') lanz.push({ t: 'i64', v: v ? 1 : 0 });
-        else lanz.push({ t: r.modelo.params[k + 1].tipoEntrada === 'real' ? 'f64' : 'i64', v });
+        else lanz.push({ t: r.modelo.params[k + (geo ? 2 : 1)].tipoEntrada === 'real' ? 'f64' : 'i64', v });
       });
-      const de = errGpu(cu);
-      if (!errLimpio.get(indiceGpu)) { cu.subir(de, err); errLimpio.set(indiceGpu, true); }
+      if (diferir) { de = reservarMem(cu, 8, c); cu.subir(de, err, c.s); }
+      else {
+        de = errGpu(cu);
+        if (!errLimpio.get(indiceGpu)) { cu.subir(de, err, null); errLimpio.set(indiceGpu, true); }
+      }
       lanz.push({ t: 'ptr', v: de });
       // desde aquí la copia buena de los residentes está en la GPU, pase lo que pase
       for (const reg of residentesAqui) reg.enGpu = true;
-      cu.lanzar(fun, c1enBloques(n, cu), C1EN_HILOS_BLOQUE, lanz);
-      cu.sincronizar();
-      for (const [vista, d] of bajadas) cu.bajar(vista, d);
-      cu.bajar(err, de);
-      if (err[0] !== 0xffffffffffffffffn) errLimpio.set(indiceGpu, false);   // hay que volver a limpiarla
+      if (geo) cu.lanzar(fun, geo.nb, geo.nh, lanz, c.s);      // (motor-exp N4.4) la cuadrícula que pidió el programa
+      else cu.lanzar(fun, c1enBloques(n, cu), C1EN_HILOS_BLOQUE, lanz, c.s);
+      trasEncolar(cu, c);
+      for (const [vista, d] of bajadas) cu.bajar(vista, d, c.s);
+      if (diferir && !bajadas.length) { c.pendientes.push({ de, r, quien, nh: geo ? geo.nh : 0 }); de = null; return null; }
+      cu.bajar(err, de, c.s);
+      if (!diferir && err[0] !== 0xffffffffffffffffn) errLimpio.set(indiceGpu, false);   // hay que volver a limpiarla
     } catch (e) {
-      errLimpio.set(indiceGpu, false);
+      if (!diferir) errLimpio.set(indiceGpu, false);
       if (e instanceof ErrorTiempoEjecucion) throw e;
       vm.error(`«${quien}»: la GPU falló: ${e.message}`);
     } finally {
-      for (const d of memorias) { try { cu.liberar(d); } catch (_) { /* ya no hay nada que hacer */ } }
+      for (const [d, bytes] of memorias) soltarMem(cu, d, bytes, undefined, c);
+      if (diferir && de !== null) soltarMem(cu, de, 8, undefined, c);
+      enUso.clear();
     }
     return c1enLeerClave(err[0]);
   }
@@ -13860,13 +15198,17 @@ function crearC1en(vm) {
     const fn = cierre.fn;
     if (!fn.ast || fn.deDisco) vm.error(`«${quien}»: esta función no trae su código fuente (vino de bytecode)`);
     const ps = fn.ast.params;
-    if (ejemplos.length > ps.length - 1)
-      vm.error(`«${quien}»: la función tiene ${ps.length - 1} parámetro(s) además del índice y llegaron ${ejemplos.length} ejemplos`);
+    // (motor-exp N4.4) un núcleo que usa barrera, compartido o la cuadrícula es de paraleloBloques: (b, t, …)
+    const bloques = c1enUsaBloques(fn.ast.cuerpo) || (c1enUsaHilos(fn.ast.cuerpo) ? 'hilos' : false);   // (motor-exp N4.7)
+    if (bloques === 'hilos' && destino === 'cuda') vm.error(`«${quien}»: un núcleo de hilos (barreraHilos, candados, esperarMientras) es de la CPU: no tiene CUDA`, 'mira su C con codigoC(f)');
+    const nIdx = bloques === true ? 2 : 1;
+    if (ejemplos.length > ps.length - nIdx)
+      vm.error(`«${quien}»: la función tiene ${ps.length - nIdx} parámetro(s) además de ${bloques === true ? 'el bloque y el hilo' : 'el índice'} y llegaron ${ejemplos.length} ejemplos`);
     // Sin ejemplo, el tipo sale de la anotación; sin anotación, de cómo se usa:
     // si se indexa es un arreglo real, y si no, un número real.
     const tipos = [];
-    for (let k = 1; k < ps.length; k++) {
-      if (k - 1 < ejemplos.length) { tipos.push(tipoDeArg(ejemplos[k - 1], ps[k].anotacion, quien, k + 1, ps[k].nombre)); continue; }
+    for (let k = nIdx; k < ps.length; k++) {
+      if (k - nIdx < ejemplos.length) { tipos.push(tipoDeArg(ejemplos[k - nIdx], ps[k].anotacion, quien, k + 1, ps[k].nombre)); continue; }
       const an = ps[k].anotacion;
       if (an && an.k === 'entero') tipos.push('ent');
       else if (an && an.k === 'real') tipos.push('real');
@@ -13874,7 +15216,7 @@ function crearC1en(vm) {
       else tipos.push(c1enSeIndexa(fn.ast, ps[k].nombre) ? 'f64*' : 'real');
     }
     if (tipos.includes('otro*')) vm.error(`«${quien}»: solo entran arreglos real o entero`);
-    const r = modeloDe(cierre, tipos, quien);
+    const r = modeloDe(cierre, tipos, quien, bloques);
     if (destino === 'c') return r.c || (r.c = c1enEmitir(r.modelo, 'c'));
     return r.cuda || (r.cuda = c1enEmitir(r.modelo, 'cuda'));
   }
@@ -13885,7 +15227,9 @@ function crearC1en(vm) {
   // JavaScript. Aquí no hay análisis: quien escribe un núcleo de biblioteca es
   // responsable de sus índices, igual que en CUDA.
   const TIPOS_K = { f64: ['double', 'double', 'double'], i64: ['int64_t', 'long long', 'int64_t'],
-    i32: ['int32_t', 'int', 'int32_t'], 'f64*': ['double *', 'double*', 'double *'], 'i32*': ['int32_t *', 'int*', 'int32_t *'] };
+    i32: ['int32_t', 'int', 'int32_t'], 'f64*': ['double *', 'double*', 'double *'], 'i32*': ['int32_t *', 'int*', 'int32_t *'],
+    // (motor-exp N4.2) arreglos real32 (y real16, que en la VM viven en un Float32Array)
+    'f32*': ['float *', 'float*', 'float *'] };
   const nucleos = new Map();
   function kernel(spec) {
     if (!spec || typeof spec !== 'object') throw new Error('vm.c1en.kernel: falta la especificación');
@@ -13896,12 +15240,32 @@ function crearC1en(vm) {
     if (!Array.isArray(params) || !params.length || params[0][1] !== 'i64')
       throw new Error(`vm.c1en.kernel «${nombre}»: el primer parámetro es siempre ['n', 'i64']`);
     for (const [pn, pt] of params) {
-      if (!TIPOS_K[pt]) throw new Error(`vm.c1en.kernel «${nombre}»: el tipo «${pt}» de «${pn}» no existe (f64, i64, i32, f64*, i32*)`);
+      if (!TIPOS_K[pt]) throw new Error(`vm.c1en.kernel «${nombre}»: el tipo «${pt}» de «${pn}» no existe (f64, i64, i32, f64*, f32*, i32*)`);
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(pn)) throw new Error(`vm.c1en.kernel «${nombre}»: «${pn}» no es un nombre de C`);
     }
-    if (typeof cuerpo !== 'string' || typeof js !== 'function')
-      throw new Error(`vm.c1en.kernel «${nombre}»: hacen falta «cuerpo» (C) y «js» (respaldo)`);
-    const k = { nombre, params, cuerpo, js, c: null, cuda: null, fnNativa: null, gpu: new Map() };
+    // (motor-exp N3) Un núcleo de biblioteca puede traer su FUENTE ENTERA en vez
+    // de un cuerpo por índice: «cFuente» (una función de C con la firma de
+    // params, que reparte el trabajo como quiera) y/o «cudaFuente» (un
+    // __global__ con la firma de params, que puede usar __shared__ y
+    // __syncthreads), con «lanzamiento(...args) → { bloques, hilos }» para la
+    // cuadrícula. Con «coop: true» el simulador lo corre con hilos cooperativos
+    // (las barreras funcionan). Así se escriben el DGEMM y la FFT de verdad.
+    const { cFuente, cudaFuente, lanzamiento } = spec;
+    if (typeof js !== 'function' || (typeof cuerpo !== 'string' && (typeof cFuente !== 'string' || typeof cudaFuente !== 'string')))
+      throw new Error(`vm.c1en.kernel «${nombre}»: hacen falta «cuerpo» (C) —o «cFuente» y «cudaFuente»— y «js» (respaldo)`);
+    if (cudaFuente !== undefined && typeof lanzamiento !== 'function')
+      throw new Error(`vm.c1en.kernel «${nombre}»: con «cudaFuente» hace falta «lanzamiento(...args) → { bloques, hilos }»`);
+    // (motor-exp N2) spec.lee / spec.escribe: los parámetros arreglo que el
+    // núcleo solo lee, o que escribe enteros sin leerlos
+    const lee = new Set(spec.lee || []), escribe = new Set(spec.escribe || []);
+    for (const pn of [...lee, ...escribe])
+      if (!params.some(([q, pt]) => q === pn && pt.endsWith('*'))) throw new Error(`vm.c1en.kernel «${nombre}»: «${pn}» en lee/escribe no es un parámetro arreglo`);
+    const k = { nombre, params, cuerpo, js, c: null, cuda: null, fnNativa: null, gpu: new Map(), lee, escribe,
+      cFuente, cudaFuente, lanzamiento, coop: !!spec.coop,
+      // (motor-exp N3) desde cuántos índices se reparte entre los hilos de la
+      // CPU: 2048 si cada índice es poco trabajo; un núcleo con índices
+      // pesados (un trozo entero de FFT por índice) pide menos
+      minParalelo: Number.isInteger(spec.minParalelo) && spec.minParalelo >= 0 ? spec.minParalelo : 2048 };
     nucleos.set(nombre, k);
     const lanzar = (...args) => lanzarKernel(k, args);
     lanzar.nucleo = k;
@@ -13910,8 +15274,12 @@ function crearC1en(vm) {
   function fuenteKernel(k, destino) {
     const d = destino === 'cuda' ? 1 : 0;
     const ps = k.params.map(([pn, pt]) => `${TIPOS_K[pt][d]} ${pn}`).join(', ');
+    const un0 = k.params.map(([, pt], j) => `*(${TIPOS_K[pt][1]}*)p[${j}]`).join(', ');
+    if (destino === 'c' && k.cFuente) return C1EN_CABECERA_C + C1EN_PRELUDIO + '\n' + k.cFuente + '\n';
+    if (destino === 'cuda' && k.cudaFuente) return C1EN_CABECERA_CUDA + C1EN_PRELUDIO + '\n' + k.cudaFuente + '\n' +
+      (k.coop ? c1enEmuladorCoop(k.nombre, un0) : c1enEmulador(k.nombre, un0));
     if (destino === 'c') return C1EN_CABECERA_C + C1EN_PRELUDIO +
-      `\nvoid ${k.nombre}(${ps}) {\n#pragma omp parallel for schedule(static) if (n > 2048)\n` +
+      `\nvoid ${k.nombre}(${ps}) {\n#pragma omp parallel for schedule(static) if (n > ${k.minParalelo})\n` +
       `  for (long long i = 0; i < n; i++) {\n    ${k.cuerpo}\n  }\n}\n`;
     const un = k.params.map(([, pt], j) => `*(${TIPOS_K[pt][1]}*)p[${j}]`).join(', ');
     return C1EN_CABECERA_CUDA + C1EN_PRELUDIO +
@@ -13926,29 +15294,37 @@ function crearC1en(vm) {
     const n = args[0];
     if (typeof n !== 'number' || !Number.isInteger(n) || n < 0)
       vm.error(`el núcleo «${quien}»: n tiene que ser un entero no negativo y es ${repr(n, 1)}`);
+    elegirInicial();
+    // (motor-exp N2) En la GPU, un arreglo de Ñ seguido y dueño de su memoria
+    // se queda RESIDENTE, como en «paralelo»: se sube una vez, el resultado se
+    // queda allí, y solo baja cuando alguien lo lee desde la CPU. Así una cadena
+    // de NEÑ (senoA, por, sumaEje…) no cruza el PCIe en cada paso.
+    const paraGpu = actual === 'gpu';
     const plano = [];
+    const preps = [];
     const devolver = [];
     const arrs = [];
     args.forEach((v, j) => {
       const pt = k.params[j][1];
       if (pt.endsWith('*')) {
-        const ctor = pt === 'f64*' ? Float64Array : Int32Array;
+        const ctor = pt === 'f64*' ? Float64Array : (pt === 'f32*' ? Float32Array : Int32Array);
         if (v instanceof ObjArreglo) {
-          if ((pt === 'f64*' && v.tipo !== 'real') || (pt === 'i32*' && v.tipo !== 'entero'))
-            vm.error(`el núcleo «${quien}»: «${k.params[j][0]}» es un arreglo ${pt === 'f64*' ? 'real' : 'entero'} y llegó uno ${v.tipo}`);
+          if ((pt === 'f64*' && v.tipo !== 'real' && v.tipo !== 'complejo') || (pt === 'i32*' && v.tipo !== 'entero') ||
+              (pt === 'f32*' && v.tipo !== 'real32' && v.tipo !== 'real16'))
+            vm.error(`el núcleo «${quien}»: «${k.params[j][0]}» es un arreglo ${pt === 'f64*' ? 'real' : (pt === 'f32*' ? 'real32' : 'entero')} y llegó uno ${v.tipo}`);
           arrs.push({ x: v, k: j + 1 });
-          const p = prepararArreglo(v, quien, j + 1);
+          const p = prepararArreglo(v, quien, j + 1, paraGpu, true);
           if (p.devolver) devolver.push(p.devolver);
+          preps.push(p.residible ? { x: v, vista: p.vista } : null);
           plano.push(p.vista);
-        } else if (v instanceof ctor) plano.push(v);
+        } else if (v instanceof ctor) { plano.push(v); preps.push(null); }
         else vm.error(`el núcleo «${quien}»: «${k.params[j][0]}» tiene que ser un arreglo y es ${tipoDe(v)}`);
       } else {
         if (typeof v !== 'number') vm.error(`el núcleo «${quien}»: «${k.params[j][0]}» tiene que ser un número y es ${tipoDe(v)}`);
-        plano.push(v);
+        plano.push(v); preps.push(null);
       }
     });
     exigirSinSolape(arrs, quien);
-    elegirInicial();
     vm.cobrar(n);
     try {
       if (n === 0) return null;
@@ -13971,26 +15347,46 @@ function crearC1en(vm) {
         catch (e) { vm.error(`el núcleo «${quien}» no compila para la GPU: ${e.message}`); }
         k.gpu.set(indiceGpu, fun);
       }
-      const memorias = [], bajadas = [], lanz = [];
+      // Lo que el núcleo solo LEE no hace falta bajarlo; lo que solo ESCRIBE
+      // (entero) no hace falta subirlo. Lo dice la especificación del núcleo
+      // (spec.lee, spec.escribe); lo que no diga nada va y vuelve.
+      // (motor-exp N4.3) en la cola actual y SIN esperar a que termine: lo que
+      // queda residente sigue en la GPU, y la CPU solo espera si tiene que bajar
+      // algo (un argumento que no podía quedarse) o cuando alguien lo lea.
+      const c = colaUsada();
+      const memorias = [], bajadas = [], lanz = [], escritos = [];
       try {
+        liberarPendientes(cu);
         plano.forEach((v, j) => {
-          const pt = k.params[j][1];
-          if (pt.endsWith('*')) {
-            const d = cu.reservar(Math.max(8, v.byteLength));
-            memorias.push(d);
-            cu.subir(d, v);
-            bajadas.push([v, d]);
-            lanz.push({ t: 'ptr', v: d });
-          } else lanz.push({ t: pt, v });
+          const [pn, pt] = k.params[j];
+          if (!pt.endsWith('*')) { lanz.push({ t: pt, v }); return; }
+          const soloLee = k.lee.has(pn), soloEscribe = k.escribe.has(pn);
+          if (preps[j]) {
+            const reg = asegurarResidente(preps[j].x, preps[j].vista, cu, soloEscribe, c, !soloLee);
+            if (!soloLee) escritos.push(reg);
+            lanz.push({ t: 'ptr', v: reg.d });
+            return;
+          }
+          const d = reservarMem(cu, v.byteLength, c);
+          memorias.push([d, Math.max(8, v.byteLength)]);
+          if (!soloEscribe) cu.subir(d, v, c.s);
+          if (!soloLee) bajadas.push([v, d]);
+          lanz.push({ t: 'ptr', v: d });
         });
-        cu.lanzar(fun, c1enBloques(n, cu), C1EN_HILOS_BLOQUE, lanz);
-        cu.sincronizar();
-        for (const [v, d] of bajadas) cu.bajar(v, d);
+        // desde aquí la copia buena de lo que el núcleo escribe está en la GPU
+        for (const reg of escritos) reg.enGpu = true;
+        if (k.lanzamiento) {
+          const { bloques, hilos } = k.lanzamiento(...args.map(v => (typeof v === 'number' ? v : null)));
+          cu.lanzar(fun, bloques, hilos, lanz, c.s);
+        } else cu.lanzar(fun, c1enBloques(n, cu), C1EN_HILOS_BLOQUE, lanz, c.s);
+        trasEncolar(cu, c);
+        for (const [v, d] of bajadas) cu.bajar(v, d, c.s);
       } catch (e) {
         if (e instanceof ErrorTiempoEjecucion) throw e;
         vm.error(`el núcleo «${quien}»: la GPU falló: ${e.message}`);
       } finally {
-        for (const d of memorias) { try { cu.liberar(d); } catch (_) { /* nada */ } }
+        for (const [d, bytes] of memorias) soltarMem(cu, d, bytes, undefined, c);
+        enUso.clear();
       }
       return null;
     } finally {
@@ -14042,20 +15438,20 @@ function crearC1en(vm) {
       redGpu.set(indiceGpu, funs);
     }
     let a = null, b = null;
+    const c = colaUsada();      // (motor-exp N4.3) en la cola actual; bajar el resultado la espera
     try {
       a = cu.reservar(n * 8); b = cu.reservar(Math.max(8, Math.ceil(n / 2) * 8));
-      cu.subir(a, datos);
+      cu.subir(a, datos, c.s);
       let len = n;
       while (len > 1) {
         const m = Math.ceil(len / 2);
         cu.lanzar(funs['c1en_red_' + op], c1enBloques(m, cu), C1EN_HILOS_BLOQUE,
-          [{ t: 'i64', v: m }, { t: 'i64', v: len }, { t: 'ptr', v: a }, { t: 'ptr', v: b }]);
+          [{ t: 'i64', v: m }, { t: 'i64', v: len }, { t: 'ptr', v: a }, { t: 'ptr', v: b }], c.s);
         const t = a; a = b; b = t;
         len = m;
       }
-      cu.sincronizar();
       const r = new Float64Array(1);
-      cu.bajar(r, a);
+      cu.bajar(r, a, c.s);
       return r[0];
     } finally {
       if (a !== null) cu.liberar(a);
@@ -14063,10 +15459,119 @@ function crearC1en(vm) {
     }
   }
 
+  // ── (motor-exp N4.3) colas para el programa ─────────────────────────────────
+  // (motor-exp N4.8) «k»: la GPU de la cola (si no, la actual). Fuera de la GPU
+  // la cola es lógica y el índice no cuenta.
+  function nuevaCola(k) {
+    elegirInicial();
+    const g = actual === 'gpu' && k !== null && k !== undefined ? exigirGpu(k, 'colaGpu') : indiceGpu;
+    const c = { s: null, gpu: g, ev: null, pendientes: [], errores: [], legado: false, viva: true, logica: true };
+    if (actual === 'gpu') {
+      const cu = c1enCuda();
+      if (cu.asincrono) { c.s = enSuGpu(c, cu2 => cu2.nuevaCola()); c.logica = false; colasVivas++; }
+    }
+    return c;
+  }
+  // (motor-exp N4.8) lo que se lance en una cola va a SU GPU, sea cual sea la actual
+  function conCola(c, f) {
+    return conGpu(c.gpu, () => {
+      const antes = colaActual;
+      colaActual = c;
+      try { return f(); } finally { colaActual = antes; }
+    });
+  }
+  // ── (motor-exp N4.8) varias GPU desde un solo programa ─────────────────────
+  function numeroGpus() { const cu = c1enCuda(); return cu ? cu.dispositivos.length : 0; }
+  function exigirGpu(k, quien) {
+    const cu = c1enCuda(), cuantas = cu ? cu.dispositivos.length : 0;
+    if (k >= cuantas) vm.error(`«${quien}»: no hay GPU ${k}: esta máquina tiene ${cuantas}`,
+      cuantas ? `los índices van de 0 a ${cuantas - 1}; numeroGpus() dice cuántas hay` : 'numeroGpus() dice cuántas hay');
+    return k;
+  }
+  // Corre f con la GPU k como la actual y deja la de antes al salir. Fuera de la
+  // GPU (jit o nativo) solo corre f: el mismo programa vale en los tres.
+  function conGpu(k, f, quien) {
+    elegirInicial();
+    if (actual !== 'gpu') return f();
+    if (quien) exigirGpu(k, quien);
+    if (k === indiceGpu) return f();
+    const cu = c1enCuda(), antes = indiceGpu;
+    cu.usar(k); indiceGpu = k;
+    try { return f(); } finally { indiceGpu = antes; cu.usar(antes); }
+  }
+  function enSuGpu(c, f) {
+    const cu = c1enCuda();
+    const otra = c.gpu !== indiceGpu;
+    if (otra) cu.usar(c.gpu);
+    try { return f(cu); } finally { if (otra) cu.usar(indiceGpu); }
+  }
+  function esperarCola(c) {
+    if (c.logica) {
+      const e = c.errores.splice(0)[0];
+      if (e) lanzarError(e[0], e[1][0], e[1][1], e[2], e[3]);
+      return;
+    }
+    enSuGpu(c, cu => {
+      cu.esperarCola(c.s);
+      let primero = null;
+      for (const p of c.pendientes.splice(0)) {
+        const e = new BigUint64Array(1);
+        cu.bajar(e, p.de, null);
+        soltarMem(cu, p.de, 8, c.gpu, c);
+        const f = c1enLeerClave(e[0]);
+        if (f && !primero) primero = [p, f];
+      }
+      if (primero) lanzarError(primero[0].r.modelo, primero[1][0], primero[1][1], primero[0].quien, primero[0].nh);
+    });
+  }
+  function colaLista(c) { return c.logica ? true : enSuGpu(c, cu => cu.colaLista(c.s)); }
+  function soltarCola(c) {
+    try { esperarCola(c); } finally {
+      if (!c.logica && c.viva) enSuGpu(c, cu => { cu.soltarCola(c.s); if (c.ev) cu.soltarEvento(c.ev); });
+      if (!c.logica && c.viva) colasVivas--;
+      c.viva = false;
+    }
+  }
+  // Subir ya, en la cola actual (un «prefetch»): el núcleo que lo use después ya
+  // lo encuentra allí. Una vista con zancadas no puede quedarse en la GPU: nada.
+  function subir(x) {
+    elegirInicial();
+    if (actual !== 'gpu') return;
+    const p = prepararArreglo(x, 'subirGpu', 1, true, true);
+    if (!p.residible) return;
+    const cu = c1enCuda(), c = colaUsada();
+    try { liberarPendientes(cu); asegurarResidente(x, p.vista, cu, false, c, false); trasEncolar(cu, c); }
+    finally { enUso.clear(); }
+  }
+  // Lo que tarda en la GPU, con dos eventos con tiempo alrededor; fuera de la
+  // GPU, el reloj (lo de jit y nativo ya terminó al volver).
+  function medir(f) {
+    elegirInicial();
+    const cu = actual === 'gpu' ? c1enCuda() : null;
+    if (!cu || !cu.asincrono) {
+      const t0 = Date.now(), p0 = typeof performance !== 'undefined' ? performance.now() : 0;
+      f();
+      if (cu) cu.sincronizar();
+      return typeof performance !== 'undefined' ? performance.now() - p0 : Date.now() - t0;
+    }
+    const c = colaUsada();
+    const a = cu.nuevoEvento(true), b = cu.nuevoEvento(true);
+    try {
+      cu.marcar(a, c.s);
+      f();
+      const c2 = colaUsada();
+      cu.marcar(b, c2.s);
+      cu.esperarEvento(b);
+      return cu.tiempoEntre(a, b);
+    } finally { cu.soltarEvento(a); cu.soltarEvento(b); }
+  }
+
   return {
     get dispositivo() { elegirInicial(); return actual; },
+    nuevaCola, conCola, esperarCola, colaLista, soltarCola, subir, medir,
     get gpu() { elegirInicial(); return actual === 'gpu' ? indiceGpu : null; },
-    usar, describir, disponibles, paralelo, codigo, kernel, reducir, liberarResidentes,
+    numeroGpus, conGpu, paraleloRepartido,
+    usar, describir, disponibles, paralelo, paraleloBloques, hilos, codigo, kernel, reducir, liberarResidentes,
     // Para las pruebas y para quien quiera ver el JavaScript que corre en "jit".
     codigoJS(cierre, ejemplos) {
       const r = modeloDe(cierre, tiposParaLlamada(cierre, ejemplos, 'codigoJS'), 'codigoJS');
@@ -14076,6 +15581,48 @@ function crearC1en(vm) {
   };
 }
 
+// (motor-exp N4.4) ¿Usa el cuerpo barrera(), compartido…, hilosPorBloque() o numeroBloques()?
+// (motor-exp N4.7) ¿Es un núcleo de «hilos»? (usa barreraHilos, numeroHilos o lo que bloquea)
+function c1enUsaHilos(n) {
+  const NOMBRES = new Set(['barreraHilos', 'numeroHilos', 'cerrarCandado', 'esperarMientras']);
+  let si = false;
+  const ver = x => {
+    if (si || !x || typeof x !== 'object') return;
+    if (Array.isArray(x)) { x.forEach(ver); return; }
+    if (x.tipo === 'Llamada' && x.callee && x.callee.tipo === 'Variable' && NOMBRES.has(x.callee.nombre)) { si = true; return; }
+    for (const k in x) if (k !== 'linea' && k !== 'col') ver(x[k]);
+  };
+  ver(n);
+  return si;
+}
+function c1enUsaBloques(n) {
+  const NOMBRES = new Set(['barrera', 'compartido', 'compartidoEntero', 'hilosPorBloque', 'numeroBloques']);
+  const ver = x => {
+    if (!x || typeof x !== 'object') return false;
+    if (Array.isArray(x)) return x.some(ver);
+    if (x.tipo === 'Llamada' && x.callee && x.callee.tipo === 'Variable' && NOMBRES.has(x.callee.nombre)) return true;
+    for (const k of Object.keys(x)) if (k !== 'tipoLit' && k !== 'anotacion' && typeof x[k] === 'object' && ver(x[k])) return true;
+    return false;
+  };
+  return ver(n);
+}
+// (motor-exp N4.8) lo que una GPU cambió de un arreglo: los elementos cuyos
+// bits difieren de los de antes pasan a «destino». Se compara en bits (un NaN
+// es igual a sí mismo, y −0 distinto de +0), en palabras de 32 o menos.
+function c1enMezclarCambios(destino, suyo, antes) {
+  const B = destino.BYTES_PER_ELEMENT;
+  const V = B >= 4 ? Uint32Array : B === 2 ? Uint16Array : Uint8Array;
+  const w = B >= 4 ? B / 4 : 1;
+  const vd = new V(destino.buffer, destino.byteOffset, destino.length * w);
+  const vs = new V(suyo.buffer, suyo.byteOffset, suyo.length * w);
+  const va = new V(antes.buffer, antes.byteOffset, antes.length * w);
+  for (let j = 0; j < destino.length; j++) {
+    const o = j * w;
+    let cambia = false;
+    for (let q = 0; q < w; q++) if (vs[o + q] !== va[o + q]) { cambia = true; break; }
+    if (cambia) for (let q = 0; q < w; q++) vd[o + q] = vs[o + q];
+  }
+}
 function c1enLeerClave(k) {
   if (k === 0xffffffffffffffffn) return null;
   return [Number(k >> 24n), Number(k & 0xffffffn)];
@@ -14149,6 +15696,12 @@ function c1enFuenteReducir(destino) {
 // la CPU y desempaqueta los parámetros igual que lo hace el driver con el
 // arreglo «void **kernelParams». Solo existe compilando con -DC1EN_EMULAR: NVRTC
 // no lo ve nunca.
+// (motor-exp N3) Para núcleos con __syncthreads: cada hilo del bloque es una
+// corrutina (ver c1en_coop_correr en la cabecera del simulador).
+function c1enEmuladorCoop(nombre, desempaquetar) {
+  return `#ifdef C1EN_EMULAR\nstatic void c1en_coopf_${nombre}(void** p) { ${nombre}(${desempaquetar}); }\n` +
+    `extern "C" void c1en_emul_${nombre}(unsigned gx, unsigned bx, void** p) { c1en_coop_correr(gx, bx, c1en_coopf_${nombre}, p); }\n#endif\n`;
+}
 function c1enEmulador(nombre, desempaquetar) {
   return `#ifdef C1EN_EMULAR\nextern "C" void c1en_emul_${nombre}(unsigned gx, unsigned bx, void** p) {\n` +
     `  gridDim.x = gx; blockDim.x = bx;\n` +
@@ -14168,7 +15721,21 @@ function c1enEmulador(nombre, desempaquetar) {
 // variable es la UNIÓN de todo lo que se le asigna (ent ∪ real = real), y se
 // calcula hasta que no cambia: «var x = 0» seguido de «x = x / 2» deja x real,
 // como en Ñ, donde x valdría 0,5.
-function c1enAnalizar(vm, cierre, tiposArgs, quien) {
+// (motor-exp N4.4) «bloques»: el núcleo es de paraleloBloques —recibe (bloque,
+// hilo, …) y puede usar memoria compartida, barreras y el tamaño de la
+// cuadrícula—; si no, de paralelo —(i, …)—.
+// (motor-exp N4.5) el tipo de C (y de CUDA, que no trae <stdint.h> en NVRTC)
+// del elemento de un parámetro arreglo: real, real32, entero o un entero de máquina
+const C1EN_ENT_C = { i8: ['int8_t', 'signed char', 8], u8: ['uint8_t', 'unsigned char', 8], i16: ['int16_t', 'short', 16],
+  u16: ['uint16_t', 'unsigned short', 16], u32: ['uint32_t', 'unsigned int', 32] };
+function c1enTipoElem(p, cu) {
+  if (p.arr === 'real') return p.f32 ? 'float' : 'double';
+  const e = p.ent && C1EN_ENT_C[p.ent];
+  if (e) return cu ? e[1] : e[0];
+  return cu ? 'int' : 'int32_t';
+}
+const C1EN_MAX_COMPARTIDA = 48 * 1024;      // bytes de memoria compartida por bloque, como en CUDA sin pedir más
+function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
   const fn = cierre.fn;
   const ast = fn.ast;
   const enl = fn.enlace || null;
@@ -14185,28 +15752,43 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien) {
   const M = {
     nombre: nombreFn, linea: ast.linea, ast: ast.cuerpo, params: [], vars: [], tipos: new Map(), arrDe: new Map(),
     sitios: [null], sitioDe: new Map(), llamadas: new Map(), porNodo: new Map(),
+    bloques: bloques === true, hilos: bloques === 'hilos', compartidos: [], barreras: 0,
+    // (motor-exp N4.8) para repartir un «paralelo» entre varias GPU: si hay
+    // atómicos o vallas (hilos que se hablan) y si el índice del hilo se reasigna
+    atomicos: false, iReasignado: false,
+    // (motor-exp N4.9) lo que se sabe al compilar: el valor de cada expresión
+    // constante, y la rama que toca de cada «si» con condición constante
+    constantes: new Map(), siFijo: new Map(),
   };
   const asc = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9_]/g, '_');
   let nVars = 0;
   const nuevaVar = (nombre, extra) => Object.assign({ nombre, cn: `v${nVars++}_${asc(nombre)}`, tipo: null, anot: null, fijo: false }, extra);
 
   // Los parámetros: el 0 es el índice del hilo; los demás, lo que llegó.
+  // (motor-exp N4.4) En un núcleo de bloques, el 0 es el bloque y el 1 el hilo
+  // dentro del bloque.
   const ps = ast.params;
-  M.params.push(Object.assign(nuevaVar(ps[0].nombre), { tipo: 'ent', tipoEntrada: 'ent', entrada: 'p0' }));
-  for (let k = 1; k < ps.length; k++) {
-    const t = tiposArgs[k - 1];
-    if (t === 'f64*' || t === 'i32*')
-      M.params.push({ nombre: ps[k].nombre, arr: t === 'f64*' ? 'real' : 'ent', cn: `p${k}`, cnN: `n${k}` });
+  const nIdx = M.bloques ? 2 : 1;
+  for (let k = 0; k < nIdx; k++) M.params.push(Object.assign(nuevaVar(ps[k].nombre), { tipo: 'ent', tipoEntrada: 'ent', entrada: `p${k}` }));
+  for (let k = nIdx; k < ps.length; k++) {
+    const t = tiposArgs[k - nIdx];
+    const entM = typeof t === 'string' && t.endsWith('*') && C1EN_ENT_C[t.slice(0, -1)] ? t.slice(0, -1) : null;
+    if (t === 'f64*' || t === 'i32*' || t === 'f32*' || entM)
+      M.params.push({ nombre: ps[k].nombre, arr: t === 'f64*' || t === 'f32*' ? 'real' : 'ent', f32: t === 'f32*', ent: entM, cn: `p${k}`, cnN: `n${k}` });
     else M.params.push(Object.assign(nuevaVar(ps[k].nombre), { tipo: t, tipoEntrada: t, entrada: `p${k}` }));
   }
 
+  let sinComprobar = 0;            // (motor-exp N4.11) dentro de cuántos «sinComprobar» se está
   const sitio = (n, clase, texto, pista) => {
     let porClase = M.sitioDe.get(n);
     if (!porClase) { porClase = new Map(); M.sitioDe.set(n, porClase); }
     if (!porClase.has(clase)) {
       const id = M.sitios.length;
       if (id >= 0xffffff) no(n, 'el núcleo es demasiado largo (más de 16 millones de sitios que pueden fallar)');
-      M.sitios.push({ linea: n.linea || ast.linea, texto, pista });
+      // (motor-exp N4.11) dentro de «sinComprobar», los que cuestan en cada acceso
+      // se quitan en nativo y en la GPU; las barreras, las esperas y el tope de
+      // vueltas se quedan (sin ellos, un fallo es un cuelgue)
+      M.sitios.push({ linea: n.linea || ast.linea, texto, pista, sin: sinComprobar > 0 && C1EN_QUITABLES.has(clase) });
       porClase.set(clase, id);
     }
     return porClase.get(clase);
@@ -14282,10 +15864,115 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien) {
     return info;
   };
 
+  // (motor-exp N4.7) un atómico: el arreglo (entero de 32 bits), el índice y los valores enteros
+  const analizarAtomico = (n, f) => {
+    const d = C1EN_ATOMICOS[f];
+    if (n.args.length !== 2 + d.v) no(n, `«${f}» recibe (arreglo, índice${d.v === 1 ? ', valor' : d.v === 2 ? ', esperado, nuevo' : ''})`);
+    if (d.b && !M.hilos)
+      no(n, `«${f}» solo vale en un núcleo de «hilos»`, 'en «paralelo» y en la GPU los hilos no tienen por qué estar vivos a la vez, y esperar a otro puede no acabar nunca: hilos(n, funcion(t, …) { … }, …)');
+    const info = arregloDe(n.args[0], `«${f}»`);
+    M.atomicos = true;
+    if (info.compartido) no(n, `«${f}» sobre la memoria compartida del bloque todavía no: usa un arreglo que llegue como argumento`);
+    if (info.arr !== 'ent' || (info.ent && info.ent !== 'u32'))
+      no(n, `«${f}» trabaja sobre arreglos enteros de 32 bits («entero» o «u32») y «${info.nombre}» es ${info.ent || (info.arr === 'real' ? (info.f32 ? 'real32' : 'real') : 'entero')}`,
+        'los atómicos de la CPU y de la GPU son de enteros: guarda contadores y candados en un arreglo "entero"');
+    for (let k = 1; k < n.args.length; k++) {
+      const t = tx(n.args[k]);
+      if (t !== 'ent') no(n, `«${f}»: el argumento ${k + 1} tiene que ser entero`);
+    }
+    sitio(n, 'idx', `el índice se sale del arreglo «${info.nombre}»`, `los índices válidos van de 0 a longitud(${info.nombre}) − 1`);
+    if (d.b) sitio(n, 'espera', 'todos los hilos se quedaron esperando: un interbloqueo (nadie va a abrir el candado ni a cambiar el valor)',
+      'mira el orden en que se cierran los candados (siempre en el mismo orden en todos los hilos) y que alguien cambie lo que se espera');
+    return info;
+  };
+
   function tx(n) {
+    // (motor-exp N4.9) lo que se sabe al compilar (el tipo de un arreglo, sus
+    // límites, y lo que se calcula con eso) es una constante del núcleo
+    if (n.tipo !== 'Literal') {
+      const c = constante(n);
+      if (c) {
+        if (c.t === 'texto') no(n, '«tipoArreglo» dentro de un núcleo solo se compara con un texto', 'si tipoArreglo(a) == "real32" { … } sino { … }');
+        M.constantes.set(n, c.v);
+        M.tipos.set(n, c.t);
+        return c.t;
+      }
+    }
     const t = tx0(n);
     M.tipos.set(n, t);
     return t;
+  }
+  // (motor-exp N4.9) El valor de una expresión que no depende de nada del hilo:
+  // { v, t } o null. Entran los literales, tipoArreglo(a) (un texto), los límites
+  // del tipo, y las comparaciones, «no», «y», «o» y «-» de constantes. Lo de un
+  // literal suelto no se guarda (ya se emite como literal).
+  function tipoElemDe(a, f) {
+    if (a.tipo === 'Literal' && typeof a.valor === 'string') {
+      const t = ALIAS_TIPO[a.valor] || a.valor;
+      if (!LIMITES_TIPO[t]) no(a, `«${f}»: no conozco el tipo «${a.valor}»`, `los que hay: ${Object.keys(LIMITES_TIPO).join(', ')}`);
+      return t;
+    }
+    const info = a.tipo === 'Variable' ? buscar(a.nombre) : null;
+    if (!info || !info.arr) no(a, `«${f}» dentro de un núcleo recibe un arreglo que sea un parámetro, por su nombre, o el nombre de un tipo`, `${f}(a) · ${f}("real32")`);
+    return info.arr === 'real' ? (info.f32 ? 'real32' : 'real') : (info.ent || 'entero');
+  }
+  function constante(n) {
+    switch (n.tipo) {
+      case 'Literal':
+        if (typeof n.valor === 'boolean') return { v: n.valor, t: 'bool' };
+        if (typeof n.valor === 'number') return { v: n.valor, t: n.tipoLit && (n.tipoLit === T.real || n.tipoLit.k === 'real') ? 'real' : (Number.isInteger(n.valor) ? 'ent' : 'real') };
+        if (typeof n.valor === 'string') return { v: n.valor, t: 'texto' };
+        return null;
+      case 'Llamada': {
+        if (n.callee.tipo !== 'Variable' || buscar(n.callee.nombre)) return null;
+        const g = vm.globals.get(globalDeEnlace(enl, n.callee.nombre));
+        if (!(g instanceof ObjNativa) || (g.edsl && g.edsl !== 'numerico' && g.edsl !== 'nen')) return null;
+        const f = g.nombreCorto || g.nombre;
+        if (f !== 'tipoArreglo' && f !== 'epsilonTipo' && f !== 'minimoTipo' && f !== 'maximoTipo') return null;
+        if (n.args.length !== 1) no(n, `«${f}» recibe un argumento`);
+        const t = tipoElemDe(n.args[0], f);
+        if (f === 'tipoArreglo') return { v: t, t: 'texto' };
+        const v = LIMITES_TIPO[t][f === 'epsilonTipo' ? 0 : f === 'minimoTipo' ? 1 : 2];
+        if (typeof v === 'bigint') no(n, `«${f}(${t})» no cabe en un número del núcleo`, 'los de 64 bits todavía no entran en los núcleos');
+        return { v, t: f === 'epsilonTipo' || esFlot(t) ? 'real' : 'ent' };
+      }
+      case 'Unario': {
+        const c = constante(n.expr);
+        if (!c) return null;
+        if (n.op === 'no') return c.t === 'bool' ? { v: !c.v, t: 'bool' } : null;
+        if (n.expr.tipo === 'Literal') return null;       // «-2.0» lo escribe el emisor, como siempre
+        return c.t === 'ent' || c.t === 'real' ? { v: -c.v, t: c.t } : null;
+      }
+      case 'Binario': {
+        const a = constante(n.izq);
+        if (!a) return null;
+        const b = constante(n.der);
+        if (!b) return null;
+        if (n.izq.tipo === 'Literal' && n.der.tipo === 'Literal' && a.t !== 'texto' && b.t !== 'texto') return null;   // eso ya lo hace el emisor
+        const op = n.op;
+        if (a.t === 'texto' || b.t === 'texto') {
+          if (a.t !== b.t) no(n, 'se compara un texto con algo que no es texto');
+          if (op !== '==' && op !== '!=') no(n, `los textos de tipoArreglo solo se comparan con == o !=`);
+          return { v: op === '==' ? a.v === b.v : a.v !== b.v, t: 'bool' };
+        }
+        if (op === 'y' || op === 'o') {
+          if (a.t !== 'bool' || b.t !== 'bool') return null;
+          return { v: op === 'y' ? a.v && b.v : a.v || b.v, t: 'bool' };
+        }
+        const num = x => x.t === 'ent' || x.t === 'real';
+        if (!num(a) || !num(b)) return null;
+        switch (op) {
+          case '==': return { v: a.v === b.v, t: 'bool' };
+          case '!=': return { v: a.v !== b.v, t: 'bool' };
+          case '<': return { v: a.v < b.v, t: 'bool' };
+          case '>': return { v: a.v > b.v, t: 'bool' };
+          case '<=': return { v: a.v <= b.v, t: 'bool' };
+          case '>=': return { v: a.v >= b.v, t: 'bool' };
+          default: return null;            // la aritmética la hace el núcleo, con sus reglas
+        }
+      }
+      default: return null;
+    }
   }
   function tx0(n) {
     switch (n.tipo) {
@@ -14354,12 +16041,39 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien) {
         const nArgs = C1EN_FUNCIONES[f];
         if (n.args.length !== nArgs) no(n, `«${f}» recibe ${nArgs} argumento(s) dentro de un núcleo y llegaron ${n.args.length}`);
         if (f === 'sumarAtomico') no(n, '«sumarAtomico» es una sentencia: no devuelve nada que usar');
+        if (f === 'barrera') no(n, '«barrera()» es una sentencia: no devuelve nada que usar');
+        if (f === 'compartido' || f === 'compartidoEntero')
+          no(n, `«${f}» va en su propia declaración, al principio del núcleo`, 'fijo s = compartido(256)');
+        if (f === 'hilosPorBloque' || f === 'numeroBloques') {
+          if (!M.bloques) no(n, `«${f}()» solo existe en los núcleos de paraleloBloques`, 'paraleloBloques(bloques, hilos, funcion(b, t, …) { … }, …)');
+          return 'ent';
+        }
         if (f === 'longitud' || f === 'tamano') { arregloDe(n.args[0], `«${f}»`); return 'ent'; }
+        if (C1EN_ATOMICOS[f] !== undefined) {         // (motor-exp N4.7)
+          if (C1EN_ATOMICOS[f].s) no(n, `«${f}» es una sentencia: no devuelve nada que usar`);
+          analizarAtomico(n, f);
+          return 'ent';
+        }
+        if (f === 'numeroHilos') {
+          if (!M.hilos) no(n, '«numeroHilos()» solo existe en los núcleos de «hilos»', 'hilos(n, funcion(t, …) { … }, …)');
+          if (n.args.length) no(n, '«numeroHilos()» no recibe argumentos');
+          return 'ent';
+        }
+        if (f === 'barreraHilos' || f === 'vallaMemoria') no(n, `«${f}()» es una sentencia: no devuelve nada que usar`);
         const ts = n.args.map(tx);
         for (let k = 0; k < ts.length; k++) if (!esNum(ts[k])) no(n, `«${f}» necesita números y el argumento ${k + 1} es bool`);
         if (f === 'azarHilo') {
           ts.forEach((t, k) => { if (t !== 'ent') no(n, `«azarHilo»: el argumento ${k + 1} tiene que ser entero`, 'azarHilo(semilla, i, canal) con tres enteros'); });
           return 'real';
+        }
+        if (C1EN_BITS[f] !== undefined) {
+          ts.forEach((t, k) => { if (t !== 'ent') no(n, `«${f}»: el argumento ${k + 1} tiene que ser entero`, 'las operaciones de bits son de enteros: usa entero(x) o piso(x)'); });
+          if (f === 'desplazarIzq' || f === 'desplazarDer')
+            sitio(n, 'despl', `«${f}»: el desplazamiento va de 0 a 63`);
+          if (f !== 'bitsNo' && f !== 'desplazarDer')
+            sitio(n, 'bits', `«${f}»: el resultado no cabe exacto en un número de Ñ (más de 2^53)`,
+              'para trabajar con los 32 bits de abajo, quédate con ellos: bitsY(x, 4294967295)');
+          return 'ent';
         }
         if (f === 'raiz') { sitio(n, 'raiz', '«raiz» de un número negativo'); return 'real'; }
         if (f === 'log' || f === 'log10') { sitio(n, 'log', `«${f}» necesita un número positivo`); return 'real'; }
@@ -14421,6 +16135,29 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien) {
   function ts(n) {
     switch (n.tipo) {
       case 'DeclVar': {
+        // (motor-exp N4.4) fijo s = compartido(256): memoria compartida del bloque
+        if (n.valor && n.valor.tipo === 'Llamada' && n.valor.callee.tipo === 'Variable' && !buscar(n.valor.callee.nombre)) {
+          const f0 = (() => { const g = vm.globals.get(globalDeEnlace(enl, n.valor.callee.nombre)); return g instanceof ObjNativa ? (g.nombreCorto || g.nombre) : null; })();
+          if (f0 === 'compartido' || f0 === 'compartidoEntero') {
+            M.llamadas.set(n.valor, f0);
+            if (!M.bloques) no(n, `«${f0}» solo existe en los núcleos de paraleloBloques`, 'paraleloBloques(bloques, hilos, funcion(b, t, …) { … }, …)');
+            if (scopes.length !== 2) no(n, `«${f0}» se declara al principio del núcleo, fuera de «si» y de bucles`, 'es de todo el bloque: todos los hilos ven la misma');
+            const a0 = n.valor.args[0];
+            if (n.valor.args.length !== 1 || !a0 || a0.tipo !== 'Literal' || !Number.isInteger(a0.valor) || a0.valor < 1)
+              no(n, `«${f0}» necesita el tamaño escrito como un entero positivo`, 'fijo s = compartido(256) — el tamaño se fija al compilar el núcleo');
+            let info = M.porNodo.get(n);
+            if (!info) {
+              info = { nombre: n.nombre, arr: f0 === 'compartido' ? 'real' : 'ent', compartido: true, tam: a0.valor,
+                cn: `sh${M.compartidos.length}_${asc(n.nombre)}`, cnN: String(a0.valor) };
+              M.porNodo.set(n, info); M.compartidos.push(info);
+              const bytes = M.compartidos.reduce((x, c) => x + c.tam * (c.arr === 'real' ? 8 : 4), 0);
+              if (bytes > C1EN_MAX_COMPARTIDA)
+                no(n, `la memoria compartida del bloque pasa de ${C1EN_MAX_COMPARTIDA / 1024} KB (${bytes} bytes)`, 'es lo que da una GPU por bloque sin pedir más: usa trozos más pequeños');
+            }
+            scopes[scopes.length - 1].set(n.nombre, info);
+            return;
+          }
+        }
         const anot = tipoAnot(n.anotacion, n, n.nombre);
         if (!n.valor && !anot) no(n, `«${n.nombre}» se declara sin valor ni tipo`, `var ${n.nombre}: real = 0.0`);
         let t = null;
@@ -14438,23 +16175,64 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien) {
       case 'ExprSent': {
         const e = n.expr;
         if (e.tipo === 'Asignacion') return asignacion(e);
+        // (motor-exp N4.11) las marcas de «sinComprobar { … }»
+        if (e.tipo === 'Llamada' && e.callee.tipo === 'Variable' && e.callee.nombre === ' sinComprobar' && !buscar(' sinComprobar')) {
+          M.llamadas.set(e, ' sinComprobar');
+          sinComprobar += e.args[0] && e.args[0].valor === 1 ? 1 : -1;
+          if (sinComprobar < 0) sinComprobar = 0;
+          return;
+        }
         if (e.tipo === 'Llamada') {
           const f = resolverLlamada(e);
           M.llamadas.set(e, f);
+          if (f === 'barrera') {
+            if (!M.bloques) no(e, '«barrera()» solo existe en los núcleos de paraleloBloques', 'paraleloBloques(bloques, hilos, funcion(b, t, …) { … }, …)');
+            if (e.args.length) no(e, '«barrera()» no recibe argumentos');
+            sitio(e, 'barrera', 'no todos los hilos del bloque llegaron a esta barrera (uno terminó o fue a otra)',
+              'todos los hilos de un bloque tienen que pasar por las mismas barreras: no la pongas en un «si» que no todos toman ni salgas antes con devolver; en una GPU eso se cuelga o da basura');
+            M.barreras++;
+            return;
+          }
+          // (motor-exp N4.7) atómicos, candados, esperas, vallas y la barrera de los hilos
+          if (C1EN_ATOMICOS[f] !== undefined) {
+            if (f === 'atomicoLeer') no(e, '«atomicoLeer» sin usar lo que lee no hace nada', 'guárdalo: fijo v = atomicoLeer(a, i)');
+            analizarAtomico(e, f);
+            return;
+          }
+          if (f === 'vallaMemoria') { if (e.args.length) no(e, '«vallaMemoria()» no recibe argumentos'); M.atomicos = true; return; }
+          if (f === 'barreraHilos') {
+            if (!M.hilos) no(e, '«barreraHilos()» solo existe en los núcleos de «hilos»', 'hilos(n, funcion(t, …) { … barreraHilos() … }, …) · en paraleloBloques, la del bloque es barrera()');
+            if (e.args.length) no(e, '«barreraHilos()» no recibe argumentos');
+            sitio(e, 'barrera', 'no todos los hilos llegaron a esta barrera (uno terminó, o fue a otra)',
+              'todos los hilos tienen que pasar por las mismas barreras: no la pongas en un «si» que no todos toman ni salgas antes con devolver');
+            sitio(e, 'espera', 'todos los hilos se quedaron esperando: un interbloqueo', 'alguien espera en un candado o en esperarMientras mientras los demás esperan en la barrera');
+            return;
+          }
           if (f !== 'sumarAtomico') no(e, `el resultado de «${f}» no se usa`, 'guárdalo en una variable o en un arreglo');
           if (e.args.length !== 3) no(e, '«sumarAtomico» recibe (arreglo, índice, valor)');
           const info = arregloDe(e.args[0], '«sumarAtomico»');
+          M.atomicos = true;
           const tj = tx(e.args[1]), tv = tx(e.args[2]);
           if (tj !== 'ent') no(e, 'el índice de «sumarAtomico» tiene que ser entero');
           if (!esNum(tv)) no(e, '«sumarAtomico» suma números');
           if (info.arr === 'ent' && tv !== 'ent') no(e, `«${info.nombre}» es un arreglo entero y se le suma un real`, 'usa piso(v), o un arreglo real');
+          if (info.ent && info.ent !== 'u32') no(e, `«sumarAtomico» sobre un arreglo ${info.ent}: las GPU no suman atómicamente en 8 ni 16 bits`, 'usa un arreglo "entero" o "u32" para el acumulador');
           sitio(e, 'idx', `el índice se sale del arreglo «${info.nombre}»`, `los índices válidos van de 0 a longitud(${info.nombre}) − 1`);
           return;
         }
-        no(n, 'esta expresión no hace nada', 'en un núcleo las sentencias son asignaciones, si, mientras, para y sumarAtomico');
+        no(n, 'esta expresión no hace nada', 'en un núcleo las sentencias son asignaciones, si, mientras, para, sumarAtomico y los atómicos');
         return;
       }
       case 'Si': {
+        // (motor-exp N4.9) una condición que se sabe al compilar: solo existe la
+        // rama que toca (la otra ni se mira, y puede no valer para este tipo)
+        const k = n.cond.tipo !== 'Literal' ? constante(n.cond) : null;
+        if (k && k.t === 'bool') {
+          tx(n.cond);
+          M.siFijo.set(n, k.v);
+          if (k.v) ts(n.entonces); else if (n.sino) ts(n.sino);
+          return;
+        }
         if (tx(n.cond) !== 'bool') no(n.cond, 'la condición de «si» tiene que ser un bool', 'compara: si x > 0 { … }');
         ts(n.entonces);
         if (n.sino) ts(n.sino);
@@ -14510,6 +16288,7 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien) {
       if (!info) no(e, `asigna a «${d.nombre}», que es de fuera del núcleo`, 'el núcleo solo escribe en sus variables y en sus arreglos');
       if (info.arr) no(e, `reasigna el arreglo «${d.nombre}»`, `escribe en sus elementos: ${d.nombre}[i] = …`);
       if (info.fijo) no(e, `«${d.nombre}» es fija`);
+      if (info === M.params[0]) M.iReasignado = true;      // (motor-exp N4.8)
       let t = tx(e.valor);
       if (e.op !== '=') {
         if (info.tipo === null) no(e, `«${d.nombre}» se usa antes de tener valor`);
@@ -14522,6 +16301,9 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien) {
     }
     if (d.tipo === 'Indice') {
       const info = arregloDe(d.obj, 'asignar por índice');
+      // (motor-exp N4.8) quién escribe dónde: «a[i] = …» con la i del hilo, o en otro sitio
+      info.escrito = true;
+      if (!(d.indice.tipo === 'Variable' && buscar(d.indice.nombre) === M.params[0])) info.fueraDeI = true;
       if (tx(d.indice) !== 'ent') no(e, `el índice de «${info.nombre}» tiene que ser entero`, 'usa piso(x)');
       sitio(d, 'idx', `el índice se sale del arreglo «${info.nombre}»`, `los índices válidos van de 0 a longitud(${info.nombre}) − 1`);
       let t = tx(e.valor);
@@ -14538,6 +16320,7 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien) {
   // puede pasar de ent a real, así que son dos o tres vueltas).
   for (let vuelta = 0; ; vuelta++) {
     cambio = false;
+    sinComprobar = 0;
     scopes = [new Map()];
     for (const p of M.params) scopes[0].set(p.nombre, p);
     // Un parámetro escalar se copia a una local al entrar: se puede reasignar,
@@ -14564,13 +16347,20 @@ function c1enEmitir(M, destino) {
   const temps = [];
   const tmp = t => { const nm = `t${temps.length}`; temps.push([nm, t]); return nm; };
   let fallas = 0;
-  const FALLA = id => { fallas++; return js ? `((f === 0 || ${id} < f) ? (f = ${id}) : 0, 0)` : `c1en_falla(&f, ${id})`; };
-  const FALLA_S = id => js ? `{ if (f === 0 || ${id} < f) f = ${id}; return f; }` : `{ c1en_falla(&f, ${id}); return f; }`;
+  // (motor-exp N4.11) un sitio dentro de «sinComprobar»: en C y en CUDA se le dice
+  // al compilador que no pasa (__builtin_unreachable), y quita la comprobación
+  // entera; en jit la comprobación se queda, porque jit es donde se depura
+  const sinCom = id => !js && M.sitios[id] && M.sitios[id].sin;
+  const FALLA = id => { if (sinCom(id)) return '(__builtin_unreachable(), 0)'; fallas++; return js ? `((f === 0 || ${id} < f) ? (f = ${id}) : 0, 0)` : `c1en_falla(&f, ${id})`; };
+  const FALLA_S = id => (sinCom(id) ? '{ __builtin_unreachable(); }' : js ? `{ if (f === 0 || ${id} < f) f = ${id}; return f; }` : `{ c1en_falla(&f, ${id}); return f; }`);
   const MATH = f => (js ? 'Math.' + f : f);
   const aReal = (c, t) => (t === 'real' ? c : (js ? `(${c} + 0)` : `((double)(${c}))`));
   const conv = (c, de, a) => (a === 'real' ? aReal(c, de) : c);
   const lit = (v, t) => {
     if (t === 'bool') return js ? String(v) : (v ? '1' : '0');
+    // (motor-exp N4.9) un negativo (de minimoTipo, o de una constante del núcleo)
+    // va entre paréntesis y con su signo; −0 también
+    if (typeof v === 'number' && (v < 0 || Object.is(v, -0))) return `(-${lit(-v, t)})`;
     if (t === 'ent') return js ? String(v) : `${v}LL`;
     if (v === Infinity) return js ? 'Infinity' : 'C1EN_INF';
     if (js) return String(v);
@@ -14616,13 +16406,18 @@ function c1enEmitir(M, destino) {
     throw new Error('operador sin emitir: ' + op);
   }
 
+  // (motor-exp N4.5) un elemento de un entero de máquina se lee como el entero
+  // de 64 bits del núcleo: sin eso, un uint32_t por un int se haría en 32 bits sin
+  // signo (las conversiones de C) y se envolvería antes de tiempo
+  const elemDe = (info, t) => (!js && info.ent ? `((${TY.ent})${info.cn}[${t}])` : `${info.cn}[${t}]`);
   function leerArr(info, j) {
     const t = tmp('ent');
-    return { t, codigo: (nodo) => `(${t} = ${j}, ${enRango(t, info.cnN)} ? ${info.cn}[${t}] : ${FALLA(M.sitio(nodo, 'idx'))})` };
+    return { t, codigo: (nodo) => `(${t} = ${j}, ${enRango(t, info.cnN)} ? ${elemDe(info, t)} : ${FALLA(M.sitio(nodo, 'idx'))})` };
   }
 
   function ex(n) {
     const t = tipoDe(n);
+    if (M.constantes.has(n)) return lit(M.constantes.get(n), t);     // (motor-exp N4.9)
     switch (n.tipo) {
       case 'Literal': return lit(n.valor, t);
       case 'Variable': {
@@ -14654,6 +16449,8 @@ function c1enEmitir(M, destino) {
     const f = M.llamadas.get(n);
     const as = n.args;
     if (f === 'longitud' || f === 'tamano') return M.arrDe.get(as[0]).cnN;
+    if (f === 'hilosPorBloque') return 'c1en_nh';      // (motor-exp N4.4)
+    if (f === 'numeroBloques') return 'c1en_nb';
     const a0 = () => ex(as[0]), t0 = tipoDe(as[0]);
     switch (f) {
       case 'raiz': {
@@ -14689,6 +16486,32 @@ function c1enEmitir(M, destino) {
         return `(${a} = ${conv(a0(), t0, t)}, ${b} = ${conv(ex(as[1]), tipoDe(as[1]), t)}, ${b} ${f === 'minimo' ? '<' : '>'} ${a} ? ${b} : ${a})`;
       }
       case 'azarHilo': return `${js ? 'c1enAzar' : 'c1en_azar'}(${a0()}, ${ex(as[1])}, ${ex(as[2])})`;
+      // (motor-exp N4.7) los atómicos que devuelven algo: lo que había en a[i]
+      case 'atomicoLeer': case 'atomicoSumar': case 'atomicoCambiar': case 'atomicoComparar': return atomicoExpr(n, f);
+      case 'numeroHilos': return 'c1en_nh';
+      // (motor-exp N4.5) bits: en C, los operadores de C en 64 bits; en JS, lo
+      // mismo con números (o BigInt, ver c1enBits); los dos comprueban lo mismo
+      case 'bitsY': case 'bitsO': case 'bitsXor': {
+        const r = tmp('ent');
+        const L53 = '9007199254740992';
+        if (js) return `(${r} = c1enBits(${C1EN_BITS[f]}, ${a0()}, ${ex(as[1])}), ${r} === ${r} ? ${r} : ${FALLA(M.sitio(n, 'bits'))})`;
+        const o = { bitsY: '&', bitsO: '|', bitsXor: '^' }[f];
+        return `(${r} = (${a0()}) ${o} (${ex(as[1])}), (${r} >= -${L53}LL && ${r} <= ${L53}LL) ? ${r} : ${FALLA(M.sitio(n, 'bits'))})`;
+      }
+      case 'bitsNo': return js ? `(-(${a0()}) - 1)` : `(~(${a0()}))`;
+      case 'desplazarIzq': case 'desplazarDer': {
+        const a = tmp('ent'), k = tmp('ent');
+        const desp = FALLA(M.sitio(n, 'despl'));
+        const pre = `${a} = ${a0()}, ${k} = ${ex(as[1])}, (${k} < 0 || ${k} > 63) ? ${desp} : `;
+        if (f === 'desplazarDer')
+          return js ? `(${pre}Math.floor(${a} / Math.pow(2, ${k})))` : `(${pre}(${a} >> ${k}))`;
+        // a la izquierda: a·2^k, que tiene que caber en 2^53 (así nunca llega a
+        // envolverse en 64 bits, y en JS la cuenta es exacta)
+        const r = tmp('real');
+        const ull = cu ? 'unsigned long long' : 'uint64_t';
+        if (js) return `(${pre}(${r} = ${a} * Math.pow(2, ${k}), (${r} >= -9007199254740992 && ${r} <= 9007199254740992) ? ${r} : ${FALLA(M.sitio(n, 'bits'))}))`;
+        return `(${pre}(${r} = (double)${a} * (double)((${ull})1 << ${k}), (${r} >= -9007199254740992.0 && ${r} <= 9007199254740992.0) ? (${TY.ent})((${ull})${a} << ${k}) : ${FALLA(M.sitio(n, 'bits'))}))`;
+      }
       default: return `${js ? C1EN_TRASC_JS[f] : C1EN_TRASC[f]}(${aReal(a0(), t0)})`;
     }
   }
@@ -14718,6 +16541,7 @@ function c1enEmitir(M, destino) {
       case 'DeclVar': {
         const info = M.porNodo.get(n);
         scopes[scopes.length - 1].set(n.nombre, info);
+        if (info.compartido) return;                     // (motor-exp N4.4) la reserva el envoltorio del bloque
         const antes = fallas;
         const v = n.valor ? conv(ex(n.valor), tipoDe(n.valor), info.tipo) : lit(info.tipo === 'bool' ? false : 0, info.tipo);
         L(`${info.cn} = ${v};`);
@@ -14726,10 +16550,29 @@ function c1enEmitir(M, destino) {
       }
       case 'ExprSent': {
         const e = n.expr;
-        if (e.tipo === 'Llamada') return sumarAtomico(e);
+        if (e.tipo === 'Llamada' && M.llamadas.get(e) === 'barrera') {
+          // (motor-exp N4.4) jit: el hilo cede el turno (es un generador) · C: la
+          // corrutina vuelve al planificador del bloque · CUDA: __syncthreads
+          const id = M.sitio(e, 'barrera');
+          if (js) L(`yield ${id};`);
+          else if (cu) L('__syncthreads();');
+          else L(`c1en_barrera(c1en_h, ${id});`);
+          return;
+        }
+        if (e.tipo === 'Llamada') {
+          const f = M.llamadas.get(e);
+          if (f === ' sinComprobar') return;                     // (motor-exp N4.11) una marca: nada que emitir
+          if (C1EN_ATOMICOS[f] !== undefined || f === 'vallaMemoria' || f === 'barreraHilos') return atomicoSentencia(e, f);   // (motor-exp N4.7)
+          return sumarAtomico(e);
+        }
         return asignacion(e);
       }
       case 'Si': {
+        if (M.siFijo.has(n)) {                 // (motor-exp N4.9) la rama que toca, y nada más
+          const r = M.siFijo.get(n) ? n.entonces : n.sino;
+          if (r) { L('{'); ind += 2; st(r); ind -= 2; L('}'); }
+          return;
+        }
         const c = tmp('bool');
         const antes = fallas;
         L(`${c} = ${ex(n.cond)};`);
@@ -14800,7 +16643,17 @@ function c1enEmitir(M, destino) {
   // envuelve módulo 2^32 al escribir. En C se dice lo mismo pasando por
   // unsigned, que es la única conversión que el estándar define para todos los
   // valores.
-  const guardarEnt = v => (js ? v : `(${cu ? 'int' : 'int32_t'})(${cu ? 'unsigned int' : 'uint32_t'})(${cu ? 'unsigned long long' : 'uint64_t'})(${v})`);
+  // (motor-exp N4.5) en un entero de máquina, igual pero con su tamaño: por el
+  // sin signo de su anchura (que el estándar define para todo valor) y de ahí a él
+  const guardarEnt = (v, info) => {
+    if (js) return v;
+    const e = info && info.ent && C1EN_ENT_C[info.ent];
+    const ull = cu ? 'unsigned long long' : 'uint64_t';
+    if (!e) return `(${cu ? 'int' : 'int32_t'})(${cu ? 'unsigned int' : 'uint32_t'})(${ull})(${v})`;
+    const ty = cu ? e[1] : e[0];
+    const sin = cu ? ({ 8: 'unsigned char', 16: 'unsigned short', 32: 'unsigned int' })[e[2]] : `uint${e[2]}_t`;
+    return `(${ty})(${sin})(${ull})(${v})`;
+  };
   function asignacion(e) {
     const d = e.destino;
     const t = tipoDe(e) || tipoDe(e.valor);
@@ -14822,14 +16675,108 @@ function c1enEmitir(M, destino) {
     let v = ex(e.valor);
     let tvTipo = tipoDe(e.valor);
     if (e.op !== '=') {
-      const lee = `(${enRango(tj, info.cnN)} ? ${info.cn}[${tj}] : ${FALLA(M.sitio(d, 'idx'))})`;
+      const lee = `(${enRango(tj, info.cnN)} ? ${elemDe(info, tj)} : ${FALLA(M.sitio(d, 'idx'))})`;
       v = binop(e, e.op[0], lee, elem, v, tvTipo, t);
       tvTipo = t;
     }
     L(`${tv} = ${elem === 'real' ? aReal(v, tvTipo) : v};`);
     comprobar(antes);
     L(`if (!${enRango(tj, info.cnN)}) ${FALLA_S(M.sitio(d, 'idx'))}`);
-    L(`${info.cn}[${tj}] = ${elem === 'real' ? tv : guardarEnt(tv)};`);
+    L(`${info.cn}[${tj}] = ${elem === 'real' ? tv : guardarEnt(tv, info)};`);
+  }
+  // ── (motor-exp N4.7) atómicos, candados, esperas y la barrera de los hilos ──
+  // El elemento es de 32 bits (int32_t o uint32_t). En C, los __atomic de gcc y
+  // clang (secuencialmente consistentes); en CUDA, atomicAdd/Exch/CAS; en jit los
+  // hilos se turnan y nadie interrumpe a nadie, así que basta la operación tal cual.
+  const tipoAtom = info => (info.ent === 'u32' ? (cu ? 'unsigned int' : 'uint32_t') : (cu ? 'int' : 'int32_t'));
+  const valAtom = (v, info) => (js ? (info.ent === 'u32' ? `((${v}) >>> 0)` : `((${v}) | 0)`) : guardarEnt(v, info));
+  function atomicoExpr(n, f) {
+    const info = M.arrDe.get(n.args[0]);
+    const tj = tmp('ent');
+    const a = info.cn, el = `${a}[${tj}]`, idx = M.sitio(n, 'idx');
+    const v1 = n.args[2] ? ex(n.args[2]) : null, v2 = n.args[3] ? ex(n.args[3]) : null;
+    let op;
+    if (js) {
+      const o = tmp('ent');
+      if (f === 'atomicoLeer') op = el;
+      else if (f === 'atomicoSumar') op = `(${o} = ${el}, ${el} = ${o} + (${v1}), ${o})`;
+      else if (f === 'atomicoCambiar') op = `(${o} = ${el}, ${el} = (${v1}), ${o})`;
+      else op = `(${o} = ${el}, (${o} === ${valAtom(v1, info)}) ? (${el} = (${v2})) : 0, ${o})`;
+    } else if (cu) {
+      const ty = tipoAtom(info);
+      if (f === 'atomicoLeer') op = `(${TY.ent})atomicAdd(&${el}, (${ty})0)`;
+      else if (f === 'atomicoSumar') op = `(${TY.ent})atomicAdd(&${el}, ${valAtom(v1, info)})`;
+      else if (f === 'atomicoCambiar') op = `(${TY.ent})atomicExch(&${el}, ${valAtom(v1, info)})`;
+      else op = `(${TY.ent})atomicCAS(&${el}, ${valAtom(v1, info)}, ${valAtom(v2, info)})`;
+    } else {
+      if (f === 'atomicoLeer') op = `(${TY.ent})__atomic_load_n(&${el}, __ATOMIC_SEQ_CST)`;
+      else if (f === 'atomicoSumar') op = `(${TY.ent})__atomic_fetch_add(&${el}, ${valAtom(v1, info)}, __ATOMIC_SEQ_CST)`;
+      else if (f === 'atomicoCambiar') op = `(${TY.ent})__atomic_exchange_n(&${el}, ${valAtom(v1, info)}, __ATOMIC_SEQ_CST)`;
+      else op = `(${TY.ent})__sync_val_compare_and_swap(&${el}, ${valAtom(v1, info)}, ${valAtom(v2, info)})`;
+    }
+    return `(${tj} = ${ex(n.args[1])}, ${enRango(tj, info.cnN)} ? ${op} : ${FALLA(idx)})`;
+  }
+  // las que esperan: en jit el generador cede el turno («yield»): la primera vez
+  // que no puede seguir cede −1−2·sitio (llegó a esperar: eso es avanzar), y las
+  // siguientes −2−2·sitio (sigue igual: si todos están así, es un interbloqueo).
+  // En C, una espera activa que cede el procesador, mira si otro hilo falló y,
+  // pasado el tiempo máximo, lo da por interbloqueo.
+  const esperaJS = (cond, sitioEsp) => {
+    const w = tmp('ent');
+    L(`${w} = ${-1 - 2 * sitioEsp};`);
+    L(`while (${cond}) { yield ${w}; ${w} = ${-2 - 2 * sitioEsp}; }`);
+  };
+  const esperaC = (cond, sitioEsp) => {
+    L(`c1en_esp_inicio(&c1en_esp);`);
+    L(`while (${cond}) { int r_ = c1en_esperar(c1en_ctl, &c1en_esp); if (r_ == 1) return C1EN_ABORTO; if (r_) { *c1en_blando = 1; ${FALLA_S(sitioEsp)} } }`);
+  };
+  function atomicoSentencia(e, f) {
+    if (f === 'vallaMemoria') { if (!js) L(cu ? '__threadfence();' : '__atomic_thread_fence(__ATOMIC_SEQ_CST);'); return; }
+    if (f === 'barreraHilos') {
+      const id = M.sitio(e, 'barrera'), esp = M.sitio(e, 'espera');
+      if (js) L(`yield ${id};`);
+      else L(`{ int r_ = c1en_barrera_hilos(c1en_ctl, ${id}); if (r_ == 1) return C1EN_ABORTO; if (r_ == 2) { *c1en_blando = 1; ${FALLA_S(id)} } if (r_ == 3) { *c1en_blando = 1; ${FALLA_S(esp)} } }`);
+      return;
+    }
+    if (f === 'atomicoSumar' || f === 'atomicoCambiar' || f === 'atomicoComparar') {
+      const antes = fallas;
+      L(`${atomicoExpr(e, f)};`);
+      comprobar(antes);
+      return;
+    }
+    const info = M.arrDe.get(e.args[0]);
+    const tj = tmp('ent'), antes = fallas;
+    L(`${tj} = ${ex(e.args[1])};`);
+    const v = e.args[2] ? tmp('ent') : null;
+    if (v) L(`${v} = ${ex(e.args[2])};`);
+    comprobar(antes);
+    L(`if (!${enRango(tj, info.cnN)}) ${FALLA_S(M.sitio(e, 'idx'))}`);
+    const el = `${info.cn}[${tj}]`;
+    if (f === 'atomicoEscribir') {
+      if (js) L(`${el} = ${v};`);
+      else if (cu) L(`atomicExch(&${el}, ${valAtom(v, info)});`);
+      else L(`__atomic_store_n(&${el}, ${valAtom(v, info)}, __ATOMIC_SEQ_CST);`);
+      return;
+    }
+    if (f === 'despertar') return;                 // las esperas miran solas: avisar es opcional
+    if (f === 'abrirCandado') {
+      if (js) L(`${el} = 0;`);
+      else L(`__atomic_store_n(&${el}, 0, __ATOMIC_RELEASE);`);
+      return;
+    }
+    const esp = M.sitio(e, 'espera');
+    if (f === 'cerrarCandado') {
+      if (js) { esperaJS(`${el} !== 0`, esp); L(`${el} = 1;`); }
+      else {
+        const ty = tipoAtom(info), c0 = tmp('ent');
+        esperaC(`!({ ${ty} e_ = 0; __atomic_compare_exchange_n(&${el}, &e_, (${ty})1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED); })`, esp);
+        void c0;
+      }
+      return;
+    }
+    // esperarMientras(a, i, v)
+    if (js) esperaJS(`${el} === ${valAtom(v, info)}`, esp);
+    else esperaC(`__atomic_load_n(&${el}, __ATOMIC_ACQUIRE) == ${valAtom(v, info)}`, esp);
   }
   function sumarAtomico(e) {
     const info = M.arrDe.get(e.args[0]);
@@ -14840,7 +16787,9 @@ function c1enEmitir(M, destino) {
     comprobar(antes);
     L(`if (!${enRango(tj, info.cnN)}) ${FALLA_S(M.sitio(e, 'idx'))}`);
     if (js) L(`${info.cn}[${tj}] += ${tv};`);
-    else if (cu) L(info.arr === 'real' ? `atomicAdd(&${info.cn}[${tj}], ${tv});` : `atomicAdd(&${info.cn}[${tj}], (int)(unsigned int)(unsigned long long)${tv});`);
+    else if (cu) L(info.arr === 'real' ? `atomicAdd(&${info.cn}[${tj}], ${info.f32 ? '(float)' : ''}${tv});`
+      : info.ent === 'u32' ? `atomicAdd(&${info.cn}[${tj}], (unsigned int)(unsigned long long)${tv});`
+        : `atomicAdd(&${info.cn}[${tj}], (int)(unsigned int)(unsigned long long)${tv});`);
     else {
       L('#pragma omp atomic');
       L(info.arr === 'real' ? `${info.cn}[${tj}] += ${tv};` : `*(uint32_t*)&${info.cn}[${tj}] += (uint32_t)(uint64_t)${tv};`);
@@ -14855,10 +16804,12 @@ function c1enEmitir(M, destino) {
   const cuerpo = lineas.join('\n');
 
   // ── el envoltorio de cada destino ──
+  if (M.bloques) return c1enEnvolverBloques(M, destino, lineas.join('\n'), temps, TY);
+  if (M.hilos) return c1enEnvolverHilos(M, destino, lineas.join('\n'), temps, TY);   // (motor-exp N4.7)
   const firmaCuerpo = [], llamada0 = [], firmaNucleo = [], desemp = [];
   M.params.forEach((p, k) => {
     if (p.arr) {
-      const ty = p.arr === 'real' ? 'double' : (cu ? 'int' : 'int32_t');
+      const ty = c1enTipoElem(p, cu);
       firmaCuerpo.push(`${ty}* ${p.cn}`, `${TY.ent} ${p.cnN}`);
       llamada0.push(p.cn, p.cnN);
       firmaNucleo.push(`${ty}* ${p.cn}`, `${TY.ent} ${p.cnN}`);
@@ -14882,7 +16833,7 @@ function c1enEmitir(M, destino) {
     const decl = locales.map(([nm, t]) => `${nm} = ${t === 'bool' ? 'false' : '0'}`);
     const sinN = firmaCuerpo.slice(1).map(s => s.split(' ').pop());
     return `(function () {\n` +
-      `  ${c1enMezclar.toString()}\n  ${c1enAzar.toString()}\n` +
+      `  ${c1enMezclar.toString()}\n  ${c1enAzar.toString()}\n  ${c1enBits.toString()}\n` +
       `  // C1EÑ — «${M.nombre}» (línea ${M.linea}), destino jit\n` +
       `  function cuerpo(${['p0'].concat(sinN).join(', ')}) {\n` +
       `    let f = 0, vueltas = 0;\n` + (decl.length ? `    let ${decl.join(', ')};\n` : '') +
@@ -14918,12 +16869,395 @@ function c1enEmitir(M, destino) {
   }
   const todosDesemp = ['*(long long*)p[0]'].concat(desemp.map(s => s.replace(/p\[(\d+)\]/, (_, q) => `p[${+q + 1}]`)))
     .concat([`*(unsigned long long**)p[${desemp.length + 1}]`]).join(', ');
+  const todosTramo = ['*(long long*)p[0]', '*(long long*)p[1]'].concat(desemp.map(s => s.replace(/p\[(\d+)\]/, (_, q) => `p[${+q + 2}]`)))
+    .concat([`*(unsigned long long**)p[${desemp.length + 2}]`]).join(', ');
   return titulo + cab + '\n' + fCuerpo + '\n' +
     `extern "C" __global__ void c1en_nucleo(long long n${firmaNucleo.length ? ', ' + firmaNucleo.join(', ') : ''}, unsigned long long* c1en_err) {\n` +
     `  for (long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (long long)blockDim.x * gridDim.x) {\n` +
     `    long long c = c1en_cuerpo(${llamada0.join(', ')});\n` +
     `    if (c != 0) atomicMin(c1en_err, ((unsigned long long)i << 24) | (unsigned long long)c);\n  }\n}\n` +
-    c1enEmulador('c1en_nucleo', todosDesemp);
+    c1enEmulador('c1en_nucleo', todosDesemp) +
+    // (motor-exp N4.8) el mismo núcleo para un tramo [desde, hasta) de los índices:
+    // es lo que corre cada GPU en paraleloRepartido. La i es la de siempre (la
+    // global), así que el cuerpo, los fallos y su clave son los mismos.
+    `extern "C" __global__ void c1en_tramo(long long desde, long long n${firmaNucleo.length ? ', ' + firmaNucleo.join(', ') : ''}, unsigned long long* c1en_err) {\n` +
+    `  for (long long i = desde + (long long)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (long long)blockDim.x * gridDim.x) {\n` +
+    `    long long c = c1en_cuerpo(${llamada0.join(', ')});\n` +
+    `    if (c != 0) atomicMin(c1en_err, ((unsigned long long)i << 24) | (unsigned long long)c);\n  }\n}\n` +
+    c1enEmulador('c1en_tramo', todosTramo);
+}
+
+// ============================================================================
+//  (motor-exp N4.4) El envoltorio de los núcleos de paraleloBloques
+// ============================================================================
+// El programa ve el modelo de la GPU: una cuadrícula de «nb» bloques de «nh»
+// hilos, memoria compartida por bloque y barreras. Los tres destinos:
+//   · CUDA: tal cual (__shared__, __syncthreads), un bloque de verdad por bloque.
+//   · jit: cada hilo es un GENERADOR de JavaScript y la barrera es «yield»; el
+//     bloque corre por rondas: todos los hilos hasta la barrera, y otra vez.
+//   · C: lo mismo con CORRUTINAS (ucontext en Linux y macOS, fibras en Windows),
+//     un bloque entero en un hilo del sistema y los bloques repartidos con
+//     OpenMP.
+// En jit y en C el orden es fijo (hilo 0, 1, 2… en cada ronda), así que dan lo
+// mismo; y como es fácil equivocarse con las barreras, las vigilan: si un hilo
+// termina mientras otros esperan en una barrera, o dos hilos esperan en
+// barreras distintas —lo que en una GPU se cuelga o da basura—, el núcleo falla
+// con la línea de la barrera. La memoria compartida empieza a cero en los tres.
+const C1EN_HILOS_C = `
+#ifdef _WIN32
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0600
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600          /* IsThreadAFiber (Vista en adelante) */
+#endif
+#include <windows.h>
+#else
+#include <ucontext.h>
+#endif
+#include <stdlib.h>
+#include <string.h>
+typedef struct c1en_hb {
+#ifdef _WIN32
+  void* fibra;
+#else
+  ucontext_t ctx; char* pila;
+#endif
+  int estado;                       /* 0 corre, 1 en una barrera, 2 terminó */
+  int64_t sitio, res, b, t;
+  const void* a;
+  void (*correr)(struct c1en_hb*);
+} c1en_hb;
+#define C1EN_PILA (64 * 1024)
+#ifdef _WIN32
+static __thread void* c1en_plan = 0;
+static void WINAPI c1en_fibra(void* p) { c1en_hb* h = (c1en_hb*)p; h->correr(h); h->estado = 2; for (;;) SwitchToFiber(c1en_plan); }
+/* (motor-exp N4.6, arreglo de Windows) Cada núcleo es su propia DLL con su propio
+   «c1en_plan», pero el hilo es el mismo: el segundo núcleo encontraba el hilo YA
+   convertido en fibra por el primero, ConvertThreadToFiber le devolvía NULL y
+   SwitchToFiber(NULL) tumbaba el proceso sin mensaje. Ahora se pregunta antes, y
+   el hilo se devuelve a hilo al terminar si lo convirtió este núcleo. */
+static int c1en_hilo_entrar(void) {
+  if (IsThreadAFiber()) { c1en_plan = GetCurrentFiber(); return 0; }
+  c1en_plan = ConvertThreadToFiber(0);
+  return c1en_plan != 0;
+}
+static void c1en_hilo_salir(int convertido) { if (convertido) ConvertFiberToThread(); c1en_plan = 0; }
+static void c1en_hb_iniciar(c1en_hb* h) {
+  if (h->fibra) DeleteFiber(h->fibra);
+  h->fibra = CreateFiberEx(C1EN_PILA, C1EN_PILA, 0, c1en_fibra, h); h->estado = 0;
+}
+static void c1en_hb_seguir(c1en_hb* h) { SwitchToFiber(h->fibra); }
+static void c1en_barrera(c1en_hb* h, int64_t sitio) { h->estado = 1; h->sitio = sitio; SwitchToFiber(c1en_plan); h->estado = 0; }
+static void c1en_hb_soltar(c1en_hb* h) { if (h->fibra) DeleteFiber(h->fibra); h->fibra = 0; }
+#else
+static __thread ucontext_t c1en_plan;
+static __thread c1en_hb* c1en_hb_actual;
+static void c1en_entrada(void) { c1en_hb* h = c1en_hb_actual; h->correr(h); h->estado = 2; }
+static void c1en_hb_iniciar(c1en_hb* h) {
+  if (!h->pila) h->pila = (char*)malloc(C1EN_PILA);
+  getcontext(&h->ctx);
+  h->ctx.uc_stack.ss_sp = h->pila; h->ctx.uc_stack.ss_size = C1EN_PILA; h->ctx.uc_link = &c1en_plan;
+  makecontext(&h->ctx, c1en_entrada, 0);
+  h->estado = 0;
+}
+static void c1en_hb_seguir(c1en_hb* h) { c1en_hb_actual = h; swapcontext(&c1en_plan, &h->ctx); }
+static void c1en_barrera(c1en_hb* h, int64_t sitio) { h->estado = 1; h->sitio = sitio; swapcontext(&h->ctx, &c1en_plan); h->estado = 0; }
+static void c1en_hb_soltar(c1en_hb* h) { free(h->pila); h->pila = 0; }
+static int c1en_hilo_entrar(void) { return 0; }
+static void c1en_hilo_salir(int convertido) { (void)convertido; }
+#endif
+/* Un bloque entero, por rondas. Devuelve la peor clave ((hilo global << 24) |
+   sitio, todo unos si nada falló): la misma regla que el jit. */
+static uint64_t c1en_correr_bloque(c1en_hb* hs, int64_t nh, int64_t b) {
+  uint64_t peor = ~0ULL;
+  for (int64_t t = 0; t < nh; t++) c1en_hb_iniciar(&hs[t]);
+  int64_t vivos = nh, fin = -1; int mal = 0;
+  while (vivos > 0) {
+    int64_t bar = 0, esperan = 0; int otra = 0;
+    for (int64_t t = 0; t < nh; t++) {
+      if (hs[t].estado == 2) continue;
+      c1en_hb_seguir(&hs[t]);
+      if (hs[t].estado == 2) {
+        vivos--;
+        if (hs[t].res != 0) { uint64_t k = ((uint64_t)(b * nh + t) << 24) | (uint64_t)hs[t].res; if (k < peor) peor = k; mal = 1; }
+        else if (fin < 0) fin = t;
+      } else {
+        esperan++;
+        if (bar == 0) bar = hs[t].sitio;
+        else if (hs[t].sitio != bar && !mal && !otra) { uint64_t k = ((uint64_t)(b * nh + t) << 24) | (uint64_t)hs[t].sitio; if (k < peor) peor = k; otra = 1; }
+      }
+    }
+    if (otra) break;
+    if (!mal && esperan > 0 && fin >= 0) { uint64_t k = ((uint64_t)(b * nh + fin) << 24) | (uint64_t)bar; if (k < peor) peor = k; break; }
+  }
+  return peor;
+}
+`;
+// ============================================================================
+//  (motor-exp N4.7) Los núcleos de «hilos»: n hilos de la CPU, vivos a la vez
+// ============================================================================
+//   · jit: cada hilo es un GENERADOR y se turnan en orden fijo (0, 1, 2… por
+//     rondas). Lo que espera cede el turno; si en una ronda nadie avanza —todos
+//     esperan algo que nadie va a cambiar—, es un interbloqueo y se dice con la
+//     línea. Da siempre lo mismo: es la referencia.
+//   · nativo: n hilos del sistema de verdad (pthreads, o los de Windows). Las
+//     esperas son activas y ceden el procesador; si un hilo falla, los demás lo
+//     ven y salen; si una espera dura más de C1EN_HILOS_ESPERA_S segundos (60
+//     por defecto), se da por interbloqueo.
+const C1EN_HILOS_SO_C = `
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#include <sched.h>
+#include <time.h>
+#endif
+#include <stdlib.h>
+#include <string.h>
+#define C1EN_ABORTO 0xffffffLL
+typedef struct { int64_t n, vivos, llegados, generacion, sitio; int abortado; double limite_ms; } c1en_ctl_t;
+typedef struct { uint64_t vueltas; double t0; } c1en_esp_t;
+static double c1en_ms(void) {
+#ifdef _WIN32
+  return (double)GetTickCount64();
+#else
+  struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
+#endif
+}
+static void c1en_ceder(void) {
+#ifdef _WIN32
+  SwitchToThread();
+#else
+  sched_yield();
+#endif
+}
+static void c1en_esp_inicio(c1en_esp_t* e) { e->vueltas = 0; e->t0 = 0; }
+/* una vuelta de espera: 1 = otro hilo falló (salir), 3 = pasó el tiempo máximo */
+static int c1en_esperar(c1en_ctl_t* c, c1en_esp_t* e) {
+  if (__atomic_load_n(&c->abortado, __ATOMIC_ACQUIRE)) return 1;
+  if ((++e->vueltas & 1023) == 0) {
+    double t = c1en_ms();
+    if (e->t0 == 0) e->t0 = t; else if (t - e->t0 > c->limite_ms) return 3;
+  }
+  c1en_ceder();
+  return 0;
+}
+/* la barrera de todos los hilos: 0 bien, 1 otro falló, 2 no llegaron todos
+   (uno terminó o fue a otra barrera), 3 pasó el tiempo máximo */
+static int c1en_barrera_hilos(c1en_ctl_t* c, int64_t sitio) {
+  int64_t g = __atomic_load_n(&c->generacion, __ATOMIC_ACQUIRE);
+  int64_t libre = -1;
+  if (!__atomic_compare_exchange_n(&c->sitio, &libre, sitio, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE) && libre != sitio) return 2;
+  if (__atomic_add_fetch(&c->llegados, 1, __ATOMIC_ACQ_REL) == c->n) {
+    __atomic_store_n(&c->llegados, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&c->sitio, -1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&c->generacion, 1, __ATOMIC_RELEASE);
+    return 0;
+  }
+  c1en_esp_t e; c1en_esp_inicio(&e);
+  while (__atomic_load_n(&c->generacion, __ATOMIC_ACQUIRE) == g) {
+    if (__atomic_load_n(&c->vivos, __ATOMIC_ACQUIRE) < c->n) return 2;
+    int r = c1en_esperar(c, &e); if (r) return r;
+  }
+  return 0;
+}
+`;
+function c1enEnvolverHilos(M, destino, cuerpo, temps, TY) {
+  const js = destino === 'js', cu = destino === 'cuda';
+  if (cu) throw new Error('un núcleo de hilos no tiene CUDA');
+  const firmaCuerpo = [], llamada0 = [], firmaNucleo = [], campos = [], deCampos = [];
+  M.params.forEach((p, k) => {
+    if (p.arr) {
+      const ty = c1enTipoElem(p, false);
+      firmaCuerpo.push(`${ty}* ${p.cn}`, `${TY.ent} ${p.cnN}`);
+      firmaNucleo.push(`${ty}* ${p.cn}`, `${TY.ent} ${p.cnN}`);
+      campos.push(`${ty}* ${p.cn};`, `${TY.ent} ${p.cnN};`); deCampos.push(`a->${p.cn}`, `a->${p.cnN}`);
+      llamada0.push(p.cn, p.cnN);
+    } else {
+      const ty = p.tipoEntrada === 'real' ? 'double' : TY.ent;
+      firmaCuerpo.push(`${ty} ${p.entrada}`);
+      if (k === 0) return;
+      firmaNucleo.push(`${ty} ${p.entrada}`);
+      campos.push(`${ty} ${p.entrada};`); deCampos.push(`a->${p.entrada}`);
+      llamada0.push(p.entrada);
+    }
+  });
+  const locales = [];
+  for (const p of M.params) if (!p.arr) locales.push([p.cn, p.tipo]);
+  for (const v of M.vars) locales.push([v.cn, v.tipo]);
+  for (const [nm, t] of temps) locales.push([nm, t]);
+  const argsCuerpo = firmaCuerpo.slice(1).map(x => x.split(' ').pop());
+  if (js) {
+    const decl = locales.map(([nm, t]) => `${nm} = ${t === 'bool' ? 'false' : '0'}`);
+    return `(function () {\n` +
+      `  ${c1enMezclar.toString()}\n  ${c1enAzar.toString()}\n  ${c1enBits.toString()}\n` +
+      `  // C1EÑ — «${M.nombre}» (línea ${M.linea}), destino jit, núcleo de hilos\n` +
+      `  function* cuerpo(${['p0', 'c1en_nh'].concat(argsCuerpo).join(', ')}) {\n` +
+      `    let f = 0, vueltas = 0;\n` + (decl.length ? `    let ${decl.join(', ')};\n` : '') +
+      cuerpo.split('\n').map(l => '  ' + l).join('\n') + `\n    return 0;\n  }\n` +
+      // el planificador: rondas en orden fijo; 0 corre, 1 en la barrera, 2 terminó
+      `  return function nucleo(${['c1en_nh'].concat(argsCuerpo).join(', ')}) {\n` +
+      `    const nh = c1en_nh, hs = new Array(nh), est = new Uint8Array(nh), bar = new Int32Array(nh), esp = new Int32Array(nh);\n` +
+      `    for (let t = 0; t < nh; t++) hs[t] = cuerpo(${['t', 'nh'].concat(argsCuerpo).join(', ')});\n` +
+      `    let vivos = nh;\n` +
+      `    while (vivos > 0) {\n` +
+      `      let avanza = false, enBarrera = 0;\n` +
+      `      for (let t = 0; t < nh; t++) {\n` +
+      `        if (est[t] !== 0) { if (est[t] === 1) enBarrera++; continue; }\n` +
+      `        const r = hs[t].next();\n` +
+      `        if (r.done) { est[t] = 2; vivos--; avanza = true; if (r.value !== 0) return [t, r.value]; continue; }\n` +
+      `        const v = r.value;\n` +
+      `        if (v >= 0) { est[t] = 1; bar[t] = v; enBarrera++; avanza = true; }\n` +
+      `        else { const k = -v - 1; esp[t] = k >> 1; if ((k & 1) === 0) avanza = true; }\n` +
+      `      }\n` +
+      `      if (vivos > 0 && enBarrera === vivos) {\n` +
+      `        let b0 = -1;\n` +
+      `        for (let t = 0; t < nh; t++) if (est[t] === 1) { if (b0 < 0) b0 = bar[t]; else if (bar[t] !== b0) return [t, bar[t]]; }\n` +
+      `        if (vivos < nh) { for (let t = 0; t < nh; t++) if (est[t] === 1) return [t, bar[t]]; }\n` +
+      `        for (let t = 0; t < nh; t++) if (est[t] === 1) est[t] = 0;\n` +
+      `        continue;\n` +
+      `      }\n` +
+      `      if (!avanza && vivos > 0) { for (let t = 0; t < nh; t++) if (est[t] === 0) return [t, esp[t]]; }\n` +
+      `    }\n` +
+      `    return null;\n  };\n})()`;
+  }
+  const decl = locales.map(([nm, t]) => `  ${TY[t]} ${nm} = 0;`).join('\n');
+  const titulo = `/* C1EÑ — generado desde la función «${M.nombre}» (línea ${M.linea}): un núcleo de hilos (CPU).\n` +
+    '   Compilar con: gcc -O2 -shared -fPIC -ffp-contract=off [-pthread] (sin FMA). */\n';
+  const cab = C1EN_CABECERA_C + C1EN_PRELUDIO;
+  // «c1en_blando»: el fallo es de los que TODOS los hilos acaban viendo (un
+  // interbloqueo, una barrera a la que no llegan todos): no se avisa a los demás
+  // para que salgan, porque cada uno lo verá y se nombrará el de índice más bajo,
+  // como en jit
+  const fCuerpo = `static ${TY.ent} c1en_cuerpo(${[firmaCuerpo[0], `${TY.ent} c1en_nh`, 'c1en_ctl_t* c1en_ctl', 'int* c1en_blando'].concat(firmaCuerpo.slice(1)).join(', ')}) {\n` +
+    `  ${TY.ent} f = 0, vueltas = 0; c1en_esp_t c1en_esp; (void)c1en_esp; (void)c1en_nh;\n${decl}\n${cuerpo}\n  (void)vueltas;\n  return 0;\n}\n`;
+  return titulo + cab + C1EN_HILOS_SO_C + '\n' + fCuerpo + '\n' +
+    `typedef struct { c1en_ctl_t* ctl; int64_t t; int64_t res; int blando; ${campos.join(' ')} } c1en_ah;\n` +
+    `#ifdef _WIN32\nstatic DWORD WINAPI c1en_hilo(void* p) {\n#else\nstatic void* c1en_hilo(void* p) {\n#endif\n` +
+    `  c1en_ah* a = (c1en_ah*)p;\n` +
+    `  a->res = c1en_cuerpo(${['a->t', 'a->ctl->n', 'a->ctl', '&a->blando'].concat(deCampos).join(', ')});\n` +
+    `  if (a->res != 0 && a->res != C1EN_ABORTO && !a->blando) __atomic_store_n(&a->ctl->abortado, 1, __ATOMIC_RELEASE);\n` +
+    `  __atomic_sub_fetch(&a->ctl->vivos, 1, __ATOMIC_ACQ_REL);\n  return 0;\n}\n` +
+    `void c1en_nucleo(${['int64_t nh'].concat(firmaNucleo).join(', ')}, uint64_t* c1en_err) {\n` +
+    `  c1en_ctl_t ctl; memset(&ctl, 0, sizeof ctl); ctl.n = nh; ctl.vivos = nh; ctl.sitio = -1;\n` +
+    `  { const char* s_ = getenv("C1EN_HILOS_ESPERA_S"); double l = s_ ? atof(s_) : 60.0; ctl.limite_ms = (l > 0 ? l : 60.0) * 1000.0; }\n` +
+    `  c1en_ah* as = (c1en_ah*)calloc((size_t)nh, sizeof(c1en_ah));\n` +
+    `#ifdef _WIN32\n  HANDLE* hs = (HANDLE*)calloc((size_t)nh, sizeof(HANDLE));\n#else\n  pthread_t* hs = (pthread_t*)calloc((size_t)nh, sizeof(pthread_t));\n#endif\n` +
+    `  int64_t lanzados = 0;\n` +
+    `  for (int64_t t = 0; t < nh; t++) {\n` +
+    `    as[t].ctl = &ctl; as[t].t = t;${llamada0.length ? ' ' : ''}${M.params.filter(p => p.arr).map(p => `as[t].${p.cn} = ${p.cn}; as[t].${p.cnN} = ${p.cnN};`).concat(M.params.slice(1).filter(p => !p.arr).map(p => `as[t].${p.entrada} = ${p.entrada};`)).join(' ')}\n` +
+    `#ifdef _WIN32\n    hs[t] = CreateThread(NULL, 0, c1en_hilo, &as[t], 0, NULL); if (!hs[t]) break;\n` +
+    `#else\n    if (pthread_create(&hs[t], NULL, c1en_hilo, &as[t]) != 0) break;\n#endif\n` +
+    `    lanzados++;\n  }\n` +
+    `  if (lanzados < nh) {               /* no se pudieron lanzar todos: los que corren salen */\n` +
+    `    __atomic_store_n(&ctl.abortado, 1, __ATOMIC_RELEASE);\n` +
+    `    __atomic_sub_fetch(&ctl.vivos, nh - lanzados, __ATOMIC_ACQ_REL);\n  }\n` +
+    `  for (int64_t t = 0; t < lanzados; t++) {\n` +
+    `#ifdef _WIN32\n    WaitForSingleObject(hs[t], INFINITE); CloseHandle(hs[t]);\n#else\n    pthread_join(hs[t], NULL);\n#endif\n  }\n` +
+    `  for (int64_t t = 0; t < lanzados; t++) if (as[t].res != 0 && as[t].res != C1EN_ABORTO) {\n` +
+    `    uint64_t k = ((uint64_t)t << 24) | (uint64_t)as[t].res; if (k < c1en_err[0]) c1en_err[0] = k;\n  }\n` +
+    `  if (lanzados < nh && c1en_err[0] == ~0ULL) c1en_err[0] = 0xfffffffffffffffeULL;\n` +
+    `  free(hs); free(as);\n}\n`;
+}
+
+function c1enEnvolverBloques(M, destino, cuerpo, temps, TY) {
+  const js = destino === 'js', cu = destino === 'cuda';
+  const firmaCuerpo = [], llamada0 = [], firmaNucleo = [], desemp = [], campos = [], deCampos = [];
+  M.params.forEach((p, k) => {
+    if (p.arr) {
+      const ty = c1enTipoElem(p, cu);
+      firmaCuerpo.push(`${ty}* ${p.cn}`, `${TY.ent} ${p.cnN}`);
+      llamada0.push(p.cn, p.cnN);
+      firmaNucleo.push(`${ty}* ${p.cn}`, `${TY.ent} ${p.cnN}`);
+      campos.push(`${ty}* ${p.cn};`, `${TY.ent} ${p.cnN};`); deCampos.push(`a->${p.cn}`, `a->${p.cnN}`);
+      desemp.push(`*(${ty}**)p[${desemp.length + 2}]`, `*(long long*)p[${desemp.length + 3}]`);
+    } else {
+      const ty = p.tipoEntrada === 'real' ? 'double' : TY.ent;
+      firmaCuerpo.push(`${ty} ${p.entrada}`);
+      if (k <= 1) return;
+      llamada0.push(p.entrada);
+      firmaNucleo.push(`${ty} ${p.entrada}`);
+      campos.push(`${ty} ${p.entrada};`); deCampos.push(`a->${p.entrada}`);
+      desemp.push(`*(${ty === 'double' ? 'double' : 'long long'}*)p[${desemp.length + 2}]`);
+    }
+  });
+  const tyC = c => (c.arr === 'real' ? 'double' : (cu ? 'int' : 'int32_t'));
+  const firmaSh = M.compartidos.map(c => `${tyC(c)}* ${c.cn}`);
+  const nombresSh = M.compartidos.map(c => c.cn);
+  const locales = [];
+  for (const p of M.params) if (!p.arr) locales.push([p.cn, p.tipo]);
+  for (const v of M.vars) locales.push([v.cn, v.tipo]);
+  for (const [nm, t] of temps) locales.push([nm, t]);
+  // los parámetros del cuerpo: bloque, hilo, la cuadrícula, los del programa y la compartida
+  const nombres = firmaCuerpo.map(x => x.split(' ').pop());
+  const argsCuerpo = nombres.slice(2);           // sin p0 y p1
+
+  if (js) {
+    const decl = locales.map(([nm, t]) => `${nm} = ${t === 'bool' ? 'false' : '0'}`);
+    const sh = M.compartidos.map(c => `const ${c.cn} = new ${c.arr === 'real' ? 'Float64Array' : 'Int32Array'}(${c.tam});`).join(' ');
+    return `(function () {\n` +
+      `  ${c1enMezclar.toString()}\n  ${c1enAzar.toString()}\n  ${c1enBits.toString()}\n` +
+      `  // C1EÑ — «${M.nombre}» (línea ${M.linea}), destino jit, núcleo de bloques\n` +
+      `  function* cuerpo(${['p0', 'p1', 'c1en_nb', 'c1en_nh'].concat(argsCuerpo, nombresSh).join(', ')}) {\n` +
+      `    let f = 0, vueltas = 0;\n` + (decl.length ? `    let ${decl.join(', ')};\n` : '') +
+      cuerpo.split('\n').map(l => '  ' + l).join('\n') + `\n    return 0;\n  }\n` +
+      `  return function nucleo(${['c1en_nb', 'c1en_nh'].concat(argsCuerpo).join(', ')}) {\n` +
+      `    let peor = null;\n` +
+      `    const anotar = (g, c) => { if (peor === null || g * 16777216 + c < peor[0] * 16777216 + peor[1]) peor = [g, c]; };\n` +
+      `    for (let b = 0; b < c1en_nb; b++) {\n` +
+      `      ${sh}\n` +
+      `      const hs = new Array(c1en_nh), est = new Uint8Array(c1en_nh);\n` +
+      `      for (let t = 0; t < c1en_nh; t++) hs[t] = cuerpo(${['b', 't', 'c1en_nb', 'c1en_nh'].concat(argsCuerpo, nombresSh).join(', ')});\n` +
+      `      let vivos = c1en_nh, fin = -1, mal = false;\n` +
+      `      while (vivos > 0) {\n` +
+      `        let bar = 0, esperan = 0, otra = false;\n` +
+      `        for (let t = 0; t < c1en_nh; t++) {\n` +
+      `          if (est[t] === 2) continue;\n` +
+      `          const r = hs[t].next();\n` +
+      `          if (r.done) { est[t] = 2; vivos--; if (r.value !== 0) { anotar(b * c1en_nh + t, r.value); mal = true; } else if (fin < 0) fin = t; }\n` +
+      `          else { esperan++; if (bar === 0) bar = r.value; else if (r.value !== bar && !mal && !otra) { anotar(b * c1en_nh + t, r.value); otra = true; } }\n` +
+      `        }\n` +
+      `        if (otra) break;\n` +
+      `        if (!mal && esperan > 0 && fin >= 0) { anotar(b * c1en_nh + fin, bar); break; }\n` +
+      `      }\n` +
+      `      if (peor !== null) return peor;\n` +
+      `    }\n    return null;\n  };\n})()`;
+  }
+  const decl = locales.map(([nm, t]) => `  ${TY[t]} ${nm} = 0;`).join('\n');
+  const titulo = `/* C1EÑ — generado desde la función «${M.nombre}» (línea ${M.linea}): un núcleo de bloques.\n` +
+    (cu ? '   Compilar con NVRTC: --fmad=false -arch=compute_75 (sin FMA: mismos bits que la CPU). */\n'
+      : '   Compilar con: gcc -O2 -shared -fPIC -ffp-contract=off [-fopenmp] (sin FMA). */\n');
+  const cab = (cu ? C1EN_CABECERA_CUDA : C1EN_CABECERA_C) + C1EN_PRELUDIO;
+  const firmaC = (cu ? [] : ['c1en_hb* c1en_h']).concat(firmaCuerpo.slice(0, 2), [`${TY.ent} c1en_nb`, `${TY.ent} c1en_nh`], firmaCuerpo.slice(2), firmaSh);
+  const fCuerpo = `${cu ? 'static __device__ ' : 'static '}${TY.ent} c1en_cuerpo(${firmaC.join(', ')}) {\n` +
+    `  ${TY.ent} f = 0, vueltas = 0;\n${decl}\n  (void)c1en_nb; (void)c1en_nh;\n${cuerpo}\n  (void)vueltas;\n  return 0;\n}\n`;
+  const nucleoParams = [`${cu ? 'long long' : 'int64_t'} c1en_nb`, `${cu ? 'long long' : 'int64_t'} c1en_nh`].concat(firmaNucleo);
+  if (!cu) {
+    const shDecl = M.compartidos.map(c => `${tyC(c)} ${c.cn}[${c.tam}]; memset(${c.cn}, 0, sizeof ${c.cn});`).join(' ');
+    return titulo + cab + C1EN_HILOS_C + '\n' + fCuerpo + '\n' +
+      `typedef struct { int64_t c1en_nb, c1en_nh; ${campos.join(' ')} ${M.compartidos.map(c => `${tyC(c)}* ${c.cn};`).join(' ')} } c1en_args;\n` +
+      `static void c1en_correr(c1en_hb* h) {\n  const c1en_args* a = (const c1en_args*)h->a;\n` +
+      `  h->res = c1en_cuerpo(${['h', 'h->b', 'h->t', 'a->c1en_nb', 'a->c1en_nh'].concat(deCampos, M.compartidos.map(c => `a->${c.cn}`)).join(', ')});\n}\n` +
+      `void c1en_nucleo(${nucleoParams.join(', ')}, uint64_t* c1en_err) {\n` +
+      `#pragma omp parallel if (c1en_nb > 1)\n  {\n` +
+      `    c1en_hb* hs = (c1en_hb*)calloc((size_t)c1en_nh, sizeof(c1en_hb));\n    int c1en_conv = c1en_hilo_entrar();\n` +
+      `#pragma omp for schedule(dynamic, 1)\n` +
+      `    for (int64_t b = 0; b < c1en_nb; b++) {\n` +
+      `      ${shDecl}\n` +
+      `      c1en_args a = { ${['c1en_nb', 'c1en_nh'].concat(llamada0, nombresSh).join(', ')} };\n` +
+      `      for (int64_t t = 0; t < c1en_nh; t++) { hs[t].b = b; hs[t].t = t; hs[t].a = &a; hs[t].correr = c1en_correr; }\n` +
+      `      uint64_t k = c1en_correr_bloque(hs, c1en_nh, b);\n` +
+      `      if (k != ~0ULL) {\n#pragma omp critical (c1en_err)\n        { if (k < c1en_err[0]) c1en_err[0] = k; }\n      }\n    }\n` +
+      `    for (int64_t t = 0; t < c1en_nh; t++) c1en_hb_soltar(&hs[t]);\n    free(hs);\n    c1en_hilo_salir(c1en_conv);\n  }\n}\n`;
+  }
+  const shDecl = M.compartidos.map(c => `  __shared__ ${tyC(c)} ${c.cn}[${c.tam}];\n  for (long long q = c1en_t; q < ${c.tam}; q += c1en_nh) ${c.cn}[q] = 0;\n`).join('');
+  const todosDesemp = ['*(long long*)p[0]', '*(long long*)p[1]'].concat(desemp).concat([`*(unsigned long long**)p[${desemp.length + 2}]`]).join(', ');
+  return titulo + cab + '\n' + fCuerpo + '\n' +
+    `extern "C" __global__ void c1en_nucleo(${nucleoParams.join(', ')}, unsigned long long* c1en_err) {\n` +
+    `  long long c1en_b = blockIdx.x, c1en_t = threadIdx.x;\n` + shDecl +
+    (M.compartidos.length ? '  __syncthreads();\n' : '') +
+    `  long long c = c1en_cuerpo(${['c1en_b', 'c1en_t', 'c1en_nb', 'c1en_nh'].concat(llamada0, nombresSh).join(', ')});\n` +
+    `  if (c != 0) atomicMin(c1en_err, ((unsigned long long)(c1en_b * c1en_nh + c1en_t) << 24) | (unsigned long long)c);\n}\n` +
+    c1enEmuladorCoop('c1en_nucleo', todosDesemp);
 }
 
 
@@ -20013,6 +22347,7 @@ function nenUnario(nombre, cuerpo, f) {
   return {
     nombre,
     params: [['n', 'i64'], ['x', 'f64*'], ['y', 'f64*']],
+    lee: ['x'], escribe: ['y'],
     cuerpo,
     js: (n, x, y) => { for (let i = 0; i < n; i++) y[i] = f(x[i]); },
   };
@@ -20080,7 +22415,145 @@ function nenReduccion(nombre, inicio, paso, pasoJs, conMu) {
         y[i] = s;
       }
     };
-  return { nombre, params, cuerpo, js };
+  return { nombre, params, cuerpo, js, lee: conMu ? ['x', 'mu'] : ['x'], escribe: ['y'] };
+}
+
+// (motor-exp N3) fma(a, b, c) = a·b + c con UN solo redondeo, en JavaScript.
+// El producto de matrices suma con FMA en los tres dispositivos (DFMA en la
+// GPU, AVX2/fma() en la CPU), y JavaScript no la trae: aquí se emula EXACTA.
+// Camino rápido: a·b = p + e exacto (Dekker con el partido de Veltkamp),
+// c + p = th + tl exacto (TwoSum), v = tl + e redondeado A IMPAR, y el
+// resultado th + v redondeado al más cercano (Boldo y Melquiond, «Emulation of
+// FMA and correctly rounded sums: proved algorithms using rounding to odd»,
+// IEEE TC 2008). En los extremos (cerca del desbordamiento o de los
+// subnormales) un camino lento exacto con enteros grandes. Comprobada contra la
+// fma de C (glibc) en 16 millones de casos, empates y cancelaciones incluidos:
+// los mismos bits en todos.
+const NEN_FMA_F = new Float64Array(1), NEN_FMA_U = new Uint32Array(NEN_FMA_F.buffer);   // NEN_FMA_U[0] bajo, NEN_FMA_U[1] alto (little-endian)
+const NEN_FMA_PARTIR = 134217729;                                       // 2^27 + 1 (Veltkamp)
+function nenFma_pot2(k) {   // 2^k exacto para -1074 ≤ k ≤ 1023
+  if (k >= -1022) { NEN_FMA_U[1] = (k + 1023) << 20; NEN_FMA_U[0] = 0; return NEN_FMA_F[0]; }
+  const s = -1022 - k;          // subnormal: solo el bit 52 − s
+  if (s <= 20) { NEN_FMA_U[1] = 1 << (20 - s); NEN_FMA_U[0] = 0; } else { NEN_FMA_U[1] = 0; NEN_FMA_U[0] = 2 ** (52 - s); }
+  return NEN_FMA_F[0];
+}
+function nenFma_porPot2(x, k) {
+  while (k > 1000) { x *= nenFma_pot2(1000); k -= 1000; }
+  while (k < -1000) { x *= nenFma_pot2(-1000); k += 1000; }
+  return x * nenFma_pot2(k);
+}
+function nenFma_partes(x) {   // x = ±m·2^e exacto
+  NEN_FMA_F[0] = x; const hi = NEN_FMA_U[1], lo = NEN_FMA_U[0];
+  const ex = (hi >>> 20) & 0x7ff, neg = (hi >>> 31) === 1;
+  let m = (BigInt(hi & 0xfffff) << 32n) | BigInt(lo), e;
+  if (ex === 0) e = -1074; else { m |= 1n << 52n; e = ex - 1075; }
+  return { m: neg ? -m : m, e, neg };
+}
+function nenFma_longitud(x) { return x.toString(2).length; }
+// El camino lento, exacto con enteros grandes: sirve para todo, se usa solo en
+// los extremos (cerca del desbordamiento o de los subnormales).
+function nenFma_fmaLenta(a, b, c) {
+  if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) return a * b + c;
+  const A = nenFma_partes(a), B = nenFma_partes(b), C = nenFma_partes(c);
+  const mp = A.m * B.m, ep = A.e + B.e;
+  const E = Math.min(ep, C.e);
+  const M = (mp << BigInt(ep - E)) + (C.m << BigInt(C.e - E));
+  if (M === 0n) {
+    const pNeg = A.neg !== B.neg;
+    return (mp === 0n && C.m === 0n && pNeg && C.neg) ? -0 : 0;
+  }
+  const neg = M < 0n, X = neg ? -M : M;
+  const L = nenFma_longitud(X), e2 = L - 1 + E;
+  if (e2 > 1023) return neg ? -Infinity : Infinity;
+  const q = Math.max(e2 - 52, -1074), d = q - E;
+  let r;
+  if (d > 0) {
+    const D = BigInt(d);
+    r = X >> D; const resto = X - (r << D), mitad = 1n << (D - 1n);
+    if (resto > mitad || (resto === mitad && (r & 1n))) r += 1n;
+  } else r = X << BigInt(-d);
+  const v = nenFma_porPot2(Number(r), q);
+  return neg ? -v : v;
+}
+const NEN_FMA_GRANDE = 2 ** 995, NEN_FMA_CHICO = 2 ** -960;
+function nenFma(a, b, c) {
+  const p = a * b;
+  const ap = Math.abs(p);
+  if (!(ap < NEN_FMA_GRANDE) || !(Math.abs(c) < NEN_FMA_GRANDE) || (ap < NEN_FMA_CHICO && p !== 0) || !(Math.abs(a) < NEN_FMA_GRANDE) || !(Math.abs(b) < NEN_FMA_GRANDE))
+    return nenFma_fmaLenta(a, b, c);
+  // a·b = p + e exacto (Dekker con el partido de Veltkamp)
+  let t = NEN_FMA_PARTIR * a; const ah = t - (t - a), al = a - ah;
+  t = NEN_FMA_PARTIR * b; const bh = t - (t - b), bl = b - bh;
+  const e = ((ah * bh - p) + ah * bl + al * bh) + al * bl;
+  if (e === 0) return p + c;
+  // c + p = th + tl exacto (TwoSum)
+  const th = c + p, z = th - c, tl = (c - (th - z)) + (p - z);
+  // v = RO(tl + e): redondeo a impar
+  let v = tl + e;
+  const w = v - tl, err = (tl - (v - w)) + (e - w);
+  if (err !== 0) {
+    NEN_FMA_F[0] = v;
+    if ((NEN_FMA_U[0] & 1) === 0) {
+      if ((v > 0) === (err > 0)) NEN_FMA_U[0] += 1;                      // un ulp más lejos de 0 (par → sin acarreo)
+      else if (NEN_FMA_U[0] === 0) { NEN_FMA_U[0] = 0xffffffff; NEN_FMA_U[1] -= 1; } else NEN_FMA_U[0] -= 1;
+      v = NEN_FMA_F[0];
+    }
+  }
+  return th + v;
+}
+
+// (motor-exp N3) fila[j] = fma(x, b[o + j], fila[j]) para j < p, con b ya
+// partido en bh + bl (Veltkamp): lo mismo que nenFma casilla a casilla, sin
+// partir b cada vez. Es el bucle interior del producto de matrices en jit.
+function nenFmaFila(x, b, bh, bl, o, fila, p) {
+  if (!(Math.abs(x) < NEN_FMA_GRANDE)) { for (let j = 0; j < p; j++) fila[j] = nenFma(x, b[o + j], fila[j]); return; }
+  const t0 = NEN_FMA_PARTIR * x, xh = t0 - (t0 - x), xl = x - xh;
+  for (let j = 0; j < p; j++) {
+    const bv = b[o + j], s = fila[j], pr = x * bv, ap = Math.abs(pr);
+    if (!(ap < NEN_FMA_GRANDE && Math.abs(s) < NEN_FMA_GRANDE && (ap >= NEN_FMA_CHICO || pr === 0) && Math.abs(bv) < NEN_FMA_GRANDE)) {
+      fila[j] = nenFma(x, bv, s); continue;
+    }
+    const bhj = bh[o + j], blj = bl[o + j];
+    const e = ((xh * bhj - pr) + xh * blj + xl * bhj) + xl * blj;
+    if (e === 0) { fila[j] = pr + s; continue; }
+    const th = s + pr, z = th - s, tl = (s - (th - z)) + (pr - z);
+    let v = tl + e;
+    const w = v - tl, err = (tl - (v - w)) + (e - w);
+    if (err !== 0) {
+      NEN_FMA_F[0] = v;
+      if ((NEN_FMA_U[0] & 1) === 0) {
+        if ((v > 0) === (err > 0)) NEN_FMA_U[0] += 1;
+        else if (NEN_FMA_U[0] === 0) { NEN_FMA_U[0] = 0xffffffff; NEN_FMA_U[1] -= 1; } else NEN_FMA_U[0] -= 1;
+        v = NEN_FMA_F[0];
+      }
+    }
+    fila[j] = th + v;
+  }
+}
+// (motor-exp N4.2) fmaf(a, b, c) de C con a, b y c floats: a·b + c con UN solo
+// redondeo a 32 bits. a·b de dos floats es exacto en un double (24 + 24 ≤ 53
+// bits), c + p = s + e exacto (TwoSum), y s se lleva A IMPAR con e: redondear a
+// impar en 53 bits y luego al más cercano en 24 es lo mismo que redondear el
+// valor exacto (53 ≥ 24 + 2; Boldo y Melquiond). Es la FMA de la GPU (FFMA), de
+// AVX2 (_mm256_fmadd_ps) y de fmaf(): los mismos bits.
+function nenFmaf(a, b, c) {
+  const p = a * b, s = p + c;
+  const bb = s - p, e = (p - (s - bb)) + (c - bb);
+  if (e === 0 || !(s - s === 0)) return Math.fround(s);
+  NEN_FMA_F[0] = s;
+  if ((e < 0) !== (s < 0)) {                                   // s se pasó: truncar es bajar un ulp
+    if (NEN_FMA_U[0] === 0) { NEN_FMA_U[0] = 0xffffffff; NEN_FMA_U[1] -= 1; } else NEN_FMA_U[0] -= 1;
+  }
+  NEN_FMA_U[0] |= 1;                                           // inexacto: el último bit, a 1 (impar)
+  return Math.fround(NEN_FMA_F[0]);
+}
+function nenFmaPartir(b, desde, hasta) {
+  const n = hasta - desde, bh = new Float64Array(n), bl = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = b[desde + i];
+    if (Math.abs(x) < NEN_FMA_GRANDE) { const t = NEN_FMA_PARTIR * x; bh[i] = t - (t - x); bl[i] = x - bh[i]; }
+  }
+  return [bh, bl];
 }
 
 const NEN_T_NUCLEOS = {};
@@ -20117,18 +22590,21 @@ for (const k of [
     // sumarle 0.5 ya redondea a 1. v − floor(v) es exacto, así que esto no.
     nombre: 'nen_redondear',
     params: [['n', 'i64'], ['f', 'f64'], ['x', 'f64*'], ['y', 'f64*']],
+    lee: ['x'], escribe: ['y'],
     cuerpo: 'double v = x[i] * f; double r = floor(v); if (v - r >= 0.5) r = r + 1.0; y[i] = r / f;',
     js: (n, f, x, y) => { for (let i = 0; i < n; i++) { const v = x[i] * f; let r = Math.floor(v); if (v - r >= 0.5) r = r + 1.0; y[i] = r / f; } },
   },
   {
     nombre: 'nen_potencia',
     params: [['n', 'i64'], ['x', 'f64*'], ['p', 'f64*'], ['y', 'f64*']],
+    lee: ['x', 'p'], escribe: ['y'],
     cuerpo: 'y[i] = pow(x[i], p[i]);',
     js: (n, x, p, y) => { for (let i = 0; i < n; i++) y[i] = Math.pow(x[i], p[i]); },
   },
   {
     nombre: 'nen_angulo',
     params: [['n', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['y', 'f64*']],
+    lee: ['a', 'b'], escribe: ['y'],
     cuerpo: 'y[i] = atan2(a[i], b[i]);',
     js: (n, a, b, y) => { for (let i = 0; i < n; i++) y[i] = Math.atan2(a[i], b[i]); },
   },
@@ -20138,6 +22614,7 @@ for (const k of [
     // orden fijo.
     nombre: 'nen_softmax',
     params: [['n', 'i64'], ['K', 'i64'], ['x', 'f64*'], ['y', 'f64*']],
+    lee: ['x'], escribe: ['y'],
     cuerpo: 'long long o = i * K; double m = x[o]; for (long long k = 1; k < K; k++) { if (x[o + k] > m) m = x[o + k]; } ' +
       'double s = 0.0; for (long long k = 0; k < K; k++) { double e = exp(x[o + k] - m); y[o + k] = e; s += e; } ' +
       'for (long long k = 0; k < K; k++) y[o + k] = y[o + k] / s;',
@@ -20168,6 +22645,7 @@ for (const k of [
     // lo que evita la cancelación de la fórmula Σx² − n·m².
     nombre: 'nen_red_desv2',
     params: [['n', 'i64'], ['K', 'i64'], ['B', 'i64'], ['nb', 'i64'], ['x', 'f64*'], ['mu', 'f64*'], ['y', 'f64*']],
+    lee: ['x', 'mu'], escribe: ['y'],
     cuerpo: 'long long f = i / nb; long long t = i % nb; long long ini = t * B; long long fin = ini + B; ' +
       'if (fin > K) fin = K; double m = mu[f]; double s = 0.0; ' +
       'for (long long k = ini; k < fin; k++) { double d = x[f * K + k] - m; s += d * d; } y[i] = s;',
@@ -20188,7 +22666,9 @@ for (const k of [
     // No es el algoritmo más rápido de GPU (sin memoria compartida), pero da
     // EXACTAMENTE lo mismo que la CPU, que aquí pesa más.
     nombre: 'nen_matmul',
+    // (motor-exp N2) la referencia: la GPU usa «nen_matmul_4x4» y la CPU «nen_matmul_bloques»
     params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
+    lee: ['a', 'b'], escribe: ['c'],
     cuerpo: 'long long mp = m * p; long long l = i / mp; long long r = i % mp; long long f = r / p; long long col = r % p; ' +
       'long long oa = l * m * K + f * K; long long ob = l * K * p + col; double s = 0.0; ' +
       'for (long long k = 0; k < K; k++) s += a[oa + k] * b[ob + k * p]; c[i] = s;',
@@ -20204,14 +22684,134 @@ for (const k of [
     },
   },
   {
+    // (motor-exp N2) El producto para la CPU. El hilo i hace un BLOQUE de 4
+    // filas × 32 columnas de un lote, y los hilos vecinos (i, i+1…) comparten
+    // las mismas 32 columnas de b: así el trozo de b (K × 32 números) se queda
+    // en la caché del núcleo mientras ese hilo recorre grupos de filas, en vez
+    // de leer b entero de la memoria para cada grupo (lo que hundía 2048×2048 a
+    // 1,8 GFLOP/s en la medida de Kaggle). Dentro, el micronúcleo de 4×8 con las
+    // 32 sumas en variables, y k por trozos de 256. Cada casilla se suma en el
+    // orden de siempre (k de 0 a K−1, empezando en 0): mismos bits que
+    // nen_matmul. n = lotes × ⌈p/32⌉ × ⌈m/4⌉.
+    nombre: 'nen_matmul_bloques',
+    params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
+    lee: ['a', 'b'], escribe: ['c'],
+    cuerpo:
+      'long long gpl = (m + 3) / 4; long long nj = (p + 31) / 32; long long porLote = nj * gpl; ' +
+      'long long l = i / porLote; long long rr = i % porLote; long long jbk = rr / gpl; long long g = rr % gpl; ' +
+      'long long r0 = l * m + g * 4; long long r1 = r0 + 4; if (r1 > l * m + m) r1 = l * m + m; ' +
+      'long long j0 = jbk * 32; long long j1 = j0 + 32; if (j1 > p) j1 = p; const double * bl = b + l * K * p; ' +
+      'for (long long r = r0; r < r1; r++) for (long long j = j0; j < j1; j++) c[r * p + j] = 0.0; ' +
+      'for (long long kb = 0; kb < K; kb += 256) { long long ke = kb + 256; if (ke > K) ke = K; ' +
+      '  long long jb = j0; ' +
+      '  if (r1 - r0 == 4) { const double * A0 = a + r0 * K; const double * A1 = A0 + K; const double * A2 = A1 + K; const double * A3 = A2 + K; ' +
+      '    for (; jb + 8 <= j1; jb += 8) { double s0[8], s1[8], s2[8], s3[8]; ' +
+      '      for (int q = 0; q < 8; q++) { s0[q] = c[r0 * p + jb + q]; s1[q] = c[(r0 + 1) * p + jb + q]; s2[q] = c[(r0 + 2) * p + jb + q]; s3[q] = c[(r0 + 3) * p + jb + q]; } ' +
+      '      for (long long k = kb; k < ke; k++) { const double * bk = bl + k * p + jb; double x0 = A0[k], x1 = A1[k], x2 = A2[k], x3 = A3[k]; ' +
+      '        for (int q = 0; q < 8; q++) { double bv = bk[q]; s0[q] = s0[q] + x0 * bv; s1[q] = s1[q] + x1 * bv; s2[q] = s2[q] + x2 * bv; s3[q] = s3[q] + x3 * bv; } } ' +
+      '      for (int q = 0; q < 8; q++) { c[r0 * p + jb + q] = s0[q]; c[(r0 + 1) * p + jb + q] = s1[q]; c[(r0 + 2) * p + jb + q] = s2[q]; c[(r0 + 3) * p + jb + q] = s3[q]; } } } ' +
+      '  for (long long r = r0; r < r1; r++) { const double * ar = a + r * K; for (long long k = kb; k < ke; k++) { double aik = ar[k]; const double * bk = bl + k * p; ' +
+      '    for (long long j = jb; j < j1; j++) c[r * p + j] = c[r * p + j] + aik * bk[j]; } } ' +
+      '}',
+    js: (n, m, K, p, a, b, c) => {
+      const s0 = new Float64Array(8), s1 = new Float64Array(8), s2 = new Float64Array(8), s3 = new Float64Array(8);
+      const gpl = Math.floor((m + 3) / 4), nj = Math.floor((p + 31) / 32), porLote = nj * gpl;
+      for (let i = 0; i < n; i++) {
+        const l = Math.floor(i / porLote), rr = i % porLote, jbk = Math.floor(rr / gpl), g = rr % gpl;
+        const r0 = l * m + g * 4, r1 = Math.min(r0 + 4, l * m + m), j0 = jbk * 32, j1 = Math.min(j0 + 32, p), bl = l * K * p;
+        for (let r = r0; r < r1; r++) for (let j = j0; j < j1; j++) c[r * p + j] = 0.0;
+        for (let kb = 0; kb < K; kb += 256) {
+          const ke = Math.min(kb + 256, K);
+          let jb = j0;
+          if (r1 - r0 === 4) {
+            const A0 = r0 * K, A1 = A0 + K, A2 = A1 + K, A3 = A2 + K;
+            for (; jb + 8 <= j1; jb += 8) {
+              for (let q = 0; q < 8; q++) { s0[q] = c[r0 * p + jb + q]; s1[q] = c[(r0 + 1) * p + jb + q]; s2[q] = c[(r0 + 2) * p + jb + q]; s3[q] = c[(r0 + 3) * p + jb + q]; }
+              for (let k = kb; k < ke; k++) {
+                const bk = bl + k * p + jb, x0 = a[A0 + k], x1 = a[A1 + k], x2 = a[A2 + k], x3 = a[A3 + k];
+                for (let q = 0; q < 8; q++) { const bv = b[bk + q]; s0[q] = s0[q] + x0 * bv; s1[q] = s1[q] + x1 * bv; s2[q] = s2[q] + x2 * bv; s3[q] = s3[q] + x3 * bv; }
+              }
+              for (let q = 0; q < 8; q++) { c[r0 * p + jb + q] = s0[q]; c[(r0 + 1) * p + jb + q] = s1[q]; c[(r0 + 2) * p + jb + q] = s2[q]; c[(r0 + 3) * p + jb + q] = s3[q]; }
+            }
+          }
+          for (let r = r0; r < r1; r++) {
+            const ar = r * K;
+            for (let k = kb; k < ke; k++) {
+              const aik = a[ar + k], bk = bl + k * p;
+              for (let j = jb; j < j1; j++) c[r * p + j] = c[r * p + j] + aik * b[bk + j];
+            }
+          }
+        }
+      }
+    },
+  },
+  {
+    // (motor-exp N2) El producto para la GPU: cada hilo hace 4 filas × 4
+    // columnas (16 sumas en registros) en vez de una casilla. Por cada k lee 4
+    // números de a y 4 de b para 16 productos, cuatro veces más cuenta por
+    // lectura que «nen_matmul»; los hilos vecinos van por columnas vecinas, así
+    // que las lecturas de b de un warp son seguidas. Sin memoria compartida ni
+    // __syncthreads, para que corra igual en C, en el simulador y en la T4. Las
+    // filas o columnas que se salen del borde se leen repetidas (la última
+    // válida) y no se escriben. Cada casilla: k de 0 a K−1 desde 0, los mismos
+    // bits. n = lotes × ⌈m/4⌉ × ⌈p/4⌉.
+    nombre: 'nen_matmul_4x4',
+    params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
+    lee: ['a', 'b'], escribe: ['c'],
+    cuerpo:
+      'long long gpl = (m + 3) / 4; long long hpl = (p + 3) / 4; long long porLote = gpl * hpl; ' +
+      'long long l = i / porLote; long long rr = i % porLote; long long g = rr / hpl; long long h = rr % hpl; ' +
+      'long long f0 = g * 4; long long j0 = h * 4; ' +
+      'long long fa = f0 < m ? f0 : m - 1; long long fb = f0 + 1 < m ? f0 + 1 : m - 1; long long fc = f0 + 2 < m ? f0 + 2 : m - 1; long long fd = f0 + 3 < m ? f0 + 3 : m - 1; ' +
+      'long long ja = j0 < p ? j0 : p - 1; long long jb = j0 + 1 < p ? j0 + 1 : p - 1; long long jc = j0 + 2 < p ? j0 + 2 : p - 1; long long jd = j0 + 3 < p ? j0 + 3 : p - 1; ' +
+      'const double * A0 = a + (l * m + fa) * K; const double * A1 = a + (l * m + fb) * K; const double * A2 = a + (l * m + fc) * K; const double * A3 = a + (l * m + fd) * K; ' +
+      'const double * bl = b + l * K * p; ' +
+      'double s00 = 0.0, s01 = 0.0, s02 = 0.0, s03 = 0.0, s10 = 0.0, s11 = 0.0, s12 = 0.0, s13 = 0.0, ' +
+      's20 = 0.0, s21 = 0.0, s22 = 0.0, s23 = 0.0, s30 = 0.0, s31 = 0.0, s32 = 0.0, s33 = 0.0; ' +
+      'for (long long k = 0; k < K; k++) { const double * bk = bl + k * p; double b0 = bk[ja], b1 = bk[jb], b2 = bk[jc], b3 = bk[jd]; ' +
+      '  double x0 = A0[k], x1 = A1[k], x2 = A2[k], x3 = A3[k]; ' +
+      '  s00 = s00 + x0 * b0; s01 = s01 + x0 * b1; s02 = s02 + x0 * b2; s03 = s03 + x0 * b3; ' +
+      '  s10 = s10 + x1 * b0; s11 = s11 + x1 * b1; s12 = s12 + x1 * b2; s13 = s13 + x1 * b3; ' +
+      '  s20 = s20 + x2 * b0; s21 = s21 + x2 * b1; s22 = s22 + x2 * b2; s23 = s23 + x2 * b3; ' +
+      '  s30 = s30 + x3 * b0; s31 = s31 + x3 * b1; s32 = s32 + x3 * b2; s33 = s33 + x3 * b3; } ' +
+      'double * cl = c + l * m * p; ' +
+      'if (f0 < m) { double * cr = cl + f0 * p; if (j0 < p) cr[j0] = s00; if (j0 + 1 < p) cr[j0 + 1] = s01; if (j0 + 2 < p) cr[j0 + 2] = s02; if (j0 + 3 < p) cr[j0 + 3] = s03; } ' +
+      'if (f0 + 1 < m) { double * cr = cl + (f0 + 1) * p; if (j0 < p) cr[j0] = s10; if (j0 + 1 < p) cr[j0 + 1] = s11; if (j0 + 2 < p) cr[j0 + 2] = s12; if (j0 + 3 < p) cr[j0 + 3] = s13; } ' +
+      'if (f0 + 2 < m) { double * cr = cl + (f0 + 2) * p; if (j0 < p) cr[j0] = s20; if (j0 + 1 < p) cr[j0 + 1] = s21; if (j0 + 2 < p) cr[j0 + 2] = s22; if (j0 + 3 < p) cr[j0 + 3] = s23; } ' +
+      'if (f0 + 3 < m) { double * cr = cl + (f0 + 3) * p; if (j0 < p) cr[j0] = s30; if (j0 + 1 < p) cr[j0 + 1] = s31; if (j0 + 2 < p) cr[j0 + 2] = s32; if (j0 + 3 < p) cr[j0 + 3] = s33; }',
+    js: (n, m, K, p, a, b, c) => {
+      const gpl = Math.floor((m + 3) / 4), hpl = Math.floor((p + 3) / 4), porLote = gpl * hpl;
+      const s = new Float64Array(16), fi = [0, 0, 0, 0], ji = [0, 0, 0, 0];
+      for (let i = 0; i < n; i++) {
+        const l = Math.floor(i / porLote), rr = i % porLote, g = Math.floor(rr / hpl), h = rr % hpl, f0 = g * 4, j0 = h * 4;
+        for (let q = 0; q < 4; q++) { fi[q] = (l * m + Math.min(f0 + q, m - 1)) * K; ji[q] = Math.min(j0 + q, p - 1); }
+        s.fill(0.0);
+        const bl = l * K * p;
+        for (let k = 0; k < K; k++) {
+          const bk = bl + k * p;
+          for (let r = 0; r < 4; r++) { const x = a[fi[r] + k]; for (let q = 0; q < 4; q++) s[r * 4 + q] = s[r * 4 + q] + x * b[bk + ji[q]]; }
+        }
+        for (let r = 0; r < 4; r++) {
+          if (f0 + r >= m) continue;
+          for (let q = 0; q < 4; q++) if (j0 + q < p) c[(l * m + f0 + r) * p + j0 + q] = s[r * 4 + q];
+        }
+      }
+    },
+  },
+  {
     // FFT, pasada 1: la permutación por inversión de bits, fuera de sitio
     // (en el sitio, dos hilos se pisarían al intercambiar). Por filas: la
     // misma pasada transforma todas las filas de una matriz a la vez.
     nombre: 'nen_fft_permutar',
-    params: [['n', 'i64'], ['N', 'i64'], ['rev', 'i32*'], ['x', 'f64*'], ['y', 'f64*']],
-    cuerpo: 'long long f = i / N; long long j = i % N; long long o = f * 2 * N; long long d = o + 2 * (long long)rev[j]; ' +
+    // (motor-exp N2) N es potencia de dos y llega también lgN = log₂ N: los
+    // índices salen con desplazamientos y máscaras. Antes eran divisiones de 64
+    // bits, que en la GPU se emulan (decenas de instrucciones) y en la CPU
+    // cuestan 40 ciclos: eran casi todo el tiempo de la FFT.
+    params: [['n', 'i64'], ['N', 'i64'], ['lgN', 'i64'], ['rev', 'i32*'], ['x', 'f64*'], ['y', 'f64*']],
+    lee: ['rev', 'x'], escribe: ['y'],
+    cuerpo: 'long long f = i >> lgN; long long j = i & (N - 1); long long o = f * 2 * N; long long d = o + 2 * (long long)rev[j]; ' +
       'y[d] = x[o + 2 * j]; y[d + 1] = x[o + 2 * j + 1];',
-    js: (n, N, rev, x, y) => {
+    js: (n, N, lgN, rev, x, y) => {
       for (let i = 0; i < n; i++) {
         const f = Math.floor(i / N), j = i % N, o = f * 2 * N, d = o + 2 * rev[j];
         y[d] = x[o + 2 * j]; y[d + 1] = x[o + 2 * j + 1];
@@ -20226,14 +22826,16 @@ for (const k of [
     // inversa): multiplicar por ±1 es exacto, así que no hay trascendentes en
     // la GPU y el resultado es el de la CPU bit a bit.
     nombre: 'nen_fft_etapa',
-    params: [['n', 'i64'], ['N', 'i64'], ['largo', 'i64'], ['conj', 'f64'], ['twr', 'f64*'], ['twi', 'f64*'], ['d', 'f64*']],
-    cuerpo: 'long long h = N / 2; long long f = i / h; long long j = i % h; long long mitad = largo / 2; ' +
-      'long long g = j / mitad; long long k = j % mitad; long long o = f * 2 * N; ' +
-      'long long p = g * largo + k; long long q = p + mitad; long long w = k * (N / largo); ' +
+    // (motor-exp N2) con lgN = log₂ N y lgL = log₂ largo: sin divisiones
+    params: [['n', 'i64'], ['N', 'i64'], ['lgN', 'i64'], ['largo', 'i64'], ['lgL', 'i64'], ['conj', 'f64'], ['twr', 'f64*'], ['twi', 'f64*'], ['d', 'f64*']],
+    lee: ['twr', 'twi'],
+    cuerpo: 'long long f = i >> (lgN - 1); long long j = i & ((N >> 1) - 1); long long mitad = largo >> 1; ' +
+      'long long g = j >> (lgL - 1); long long k = j & (mitad - 1); long long o = f * 2 * N; ' +
+      'long long p = g * largo + k; long long q = p + mitad; long long w = k << (lgN - lgL); ' +
       'double wr = twr[w]; double wi = conj * twi[w]; double qr = d[o + 2 * q]; double qi = d[o + 2 * q + 1]; ' +
       'double vr = qr * wr - qi * wi; double vi = qr * wi + qi * wr; double ur = d[o + 2 * p]; double ui = d[o + 2 * p + 1]; ' +
       'd[o + 2 * p] = ur + vr; d[o + 2 * p + 1] = ui + vi; d[o + 2 * q] = ur - vr; d[o + 2 * q + 1] = ui - vi;',
-    js: (n, N, largo, conj, twr, twi, d) => {
+    js: (n, N, lgN, largo, lgL, conj, twr, twi, d) => {
       const h = N / 2, mitad = largo / 2, salto = N / largo;
       for (let i = 0; i < n; i++) {
         const f = Math.floor(i / h), j = i % h, g = Math.floor(j / mitad), k = j % mitad, o = f * 2 * N;
@@ -20251,6 +22853,7 @@ for (const k of [
     // Multiplicar cada fila compleja por la misma fila «b» (Bluestein, filtros).
     nombre: 'nen_cmul_filas',
     params: [['n', 'i64'], ['N', 'i64'], ['a', 'f64*'], ['b', 'f64*']],
+    lee: ['b'],
     cuerpo: 'long long j = i % N; double ar = a[2 * i]; double ai = a[2 * i + 1]; double br = b[2 * j]; double bi = b[2 * j + 1]; ' +
       'a[2 * i] = ar * br - ai * bi; a[2 * i + 1] = ar * bi + ai * br;',
     js: (n, N, a, b) => {
@@ -20266,6 +22869,47 @@ for (const k of [
     cuerpo: 'd[i] = d[i] / s;',
     js: (n, s, d) => { for (let i = 0; i < n; i++) d[i] = d[i] / s; },
   },
+  // (motor-exp N2) La aritmética de arreglos de la VM («x * 2 + 1», «a + b»)
+  // cuando el arreglo es grande: + − * / son exactos en IEEE 754 (con
+  // -ffp-contract=off y sin FMA), así que dan el mismo número que el bucle de
+  // JavaScript en los tres dispositivos. «op»: 0 +, 1 −, 2 *, 3 /. Dividir entre
+  // cero es un error en Ñ: el núcleo levanta una bandera (z[0] = 1) y quien
+  // lanza lo dice después, con el mismo mensaje que el bucle de la VM.
+  {
+    nombre: 'nen_op_aa',
+    params: [['n', 'i64'], ['op', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['y', 'f64*'], ['z', 'i32*']],
+    lee: ['a', 'b'], escribe: ['y'],
+    cuerpo: 'double u = a[i]; double v = b[i]; double r; if (op == 0) r = u + v; else if (op == 1) r = u - v; ' +
+      'else if (op == 2) r = u * v; else { if (v == 0.0) z[0] = 1; r = u / v; } y[i] = r;',
+    js: (n, op, a, b, y, z) => {
+      if (op === 0) for (let i = 0; i < n; i++) y[i] = a[i] + b[i];
+      else if (op === 1) for (let i = 0; i < n; i++) y[i] = a[i] - b[i];
+      else if (op === 2) for (let i = 0; i < n; i++) y[i] = a[i] * b[i];
+      else for (let i = 0; i < n; i++) { if (b[i] === 0) z[0] = 1; y[i] = a[i] / b[i]; }
+    },
+  },
+  {
+    // arreglo con número; «rev» = 1 si el número va delante (2 − x, 2 / x)
+    nombre: 'nen_op_ae',
+    params: [['n', 'i64'], ['op', 'i64'], ['rev', 'i64'], ['s', 'f64'], ['a', 'f64*'], ['y', 'f64*'], ['z', 'i32*']],
+    lee: ['a'], escribe: ['y'],
+    cuerpo: 'double u = a[i]; double r; ' +
+      'if (rev == 0) { if (op == 0) r = u + s; else if (op == 1) r = u - s; else if (op == 2) r = u * s; else r = u / s; } ' +
+      'else { if (op == 0) r = s + u; else if (op == 1) r = s - u; else if (op == 2) r = s * u; else { if (u == 0.0) z[0] = 1; r = s / u; } } y[i] = r;',
+    js: (n, op, rev, s, a, y, z) => {
+      if (!rev) {
+        if (op === 0) for (let i = 0; i < n; i++) y[i] = a[i] + s;
+        else if (op === 1) for (let i = 0; i < n; i++) y[i] = a[i] - s;
+        else if (op === 2) for (let i = 0; i < n; i++) y[i] = a[i] * s;
+        else for (let i = 0; i < n; i++) y[i] = a[i] / s;
+      } else {
+        if (op === 0) for (let i = 0; i < n; i++) y[i] = s + a[i];
+        else if (op === 1) for (let i = 0; i < n; i++) y[i] = s - a[i];
+        else if (op === 2) for (let i = 0; i < n; i++) y[i] = s * a[i];
+        else for (let i = 0; i < n; i++) { if (a[i] === 0) z[0] = 1; y[i] = s / a[i]; }
+      }
+    },
+  },
   {
     // Convolución 2D directa, un hilo por número de la salida. «oM, oN» es
     // dónde empieza la salida pedida dentro de la convolución completa: así
@@ -20273,6 +22917,7 @@ for (const k of [
     nombre: 'nen_conv2d',
     params: [['n', 'i64'], ['Ma', 'i64'], ['Na', 'i64'], ['Mb', 'i64'], ['Nb', 'i64'], ['No', 'i64'], ['oM', 'i64'], ['oN', 'i64'],
       ['a', 'f64*'], ['b', 'f64*'], ['y', 'f64*']],
+    lee: ['a', 'b'], escribe: ['y'],
     cuerpo: 'long long fi = i / No + oM; long long fj = i % No + oN; double s = 0.0; ' +
       'for (long long p = 0; p < Mb; p++) { long long ai = fi - p; if (ai < 0 || ai >= Ma) continue; ' +
       'for (long long q = 0; q < Nb; q++) { long long aj = fj - q; if (aj < 0 || aj >= Na) continue; ' +
@@ -20294,6 +22939,522 @@ for (const k of [
       }
     },
   },
+  {
+    // (motor-exp N3) EL producto de matrices de C1EÑ, nuestro «cuBLAS»: un
+    // DGEMM de verdad en cada dispositivo, por lotes (n = lotes). Cada casilla:
+    // s = +0; para k de 0 a K−1, s = fma(a, b, s). Con FMA porque es lo que hace
+    // rápida a la GPU (la DFMA cuenta doble: sin ella la T4 no pasa de la mitad
+    // de su pico en doble) y a la CPU (AVX2), y como la FMA es exacta, los tres
+    // dispositivos dan LOS MISMOS BITS. Frente a nen_matmul (sin FMA) cambia el
+    // último bit, y casi siempre hacia el valor exacto.
+    //   CPU: paneles empaquetados (B en NR = 8 columnas, A en MR = 6 filas, por
+    //        trozos de 256 en k) y un micronúcleo AVX2 de 6×8 con 12 registros de
+    //        suma; si la CPU no tiene AVX2+FMA (o C1EN_SIN_AVX=1), el mismo con
+    //        fma() de C. OpenMP por bloques de 96 filas.
+    //   GPU: mosaicos de 64×64 por bloque de 256 hilos, 4×4 casillas por hilo,
+    //        trozos de 16 en k por memoria compartida (__syncthreads).
+    //   jit: la misma suma con la FMA emulada (nenFma), fila por fila.
+    nombre: 'nen_dgemm',
+    params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f64*'], ['b', 'f64*'], ['c', 'f64*']],
+    lee: ['a', 'b'], escribe: ['c'],
+    coop: true,
+    lanzamiento: (n, m, K, p) => ({ bloques: n * Math.ceil(m / 64) * Math.ceil(p / 64), hilos: 256 }),
+    cFuente: `/* (motor-exp N3) El DGEMM de la CPU de C1EÑ: C = A·B por lotes, fila mayor.
+   Cada casilla se suma en el orden de siempre, con FMA:
+       s = +0;  para k de 0 a K−1:  s = fma(a[i][k], b[k][j], s)
+   La FMA es exacta (un solo redondeo), así que da los mismos bits en la CPU
+   (AVX2 o fma() de la libm), en la GPU (DFMA) y en JavaScript (fma emulada).
+   Por dentro: B se empaqueta en paneles de NR columnas y A en paneles de MR
+   filas (contiguos en k), por trozos de KC en k; el micronúcleo de 6×8 tiene 12
+   registros AVX de suma. Entre trozos de k la suma parcial se guarda en C y se
+   retoma: el orden de cada casilla no cambia. */
+#include <stdlib.h>
+#include <string.h>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
+#define NEN_X86 1
+#include <immintrin.h>
+#endif
+#define NEN_MR 6
+#define NEN_NR 8
+#define NEN_KC 256
+#define NEN_MC 96
+#define NEN_NC 2048
+
+/* micronúcleo genérico: acumula en t (MR×NR, fila mayor) desde Ap (kc×MR) y Bp (kc×NR) */
+static void nen_mk_escalar(long long kc, const double* Ap, const double* Bp, double* t) {
+  for (long long k = 0; k < kc; k++) {
+    const double* ak = Ap + k * NEN_MR; const double* bk = Bp + k * NEN_NR;
+    for (int r = 0; r < NEN_MR; r++) { double x = ak[r]; for (int q = 0; q < NEN_NR; q++) t[r * NEN_NR + q] = fma(x, bk[q], t[r * NEN_NR + q]); }
+  }
+}
+#ifdef NEN_X86
+/* (Windows) sin AVX2 pero con FMA, la instrucción del procesador y no el fma()
+   de la biblioteca de C (el de mingw no se puede dar por exacto) */
+__attribute__((target("fma")))
+static void nen_mk_fma(long long kc, const double* Ap, const double* Bp, double* t) {
+  for (long long k = 0; k < kc; k++) {
+    const double* ak = Ap + k * NEN_MR; const double* bk = Bp + k * NEN_NR;
+    for (int r = 0; r < NEN_MR; r++) { double x = ak[r]; for (int q = 0; q < NEN_NR; q++) t[r * NEN_NR + q] = __builtin_fma(x, bk[q], t[r * NEN_NR + q]); }
+  }
+}
+#endif
+#ifdef NEN_X86
+__attribute__((target("avx2,fma")))
+static void nen_mk_avx2(long long kc, const double* Ap, const double* Bp, double* t) {
+  __m256d c00 = _mm256_loadu_pd(t + 0), c01 = _mm256_loadu_pd(t + 4);
+  __m256d c10 = _mm256_loadu_pd(t + 8), c11 = _mm256_loadu_pd(t + 12);
+  __m256d c20 = _mm256_loadu_pd(t + 16), c21 = _mm256_loadu_pd(t + 20);
+  __m256d c30 = _mm256_loadu_pd(t + 24), c31 = _mm256_loadu_pd(t + 28);
+  __m256d c40 = _mm256_loadu_pd(t + 32), c41 = _mm256_loadu_pd(t + 36);
+  __m256d c50 = _mm256_loadu_pd(t + 40), c51 = _mm256_loadu_pd(t + 44);
+  for (long long k = 0; k < kc; k++) {
+    __m256d b0 = _mm256_loadu_pd(Bp + 8 * k), b1 = _mm256_loadu_pd(Bp + 8 * k + 4);
+    const double* ak = Ap + 6 * k; __m256d x;
+    x = _mm256_broadcast_sd(ak + 0); c00 = _mm256_fmadd_pd(x, b0, c00); c01 = _mm256_fmadd_pd(x, b1, c01);
+    x = _mm256_broadcast_sd(ak + 1); c10 = _mm256_fmadd_pd(x, b0, c10); c11 = _mm256_fmadd_pd(x, b1, c11);
+    x = _mm256_broadcast_sd(ak + 2); c20 = _mm256_fmadd_pd(x, b0, c20); c21 = _mm256_fmadd_pd(x, b1, c21);
+    x = _mm256_broadcast_sd(ak + 3); c30 = _mm256_fmadd_pd(x, b0, c30); c31 = _mm256_fmadd_pd(x, b1, c31);
+    x = _mm256_broadcast_sd(ak + 4); c40 = _mm256_fmadd_pd(x, b0, c40); c41 = _mm256_fmadd_pd(x, b1, c41);
+    x = _mm256_broadcast_sd(ak + 5); c50 = _mm256_fmadd_pd(x, b0, c50); c51 = _mm256_fmadd_pd(x, b1, c51);
+  }
+  _mm256_storeu_pd(t + 0, c00); _mm256_storeu_pd(t + 4, c01); _mm256_storeu_pd(t + 8, c10); _mm256_storeu_pd(t + 12, c11);
+  _mm256_storeu_pd(t + 16, c20); _mm256_storeu_pd(t + 20, c21); _mm256_storeu_pd(t + 24, c30); _mm256_storeu_pd(t + 28, c31);
+  _mm256_storeu_pd(t + 32, c40); _mm256_storeu_pd(t + 36, c41); _mm256_storeu_pd(t + 40, c50); _mm256_storeu_pd(t + 44, c51);
+}
+#endif
+typedef void (*nen_mk_t)(long long, const double*, const double*, double*);
+static nen_mk_t nen_mk_elegir(void) {
+#ifdef NEN_X86
+  if (getenv("C1EN_SIN_AVX") == NULL) {
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) return nen_mk_avx2;
+  }
+  __builtin_cpu_init();
+  if (__builtin_cpu_supports("fma")) return nen_mk_fma;
+#endif
+  return nen_mk_escalar;
+}
+/* un lote: A m×K, B K×p, C m×p */
+static void nen_dgemm_uno(nen_mk_t mk, long long m, long long K, long long p, const double* A, const double* B, double* C) {
+  for (long long i = 0; i < m * p; i++) C[i] = 0.0;
+  if (K == 0) return;
+  long long ncMax = p < NEN_NC ? p : NEN_NC;
+  double* Bp = (double*)malloc(sizeof(double) * NEN_KC * (((ncMax + NEN_NR - 1) / NEN_NR) * NEN_NR));
+  for (long long jc = 0; jc < p; jc += NEN_NC) {
+    long long nc = p - jc < NEN_NC ? p - jc : NEN_NC, npan = (nc + NEN_NR - 1) / NEN_NR;
+    for (long long pc = 0; pc < K; pc += NEN_KC) {
+      long long kc = K - pc < NEN_KC ? K - pc : NEN_KC;
+      /* B[pc:pc+kc, jc:jc+nc] en paneles de NR columnas, k mayor; lo que falta, ceros */
+      #pragma omp parallel for schedule(static) if (npan * kc > 4096)
+      for (long long jp = 0; jp < npan; jp++) {
+        double* dst = Bp + jp * kc * NEN_NR; long long j0 = jc + jp * NEN_NR;
+        for (long long k = 0; k < kc; k++) { const double* src = B + (pc + k) * p + j0;
+          for (int q = 0; q < NEN_NR; q++) dst[k * NEN_NR + q] = (j0 + q < p) ? src[q] : 0.0; }
+      }
+      long long nbm = (m + NEN_MC - 1) / NEN_MC;
+      #pragma omp parallel for schedule(dynamic, 1) if (nbm * npan > 1 && m * nc * kc > 32768)
+      for (long long ib = 0; ib < nbm; ib++) {
+        double* Ap = (double*)malloc(sizeof(double) * NEN_KC * NEN_MC); double t[NEN_MR * NEN_NR];
+        long long i0 = ib * NEN_MC, mc = m - i0 < NEN_MC ? m - i0 : NEN_MC, npa = (mc + NEN_MR - 1) / NEN_MR;
+        for (long long ip = 0; ip < npa; ip++) {     /* A[i0.., pc..] en paneles de MR filas */
+          double* dst = Ap + ip * kc * NEN_MR;
+          for (int r = 0; r < NEN_MR; r++) { long long fi = i0 + ip * NEN_MR + r;
+            if (fi < m) { const double* src = A + fi * K + pc; for (long long k = 0; k < kc; k++) dst[k * NEN_MR + r] = src[k]; }
+            else for (long long k = 0; k < kc; k++) dst[k * NEN_MR + r] = 0.0; }
+        }
+        for (long long jp = 0; jp < npan; jp++) {
+          long long j0 = jc + jp * NEN_NR; int nq = (int)(p - j0 < NEN_NR ? p - j0 : NEN_NR);
+          for (long long ip = 0; ip < npa; ip++) {
+            long long f0 = i0 + ip * NEN_MR; int nr = (int)(m - f0 < NEN_MR ? m - f0 : NEN_MR);
+            for (int r = 0; r < NEN_MR; r++) for (int q = 0; q < NEN_NR; q++)
+              t[r * NEN_NR + q] = (r < nr && q < nq) ? C[(f0 + r) * p + j0 + q] : 0.0;
+            mk(kc, Ap + ip * kc * NEN_MR, Bp + jp * kc * NEN_NR, t);
+            for (int r = 0; r < nr; r++) for (int q = 0; q < nq; q++) C[(f0 + r) * p + j0 + q] = t[r * NEN_NR + q];
+          }
+        }
+        free(Ap);
+      }
+    }
+  }
+  free(Bp);
+}
+void nen_dgemm(c1en_i64 n, c1en_i64 m, c1en_i64 K, c1en_i64 p, double* a, double* b, double* c) {
+  nen_mk_t mk = nen_mk_elegir();
+  for (long long l = 0; l < n; l++) nen_dgemm_uno(mk, m, K, p, a + l * m * K, b + l * K * p, c + l * m * p);
+}
+`,
+    cudaFuente: `/* (motor-exp N3) El DGEMM de la GPU de C1EÑ. Mosaico de 64×64 de C por bloque,
+   256 hilos con 4×4 casillas cada uno (filas ty+16i, columnas tx+16j: los hilos
+   de un warp leen columnas seguidas), trozos de 16 en k por memoria compartida.
+   As va traspuesta y con una columna de relleno (65) para que guardarla no
+   choque en los bancos. Cada casilla: s = +0; s = fma(a, b, s) con k de 0 a
+   K−1: los mismos bits que la CPU y que JavaScript. n = lotes. */
+#define NEN_BM 64
+#define NEN_BN 64
+#define NEN_BK 16
+extern "C" __global__ void nen_dgemm(long long n, long long m, long long K, long long p, double* a, double* b, double* c) {
+  __shared__ double As[NEN_BK][NEN_BM + 1];
+  __shared__ double Bs[NEN_BK][NEN_BN];
+  long long tm = (m + NEN_BM - 1) / NEN_BM, tp = (p + NEN_BN - 1) / NEN_BN;
+  long long blk = (long long)blockIdx.x, porLote = tm * tp;
+  long long l = blk / porLote, r = blk % porLote, bi = r / tp, bj = r % tp;
+  int t = (int)threadIdx.x, tx = t & 15, ty = t >> 4;
+  const double* A = a + l * m * K; const double* B = b + l * K * p; double* C = c + l * m * p;
+  long long r0 = bi * NEN_BM, c0 = bj * NEN_BN;
+  double s00 = 0.0, s01 = 0.0, s02 = 0.0, s03 = 0.0, s10 = 0.0, s11 = 0.0, s12 = 0.0, s13 = 0.0;
+  double s20 = 0.0, s21 = 0.0, s22 = 0.0, s23 = 0.0, s30 = 0.0, s31 = 0.0, s32 = 0.0, s33 = 0.0;
+  for (long long k0 = 0; k0 < K; k0 += NEN_BK) {
+    for (int q = 0; q < 4; q++) {
+      int rr = (t >> 4) + 16 * q, kk = t & 15; long long gr = r0 + rr, gk = k0 + kk;
+      As[kk][rr] = (gr < m && gk < K) ? A[gr * K + gk] : 0.0;
+      int kb = (t >> 6) + 4 * q, cc = t & 63; long long gkb = k0 + kb, gc = c0 + cc;
+      Bs[kb][cc] = (gkb < K && gc < p) ? B[gkb * p + gc] : 0.0;
+    }
+    __syncthreads();
+    int kmax = (K - k0 < NEN_BK) ? (int)(K - k0) : NEN_BK;
+#define NEN_PASO(k) { \
+      double x0 = As[k][ty], x1 = As[k][ty + 16], x2 = As[k][ty + 32], x3 = As[k][ty + 48]; \
+      double y0 = Bs[k][tx], y1 = Bs[k][tx + 16], y2 = Bs[k][tx + 32], y3 = Bs[k][tx + 48]; \
+      s00 = fma(x0, y0, s00); s01 = fma(x0, y1, s01); s02 = fma(x0, y2, s02); s03 = fma(x0, y3, s03); \
+      s10 = fma(x1, y0, s10); s11 = fma(x1, y1, s11); s12 = fma(x1, y2, s12); s13 = fma(x1, y3, s13); \
+      s20 = fma(x2, y0, s20); s21 = fma(x2, y1, s21); s22 = fma(x2, y2, s22); s23 = fma(x2, y3, s23); \
+      s30 = fma(x3, y0, s30); s31 = fma(x3, y1, s31); s32 = fma(x3, y2, s32); s33 = fma(x3, y3, s33); }
+    if (kmax == NEN_BK) {
+#pragma unroll
+      for (int k = 0; k < NEN_BK; k++) NEN_PASO(k)
+    } else {
+      for (int k = 0; k < kmax; k++) NEN_PASO(k)
+    }
+#undef NEN_PASO
+    __syncthreads();
+  }
+  long long f0 = r0 + ty, j0 = c0 + tx;
+#define NEN_GUARDA(i, j, v) { long long f = f0 + 16 * (i), cj = j0 + 16 * (j); if (f < m && cj < p) C[f * p + cj] = v; }
+  NEN_GUARDA(0, 0, s00) NEN_GUARDA(0, 1, s01) NEN_GUARDA(0, 2, s02) NEN_GUARDA(0, 3, s03)
+  NEN_GUARDA(1, 0, s10) NEN_GUARDA(1, 1, s11) NEN_GUARDA(1, 2, s12) NEN_GUARDA(1, 3, s13)
+  NEN_GUARDA(2, 0, s20) NEN_GUARDA(2, 1, s21) NEN_GUARDA(2, 2, s22) NEN_GUARDA(2, 3, s23)
+  NEN_GUARDA(3, 0, s30) NEN_GUARDA(3, 1, s31) NEN_GUARDA(3, 2, s32) NEN_GUARDA(3, 3, s33)
+#undef NEN_GUARDA
+}
+`,
+    js: (n, m, K, p, a, b, c) => {
+      const fila = new Float64Array(p);
+      for (let l = 0; l < n; l++) {
+        const oa = l * m * K, ob = l * K * p, oc = l * m * p;
+        const [bh, bl] = nenFmaPartir(b, ob, ob + K * p);
+        const bLote = b.subarray(ob, ob + K * p);
+        for (let i = 0; i < m; i++) {
+          fila.fill(0.0);
+          const ai = oa + i * K;
+          for (let k = 0; k < K; k++) nenFmaFila(a[ai + k], bLote, bh, bl, k * p, fila, p);
+          c.set(fila, oc + i * p);
+        }
+      }
+    },
+  },
+  {
+    // (motor-exp N4.2) El SGEMM de C1EÑ: el producto de matrices en PRECISIÓN
+    // SIMPLE (real32; real16 entra igual, porque en la VM vive en floats, y se
+    // redondea a 16 bits al final). Lo mismo que nen_dgemm con floats: cada
+    // casilla, s = +0 y s = fmaf(a, b, s) con k de 0 a K−1. La FFMA es exacta,
+    // así que jit (nenFmaf), nativo (AVX2 de 8 floats o fmaf) y GPU dan los
+    // mismos bits. En una GPU de consumo la simple va hasta 32 veces más rápida
+    // que la doble; en la CPU, el doble de números por instrucción.
+    //   CPU: paneles empaquetados (B en NR = 16 columnas, A en MR = 6 filas, por
+    //        trozos de 256 en k) y un micronúcleo AVX2 de 6×16 con 12 registros
+    //        de suma. OpenMP por bloques de 96 filas.
+    //   GPU: mosaicos de 64×64 por bloque de 256 hilos, 4×4 casillas por hilo,
+    //        trozos de 16 en k por memoria compartida.
+    nombre: 'nen_sgemm',
+    params: [['n', 'i64'], ['m', 'i64'], ['K', 'i64'], ['p', 'i64'], ['a', 'f32*'], ['b', 'f32*'], ['c', 'f32*']],
+    lee: ['a', 'b'], escribe: ['c'],
+    coop: true,
+    lanzamiento: (n, m, K, p) => ({ bloques: n * Math.ceil(m / 64) * Math.ceil(p / 64), hilos: 256 }),
+    cFuente: `/* (motor-exp N4.2) El SGEMM de la CPU de C1EÑ: el de nen_dgemm con floats.
+   Cada casilla: s = +0; para k de 0 a K−1: s = fmaf(a[i][k], b[k][j], s). */
+#include <stdlib.h>
+#include <string.h>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
+#define NEN_S_X86 1
+#include <immintrin.h>
+#endif
+#define NEN_S_MR 6
+#define NEN_S_NR 16
+#define NEN_S_KC 256
+#define NEN_S_MC 96
+#define NEN_S_NC 2048
+/* (Windows) el fmaf() de la biblioteca de mingw no es exacto en todos los casos
+   (fmaf(3.4e38, 2, -3.4e38) le da infinito): sin AVX2, la FMA de simple se hace
+   aquí, exacta, con el mismo método que nenFmaf en JavaScript (el producto de dos
+   floats es exacto en un double, TwoSum, y redondeo a impar antes de bajar a 24
+   bits). Así el camino sin AVX2 da los mismos bits en Linux y en Windows. */
+static inline float nen_fmaf_exacta(float a, float b, float c) {
+  double p = (double)a * (double)b, s = p + (double)c;
+  double bb = s - p, e = (p - (s - bb)) + ((double)c - bb);
+  if (e == 0 || !(s - s == 0)) return (float)s;
+  unsigned long long u; memcpy(&u, &s, 8);
+  if ((e < 0) != (s < 0)) u -= 1;
+  u |= 1; memcpy(&s, &u, 8);
+  return (float)s;
+}
+static void nen_smk_escalar(long long kc, const float* Ap, const float* Bp, float* t) {
+  for (long long k = 0; k < kc; k++) {
+    const float* ak = Ap + k * NEN_S_MR; const float* bk = Bp + k * NEN_S_NR;
+    for (int r = 0; r < NEN_S_MR; r++) { float x = ak[r]; for (int q = 0; q < NEN_S_NR; q++) t[r * NEN_S_NR + q] = nen_fmaf_exacta(x, bk[q], t[r * NEN_S_NR + q]); }
+  }
+}
+#ifdef NEN_S_X86
+__attribute__((target("avx2,fma")))
+static void nen_smk_avx2(long long kc, const float* Ap, const float* Bp, float* t) {
+  __m256 c00 = _mm256_loadu_ps(t + 0), c01 = _mm256_loadu_ps(t + 8);
+  __m256 c10 = _mm256_loadu_ps(t + 16), c11 = _mm256_loadu_ps(t + 24);
+  __m256 c20 = _mm256_loadu_ps(t + 32), c21 = _mm256_loadu_ps(t + 40);
+  __m256 c30 = _mm256_loadu_ps(t + 48), c31 = _mm256_loadu_ps(t + 56);
+  __m256 c40 = _mm256_loadu_ps(t + 64), c41 = _mm256_loadu_ps(t + 72);
+  __m256 c50 = _mm256_loadu_ps(t + 80), c51 = _mm256_loadu_ps(t + 88);
+  for (long long k = 0; k < kc; k++) {
+    __m256 b0 = _mm256_loadu_ps(Bp + 16 * k), b1 = _mm256_loadu_ps(Bp + 16 * k + 8);
+    const float* ak = Ap + 6 * k; __m256 x;
+    x = _mm256_broadcast_ss(ak + 0); c00 = _mm256_fmadd_ps(x, b0, c00); c01 = _mm256_fmadd_ps(x, b1, c01);
+    x = _mm256_broadcast_ss(ak + 1); c10 = _mm256_fmadd_ps(x, b0, c10); c11 = _mm256_fmadd_ps(x, b1, c11);
+    x = _mm256_broadcast_ss(ak + 2); c20 = _mm256_fmadd_ps(x, b0, c20); c21 = _mm256_fmadd_ps(x, b1, c21);
+    x = _mm256_broadcast_ss(ak + 3); c30 = _mm256_fmadd_ps(x, b0, c30); c31 = _mm256_fmadd_ps(x, b1, c31);
+    x = _mm256_broadcast_ss(ak + 4); c40 = _mm256_fmadd_ps(x, b0, c40); c41 = _mm256_fmadd_ps(x, b1, c41);
+    x = _mm256_broadcast_ss(ak + 5); c50 = _mm256_fmadd_ps(x, b0, c50); c51 = _mm256_fmadd_ps(x, b1, c51);
+  }
+  _mm256_storeu_ps(t + 0, c00); _mm256_storeu_ps(t + 8, c01); _mm256_storeu_ps(t + 16, c10); _mm256_storeu_ps(t + 24, c11);
+  _mm256_storeu_ps(t + 32, c20); _mm256_storeu_ps(t + 40, c21); _mm256_storeu_ps(t + 48, c30); _mm256_storeu_ps(t + 56, c31);
+  _mm256_storeu_ps(t + 64, c40); _mm256_storeu_ps(t + 72, c41); _mm256_storeu_ps(t + 80, c50); _mm256_storeu_ps(t + 88, c51);
+}
+#endif
+typedef void (*nen_smk_t)(long long, const float*, const float*, float*);
+static nen_smk_t nen_smk_elegir(void) {
+#ifdef NEN_S_X86
+  if (getenv("C1EN_SIN_AVX") == NULL) {
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) return nen_smk_avx2;
+  }
+#endif
+  return nen_smk_escalar;
+}
+static void nen_sgemm_uno(nen_smk_t mk, long long m, long long K, long long p, const float* A, const float* B, float* C) {
+  for (long long i = 0; i < m * p; i++) C[i] = 0.0f;
+  if (K == 0) return;
+  long long ncMax = p < NEN_S_NC ? p : NEN_S_NC;
+  float* Bp = (float*)malloc(sizeof(float) * NEN_S_KC * (((ncMax + NEN_S_NR - 1) / NEN_S_NR) * NEN_S_NR));
+  for (long long jc = 0; jc < p; jc += NEN_S_NC) {
+    long long nc = p - jc < NEN_S_NC ? p - jc : NEN_S_NC, npan = (nc + NEN_S_NR - 1) / NEN_S_NR;
+    for (long long pc = 0; pc < K; pc += NEN_S_KC) {
+      long long kc = K - pc < NEN_S_KC ? K - pc : NEN_S_KC;
+      #pragma omp parallel for schedule(static) if (npan * kc > 4096)
+      for (long long jp = 0; jp < npan; jp++) {
+        float* dst = Bp + jp * kc * NEN_S_NR; long long j0 = jc + jp * NEN_S_NR;
+        for (long long k = 0; k < kc; k++) { const float* src = B + (pc + k) * p + j0;
+          for (int q = 0; q < NEN_S_NR; q++) dst[k * NEN_S_NR + q] = (j0 + q < p) ? src[q] : 0.0f; }
+      }
+      long long nbm = (m + NEN_S_MC - 1) / NEN_S_MC;
+      #pragma omp parallel for schedule(dynamic, 1) if (nbm * npan > 1 && m * nc * kc > 32768)
+      for (long long ib = 0; ib < nbm; ib++) {
+        float* Ap = (float*)malloc(sizeof(float) * NEN_S_KC * NEN_S_MC); float t[NEN_S_MR * NEN_S_NR];
+        long long i0 = ib * NEN_S_MC, mc = m - i0 < NEN_S_MC ? m - i0 : NEN_S_MC, npa = (mc + NEN_S_MR - 1) / NEN_S_MR;
+        for (long long ip = 0; ip < npa; ip++) {
+          float* dst = Ap + ip * kc * NEN_S_MR;
+          for (int r = 0; r < NEN_S_MR; r++) { long long fi = i0 + ip * NEN_S_MR + r;
+            if (fi < m) { const float* src = A + fi * K + pc; for (long long k = 0; k < kc; k++) dst[k * NEN_S_MR + r] = src[k]; }
+            else for (long long k = 0; k < kc; k++) dst[k * NEN_S_MR + r] = 0.0f; }
+        }
+        for (long long jp = 0; jp < npan; jp++) {
+          long long j0 = jc + jp * NEN_S_NR; int nq = (int)(p - j0 < NEN_S_NR ? p - j0 : NEN_S_NR);
+          for (long long ip = 0; ip < npa; ip++) {
+            long long f0 = i0 + ip * NEN_S_MR; int nr = (int)(m - f0 < NEN_S_MR ? m - f0 : NEN_S_MR);
+            for (int r = 0; r < NEN_S_MR; r++) for (int q = 0; q < NEN_S_NR; q++)
+              t[r * NEN_S_NR + q] = (r < nr && q < nq) ? C[(f0 + r) * p + j0 + q] : 0.0f;
+            mk(kc, Ap + ip * kc * NEN_S_MR, Bp + jp * kc * NEN_S_NR, t);
+            for (int r = 0; r < nr; r++) for (int q = 0; q < nq; q++) C[(f0 + r) * p + j0 + q] = t[r * NEN_S_NR + q];
+          }
+        }
+        free(Ap);
+      }
+    }
+  }
+  free(Bp);
+}
+void nen_sgemm(c1en_i64 n, c1en_i64 m, c1en_i64 K, c1en_i64 p, float* a, float* b, float* c) {
+  nen_smk_t mk = nen_smk_elegir();
+  for (long long l = 0; l < n; l++) nen_sgemm_uno(mk, m, K, p, a + l * m * K, b + l * K * p, c + l * m * p);
+}
+`,
+    cudaFuente: `/* (motor-exp N4.2) El SGEMM de la GPU de C1EÑ: el de nen_dgemm con floats y FFMA.
+   Cada casilla: s = +0; s = fmaf(a, b, s) con k de 0 a K−1. n = lotes. */
+#define NEN_S_BM 64
+#define NEN_S_BN 64
+#define NEN_S_BK 16
+extern "C" __global__ void nen_sgemm(long long n, long long m, long long K, long long p, float* a, float* b, float* c) {
+  __shared__ float As[NEN_S_BK][NEN_S_BM + 1];
+  __shared__ float Bs[NEN_S_BK][NEN_S_BN];
+  long long tm = (m + NEN_S_BM - 1) / NEN_S_BM, tp = (p + NEN_S_BN - 1) / NEN_S_BN;
+  long long blk = (long long)blockIdx.x, porLote = tm * tp;
+  long long l = blk / porLote, r = blk % porLote, bi = r / tp, bj = r % tp;
+  int t = (int)threadIdx.x, tx = t & 15, ty = t >> 4;
+  const float* A = a + l * m * K; const float* B = b + l * K * p; float* C = c + l * m * p;
+  long long r0 = bi * NEN_S_BM, c0 = bj * NEN_S_BN;
+  float s00 = 0.0f, s01 = 0.0f, s02 = 0.0f, s03 = 0.0f, s10 = 0.0f, s11 = 0.0f, s12 = 0.0f, s13 = 0.0f;
+  float s20 = 0.0f, s21 = 0.0f, s22 = 0.0f, s23 = 0.0f, s30 = 0.0f, s31 = 0.0f, s32 = 0.0f, s33 = 0.0f;
+  for (long long k0 = 0; k0 < K; k0 += NEN_S_BK) {
+    for (int q = 0; q < 4; q++) {
+      int rr = (t >> 4) + 16 * q, kk = t & 15; long long gr = r0 + rr, gk = k0 + kk;
+      As[kk][rr] = (gr < m && gk < K) ? A[gr * K + gk] : 0.0f;
+      int kb = (t >> 6) + 4 * q, cc = t & 63; long long gkb = k0 + kb, gc = c0 + cc;
+      Bs[kb][cc] = (gkb < K && gc < p) ? B[gkb * p + gc] : 0.0f;
+    }
+    __syncthreads();
+    int kmax = (K - k0 < NEN_S_BK) ? (int)(K - k0) : NEN_S_BK;
+#define NEN_S_PASO(k) { \
+      float x0 = As[k][ty], x1 = As[k][ty + 16], x2 = As[k][ty + 32], x3 = As[k][ty + 48]; \
+      float y0 = Bs[k][tx], y1 = Bs[k][tx + 16], y2 = Bs[k][tx + 32], y3 = Bs[k][tx + 48]; \
+      s00 = fmaf(x0, y0, s00); s01 = fmaf(x0, y1, s01); s02 = fmaf(x0, y2, s02); s03 = fmaf(x0, y3, s03); \
+      s10 = fmaf(x1, y0, s10); s11 = fmaf(x1, y1, s11); s12 = fmaf(x1, y2, s12); s13 = fmaf(x1, y3, s13); \
+      s20 = fmaf(x2, y0, s20); s21 = fmaf(x2, y1, s21); s22 = fmaf(x2, y2, s22); s23 = fmaf(x2, y3, s23); \
+      s30 = fmaf(x3, y0, s30); s31 = fmaf(x3, y1, s31); s32 = fmaf(x3, y2, s32); s33 = fmaf(x3, y3, s33); }
+    if (kmax == NEN_S_BK) {
+#pragma unroll
+      for (int k = 0; k < NEN_S_BK; k++) NEN_S_PASO(k)
+    } else {
+      for (int k = 0; k < kmax; k++) NEN_S_PASO(k)
+    }
+#undef NEN_S_PASO
+    __syncthreads();
+  }
+  long long f0 = r0 + ty, j0 = c0 + tx;
+#define NEN_S_GUARDA(i, j, v) { long long f = f0 + 16 * (i), cj = j0 + 16 * (j); if (f < m && cj < p) C[f * p + cj] = v; }
+  NEN_S_GUARDA(0, 0, s00) NEN_S_GUARDA(0, 1, s01) NEN_S_GUARDA(0, 2, s02) NEN_S_GUARDA(0, 3, s03)
+  NEN_S_GUARDA(1, 0, s10) NEN_S_GUARDA(1, 1, s11) NEN_S_GUARDA(1, 2, s12) NEN_S_GUARDA(1, 3, s13)
+  NEN_S_GUARDA(2, 0, s20) NEN_S_GUARDA(2, 1, s21) NEN_S_GUARDA(2, 2, s22) NEN_S_GUARDA(2, 3, s23)
+  NEN_S_GUARDA(3, 0, s30) NEN_S_GUARDA(3, 1, s31) NEN_S_GUARDA(3, 2, s32) NEN_S_GUARDA(3, 3, s33)
+#undef NEN_S_GUARDA
+}
+`,
+    js: (n, m, K, p, a, b, c) => {
+      const fila = new Float32Array(p);
+      for (let l = 0; l < n; l++) {
+        const oa = l * m * K, ob = l * K * p, oc = l * m * p;
+        for (let i = 0; i < m; i++) {
+          fila.fill(0);
+          const ai = oa + i * K;
+          for (let k = 0; k < K; k++) {
+            const x = a[ai + k], o = ob + k * p;
+            for (let j = 0; j < p; j++) fila[j] = nenFmaf(x, b[o + j], fila[j]);
+          }
+          c.set(fila, oc + i * p);
+        }
+      }
+    },
+  },
+  {
+    // (motor-exp N3) FFT: cargar un arreglo REAL ya permutado (inversión de
+    // bits) como complejo: y[rev[j]] = (x[j], 0). Una pasada en vez de copiar a
+    // complejos en la CPU y subir el doble.
+    nombre: 'nen_fft_cargar_real',
+    params: [['n', 'i64'], ['N', 'i64'], ['lgN', 'i64'], ['rev', 'i32*'], ['x', 'f64*'], ['y', 'f64*']],
+    lee: ['rev', 'x'], escribe: ['y'],
+    cuerpo: 'long long f = i >> lgN; long long j = i & (N - 1); long long d = f * 2 * N + 2 * (long long)rev[j]; y[d] = x[i]; y[d + 1] = 0.0;',
+    js: (n, N, lgN, rev, x, y) => {
+      for (let i = 0; i < n; i++) { const f = Math.floor(i / N), j = i % N, d = f * 2 * N + 2 * rev[j]; y[d] = x[i]; y[d + 1] = 0.0; }
+    },
+  },
+  {
+    // (motor-exp N3) FFT: las PRIMERAS etapas (largo 2, 4… hasta T ≤ 2048) de
+    // un trozo de T números seguidos, todas de una vez: tras la permutación,
+    // esas etapas solo mezclan dentro de trozos alineados de T. En la GPU un
+    // bloque carga su trozo en memoria compartida (32 KB), hace las lgT etapas
+    // con __syncthreads entre una y otra y lo devuelve: una pasada por la
+    // memoria en vez de lgT. En la CPU, un hilo por trozo (cabe en la caché).
+    // Las mismas mariposas, con la misma tabla y la misma aritmética que
+    // «nen_fft_etapa»: los mismos bits. n = trozos.
+    nombre: 'nen_fft_bloque',
+    params: [['n', 'i64'], ['N', 'i64'], ['lgN', 'i64'], ['T', 'i64'], ['lgT', 'i64'], ['conj', 'f64'], ['twr', 'f64*'], ['twi', 'f64*'], ['d', 'f64*']],
+    lee: ['twr', 'twi'],
+    minParalelo: 1,
+    coop: true,
+    lanzamiento: n => ({ bloques: n, hilos: 256 }),
+    cuerpo: 'long long o = i * 2 * T; ' +
+      'for (long long lgL = 1; lgL <= lgT; lgL++) { long long largo = 1LL << lgL; long long mitad = largo >> 1; long long sh = lgN - lgL; ' +
+      '  for (long long j = 0; j < (T >> 1); j++) { long long g = j >> (lgL - 1); long long k = j & (mitad - 1); ' +
+      '    long long p = o + 2 * (g * largo + k); long long q = p + 2 * mitad; long long w = k << sh; ' +
+      '    double wr = twr[w]; double wi = conj * twi[w]; double qr = d[q]; double qi = d[q + 1]; double vr = qr * wr - qi * wi; double vi = qr * wi + qi * wr; double ur = d[p]; double ui = d[p + 1]; ' +
+      '    d[p] = ur + vr; d[p + 1] = ui + vi; d[q] = ur - vr; d[q + 1] = ui - vi; } }',
+    cudaFuente: `#define NEN_FFT_T 2048
+extern "C" __global__ void nen_fft_bloque(long long n, long long N, long long lgN, long long T, long long lgT, double conj, double* twr, double* twi, double* d) {
+  __shared__ double sr[NEN_FFT_T];
+  __shared__ double si[NEN_FFT_T];
+  long long o = (long long)blockIdx.x * 2 * T;
+  long long t = (long long)threadIdx.x, H = (long long)blockDim.x;
+  for (long long j = t; j < T; j += H) { sr[j] = d[o + 2 * j]; si[j] = d[o + 2 * j + 1]; }
+  __syncthreads();
+  for (long long lgL = 1; lgL <= lgT; lgL++) {
+    long long largo = 1LL << lgL; long long mitad = largo >> 1; long long sh = lgN - lgL;
+    for (long long j = t; j < (T >> 1); j += H) {
+      long long g = j >> (lgL - 1); long long k = j & (mitad - 1);
+      long long p = g * largo + k; long long q = p + mitad; long long w = k << sh;
+      double wr = twr[w]; double wi = conj * twi[w]; double qr = sr[q]; double qi = si[q]; double vr = qr * wr - qi * wi; double vi = qr * wi + qi * wr; double ur = sr[p]; double ui = si[p]; 
+      sr[p] = ur + vr; si[p] = ui + vi; sr[q] = ur - vr; si[q] = ui - vi;
+    }
+    __syncthreads();
+  }
+  for (long long j = t; j < T; j += H) { d[o + 2 * j] = sr[j]; d[o + 2 * j + 1] = si[j]; }
+}`,
+    js: (n, N, lgN, T, lgT, conj, twr, twi, d) => {
+      for (let i = 0; i < n; i++) {
+        const o = i * 2 * T;
+        for (let lgL = 1; lgL <= lgT; lgL++) {
+          const largo = 2 ** lgL, mitad = largo / 2, sh = 2 ** (lgN - lgL);
+          for (let j = 0; j < T / 2; j++) {
+            const g = Math.floor(j / mitad), k = j % mitad, p = o + 2 * (g * largo + k), q = p + 2 * mitad, w = k * sh;
+            const wr = twr[w], wi = conj * twi[w], qr = d[q], qi = d[q + 1];
+            const vr = qr * wr - qi * wi, vi = qr * wi + qi * wr, ur = d[p], ui = d[p + 1];
+            d[p] = ur + vr; d[p + 1] = ui + vi; d[q] = ur - vr; d[q + 1] = ui - vi;
+          }
+        }
+      }
+    },
+  },
+  {
+    // (motor-exp N3) FFT: TRES etapas seguidas (largo L, 2L y 4L) de una vez.
+    // Cada hilo toma los 8 números que esas tres etapas mezclan entre sí
+    // (base + m·L/2, m = 0…7), hace sus 12 mariposas en registros y los
+    // devuelve: una pasada por la memoria en vez de tres. Cada mariposa es la
+    // de «nen_fft_etapa» (misma raíz de la tabla, misma aritmética): los mismos
+    // bits. n = filas × N/8; lgL = log₂ L de la primera de las tres.
+    nombre: 'nen_fft_r8',
+    params: [['n', 'i64'], ['N', 'i64'], ['lgN', 'i64'], ['lgL', 'i64'], ['conj', 'f64'], ['twr', 'f64*'], ['twi', 'f64*'], ['d', 'f64*']],
+    lee: ['twr', 'twi'],
+    cuerpo: 'long long f = i >> (lgN - 3); long long gi = i & ((N >> 3) - 1); long long L = 1LL << lgL; long long h = L >> 1; ' +
+      'long long gb = gi >> (lgL - 1); long long k = gi & (h - 1); long long o = f * 2 * N; long long base = gb * 4 * L + k; ' +
+      'double xr[8], xi[8]; for (int m = 0; m < 8; m++) { long long ix = o + 2 * (base + m * h); xr[m] = d[ix]; xi[m] = d[ix + 1]; } ' +
+      'for (int e = 0; e < 3; e++) { long long sh = lgN - lgL - e; int paso = 1 << e; ' +
+      '  for (int m = 0; m < 8; m++) { if (m & paso) continue; int mq = m + paso; long long kk = k + h * (long long)(m & (paso - 1)); long long w = kk << sh; ' +
+      '    double wr = twr[w]; double wi = conj * twi[w]; double qr = xr[mq]; double qi = xi[mq]; double vr = qr * wr - qi * wi; double vi = qr * wi + qi * wr; double ur = xr[m]; double ui = xi[m]; ' +
+      '    xr[m] = ur + vr; xi[m] = ui + vi; xr[mq] = ur - vr; xi[mq] = ui - vi; } } ' +
+      'for (int m = 0; m < 8; m++) { long long ix = o + 2 * (base + m * h); d[ix] = xr[m]; d[ix + 1] = xi[m]; }',
+    js: (n, N, lgN, lgL, conj, twr, twi, d) => {
+      const xr = new Float64Array(8), xi = new Float64Array(8), L = 2 ** lgL, h = L / 2, gpf = N / 8;
+      for (let i = 0; i < n; i++) {
+        const f = Math.floor(i / gpf), gi = i % gpf, gb = Math.floor(gi / h), k = gi % h, o = f * 2 * N, base = gb * 4 * L + k;
+        for (let m = 0; m < 8; m++) { const ix = o + 2 * (base + m * h); xr[m] = d[ix]; xi[m] = d[ix + 1]; }
+        for (let e = 0; e < 3; e++) {
+          const sh = 2 ** (lgN - lgL - e), paso = 1 << e;
+          for (let m = 0; m < 8; m++) {
+            if (m & paso) continue;
+            const mq = m + paso, kk = k + h * (m & (paso - 1)), w = kk * sh;
+            const wr = twr[w], wi = conj * twi[w], qr = xr[mq], qi = xi[mq];
+            const vr = qr * wr - qi * wi, vi = qr * wi + qi * wr, ur = xr[m], ui = xi[m];
+            xr[m] = ur + vr; xi[m] = ui + vi; xr[mq] = ur - vr; xi[mq] = ui - vi;
+          }
+        }
+        for (let m = 0; m < 8; m++) { const ix = o + 2 * (base + m * h); d[ix] = xr[m]; d[ix + 1] = xi[m]; }
+      }
+    },
+  },
 ]) NEN_T_NUCLEOS[k.nombre] = k;
 
 // ============================================================================
@@ -20305,22 +23466,31 @@ function instalarNenTensores(vm, def) {
   const EPS = 2.220446049250313e-16;
 
   // ── lanzar un núcleo ──────────────────────────────────────────────────────
-  // Grande y con C1EÑ: por el motor (que decide jit, nativo o GPU). Si no, el
-  // respaldo directamente. Los Float64Array internos se envuelven en un
-  // ObjArreglo sin registrar: son temporales y nadie más los ve.
+  // Grande y con C1EÑ: por el motor, que usa la GPU si la hay y si no C con
+  // OpenMP (o jit si no hay compilador). Si no, el respaldo directamente.
+  // (motor-exp N2) Los arreglos van como llegan: un ObjArreglo de Ñ seguido se
+  // pasa TAL CUAL (en la GPU se queda residente y el resultado no baja hasta
+  // que alguien lo lea), y un Float64Array interno va y vuelve como antes.
   const cacheNucleos = new Map();
-  const envolver = a => (a instanceof Float64Array ? new ObjArreglo(a, [a.length], 'real')
-    : a instanceof Int32Array ? new ObjArreglo(a, [a.length], 'entero') : a);
+  // (motor-exp N3) un complejo son 2n reales entrelazados
+  const crudo = a => (a instanceof ObjArreglo ? (a.tipo === 'complejo' ? a.datos.subarray(2 * a.desp, 2 * (a.desp + a.tamano))
+    : a.datos.subarray(a.desp, a.desp + a.tamano)) : a);
   function correr(nombre, trabajo, ...args) {
     const spec = NEN_T_NUCLEOS[nombre];
     vm.cobrar(trabajo);
     if (trabajo >= NEN_T_UMBRAL && vm.c1en && typeof vm.c1en.kernel === 'function') {
       let k = cacheNucleos.get(nombre);
       if (!k) { k = vm.c1en.kernel(spec); cacheNucleos.set(nombre, k); }
-      return k(...args.map(envolver));
+      return k(...args);
     }
-    return spec.js(...args);
+    return spec.js(...args.map(crudo));
   }
+  // ¿Se le puede pasar al núcleo tal cual? Real y seguido (sin zancadas raras).
+  const directo = x => x instanceof ObjArreglo && x.tipo === 'real' && x.seguida;
+  // Un arreglo temporal de NEÑ (no lo ve el programa): también puede quedarse
+  // en la GPU entre dos núcleos, y se lee con «.datos» al final.
+  const temporal = n => new ObjArreglo(new Float64Array(n), [n], 'real');
+  const enGpuAhora = () => !!(vm.c1en && typeof vm.c1en.describir === 'function' && /^gpu/.test(vm.c1en.describir()));
 
   // ── llamar a lo que ya existe en «numerico» ───────────────────────────────
   function deNumerico(nombre, args) {
@@ -20393,12 +23563,52 @@ function instalarNenTensores(vm, def) {
 
   // ── el producto de matrices, por el núcleo ────────────────────────────────
   // (lotes × m × K) · (lotes × K × p) → (lotes × m × p), todo plano.
-  function mm(a, b, m, K, p, lotes) {
+  // (motor-exp N3) Por «nen_dgemm», el DGEMM propio: en la GPU mosaicos de
+  // 64×64 en memoria compartida, en la CPU paneles empaquetados con AVX2, y los
+  // dos con FMA en el orden de siempre (k de 0 a K−1, desde +0): los mismos
+  // bits en jit, nativo y GPU. (En N2 eran nen_matmul_4x4 y nen_matmul_bloques,
+  // sin FMA; siguen en la lista como referencia.)
+  // «a» y «b» pueden ser Float64Array o arreglos de Ñ seguidos; «c», si llega,
+  // es el arreglo de Ñ donde va el resultado (y en la GPU se queda allí).
+  function mm(a, b, m, K, p, lotes, c) {
     lotes = lotes || 1;
-    const c = new Float64Array(lotes * m * p);
-    correr('nen_matmul', lotes * m * K * p, lotes * m * p, m, K, p, a, b, c);
+    const salida = c || new Float64Array(lotes * m * p);
+    const trabajo = lotes * m * K * p;
+    if (m === 0 || p === 0) return salida;
+    if (K === 0) { crudo(salida).fill(0); return salida; }
+    // (motor-exp N3) el DGEMM propio en los tres dispositivos (ver nen_dgemm)
+    correr('nen_dgemm', trabajo, lotes, m, K, p, a, b, salida);
+    return salida;
+  }
+  // numerico (por, multMatriz) multiplica con esto mismo
+  vm.nenMatmul = (a, b, m, K, p) => mm(a, b, m, K, p, 1);
+  // (motor-exp N2) «por» de arreglos sin copiarlos: entran tal cual y el
+  // resultado es un arreglo de Ñ nuevo (residente en la GPU si la hay)
+  // (motor-exp N4.2) en precisión simple o media, por el SGEMM («nen_sgemm»):
+  // los operandos que no sean ya floats seguidos se pasan a floats (redondeando,
+  // como hace la aritmética) y real16 se redondea a 16 bits al final, que es lo
+  // que hacen los núcleos de media precisión de las GPU (acumular en 32).
+  const directo32 = x => x instanceof ObjArreglo && (x.tipo === 'real32' || x.tipo === 'real16') && x.seguida;
+  const plano32 = x => Float32Array.from(planoDe(x));
+  function sm(a, b, m, K, p, lotes, c) {
+    const trabajo = lotes * m * K * p;
+    if (m === 0 || p === 0) return c;
+    if (K === 0) { crudo(c).fill(0); return c; }
+    correr('nen_sgemm', trabajo, lotes, m, K, p, a, b, c);
     return c;
   }
+  vm.nenPor = (A, B) => {
+    const m = A.forma[0], K = A.forma[1], p = B.forma[1];
+    const t = tipoAritmetico(A.tipo === 'bool' ? 'real' : A.tipo, B.tipo === 'bool' ? 'real' : B.tipo, '*', true, true);
+    if (t === 'real32' || t === 'real16') {
+      const o = vm.arrNuevo([m, p], t);
+      sm(directo32(A) ? A : plano32(A), directo32(B) ? B : plano32(B), m, K, p, 1, o);
+      return vm.arrRedondear(o);
+    }
+    const o = vm.arrNuevo([m, p], 'real');
+    mm(directo(A) ? A : planoDe(A), directo(B) ? B : planoDe(B), m, K, p, 1, o);
+    return o;
+  };
   const identidadP = n => { const I = new Float64Array(n * n); for (let i = 0; i < n; i++) I[i * n + i] = 1; return I; };
   const norma1 = (A, n) => { let mx = 0; for (let j = 0; j < n; j++) { let s = 0; for (let i = 0; i < n; i++) s += Math.abs(A[i * n + j]); if (s > mx) mx = s; } return mx; };
   const normaF = A => { let s = 0; for (let i = 0; i < A.length; i++) s += A[i] * A[i]; return Math.sqrt(s); };
@@ -20430,24 +23640,66 @@ function instalarNenTensores(vm, def) {
     const rev = new Int32Array(n);
     const bits = Math.round(Math.log2(n));
     for (let i = 0; i < n; i++) { let r = 0; for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b); rev[i] = r; }
-    t = { re, im, rev };
+    // (motor-exp N2) y como arreglos de Ñ: en la GPU suben una vez y se quedan
+    t = { re, im, rev, reA: new ObjArreglo(re, [re.length], 'real'), imA: new ObjArreglo(im, [im.length], 'real'),
+      revA: new ObjArreglo(rev, [rev.length], 'entero') };
     if (tablas.size > 16) tablas.clear();
     tablas.set(n, t);
     return t;
   }
   const potenciaDeDos = n => (n & (n - 1)) === 0;
+  // (motor-exp N3) Las log₂ n etapas de la FFT con menos pasadas por la
+  // memoria: las primeras (hasta largo 2048) en un solo núcleo por trozos
+  // (nen_fft_bloque, en memoria compartida en la GPU), y las demás de tres en
+  // tres (nen_fft_r8); si sobran una o dos, de una en una (nen_fft_etapa). En
+  // 2^20: 1 + 3 pasadas en vez de 20. Las mismas mariposas en el mismo orden
+  // por casilla, así que los mismos bits que etapa a etapa. «trabajo» es el
+  // mismo en todas para que todas vayan por el mismo camino (núcleo o JS).
+  function etapasFFT(y, filas, n, lgN, signo, t, trabajo) {
+    const lgT = Math.min(lgN, 11), T = 2 ** lgT, total = filas * n;
+    correr('nen_fft_bloque', trabajo, total / T, n, lgN, T, lgT, -signo, t.reA, t.imA, y);
+    let lgL = lgT + 1;
+    while (lgL <= lgN) {
+      if (lgN - lgL + 1 >= 3) { correr('nen_fft_r8', trabajo, total / 8, n, lgN, lgL, -signo, t.reA, t.imA, y); lgL += 3; }
+      else { correr('nen_fft_etapa', trabajo, filas * (n >> 1), n, lgN, 2 ** lgL, lgL, -signo, t.reA, t.imA, y); lgL++; }
+    }
+  }
+  // (motor-exp N3) «fourier» de un vector seguido de largo potencia de dos,
+  // con el resultado como arreglo complejo de Ñ hecho por los núcleos: en la
+  // GPU la entrada no se copia a complejos en la CPU (nen_fft_cargar_real lo
+  // hace allí) y el resultado se QUEDA en la GPU hasta que alguien lo lea.
+  // Mismos pasos y mismos bits que fftFilas. Si no se puede, null (y numerico
+  // sigue por su camino de siempre).
+  vm.nenFourier = (x, signo, dividirEntre) => {
+    const n = x.tamano;
+    if (!(x instanceof ObjArreglo) || x.dimensiones !== 1 || n < 2 || !potenciaDeDos(n) || !x.seguida || x.base !== null) return null;
+    if (x.tipo !== 'real' && x.tipo !== 'complejo') return null;
+    const t = tablaDe(n), lgN = Math.round(Math.log2(n)), out = vm.arrNuevo(x.forma.slice(), 'complejo');
+    const trabajo = n;
+    if (x.tipo === 'real') correr('nen_fft_cargar_real', trabajo, n, n, lgN, t.revA, x, out);
+    else correr('nen_fft_permutar', trabajo, n, n, lgN, t.revA, x, out);
+    etapasFFT(out, 1, n, lgN, signo, t, trabajo);
+    if (dividirEntre) correr('nen_dividir', trabajo, 2 * n, dividirEntre, out);
+    return out;
+  };
   // Transforma «filas» filas de largo n, guardadas seguidas y entrelazadas
   // (re, im). Devuelve un arreglo NUEVO. signo −1 directa, +1 inversa (sin
   // dividir entre n: lo hace quien llama).
-  function fftFilas(d, filas, n, signo) {
-    if (n === 1) return Float64Array.from(d);
+  function fftFilas(d, filas, n, signo, dividirEntre) {
+    if (n === 1) { const r = Float64Array.from(d); if (dividirEntre) for (let i = 0; i < r.length; i++) r[i] = r[i] / dividirEntre; return r; }
     if (potenciaDeDos(n)) {
-      const t = tablaDe(n), y = new Float64Array(filas * 2 * n);
+      // (motor-exp N2) La salida es un arreglo temporal que, en la GPU, se
+      // queda allí entre la permutación y las log₂ n etapas: los datos suben una
+      // vez y bajan una vez (antes subían y bajaban en cada etapa). Las tablas
+      // también se quedan. «dividirEntre» hace la división de la inversa allí
+      // mismo, antes de bajar.
+      const t = tablaDe(n), y = temporal(filas * 2 * n);
       const trabajo = filas * n;
-      correr('nen_fft_permutar', trabajo, filas * n, n, t.rev, d, y);
-      for (let largo = 2; largo <= n; largo <<= 1)
-        correr('nen_fft_etapa', trabajo, filas * (n >> 1), n, largo, -signo, t.re, t.im, y);
-      return y;
+      const lgN = Math.round(Math.log2(n));
+      correr('nen_fft_permutar', trabajo, filas * n, n, lgN, t.revA, d, y);
+      etapasFFT(y, filas, n, lgN, signo, t, trabajo);
+      if (dividirEntre) correr('nen_dividir', trabajo, 2 * filas * n, dividirEntre, y);
+      return y.datos;
     }
     // Bluestein: las longitudes que no son potencia de dos se convierten en una
     // convolución de largo potencia de dos y se resuelven con las etapas de
@@ -20474,17 +23726,71 @@ function instalarNenTensores(vm, def) {
     correr('nen_cmul_filas', filas * T, filas * T, T, FA, FB);
     const R = fftFilas(FA, filas, T, 1);
     const out = new Float64Array(filas * 2 * n);
+    const dv = dividirEntre || 1;
     for (let f = 0; f < filas; f++) {
       const o = f * 2 * n, oR = f * 2 * T;
       for (let k = 0; k < n; k++) {
         const vr = R[oR + 2 * k] / T, vi = R[oR + 2 * k + 1] / T;
-        out[o + 2 * k] = vr * cr[k] - vi * ci[k];
-        out[o + 2 * k + 1] = vr * ci[k] + vi * cr[k];
+        out[o + 2 * k] = (vr * cr[k] - vi * ci[k]) / dv;
+        out[o + 2 * k + 1] = (vr * ci[k] + vi * cr[k]) / dv;
       }
     }
     vm.cobrar(filas * n);
     return out;
   }
+  // (motor-exp N2) «fourier», «fourierInversa», «espectro» y «convolucion» de
+  // numerico transforman con esto: los mismos pasos que su FFT (mismas tablas,
+  // mismas mariposas, mismo Bluestein), así que dan los mismos números, pero
+  // por los núcleos de C1EÑ (GPU, o C con OpenMP).
+  vm.nenFFT = (d, n, signo, dividirEntre) => fftFilas(d, 1, n, signo, dividirEntre);
+  // (motor-exp N2) La aritmética de arreglos de la VM («x * 2 + 1», «a / b»)
+  // por C1EÑ cuando el arreglo es grande y el dispositivo no es jit: así una
+  // expresión con arreglos que ya están en la GPU se calcula allí y no baja.
+  // Solo + − * / con reales (exactos en IEEE: el mismo número en todas
+  // partes), dos arreglos seguidos de la misma forma o uno con un número. Lo
+  // demás (difusión, vistas, enteros, %, //, **) devuelve null y lo hace la VM.
+  const OPS_ARIT = { '+': 0, '-': 1, '*': 2, '/': 3 };
+  let zQuieta = null;
+  vm.nenArit = (a, b, op, tipo) => {
+    if (tipo && tipo !== 'real') return null;   // (motor-exp N4.2) real32/real16: la VM
+    const codigo = OPS_ARIT[op];
+    if (codigo === undefined || !vm.c1en || typeof vm.c1en.describir !== 'function') return null;
+    const esA = a instanceof ObjArreglo, esB = b instanceof ObjArreglo;
+    const n = esA ? a.tamano : b.tamano;
+    if (n < NEN_T_UMBRAL || vm.c1en.describir() === 'jit') return null;
+    // (motor-exp N4.3) la marca de «división entre cero» solo hace falta mirarla
+    // al dividir: con + − × se pasa una que vive en la GPU y nadie lee, así la
+    // operación no obliga a esperar a la GPU ni a bajar nada
+    const z = codigo === 3 ? new Int32Array(1) : (zQuieta || (zQuieta = vm.arrNuevo([1], 'entero')));
+    if (esA && esB) {
+      if (!directo(a) || !directo(b) || a.forma.length !== b.forma.length || !a.forma.every((v, i) => v === b.forma[i])) return null;
+      const o = vm.arrNuevo(a.forma.slice(), 'real');
+      correr('nen_op_aa', n, n, codigo, a, b, o, z);
+      if (codigo === 3 && z[0]) vm.error('división entre cero');
+      return o;
+    }
+    const x = esA ? a : b, s = esA ? b : a;
+    if (!directo(x) || typeof s !== 'number') return null;
+    if (esA && codigo === 3 && s === 0) vm.error('división entre cero');
+    const o = vm.arrNuevo(x.forma.slice(), 'real');
+    correr('nen_op_ae', n, n, codigo, esA ? 0 : 1, s, x, o, z);
+    if (codigo === 3 && z[0]) vm.error('división entre cero');
+    return o;
+  };
+  // (motor-exp N2) suma, media, varianza y desviación de numerico para
+  // arreglos reales: por la reducción de NEÑ, POR TROZOS DE 4096 en orden. Con
+  // 4096 números o menos es exactamente la suma de izquierda a derecha de
+  // siempre; con más, los trozos se suman entre sí (menos error, y el mismo
+  // número en jit, nativo y GPU). Con datos en la GPU, solo baja el resultado.
+  vm.nenReducir = (op, x) => {
+    const d = directo(x) ? x : planoDe(x), n = x.tamano;
+    const s = reducirFilas('nen_red_suma', d, 1, n)[0];
+    if (op === 'suma') return s;
+    const mu = s / n;
+    if (op === 'media') return mu;
+    const v = reducirFilas('nen_red_desv2', d, 1, n, Float64Array.of(mu))[0] / (n - 1);
+    return op === 'varianza' ? v : Math.sqrt(v);
+  };
   // Complejo entrelazado desde reales.
   const aComplejo = re => { const d = new Float64Array(2 * re.length); for (let i = 0; i < re.length; i++) d[2 * i] = re[i]; return d; };
   const planoC = x => (esC(x) ? planoDe(x) : aComplejo(planoDe(x)));
@@ -20562,13 +23868,19 @@ function instalarNenTensores(vm, def) {
         if (!fc) vm.error(`«${nombre}» no está definida para complejos`, 'usa parteReal, parteImaginaria o absoluto primero');
         return vm.arrComplejoA(x, fc);
       }
-      const d = planoDe(x), n = d.length;
-      if (DOMINIO[nombre]) for (let i = 0; i < n; i++) if (DOMINIO[nombre](d[i]))
-        vm.error(`«${nombre}»: hay un valor negativo (${d[i]}, en la posición ${i}) y su resultado no es un número real`,
-          'pásalo a complejo con complejo(a) si quieres los resultados complejos');
-      const y = new Float64Array(n);
-      correr(nucleo, n, n, d, y);
-      return deReales(x.forma, y);
+      // (motor-exp N2) un arreglo real seguido entra tal cual (en la GPU, sin
+      // copiarlo si ya está allí) y la salida es el arreglo nuevo, que en la
+      // GPU se queda allí hasta que alguien lo lea
+      const d = directo(x) ? x : planoDe(x), n = x.tamano;
+      if (DOMINIO[nombre]) {
+        const v = crudo(d);
+        for (let i = 0; i < n; i++) if (DOMINIO[nombre](v[i]))
+          vm.error(`«${nombre}»: hay un valor negativo (${v[i]}, en la posición ${i}) y su resultado no es un número real`,
+            'pásalo a complejo con complejo(a) si quieres los resultados complejos');
+      }
+      const o = vm.arrNuevo(x.forma.slice(), 'real');
+      correr(nucleo, n, n, d, o);
+      return o;
     }, doc);
   }
   unaria('senoA', 'nen_seno', 'senoA(a) — el seno de cada número · también de complejos y de listas · en la GPU si el arreglo es grande');
@@ -20593,9 +23905,9 @@ function instalarNenTensores(vm, def) {
     const dec = a.length > 1 ? ent(a[1], 2, 'redondearA') : 0;
     const f = Math.pow(10, dec);
     if (typeof a[0] === 'number') { const y = new Float64Array(1); NEN_T_NUCLEOS.nen_redondear.js(1, f, Float64Array.of(a[0]), y); return y[0]; }
-    const x = real(a[0], 1, 'redondearA'), d = planoDe(x), y = new Float64Array(d.length);
-    correr('nen_redondear', d.length, d.length, f, d, y);
-    return deReales(x.forma, y);
+    const x = real(a[0], 1, 'redondearA'), d = directo(x) ? x : planoDe(x), o = vm.arrNuevo(x.forma.slice(), 'real');
+    correr('nen_redondear', x.tamano, x.tamano, f, d, o);
+    return o;
   }, 'redondearA(a, decimales?) — redondea cada número, la mitad hacia arriba como «redondear»');
 
   // Dos arreglos (o arreglo y número) a la misma forma por difusión, en planos.
@@ -20636,17 +23948,17 @@ function instalarNenTensores(vm, def) {
       if (t.x[i] < 0 && !Number.isInteger(t.y[i]))
         vm.error(`«potenciaA»: ${t.x[i]} elevado a ${t.y[i]} no es un número real (posición ${i})`,
           'una base negativa solo admite exponentes enteros; pásala a complejo con complejo(a) para el resultado complejo');
-    const y = new Float64Array(n);
-    correr('nen_potencia', n, n, t.x, t.y, y);
-    return deReales(t.forma, y);
+    const o = vm.arrNuevo(t.forma.slice(), 'real');
+    correr('nen_potencia', n, n, t.x, t.y, o);
+    return o;
   }, 'potenciaA(a, b) — a elevado a b elemento a elemento, con difusión · bases negativas solo con exponente entero, salvo en complejos');
   def('anguloA', 'real|arreglo|lista, real|arreglo|lista -> cualquiera', a => {
     if (typeof a[0] === 'number' && typeof a[1] === 'number') return Math.atan2(a[0], a[1]);
     const t = dosPlanos(a[0], a[1], 'anguloA');
     if (t.complejo) vm.error('«anguloA» es para reales: el ángulo de un complejo es fase(z)');
-    const n = tamanoDe(t.forma), y = new Float64Array(n);
-    correr('nen_angulo', n, n, t.x, t.y, y);
-    return deReales(t.forma, y);
+    const n = tamanoDe(t.forma), o = vm.arrNuevo(t.forma.slice(), 'real');
+    correr('nen_angulo', n, n, t.x, t.y, o);
+    return o;
   }, 'anguloA(y, x) — el ángulo de cada punto (x, y) entre −π y π, sabiendo el cuadrante · la «angulo» de numerico, por arreglos');
 
   // Mover un eje al final y volver: lo usan softmax y las reducciones.
@@ -20658,6 +23970,12 @@ function instalarNenTensores(vm, def) {
     const e = vm.arrEje(x, a.length > 1 ? ent(a[1], 2, 'softmax') : -1, 'softmax');
     const perm = ejeAlFinal(x, e), K = x.forma[e], M = x.tamano / (K || 1);
     if (K === 0) return deReales(x.forma, new Float64Array(0));
+    if (e === x.dimensiones - 1 && directo(x)) {
+      // (motor-exp N2) el eje es el último y el arreglo está seguido: sin copias
+      const o = vm.arrNuevo(x.forma.slice(), 'real');
+      correr('nen_softmax', x.tamano, M, K, x, o);
+      return o;
+    }
     const d = planoDe(permutadaT(x, perm)), y = new Float64Array(d.length);
     correr('nen_softmax', d.length, M, K, d, y);
     const pf = perm.map(i => x.forma[i]);
@@ -20699,7 +24017,10 @@ function instalarNenTensores(vm, def) {
     const perm = libres.concat(ejes);
     const M = libres.reduce((p, i) => p * x.forma[i], 1), K = ejes.reduce((p, i) => p * x.forma[i], 1);
     const formaOut = mantener ? x.forma.map((v, i) => (ejes.includes(i) ? 1 : v)) : libres.map(i => x.forma[i]);
-    return { d: planoDe(permutadaT(x, perm)), M, K, formaOut };
+    // (motor-exp N2) si los ejes reducidos ya son los últimos y el arreglo está
+    // seguido, el plano ES el arreglo: se le pasa al núcleo sin copiarlo
+    const identidad = perm.every((v, i) => v === i);
+    return { d: identidad && directo(x) ? x : planoDe(permutadaT(x, perm)), M, K, formaOut };
   }
   // Reducir M filas de K por trozos; si quedan varios trozos por fila, se
   // reducen otra vez (con la operación que los combina).
@@ -20803,8 +24124,8 @@ function instalarNenTensores(vm, def) {
       // infinito al elevar al cuadrado. Se divide entre el mayor, se suma y se
       // vuelve a multiplicar.
       const mx = reducirFilas('nen_red_maxabs', r.d, r.M, r.K);
-      const esc = new Float64Array(r.d.length);
-      for (let i = 0; i < r.M; i++) { const s = mx[i] || 1; for (let k = 0; k < r.K; k++) esc[i * r.K + k] = r.d[i * r.K + k] / s; }
+      const dv = crudo(r.d), esc = new Float64Array(dv.length);
+      for (let i = 0; i < r.M; i++) { const s = mx[i] || 1; for (let k = 0; k < r.K; k++) esc[i * r.K + k] = dv[i * r.K + k] / s; }
       y = reducirFilas('nen_red_suma2', esc, r.M, r.K);
       for (let i = 0; i < y.length; i++) y[i] = mx[i] === 0 || !Number.isFinite(mx[i]) ? mx[i] : mx[i] * Math.sqrt(y[i]);
     } else y = reducirFilas(orden === 1 ? 'nen_red_sumaabs' : 'nen_red_maxabs', r.d, r.M, r.K);
@@ -20814,6 +24135,7 @@ function instalarNenTensores(vm, def) {
     const { x, eje, mantener } = argsRed(a, nombre);
     vm.nadaDeComplejos(x, nombre);
     const r = prepararReduccion(x, eje, mantener, nombre);
+    r.d = Float64Array.from(crudo(r.d));              // una copia: aquí se pisa
     for (let i = 0; i < r.d.length; i++) r.d[i] = r.d[i] ? 1 : 0;
     if (r.K === 0) { const y = new Float64Array(r.M).fill(op === 'nen_red_minimo' ? 1 : 0); return r.formaOut.length ? aBool(r.formaOut, y) : !!y[0]; }
     const y = reducirFilas(op, r.d, r.M, r.K);
@@ -21122,13 +24444,16 @@ function instalarNenTensores(vm, def) {
     const la = x.forma.slice(0, -2), lb = y.forma.slice(0, -2), fl = difundir(la, lb);
     if (fl === null) vm.error(`«multLotes»: los lotes ${la.join('×')} y ${lb.join('×')} no se pueden difundir`);
     const lotes = tamanoDe(fl);
-    const A = planoDe(difundidaT(x, fl.concat([m, K]))), B = planoDe(difundidaT(y, fl.concat([K, p])));
-    const C = mm(A, B, m, K, p, lotes);
+    const iguales2 = (u, w) => u.length === w.length && u.every((q, k) => q === w[k]);
+    const A = (!v1 && iguales2(x.forma, fl.concat([m, K])) && directo(x)) ? x : planoDe(difundidaT(x, fl.concat([m, K])));
+    const B = (!v2 && iguales2(y.forma, fl.concat([K, p])) && directo(y)) ? y : planoDe(difundidaT(y, fl.concat([K, p])));
     let forma = fl.concat([m, p]);
     if (v1) forma.splice(forma.length - 2, 1);
     if (v2) forma.splice(forma.length - 1, 1);
-    if (!forma.length) return C[0];
-    return deReales(forma, C);
+    if (!forma.length) return mm(A, B, m, K, p, lotes)[0];
+    const o = vm.arrNuevo(forma, 'real');
+    mm(A, B, m, K, p, lotes, o);
+    return o;
   }, 'multLotes(A, B) — producto de matrices por lotes: los dos últimos ejes son la matriz y los de delante se difunden · como «por» pero para pilas de matrices, en la GPU si es grande');
 
   // ════════════════════════════════════════════ álgebra lineal avanzada
@@ -22066,12 +25391,1446 @@ function instalarNenTensores(vm, def) {
 }
 
 
+// ============================================================================
+//  Ñ v4 — NEÑ: precisión arbitraria, enteros exactos y la unión con numerico
+//  y datos. Parte 18 (motor-exp, fase N1).
+//
+//  EL TIPO «grande». Un número decimal con tantas cifras como se pidan:
+//
+//      fijo r = raizGrande(grande(2), 1000)      # √2 con mil cifras
+//      fijo x = grande("0.1") + grande("0.2")    # 0.3, exacto
+//      imprimir(factorialExacto(100))            # las 158 cifras de 100!
+//
+//  Por dentro es m × 10^e con m un BigInt y una precisión p (cifras
+//  significativas). Se opera con los operadores de siempre (+ − * / // % **,
+//  < <= > >= == !=, el menos de delante) contra otro grande o contra un número,
+//  y el verificador lo tipa: «grande op número» es grande.
+//
+//  REDONDEO. Cada resultado se redondea a p cifras, al par más cercano (como
+//  Python con «decimal» y como decimal.js por defecto en su modo 6). Al operar
+//  dos grandes manda la mayor de sus precisiones. + − * / y la raíz salen con
+//  redondeo correcto; exp, log, seno y compañía se calculan con 12 cifras de
+//  guarda y luego se redondean (error de menos de una unidad en la última
+//  cifra salvo casos rarísimos).
+//
+//  EXACTOS. Un grande que viene de un entero (o de factorialExacto, o de un
+//  texto sin coma) es EXACTO: sumarlo, restarlo, multiplicarlo o elevarlo a un
+//  entero no redondea nunca, por grande que salga. Dividir dos exactos da un
+//  exacto si la división es justa; si no, un grande con la precisión por
+//  defecto. Mezclar un exacto con uno que no lo es da uno que no lo es.
+//
+//  DE UN REAL. grande(0.1) es 0.1, no 0.1000000000000000055511…: se toma la
+//  escritura más corta del real, que es lo que el programa escribió. El valor
+//  binario exacto está en grandeExactoDe(0.1).
+//
+//  LA UNIÓN. «usar … de "nen"» trae también TODO numerico y TODO datos: es el
+//  mismo objeto registrado con otro nombre, no una copia (ver reexportarEnNen).
+//  Tres nombres existían en los dos —fila, donde y apilar— y en NEÑ miran el
+//  primer argumento: con una tabla hacen lo de datos; si no, lo de numerico.
+// ============================================================================
+
+// ─────────────────────────────────────────────── el valor
+class ObjGrande {
+  constructor(m, e, p, exacto) {
+    this.clase = 'grande';
+    this.m = m;            // BigInt con signo
+    this.e = e;            // exponente de 10 (entero de JavaScript)
+    this.p = p;            // cifras significativas
+    this.exacto = !!exacto;
+  }
+}
+
+const GR_DEFECTO = 50;          // cifras por defecto
+// las cifras por defecto de ESTA vm (las que fija cifrasGrande): se usan cuando
+// el resultado de dos exactos (o de un exacto y un número) hay que redondearlo
+const grDef = vm => (vm && vm.cifrasGrande) || GR_DEFECTO;
+const GR_MAX = 1000000;         // un millón de cifras como mucho
+const GR_GUARDA = 12;           // cifras de guarda en las trascendentes
+const GR_10 = 10n;
+
+const grPot10 = (() => {
+  const cache = new Map();
+  return k => {
+    if (k < 0) throw new Error('grPot10 negativo');
+    if (k < 400) {
+      let v = cache.get(k);
+      if (v === undefined) { v = GR_10 ** BigInt(k); cache.set(k, v); }
+      return v;
+    }
+    return GR_10 ** BigInt(k);
+  };
+})();
+const grAbs = x => (x < 0n ? -x : x);
+function grCifras(x) {
+  // cuántas cifras tiene |x| (0 tiene 1)
+  x = grAbs(x);
+  if (x < 10n) return 1;
+  // estimación por bits y corrección
+  const bits = x.toString(2).length;
+  let d = Math.floor((bits - 1) * 0.30102999566398120) + 1;
+  if (x >= grPot10(d)) d++;
+  else if (d > 1 && x < grPot10(d - 1)) d--;
+  return d;
+}
+
+// Redondea m × 10^e a p cifras (al par más cercano). «pegajoso» dice si a la
+// derecha de m había algo distinto de cero que ya se perdió (para que 2,5000…1
+// no se redondee como 2,5 justo).
+function grRedondear(m, e, p, pegajoso) {
+  if (m === 0n) return { m: 0n, e: 0 };
+  const d = grCifras(m);
+  if (d <= p) return { m, e };
+  const quita = d - p;
+  const div = grPot10(quita);
+  let q = m / div;                      // trunca hacia cero
+  const r = grAbs(m - q * div);
+  const mitad = div / 2n;
+  const signo = m < 0n ? -1n : 1n;
+  let sube = false;
+  if (r > mitad) sube = true;
+  else if (r === mitad && div % 2n === 0n) sube = pegajoso ? true : (grAbs(q) % 2n === 1n);
+  else if (r === mitad) sube = true;
+  if (sube) q += signo;
+  e += quita;
+  // 9,99… redondeado puede ganar una cifra: 99 → 100
+  if (grCifras(q) > p) { q /= GR_10; e += 1; }
+  return { m: q, e };
+}
+
+function grNuevo(m, e, p, exacto) {
+  if (exacto) return new ObjGrande(m, e, p, true);
+  const r = grRedondear(m, e, p, false);
+  return new ObjGrande(r.m, r.e, p, false);
+}
+
+// Quita los ceros de la derecha (para comparar y escribir).
+function grNormal(m, e) {
+  if (m === 0n) return { m: 0n, e: 0 };
+  const s = grAbs(m).toString();
+  let z = 0;
+  while (z < s.length - 1 && s.charCodeAt(s.length - 1 - z) === 48) z++;
+  if (z) { m /= grPot10(z); e += z; }
+  return { m, e };
+}
+
+// ─────────────────────────────────────────────── entrar
+function grDeTexto(s, p, quien) {
+  const t = String(s).trim().replace(/_/g, '');
+  const mt = t.match(/^([+-]?)(\d*)(?:[.,](\d*))?(?:[eE]([+-]?\d+))?$/);
+  if (!mt || (mt[2] === '' && (mt[3] === undefined || mt[3] === '')))
+    return { error: `«${quien}»: «${s}» no es un número` };
+  const ent = mt[2] || '', frac = mt[3] || '';
+  let m = BigInt((ent + frac) || '0');
+  if (mt[1] === '-') m = -m;
+  const e = -frac.length + (mt[4] ? parseInt(mt[4], 10) : 0);
+  const exacto = frac.length === 0 && !mt[4];
+  if (exacto) return { v: new ObjGrande(m, 0, Math.max(p, grCifras(m)), true) };
+  return { v: grNuevo(m, e, p, false) };
+}
+function grDeNumero(x, p, quien) {
+  if (!Number.isFinite(x)) return { error: `«${quien}»: ${x} no se puede pasar a grande` };
+  if (Number.isInteger(x) && Math.abs(x) <= Number.MAX_SAFE_INTEGER) {
+    const m = BigInt(x);
+    return { v: new ObjGrande(m, 0, Math.max(p, grCifras(m)), true) };
+  }
+  // la escritura más corta: lo que el programa escribió
+  return grDeTexto(String(x), p, quien);
+}
+// El valor binario exacto de un real de 64 bits, en decimal.
+function grExactoDeReal(x) {
+  if (x === 0) return new ObjGrande(0n, 0, 1, true);
+  const buf = new DataView(new ArrayBuffer(8));
+  buf.setFloat64(0, x);
+  const hi = buf.getUint32(0), lo = buf.getUint32(4);
+  const signo = hi >>> 31 ? -1n : 1n;
+  const expo = (hi >>> 20) & 0x7ff;
+  let mant = (BigInt(hi & 0xfffff) << 32n) | BigInt(lo);
+  let e2;
+  if (expo === 0) e2 = -1074; else { mant |= 1n << 52n; e2 = expo - 1075; }
+  if (e2 >= 0) return new ObjGrande(signo * (mant << BigInt(e2)), 0, 0, true);
+  // mant × 2^e2 = mant × 5^(−e2) × 10^e2
+  const m = signo * mant * (5n ** BigInt(-e2));
+  const r = grNormal(m, e2);
+  return new ObjGrande(r.m, r.e, grCifras(r.m), false);
+}
+
+// ─────────────────────────────────────────────── salir
+function grATexto(g, cifras) {
+  if (g.m === 0n) return '0';
+  let { m, e } = grNormal(g.m, g.e);
+  if (cifras !== undefined && cifras < grCifras(m)) {
+    const r = grRedondear(m, e, cifras, false);
+    ({ m, e } = grNormal(r.m, r.e));
+  }
+  const neg = m < 0n;
+  const s = grAbs(m).toString();
+  const n = s.length;
+  const exp10 = n - 1 + e;                  // exponente científico
+  let out;
+  // un exacto se escribe entero siempre; uno que no lo es, con exponente si
+  // los ceros de la derecha no son cifras de verdad (como un real: 1e+21)
+  if (e >= 0 && (g.exacto || exp10 < 21)) out = s + '0'.repeat(e);
+  else if (exp10 >= -7 && e < 0) {
+    if (exp10 >= 0) out = s.slice(0, n + e) + '.' + s.slice(n + e);
+    else out = '0.' + '0'.repeat(-exp10 - 1) + s;
+  } else {
+    out = s[0] + (n > 1 ? '.' + s.slice(1) : '') + 'e' + (exp10 >= 0 ? '+' : '') + exp10;
+  }
+  return (neg ? '-' : '') + out;
+}
+function grAReal(g) { return Number(grATexto(g, 20)); }
+
+// ─────────────────────────────────────────────── aritmética
+function grPrec(a, b) {
+  // la precisión del resultado: la mayor de las que no son exactas; si los dos
+  // son exactos, la por defecto (solo importa si hay que redondear)
+  if (!a.exacto && !b.exacto) return Math.max(a.p, b.p);
+  if (!a.exacto) return a.p;
+  if (!b.exacto) return b.p;
+  return Math.max(GR_DEFECTO, a.p, b.p);
+}
+function grMagn(g) { return g.m === 0n ? -Infinity : grCifras(g.m) + g.e; }
+
+function grSumar(a, b, restar) {
+  const mb0 = restar ? -b.m : b.m;
+  if (a.m === 0n) return b.exacto && a.exacto ? new ObjGrande(mb0, b.e, b.p, true) : grNuevo(mb0, b.e, grPrec(a, b), false);
+  if (b.m === 0n) return a.exacto && b.exacto ? new ObjGrande(a.m, a.e, a.p, true) : grNuevo(a.m, a.e, grPrec(a, b), false);
+  const exacto = a.exacto && b.exacto;
+  const p = grPrec(a, b);
+  if (!exacto) {
+    // si uno es despreciable frente al otro, no hace falta alinear un millón
+    // de ceros: basta con dejar una marca a la derecha
+    const ma = grMagn(a), mb = grMagn(b);
+    if (ma - mb > p + 3) return grSumarMarca(a.m, a.e, mb0 < 0n ? -1n : 1n, p);
+    if (mb - ma > p + 3) return grSumarMarca(mb0, b.e, a.m < 0n ? -1n : 1n, p);
+  }
+  let m, e;
+  if (a.e === b.e) { m = a.m + mb0; e = a.e; }
+  else if (a.e > b.e) { m = a.m * grPot10(a.e - b.e) + mb0; e = b.e; }
+  else { m = a.m + mb0 * grPot10(b.e - a.e); e = a.e; }
+  if (exacto) return new ObjGrande(m, e, Math.max(a.p, b.p, grCifras(m)), true);
+  return grNuevo(m, e, p, false);
+}
+// x + algo diminuto con signo s: se baja x a p+3 cifras y se suma una unidad
+// de la última cifra de guarda, que decide el redondeo como debe.
+function grSumarMarca(m, e, s, p) {
+  const d = grCifras(m);
+  const extra = p + 3 - d;
+  if (extra > 0) { m *= grPot10(extra); e -= extra; }
+  return grNuevo(m * 10n + s, e - 1, p, false);
+}
+function grMult(a, b) {
+  const exacto = a.exacto && b.exacto;
+  const m = a.m * b.m, e = a.e + b.e;
+  if (exacto) return new ObjGrande(m, e, Math.max(a.p, b.p, grCifras(m)), true);
+  return grNuevo(m, e, grPrec(a, b), false);
+}
+// a / b redondeado a p cifras, con redondeo correcto
+function grDividirP(am, ae, bm, be, p) {
+  if (am === 0n) return { m: 0n, e: 0 };
+  const neg = (am < 0n) !== (bm < 0n);
+  am = grAbs(am); bm = grAbs(bm);
+  let k = p + grCifras(bm) - grCifras(am);
+  if (k < 0) k = 0;
+  let num = am * grPot10(k);
+  let q = num / bm;
+  if (grCifras(q) < p) { k += 1; num *= GR_10; q = num / bm; }
+  let r = num - q * bm;
+  let e = ae - be - k;
+  // q tiene p o p+1 cifras; si tiene p+1, se redondea con el resto como marca
+  if (grCifras(q) > p) {
+    const rr = grRedondear(neg ? -q : q, e, p, r !== 0n);
+    return rr;
+  }
+  const dos = 2n * r;
+  if (dos > bm || (dos === bm && q % 2n === 1n)) q += 1n;
+  const out = grRedondear(neg ? -q : q, e, p, false);
+  return out;
+}
+function grDividir(vm, a, b, quien) {
+  if (b.m === 0n) vm.error(`«${quien}»: división entre cero`);
+  if (a.exacto && b.exacto && a.e >= 0 && b.e >= 0) {
+    const na = a.m * grPot10(a.e), nb = b.m * grPot10(b.e);
+    if (na % nb === 0n) { const q = na / nb; return new ObjGrande(q, 0, Math.max(GR_DEFECTO, grCifras(q)), true); }
+  }
+  const p = (a.exacto && b.exacto) ? grDef(vm) : grPrec(a, b);
+  const r = grDividirP(a.m, a.e, b.m, b.e, p);
+  return new ObjGrande(r.m, r.e, p, false);
+}
+// la parte entera hacia −infinito de a/b, como «//» en Ñ
+function grPisoDiv(vm, a, b) {
+  if (b.m === 0n) vm.error('«//»: división entre cero');
+  // a/b = (am·10^ae)/(bm·10^be)
+  let na = a.m, nb = b.m;
+  if (a.e > b.e) na *= grPot10(a.e - b.e); else if (b.e > a.e) nb *= grPot10(b.e - a.e);
+  let q = na / nb;
+  if ((na % nb !== 0n) && ((na < 0n) !== (nb < 0n))) q -= 1n;
+  return new ObjGrande(q, 0, Math.max(grPrec(a, b), grCifras(q)), true);      // la parte entera siempre es exacta
+}
+function grResto(vm, a, b) {
+  if (b.m === 0n) vm.error('«%»: módulo entre cero');
+  let na = a.m, nb = b.m, e = Math.min(a.e, b.e);
+  if (a.e > e) na *= grPot10(a.e - e);
+  if (b.e > e) nb *= grPot10(b.e - e);
+  let r = ((na % nb) + nb) % nb;
+  if (nb < 0n && r > 0n) r += nb;
+  const exacto = a.exacto && b.exacto;
+  return exacto ? new ObjGrande(r, e, Math.max(a.p, b.p), true) : grNuevo(r, e, grPrec(a, b), false);
+}
+function grComparar(a, b) {
+  if (a.m === 0n && b.m === 0n) return 0;
+  const sa = a.m < 0n ? -1 : (a.m > 0n ? 1 : 0), sb = b.m < 0n ? -1 : (b.m > 0n ? 1 : 0);
+  if (sa !== sb) return sa < sb ? -1 : 1;
+  // mismo signo: por magnitud primero (barato)
+  const ma = grMagn(a), mb = grMagn(b);
+  if (ma !== mb) return (ma < mb ? -1 : 1) * sa;
+  let na = a.m, nb = b.m;
+  if (a.e > b.e) na *= grPot10(a.e - b.e); else if (b.e > a.e) nb *= grPot10(b.e - a.e);
+  return na < nb ? -1 : (na > nb ? 1 : 0);
+}
+function grNeg(g) { return new ObjGrande(-g.m, g.e, g.p, g.exacto); }
+
+// ─────────────────────────────────────────────── punto fijo para las trascendentes
+// Un número en punto fijo es un BigInt X que vale X / 10^w.
+function grAFijo(g, w) {
+  const s = g.e + w;
+  if (s >= 0) return g.m * grPot10(s);
+  return g.m / grPot10(-s);
+}
+function grDeFijo(X, w, p) { return grNuevo(X, -w, p, false); }
+function grRaizEntera(n) {
+  if (n < 0n) throw new Error('raíz entera de un negativo');
+  if (n < 2n) return n;
+  // primera aproximación con un real
+  // se empieza por ENCIMA de la raíz: Newton baja sin pasarse
+  const bits = n.toString(2).length;
+  let x = 1n << BigInt(Math.ceil(bits / 2));
+  for (;;) {
+    const y = (x + n / x) >> 1n;
+    if (y >= x) break;
+    x = y;
+  }
+  while (x * x > n) x -= 1n;
+  while ((x + 1n) * (x + 1n) <= n) x += 1n;
+  return x;
+}
+
+// π por Chudnovsky con partición binaria: unas 14 cifras por término.
+const grCachePi = { w: 0, X: 0n };
+function grPiFijo(w) {
+  if (grCachePi.w >= w) return grCachePi.X / grPot10(grCachePi.w - w);
+  const C = 640320n, C3_24 = C * C * C / 24n;
+  const n = Math.floor(w / 14) + 2;
+  function bs(a, b) {
+    if (b - a === 1) {
+      let Pab, Qab;
+      if (a === 0) { Pab = 1n; Qab = 1n; }
+      else {
+        const A = BigInt(a);
+        Pab = (6n * A - 5n) * (2n * A - 1n) * (6n * A - 1n);
+        Qab = A * A * A * C3_24;
+      }
+      let Tab = Pab * (13591409n + 545140134n * BigInt(a));
+      if (a & 1) Tab = -Tab;
+      return [Pab, Qab, Tab];
+    }
+    const m = (a + b) >> 1;
+    const [P1, Q1, T1] = bs(a, m), [P2, Q2, T2] = bs(m, b);
+    return [P1 * P2, Q1 * Q2, Q2 * T1 + P1 * T2];
+  }
+  const [, Q, T] = bs(0, n);
+  const raiz = grRaizEntera(10005n * grPot10(2 * w));
+  const X = (Q * 426880n * raiz) / T;
+  grCachePi.w = w; grCachePi.X = X;
+  return X;
+}
+// atanh(1/k) en punto fijo: 1/k + 1/(3k³) + …
+function grAtanhInv(k, w) {
+  const S = grPot10(w);
+  const K = BigInt(k), K2 = K * K;
+  let pot = S / K, suma = pot, n = 1n;
+  for (;;) {
+    pot /= K2; n += 2n;
+    const t = pot / n;
+    if (t === 0n) break;
+    suma += t;
+  }
+  return suma;
+}
+const grCacheLn2 = { w: 0, X: 0n }, grCacheLn10 = { w: 0, X: 0n };
+function grLn2Fijo(w) {
+  if (grCacheLn2.w >= w) return grCacheLn2.X / grPot10(grCacheLn2.w - w);
+  // ln 2 = 2·atanh(1/3)
+  const X = 2n * grAtanhInv(3, w + 5) / grPot10(5);
+  grCacheLn2.w = w; grCacheLn2.X = X;
+  return X;
+}
+function grLn10Fijo(w) {
+  if (grCacheLn10.w >= w) return grCacheLn10.X / grPot10(grCacheLn10.w - w);
+  // ln 10 = 3·ln 2 + ln(5/4), y ln(5/4) = 2·atanh(1/9)
+  const X = (3n * grLn2Fijo(w + 5) + 2n * grAtanhInv(9, w + 5)) / grPot10(5);
+  grCacheLn10.w = w; grCacheLn10.X = X;
+  return X;
+}
+// exp de un punto fijo X (|x| razonable). Devuelve punto fijo.
+function grExpFijo(X, w) {
+  const S = grPot10(w);
+  // reducción: x = n·ln2 + r, |r| ≤ ln2/2
+  const L = grLn2Fijo(w + 10) / grPot10(10);
+  let n = X / L;
+  let r = X - n * L;
+  if (r * 2n > L) { r -= L; n += 1n; } else if (r * 2n < -L) { r += L; n -= 1n; }
+  // y luego r / 2^k, para que la serie sea corta
+  const k = Math.max(4, Math.floor(Math.sqrt(w)));
+  const ww = w + k + 10;
+  const SS = grPot10(ww);
+  let rr = r * grPot10(ww - w) / (1n << BigInt(k));
+  let t = SS, suma = SS, i = 1n;
+  for (;;) {
+    t = t * rr / SS / i;
+    if (t === 0n) break;
+    suma += t; i += 1n;
+  }
+  for (let j = 0; j < k; j++) suma = suma * suma / SS;
+  // × 2^n
+  if (n >= 0n) suma <<= n; else suma >>= -n;
+  return suma / grPot10(ww - w);
+}
+// exp(X / 10^w) como grande de p cifras: x = q·ln 10 + r con r en [0, ln 10),
+// así exp(x) = exp(r)·10^q y el exponente enorme va al exponente decimal.
+function grExpGrande(vm, X, w, p, quien) {
+  const L10 = grLn10Fijo(w + 5) / grPot10(5);
+  let q = X / L10;
+  let r = X - q * L10;
+  if (r < 0n) { r += L10; q -= 1n; }
+  if (q > 1000000000000000n || q < -1000000000000000n) vm.error(`«${quien}»: el resultado no cabe ni en un grande`);
+  const E = grExpFijo(r, w);
+  return grNuevo(E, -w + Number(q), p, false);
+}
+// ln de un grande positivo, en punto fijo de w cifras
+function grLnFijo(g, w) {
+  // g = m·10^e = y·10^E con y en [1, 10)
+  const d = grCifras(g.m);
+  const E = d - 1 + g.e;
+  const ww = w + 15;
+  const SS = grPot10(ww);
+  let Y = g.m * grPot10(ww) / grPot10(d - 1);       // y en punto fijo, en [1, 10)
+  // y = y'·2^k con y' en [0.75, 1.5)
+  let k = 0;
+  const tres4 = SS * 3n / 4n, tres2 = SS * 3n / 2n;
+  while (Y >= tres2) { Y >>= 1n; k++; }
+  while (Y < tres4) { Y <<= 1n; k--; }
+  // unas cuantas raíces cuadradas para acercar y' a 1: ln y' = 2^j · ln y'^(1/2^j)
+  const j = Math.min(24, Math.max(2, Math.floor(Math.sqrt(ww) / 3)));
+  for (let i = 0; i < j; i++) Y = grRaizEntera(Y * SS);
+  // ln y = 2·atanh(z), z = (y−1)/(y+1)
+  const Z = (Y - SS) * SS / (Y + SS);
+  const Z2 = Z * Z / SS;
+  let pot = Z, suma = Z, n = 1n;
+  for (;;) {
+    pot = pot * Z2 / SS; n += 2n;
+    const t = pot / n;
+    if (t === 0n) break;
+    suma += t;
+  }
+  let ln = 2n * suma * (1n << BigInt(j));
+  ln += BigInt(k) * grLn2Fijo(ww) + BigInt(E) * grLn10Fijo(ww);
+  return ln / grPot10(ww - w);
+}
+// seno y coseno de un punto fijo X
+function grSenCosFijo(X, w) {
+  const ww = w + 15;
+  const SS = grPot10(ww);
+  let x = X * grPot10(ww - w);
+  // reducir módulo 2π (con π de más cifras si x es grande)
+  const extra = Math.max(0, x.toString().length - ww) + 5;
+  const PI = grPiFijo(ww + extra) / grPot10(extra);
+  const DOS_PI = 2n * PI;
+  x = x % DOS_PI;
+  if (x > PI) x -= DOS_PI; else if (x < -PI) x += DOS_PI;
+  // ahora |x| ≤ π: se divide entre 2^k y se duplica después
+  const k = Math.max(4, Math.floor(Math.sqrt(ww) / 2));
+  const SK = grPot10(ww + k);
+  let r = x * grPot10(k) / (1n << BigInt(k));     // en punto fijo de ww+k
+  const R2 = r * r / SK;
+  // seno y coseno de r por Taylor
+  let s = r, c = SK, ts = r, tc = SK, i = 1n;
+  for (;;) {
+    ts = -ts * R2 / SK / ((2n * i) * (2n * i + 1n));
+    tc = -tc * R2 / SK / ((2n * i - 1n) * (2n * i));
+    if (ts === 0n && tc === 0n) break;
+    s += ts; c += tc; i += 1n;
+  }
+  for (let j = 0; j < k; j++) { const s2 = 2n * s * c / SK; c = (c * c - s * s) / SK; s = s2; }
+  const div = grPot10(ww + k - w);
+  return [s / div, c / div];
+}
+// arcotangente de un punto fijo X
+function grAtanFijo(X, w) {
+  const ww = w + 15;
+  const SS = grPot10(ww);
+  let x = X * grPot10(ww - w);
+  let neg = false;
+  if (x < 0n) { neg = true; x = -x; }
+  let inv = false;
+  if (x > SS) { x = SS * SS / x; inv = true; }
+  // atan(x) = 2·atan(x / (1 + √(1 + x²))), j veces
+  const j = Math.max(3, Math.floor(Math.sqrt(ww) / 2));
+  for (let i = 0; i < j; i++) {
+    const raiz = grRaizEntera(SS * SS + x * x);
+    x = x * SS / (SS + raiz);
+  }
+  const X2 = x * x / SS;
+  let pot = x, suma = x, n = 1n, signo = -1n;
+  for (;;) {
+    pot = pot * X2 / SS; n += 2n;
+    const t = pot / n;
+    if (t === 0n) break;
+    suma += signo * t; signo = -signo;
+  }
+  let a = suma * (1n << BigInt(j));
+  if (inv) a = grPiFijo(ww) / 2n - a;
+  if (neg) a = -a;
+  return a / grPot10(ww - w);
+}
+
+// ─────────────────────────────────────────────── las operaciones que llama la VM
+// aritOtro, sumar, neg y las comparaciones de 03-vm-jit.js vienen aquí cuando
+// alguno de los dos es un grande.
+function grDeOperando(vm, x, op) {
+  if (x instanceof ObjGrande) return x;
+  if (typeof x === 'number') {
+    const r = grDeNumero(x, grDef(vm), op);
+    if (r.error) vm.error(r.error);
+    return r.v;
+  }
+  vm.error(`«${op}»: un grande se opera con otro grande o con un número, y llegó ${tipoDe(x)}`,
+    'para pasar un texto a grande: grande("3.14159…")');
+}
+function grandeArit(vm, a, b, op) {
+  const x = grDeOperando(vm, a, op), y = grDeOperando(vm, b, op);
+  switch (op) {
+    case '+': return grSumar(x, y, false);
+    case '-': return grSumar(x, y, true);
+    case '*': return grMult(x, y);
+    case '/': return grDividir(vm, x, y, '/');
+    case '//': return grPisoDiv(vm, x, y);
+    case '%': return grResto(vm, x, y);
+    case '**': return grPotencia(vm, x, y, '**');
+  }
+  vm.error(`«${op}» no se aplica a un grande`);
+}
+function grandeCmp(vm, a, b, op) {
+  const x = grDeOperando(vm, a, op), y = grDeOperando(vm, b, op);
+  return grComparar(x, y);
+}
+function grandeIgual(a, b) {
+  const x = a instanceof ObjGrande ? a : (typeof a === 'number' && Number.isFinite(a) ? grDeNumero(a, GR_DEFECTO, '==').v : null);
+  const y = b instanceof ObjGrande ? b : (typeof b === 'number' && Number.isFinite(b) ? grDeNumero(b, GR_DEFECTO, '==').v : null);
+  if (!x || !y) return false;
+  return grComparar(x, y) === 0;
+}
+
+// ─────────────────────────────────────────────── potencia y trascendentes
+function grEsEntero(g) {
+  if (g.e >= 0) return true;
+  return g.m % grPot10(-g.e) === 0n;
+}
+function grAEnteroBig(g) {
+  if (g.e >= 0) return g.m * grPot10(g.e);
+  return g.m / grPot10(-g.e);
+}
+function grPotencia(vm, b, x, quien, pForzada) {
+  if (grEsEntero(x)) {
+    const n = grAEnteroBig(x);
+    if (b.exacto && n >= 0n && !pForzada) {
+      if (n > 100000000n) vm.error(`«${quien}»: el exponente ${n} es demasiado grande para un resultado exacto`);
+      const m = (b.m * grPot10(Math.max(0, b.e))) ** n;
+      return new ObjGrande(m, 0, Math.max(b.p, grCifras(m)), true);
+    }
+    const p = pForzada || (b.exacto ? (x.exacto ? grDef(vm) : x.p) : b.p);
+    if (n === 0n) return new ObjGrande(1n, 0, p, false);
+    if (b.m === 0n) {
+      if (n < 0n) vm.error(`«${quien}»: 0 elevado a un negativo`);
+      return new ObjGrande(0n, 0, p, false);
+    }
+    // por cuadrados, con guarda
+    let k = n < 0n ? -n : n;
+    const guarda = p + 10 + k.toString(2).length;
+    let base = { m: b.m, e: b.e }, acc = { m: 1n, e: 0 };
+    while (k > 0n) {
+      if (k & 1n) { const r = grRedondear(acc.m * base.m, acc.e + base.e, guarda, false); acc = r; }
+      k >>= 1n;
+      if (k > 0n) { const r = grRedondear(base.m * base.m, base.e + base.e, guarda, false); base = r; }
+    }
+    if (n < 0n) {
+      const r = grDividirP(1n, 0, acc.m, acc.e, p);
+      return new ObjGrande(r.m, r.e, p, false);
+    }
+    return grNuevo(acc.m, acc.e, p, false);
+  }
+  if (b.m <= 0n) vm.error(`«${quien}»: una base negativa o cero con un exponente que no es entero no da un real`);
+  const p = pForzada || Math.max(b.exacto ? grDef(vm) : b.p, x.exacto ? grDef(vm) : x.p);
+  // b^x = exp(x·ln b), con cifras de más por lo que crece el exponente
+  const w = p + GR_GUARDA + Math.max(0, grMagn(x)) + 2;
+  const L = grLnFijo(b, w);
+  const xf = grAFijo(x, w);
+  return grExpGrande(vm, xf * L / grPot10(w), w, p, quien);
+}
+
+function grCifrasArg(vm, v, quien, k) {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1)
+    vm.error(`«${quien}»: las cifras (argumento ${k}) deben ser un entero positivo y son ${repr(v, 1)}`);
+  if (v > GR_MAX) vm.error(`«${quien}»: ${v} cifras es demasiado; el máximo es ${GR_MAX}`);
+  return v;
+}
+
+// ─────────────────────────────────────────────── la unión con numerico y datos
+function instalarNenUnion(vm, def) {
+  const de = (edsl, n) => vm.globals.get(nombreGlobalModulo(claveEdsl(edsl), n));
+  const esTabla = v => v instanceof ObjTabla;
+  // cada una dice a quiénes despacha: así abrir NEÑ junto a numerico no choca
+  const marcar = n => { const o = vm.globals.get(nombreGlobalModulo(claveEdsl('nen'), n)); o.despacha = [de('numerico', n), de('datos', n)]; };
+  def('fila', 'tabla|arreglo, entero -> dic|arreglo', a =>
+    (esTabla(a[0]) ? de('datos', 'fila') : de('numerico', 'fila')).fn(a, vm),
+    'fila(t, 0) — con una tabla, un diccionario con esa fila (como en datos); con un arreglo, la vista de la fila i (como en numerico)');
+  def('donde', '... -> cualquiera', a =>
+    (esTabla(a[0]) ? de('datos', 'donde') : de('numerico', 'donde')).fn(a, vm),
+    'donde(t, fn(f) {…}) — con una tabla, las filas que cumplen (datos); donde(cond, a, b) — con arreglos, el «si» elemento a elemento (numerico)');
+  def('apilar', '... -> cualquiera', a => {
+    const primero = a[0] instanceof ObjLista ? a[0].items[0] : a[0];
+    return (esTabla(primero) ? de('datos', 'apilar') : de('numerico', 'apilar')).fn(a, vm);
+  }, 'apilar(t1, t2) — con tablas, una debajo de la otra (datos); con arreglos, en un eje nuevo (numerico)');
+  for (const n of ['fila', 'donde', 'apilar']) marcar(n);
+}
+// Después de instalar «nen»: cada nombre de numerico y de datos que NEÑ no
+// define queda registrado también bajo la clave de NEÑ, apuntando al MISMO
+// objeto. «usar media de "nen"» y «usar media de "numerico"» llaman a la misma
+// función, con la misma firma y el mismo JIT.
+function reexportarEnNen(vm, reg) {
+  const propios = new Set(reg.exporta.keys());
+  reg.reexporta = new Map();          // nombre → eDSL de donde viene
+  for (const origen of ['numerico', 'datos']) {
+    const r = vm.edsls.get(origen);
+    if (!r) continue;
+    for (const [n, firmaT] of r.exporta) {
+      if (propios.has(n) || reg.exporta.has(n)) continue;
+      const obj = vm.globals.get(nombreGlobalModulo(r.clave, n));
+      vm.globals.set(nombreGlobalModulo(reg.clave, n), obj);
+      reg.exporta.set(n, firmaT);
+      reg.reexporta.set(n, origen);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────── las funciones de NEÑ
+function instalarNenPrecision(vm, def) {
+  if (vm.cifrasGrande === undefined) vm.cifrasGrande = GR_DEFECTO;
+  const P = () => vm.cifrasGrande;
+  const aGrande = (v, k, quien, p) => {
+    if (v instanceof ObjGrande) return v;
+    let r;
+    if (typeof v === 'number') r = grDeNumero(v, p || P(), quien);
+    else if (typeof v === 'string') r = grDeTexto(v, p || P(), quien);
+    else vm.error(`«${quien}»: el argumento ${k} debe ser un número, un texto o un grande y es ${tipoDe(v)}`);
+    if (r.error) vm.error(r.error);
+    return r.v;
+  };
+  // con la precisión pedida (o la de x, o la por defecto)
+  const precisionPara = (x, c) => c || (x.exacto ? P() : x.p);
+  const entN = (v, k, quien) => {
+    if (typeof v !== 'number' || !Number.isInteger(v)) vm.error(`«${quien}»: el argumento ${k} debe ser un entero y es ${repr(v, 1)}`);
+    return v;
+  };
+
+  def('grande', '... -> grande', a => {
+    const c = grCifrasArg(vm, a[1], 'grande', 2);
+    if (a[0] instanceof ObjGrande) return c ? grNuevo(a[0].m, a[0].e, c, false) : a[0];
+    return aGrande(a[0], 1, 'grande', c);
+  }, 'grande(2), grande("0.1"), grande(|PI, 30) — un número decimal de precisión arbitraria; de un entero o de un texto sin coma, EXACTO');
+  def('cifrasGrande', '... -> entero', a => {
+    const antes = P();
+    if (a.length) vm.cifrasGrande = grCifrasArg(vm, a[0], 'cifrasGrande', 1);
+    return antes;
+  }, 'cifrasGrande(100) — las cifras de los grandes que se creen desde ahora (por defecto 50); devuelve las que había');
+  def('cifrasDe', 'grande -> entero', a => {
+    const g = aGrande(a[0], 1, 'cifrasDe');
+    return g.exacto ? grCifras(g.m * grPot10(Math.max(0, g.e))) : g.p;
+  }, 'cifrasDe(g) — con cuántas cifras significativas va g (en un exacto, las que tiene)');
+  def('esExacto', 'grande -> bool', a => aGrande(a[0], 1, 'esExacto').exacto,
+    'esExacto(factorialExacto(30)) — cierto si g es un entero exacto (nunca se redondea al sumar, restar o multiplicar)');
+  def('grandeExactoDe', 'real -> grande', a => {
+    if (typeof a[0] !== 'number' || !Number.isFinite(a[0])) vm.error('«grandeExactoDe»: necesita un real finito');
+    return grExactoDeReal(a[0]);
+  }, 'grandeExactoDe(0.1) — el valor binario EXACTO de un real de 64 bits: 0.1000000000000000055511151231257827…');
+  def('redondearGrande', 'grande, entero -> grande', a => {
+    const g = aGrande(a[0], 1, 'redondearGrande');
+    const c = grCifrasArg(vm, a[1], 'redondearGrande', 2);
+    return grNuevo(g.m, g.e, c, false);
+  }, 'redondearGrande(g, 10) — g con 10 cifras significativas');
+  def('decimalesGrande', 'grande, entero -> texto', a => {
+    const g = aGrande(a[0], 1, 'decimalesGrande');
+    const d = entN(a[1], 2, 'decimalesGrande');
+    if (d < 0) vm.error('«decimalesGrande»: los decimales no pueden ser negativos');
+    // redondear a d decimales: al par
+    const e0 = -d;
+    let m = g.m, e = g.e;
+    if (e < e0) {
+      const div = grPot10(e0 - e);
+      let q = m / div; const r = grAbs(m - q * div); const mitad = div / 2n;
+      if (r > mitad || (r === mitad && grAbs(q) % 2n === 1n)) q += (m < 0n ? -1n : 1n);
+      m = q; e = e0;
+    } else if (e > e0) { m = m * grPot10(e - e0); e = e0; }
+    const neg = m < 0n;
+    let s = grAbs(m).toString();
+    if (d > 0) { s = s.padStart(d + 1, '0'); s = s.slice(0, s.length - d) + '.' + s.slice(s.length - d); }
+    return (neg ? '-' : '') + s;
+  }, 'decimalesGrande(piGrande(30), 5) — «3.14159»: el texto con ese número de decimales, redondeado');
+  def('aReal', 'grande -> real', a => grAReal(aGrande(a[0], 1, 'aReal')),
+    'aReal(g) — el real de 64 bits más cercano (también vale real(g))');
+
+  // raíces, exponenciales, logaritmos
+  def('raizGrande', '... -> grande', a => {
+    const c = grCifrasArg(vm, a[1], 'raizGrande', 2);
+    const g = aGrande(a[0], 1, 'raizGrande', c);
+    if (g.m < 0n) vm.error('«raizGrande»: no hay raíz real de un negativo', 'para complejos está «raiz» de numerico');
+    const p = precisionPara(g, c);
+    if (g.m === 0n) return new ObjGrande(0n, 0, p, false);
+    // N = m·10^s con (e − s) par y unas 2(p+2) cifras
+    let s = 2 * (p + 2) - grCifras(g.m);
+    if ((g.e - s) % 2 !== 0) s += 1;
+    const N = s >= 0 ? g.m * grPot10(s) : g.m / grPot10(-s);
+    const r = grRaizEntera(N);
+    const exacta = s >= 0 && r * r === N;
+    const R = grRedondear(r, (g.e - s) / 2, p, !exacta);
+    return new ObjGrande(R.m, R.e, p, false);
+  }, 'raizGrande(2, 1000) — √2 con mil cifras (redondeo correcto)');
+  def('expGrande', '... -> grande', a => {
+    const c = grCifrasArg(vm, a[1], 'expGrande', 2);
+    const g = aGrande(a[0], 1, 'expGrande', c);
+    const p = precisionPara(g, c);
+    const w = p + GR_GUARDA + Math.max(0, grMagn(g));
+    return grExpGrande(vm, grAFijo(g, w), w, p, 'expGrande');
+  }, 'expGrande(1, 100) — e con cien cifras; expGrande(x) — e elevado a x');
+  def('logGrande', '... -> grande', a => {
+    const c = grCifrasArg(vm, typeof a[1] === 'number' && a.length === 2 ? a[1] : a[2], 'logGrande', a.length === 2 ? 2 : 3);
+    const g = aGrande(a[0], 1, 'logGrande', c);
+    if (g.m <= 0n) vm.error('«logGrande»: el logaritmo solo existe para positivos');
+    const p = precisionPara(g, c);
+    const w = p + GR_GUARDA;
+    let L = grLnFijo(g, w);
+    if (a.length === 3) {
+      const b = aGrande(a[1], 2, 'logGrande');
+      if (b.m <= 0n || grComparar(b, new ObjGrande(1n, 0, 1, true)) === 0) vm.error('«logGrande»: la base debe ser positiva y distinta de 1');
+      L = L * grPot10(w) / grLnFijo(b, w);
+    }
+    return grDeFijo(L, w, p);
+  }, 'logGrande(2, 100) — ln 2 con cien cifras; logGrande(x, base, cifras) — en otra base');
+  // trigonometría
+  const trig = (nombre, f, doc) => def(nombre, '... -> grande', a => {
+    const c = grCifrasArg(vm, a[1], nombre, 2);
+    const g = aGrande(a[0], 1, nombre, c);
+    const p = precisionPara(g, c);
+    const w = p + GR_GUARDA;
+    return grDeFijo(f(grAFijo(g, w), w, g), w, p);
+  }, doc);
+  trig('senoGrande', (X, w) => grSenCosFijo(X, w)[0], 'senoGrande(1, 60) — sen 1 con 60 cifras (en radianes)');
+  trig('cosenoGrande', (X, w) => grSenCosFijo(X, w)[1], 'cosenoGrande(1, 60) — cos 1 con 60 cifras');
+  trig('tangenteGrande', (X, w) => {
+    const [s, c] = grSenCosFijo(X, w);
+    if (c === 0n) vm.error('«tangenteGrande»: la tangente no existe ahí');
+    return s * grPot10(w) / c;
+  }, 'tangenteGrande(1, 60) — tan 1 con 60 cifras');
+  trig('arcotangenteGrande', (X, w) => grAtanFijo(X, w), 'arcotangenteGrande(1, 100) — π/4 con cien cifras');
+  trig('arcosenoGrande', (X, w) => {
+    const S = grPot10(w);
+    if (grAbs(X) > S) vm.error('«arcosenoGrande»: el argumento debe estar entre −1 y 1');
+    if (grAbs(X) === S) return X > 0n ? grPiFijo(w) / 2n : -grPiFijo(w) / 2n;
+    const raiz = grRaizEntera(S * S - X * X);
+    return grAtanFijo(X * S / raiz, w);
+  }, 'arcosenoGrande(0.5, 50) — π/6 con 50 cifras');
+  trig('arcocosenoGrande', (X, w) => {
+    const S = grPot10(w);
+    if (grAbs(X) > S) vm.error('«arcocosenoGrande»: el argumento debe estar entre −1 y 1');
+    let as;
+    if (grAbs(X) === S) as = X > 0n ? grPiFijo(w) / 2n : -grPiFijo(w) / 2n;
+    else as = grAtanFijo(X * S / grRaizEntera(S * S - X * X), w);
+    return grPiFijo(w) / 2n - as;
+  }, 'arcocosenoGrande(0, 50) — π/2 con 50 cifras');
+  def('potenciaGrande', '... -> grande', a => {
+    const c = grCifrasArg(vm, a[2], 'potenciaGrande', 3);
+    const b = aGrande(a[0], 1, 'potenciaGrande', c), x = aGrande(a[1], 2, 'potenciaGrande', c);
+    return grPotencia(vm, b, x, 'potenciaGrande', c);
+  }, 'potenciaGrande(2, "0.5", 40) — 2^0,5 con 40 cifras; con base exacta y exponente entero, exacto');
+  def('piGrande', 'entero -> grande', a => {
+    const p = grCifrasArg(vm, a[0], 'piGrande', 1);
+    const w = p + GR_GUARDA;
+    return grDeFijo(grPiFijo(w), w, p);
+  }, 'piGrande(1000) — π con mil cifras (Chudnovsky)');
+  def('eGrande', 'entero -> grande', a => {
+    const p = grCifrasArg(vm, a[0], 'eGrande', 1);
+    const w = p + GR_GUARDA;
+    return grExpGrande(vm, grPot10(w), w, p, 'eGrande');
+  }, 'eGrande(100) — el número e con cien cifras');
+
+  // enteros exactos
+  const natural = (v, k, quien, max) => {
+    if (typeof v === 'number') {
+      if (!Number.isInteger(v) || v < 0) vm.error(`«${quien}»: el argumento ${k} debe ser un entero no negativo y es ${repr(v, 1)}`);
+      if (max && v > max) vm.error(`«${quien}»: ${v} es demasiado; el máximo es ${max}`);
+      return BigInt(v);
+    }
+    if (v instanceof ObjGrande && grEsEntero(v) && v.m >= 0n) return grAEnteroBig(v);
+    vm.error(`«${quien}»: el argumento ${k} debe ser un entero no negativo y es ${tipoDe(v)}`);
+  };
+  const exacto = m => new ObjGrande(m, 0, grCifras(m), true);
+  def('factorialExacto', 'entero -> grande', a => {
+    const n = Number(natural(a[0], 1, 'factorialExacto', 200000));
+    // producto por mitades: mucho más rápido que de uno en uno
+    const prod = (lo, hi) => {
+      if (hi - lo < 16) { let r = 1n; for (let i = lo; i <= hi; i++) r *= BigInt(i); return r; }
+      const m = (lo + hi) >> 1;
+      return prod(lo, m) * prod(m + 1, hi);
+    };
+    return exacto(n < 2 ? 1n : prod(2, n));
+  }, 'factorialExacto(100) — 100! con sus 158 cifras, exacto');
+  def('potenciaExacta', 'entero|grande, entero -> grande', a => {
+    const b = a[0] instanceof ObjGrande ? a[0] : aGrande(entN(a[0], 1, 'potenciaExacta'), 1, 'potenciaExacta');
+    if (!b.exacto) vm.error('«potenciaExacta»: la base debe ser un entero exacto', 'para potencias con decimales: potenciaGrande');
+    const n = entN(a[1], 2, 'potenciaExacta');
+    if (n < 0) vm.error('«potenciaExacta»: el exponente no puede ser negativo');
+    if (n > 10000000) vm.error('«potenciaExacta»: el exponente es demasiado grande');
+    return exacto(grAEnteroBig(b) ** BigInt(n));
+  }, 'potenciaExacta(2, 1000) — 2^1000 con sus 302 cifras');
+  def('combinacionesExactas', 'entero, entero -> grande', a => {
+    const n = natural(a[0], 1, 'combinacionesExactas', 1000000), k0 = natural(a[1], 2, 'combinacionesExactas');
+    if (k0 > n) return exacto(0n);
+    const k = k0 > n - k0 ? n - k0 : k0;
+    let r = 1n;
+    for (let i = 1n; i <= k; i++) r = r * (n - k + i) / i;
+    return exacto(r);
+  }, 'combinacionesExactas(100, 50) — 100 sobre 50, exacto (29 cifras)');
+  def('fibonacciExacto', 'entero -> grande', a => {
+    const n = Number(natural(a[0], 1, 'fibonacciExacto', 10000000));
+    // duplicación: F(2k) = F(k)(2F(k+1) − F(k)), F(2k+1) = F(k)² + F(k+1)²
+    const fib = n => {
+      if (n === 0) return [0n, 1n];
+      const [x, y] = fib(n >> 1);
+      const c = x * (2n * y - x), d = x * x + y * y;
+      return n & 1 ? [d, c + d] : [c, d];
+    };
+    return exacto(fib(n)[0]);
+  }, 'fibonacciExacto(1000) — el término mil de Fibonacci, exacto (209 cifras)');
+  def('mcdExacto', 'entero|grande, entero|grande -> grande', a => {
+    let x = natural(a[0] instanceof ObjGrande ? a[0] : Math.abs(entN(a[0], 1, 'mcdExacto')), 1, 'mcdExacto');
+    let y = natural(a[1] instanceof ObjGrande ? a[1] : Math.abs(entN(a[1], 2, 'mcdExacto')), 2, 'mcdExacto');
+    while (y) { [x, y] = [y, x % y]; }
+    return exacto(x);
+  }, 'mcdExacto(factorialExacto(30), potenciaExacta(2, 40)) — el máximo común divisor de dos enteros exactos');
+  def('esPrimoExacto', 'entero|grande -> bool', a => {
+    const n = natural(a[0], 1, 'esPrimoExacto');
+    if (n < 2n) return false;
+    for (const p of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n]) { if (n === p) return true; if (n % p === 0n) return false; }
+    // Miller–Rabin con las 12 primeras bases: determinista hasta 3,3·10^24 y
+    // con probabilidad de error menor que 4^-12 más allá
+    let d = n - 1n, s = 0;
+    while ((d & 1n) === 0n) { d >>= 1n; s++; }
+    const potMod = (b, e, m) => { let r = 1n; b %= m; while (e > 0n) { if (e & 1n) r = r * b % m; e >>= 1n; b = b * b % m; } return r; };
+    for (const b of [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n, 37n]) {
+      let x = potMod(b, d, n);
+      if (x === 1n || x === n - 1n) continue;
+      let compuesto = true;
+      for (let r = 1; r < s; r++) { x = x * x % n; if (x === n - 1n) { compuesto = false; break; } }
+      if (compuesto) return false;
+    }
+    return true;
+  }, 'esPrimoExacto(potenciaExacta(2, 127) - 1) — si un entero (de cualquier tamaño) es primo (Miller–Rabin)');
+  def('cifrasExactas', 'grande -> texto', a => {
+    const g = aGrande(a[0], 1, 'cifrasExactas');
+    if (!grEsEntero(g)) vm.error('«cifrasExactas»: necesita un entero', 'para decimales: decimalesGrande(g, n)');
+    return grAEnteroBig(g).toString();
+  }, 'cifrasExactas(factorialExacto(25)) — «15511210043330985984000000»: todas las cifras como texto');
+}
+
+
+// ============================================================================
+//  Ñ v4 — NEÑ: más funciones (motor-exp, fase N1, primera tanda)
+//  Parte 19.
+//
+//  La comparativa con NumPy/SciPy y mpmath dejó a NEÑ corto en funciones
+//  especiales, distribuciones y muestreo. Esta es la PRIMERA tanda; cada
+//  función está comprobada contra SciPy 1.18 en una rejilla de valores
+//  (pruebas/exp-nen.js) y lleva su ejemplo en la referencia.
+//
+//  ESPECIALES   lambertW, integralExponencial (Ei), integralExponencialE1 (E₁),
+//               integralSeno (Si), integralCoseno (Ci), fresnelS, fresnelC,
+//               elipticaK, elipticaE, dilogaritmo (Li₂), hipergeometrica (₂F₁),
+//               besselI, trigamma, poligamma, sinc
+//  DISTRIBUC.   densidad y acumulada de gamma, beta, Weibull, lognormal,
+//               Cauchy y logística; densidad de la exponencial, la t, la χ² y
+//               la F; probabilidad geométrica, binomial negativa e
+//               hipergeométrica
+//  MUESTREO     azarExponencial, azarGamma, azarBeta, azarChiCuadrado,
+//               azarTStudent, azarPoisson, azarBinomial, azarLogNormal,
+//               azarWeibull, azarCauchy — con el azar SEMBRADO de numerico
+//               (semilla(7) los repite), y con cantidad devuelven una lista.
+//
+//  Las siguientes tandas (pendientes, en EXPERIMENTAL.md): Bessel Y y K y de
+//  orden real, Airy, funciones de Struve y de Kelvin, la ₁F₁, polilogaritmos de
+//  orden s, zeta de Hurwitz, más distribuciones (Pareto, Gumbel, Rayleigh,
+//  von Mises, multinomial, Dirichlet), y versiones «…A» sobre arreglos.
+// ============================================================================
+
+const NA_EULER = 0.57721566490153286061;
+const NA_EPS = 2.220446049250313e-16;
+
+function instalarNenAmplitud(vm, def) {
+  const de = (edsl, n) => vm.globals.get(nombreGlobalModulo(claveEdsl(edsl), n));
+  const llamar = (edsl, n, args) => de(edsl, n).fn(args, vm);
+  const lnGamma = x => llamar('nen', 'lnGamma', [x]);
+  const gammaP = (a, x) => llamar('nen', 'gammaIncompleta', [a, x]);
+  const betaI = (a, b, x) => llamar('nen', 'betaIncompleta', [a, b, x]);
+  const erfc = x => llamar('nen', 'erfc', [x]);
+  const digamma = x => llamar('nen', 'digamma', [x]);
+  const uniforme = () => llamar('numerico', 'azar', []);
+  const normalE = () => llamar('numerico', 'azarNormal', [0, 1]);
+
+  const num = (v, k, quien) => {
+    if (typeof v !== 'number') vm.error(`«${quien}»: el argumento ${k} debe ser un número y es ${tipoDe(v)}`);
+    return v;
+  };
+  const ent = (v, k, quien) => {
+    if (typeof v !== 'number' || !Number.isInteger(v)) vm.error(`«${quien}»: el argumento ${k} debe ser un entero y es ${repr(v, 1)}`);
+    return v;
+  };
+  const positivo = (v, k, quien, nombre) => {
+    num(v, k, quien);
+    if (!(v > 0)) vm.error(`«${quien}»: ${nombre || 'el argumento ' + k} debe ser positivo y es ${repr(v, 1)}`);
+    return v;
+  };
+  const prob = (v, k, quien) => {
+    num(v, k, quien);
+    if (!(v >= 0 && v <= 1)) vm.error(`«${quien}»: la probabilidad debe estar entre 0 y 1 y es ${repr(v, 1)}`);
+    return v;
+  };
+  const real1 = (nombre, fn, doc) => def(nombre, 'real -> real', a => fn(num(a[0], 1, nombre)), doc);
+
+  // ─────────────────────────────────────────────── funciones especiales
+  // W de Lambert: la w con w·eʷ = x. Rama 0 (principal, w ≥ −1) o −1 (w ≤ −1).
+  def('lambertW', '... -> real', a => {
+    const x = num(a[0], 1, 'lambertW');
+    const rama = a.length > 1 ? ent(a[1], 2, 'lambertW') : 0;
+    if (rama !== 0 && rama !== -1) vm.error('«lambertW»: la rama es 0 (la principal) o −1');
+    const minimo = -1 / Math.E;
+    if (x < minimo - 1e-15) vm.error(`«lambertW»: W(x) solo es real para x ≥ −1/e (−0,3679…), y llegó ${repr(x, 1)}`);
+    if (rama === -1 && x >= 0) vm.error('«lambertW»: la rama −1 solo existe para −1/e ≤ x < 0');
+    if (Math.abs(x - minimo) < 1e-15) return -1;
+    if (x === 0) return 0;
+    let w;
+    if (rama === 0) {
+      if (x < -0.3) { const p = Math.sqrt(2 * (Math.E * x + 1)); w = -1 + p - p * p / 3 + 11 * p * p * p / 72; }
+      else if (x < 3) w = Math.log1p(x) * 0.8;
+      else { const L1 = Math.log(x), L2 = Math.log(L1); w = L1 - L2 + L2 / L1; }
+    } else {
+      if (x < -0.3) { const p = -Math.sqrt(2 * (Math.E * x + 1)); w = -1 + p - p * p / 3 + 11 * p * p * p / 72; }
+      else { const L1 = Math.log(-x), L2 = Math.log(-L1); w = L1 - L2 + L2 / L1; }
+    }
+    for (let i = 0; i < 100; i++) {
+      const ew = Math.exp(w), f = w * ew - x;
+      const d = ew * (w + 1) - (w + 2) * f / (2 * w + 2);
+      const dw = f / d;
+      w -= dw;
+      if (Math.abs(dw) <= 1e-15 * (1 + Math.abs(w))) break;
+    }
+    return w;
+  }, 'lambertW(x, rama?) — la w con w·eʷ = x · rama 0 (principal) o −1 · lambertW(1) = 0,5671… (la omega)');
+
+  // E₁(x) = ∫ₓ^∞ e^(−t)/t dt, x > 0
+  const E1 = x => {
+    if (x <= 0) return NaN;
+    if (x <= 1) {
+      let s = 0, t = 1;
+      for (let k = 1; k < 200; k++) { t *= -x / k; const d = t / k; s += d; if (Math.abs(d) < NA_EPS * Math.abs(s)) break; }
+      return -NA_EULER - Math.log(x) - s;
+    }
+    // fracción continua (Lentz)
+    let b = x + 1, c = 1 / 1e-300, d = 1 / b, h = d;
+    for (let i = 1; i < 500; i++) {
+      const an = -i * i; b += 2;
+      d = 1 / (an * d + b); c = b + an / c;
+      const del = c * d; h *= del;
+      if (Math.abs(del - 1) < NA_EPS) break;
+    }
+    return h * Math.exp(-x);
+  };
+  // Ei(x) = −PV∫₋ₓ^∞ e^(−t)/t dt
+  const Ei = x => {
+    if (x === 0) return -Infinity;
+    if (x < 0) return -E1(-x);
+    if (x < 40) {
+      let s = 0, t = 1;
+      for (let k = 1; k < 500; k++) { t *= x / k; const d = t / k; s += d; if (d < NA_EPS * s) break; }
+      return NA_EULER + Math.log(x) + s;
+    }
+    let s = 1, t = 1;
+    for (let k = 1; k < 40; k++) { const t2 = t * k / x; if (t2 > t) break; t = t2; s += t; if (t < NA_EPS) break; }
+    return Math.exp(x) / x * s;
+  };
+  real1('integralExponencial', Ei, 'integralExponencial(x) — Ei(x) = −VP ∫₋ₓ^∞ e^(−t)/t dt · Ei(1) = 1,8951…');
+  def('integralExponencialE1', 'real -> real', a => {
+    const x = num(a[0], 1, 'integralExponencialE1');
+    if (!(x > 0)) vm.error('«integralExponencialE1»: E₁(x) se define para x > 0');
+    return E1(x);
+  }, 'integralExponencialE1(x) — E₁(x) = ∫ₓ^∞ e^(−t)/t dt, para x > 0 · la caída de una fuente en un pozo, la teoría de Theis');
+
+  // Si y Ci (Numerical Recipes, «cisi»)
+  const cisi = x => {
+    const t = Math.abs(x);
+    if (t === 0) return [0, -Infinity];
+    let si, ci;
+    if (t > 2) {
+      // fracción continua compleja para E₁(it)
+      let br = 1, bi = t, cr = 1 / 1e-300, ci2 = 0;
+      let dr, di; { const m = br * br + bi * bi; dr = br / m; di = -bi / m; }
+      let hr = dr, hi = di;
+      for (let i = 2; i < 200; i++) {
+        const a = -(i - 1) * (i - 1);
+        br += 2;
+        // d = 1/(a·d + b)
+        let xr = a * dr + br, xi = a * di + bi;
+        { const m = xr * xr + xi * xi; dr = xr / m; di = -xi / m; }
+        // c = b + a/c
+        { const m = cr * cr + ci2 * ci2; const qr = a * cr / m, qi = -a * ci2 / m; cr = br + qr; ci2 = bi + qi; }
+        const delr = cr * dr - ci2 * di, deli = cr * di + ci2 * dr;
+        const nr = hr * delr - hi * deli, ni = hr * deli + hi * delr;
+        hr = nr; hi = ni;
+        if (Math.abs(delr - 1) + Math.abs(deli) < NA_EPS) break;
+      }
+      // h · (cos t − i sen t)
+      const co = Math.cos(t), se = Math.sin(t);
+      const rr = co * hr + se * hi, ri = co * hi - se * hr;
+      ci = -rr;
+      si = Math.PI / 2 + ri;
+    } else {
+      // series: uₖ = tᵏ/k!; las impares van a Si y las pares a Ci, con signo alterno
+      let u = 1, sumS = 0, sumC = 0;
+      for (let k = 1; k < 200; k++) {
+        u *= t / k;
+        const term = u / k;
+        if (k % 2 === 1) sumS += ((k - 1) / 2 % 2 === 0 ? 1 : -1) * term;
+        else sumC += (k / 2 % 2 === 0 ? 1 : -1) * term;
+        if (term < NA_EPS * 1e-2 * Math.max(Math.abs(sumS), 1e-300)) break;
+      }
+      si = sumS; ci = NA_EULER + Math.log(t) + sumC;
+    }
+    if (x < 0) si = -si;
+    return [si, ci];
+  };
+  real1('integralSeno', x => cisi(x)[0], 'integralSeno(x) — Si(x) = ∫₀ˣ sen(t)/t dt · Si(∞) = π/2');
+  def('integralCoseno', 'real -> real', a => {
+    const x = num(a[0], 1, 'integralCoseno');
+    if (!(x > 0)) vm.error('«integralCoseno»: Ci(x) se define para x > 0');
+    return cisi(x)[1];
+  }, 'integralCoseno(x) — Ci(x) = γ + ln x + ∫₀ˣ (cos t − 1)/t dt, para x > 0');
+
+  // Fresnel, con la convención de SciPy: S(x) = ∫₀ˣ sen(πt²/2) dt
+  const fresnel = x => {
+    const ax = Math.abs(x);
+    let s, c;
+    if (ax < 1e-150) return [x, x];
+    if (ax < 1.5) {
+      // series: uₖ = x·(πx²/2)ᵏ/k!; las pares van a C y las impares a S
+      const w = Math.PI * ax * ax / 2;
+      let u = ax, sumS = 0, sumC = ax;
+      for (let k = 1; k < 200; k++) {
+        u *= w / k;
+        const term = u / (2 * k + 1);
+        if (k % 2 === 1) sumS += ((k - 1) / 2 % 2 === 0 ? 1 : -1) * term;
+        else sumC += (k / 2 % 2 === 0 ? 1 : -1) * term;
+        if (term < NA_EPS * 1e-2 * Math.max(Math.abs(sumS), Math.abs(sumC))) break;
+      }
+      s = sumS; c = sumC;
+    } else {
+      // fracción continua compleja (NR «frenel»)
+      const pix2 = Math.PI * ax * ax;
+      let br = 1, bi = -pix2, cr = 1 / 1e-300, ci = 0;
+      let dr, di, hr, hi;
+      { const m = br * br + bi * bi; dr = br / m; di = -bi / m; hr = dr; hi = di; }
+      let n = -1;
+      for (let k = 2; k < 200; k++) {
+        n += 2;
+        const a = -n * (n + 1);
+        br += 4;
+        let xr = a * dr + br, xi = a * di + bi;
+        { const m = xr * xr + xi * xi; dr = xr / m; di = -xi / m; }
+        { const m = cr * cr + ci * ci; const qr = a * cr / m, qi = -a * ci / m; cr = br + qr; ci = bi + qi; }
+        const delr = cr * dr - ci * di, deli = cr * di + ci * dr;
+        const nr = hr * delr - hi * deli, ni = hr * deli + hi * delr;
+        hr = nr; hi = ni;
+        if (Math.abs(delr - 1) + Math.abs(deli) < NA_EPS) break;
+      }
+      // h · (ax − i·ax) → h' = h·(ax, −ax)
+      let h2r = hr * ax + hi * ax, h2i = hi * ax - hr * ax;
+      const co = Math.cos(0.5 * pix2), se = Math.sin(0.5 * pix2);
+      // cs = (1+i)/2 · (1 − (cos + i sen)·h')
+      const pr = co * h2r - se * h2i, pi = co * h2i + se * h2r;
+      const ur = 1 - pr, ui = -pi;
+      c = 0.5 * (ur - ui);
+      s = 0.5 * (ur + ui);
+    }
+    if (x < 0) { s = -s; c = -c; }
+    return [s, c];
+  };
+  real1('fresnelS', x => fresnel(x)[0], 'fresnelS(x) — S(x) = ∫₀ˣ sen(πt²/2) dt, la integral de Fresnel (la clotoide de las carreteras)');
+  real1('fresnelC', x => fresnel(x)[1], 'fresnelC(x) — C(x) = ∫₀ˣ cos(πt²/2) dt');
+
+  // elípticas completas, con el parámetro m = k² (como SciPy)
+  const agm = m => {
+    let a = 1, b = Math.sqrt(1 - m), c = Math.sqrt(m), suma = m / 2, pot = 0.5;
+    for (let i = 0; i < 60; i++) {
+      const a1 = (a + b) / 2, b1 = Math.sqrt(a * b), c1 = (a - b) / 2;
+      pot *= 2;
+      suma += pot * c1 * c1;
+      a = a1; b = b1; c = c1;
+      if (Math.abs(c) < 1e-17 * a) break;
+    }
+    return [Math.PI / (2 * a), suma];
+  };
+  def('elipticaK', 'real -> real', a => {
+    const m = num(a[0], 1, 'elipticaK');
+    if (m > 1) vm.error('«elipticaK»: el parámetro m = k² debe ser como mucho 1');
+    if (m === 1) return Infinity;
+    return agm(m)[0];
+  }, 'elipticaK(m) — la integral elíptica completa de primera especie K(m), m = k² · el periodo del péndulo grande');
+  def('elipticaE', 'real -> real', a => {
+    const m = num(a[0], 1, 'elipticaE');
+    if (m > 1) vm.error('«elipticaE»: el parámetro m = k² debe ser como mucho 1');
+    if (m === 1) return 1;
+    const [K, s] = agm(m);
+    return K * (1 - s);
+  }, 'elipticaE(m) — la integral elíptica completa de segunda especie E(m) · el perímetro de una elipse es 4a·E(e²)');
+
+  // dilogaritmo real, Li₂(x) = −∫₀ˣ ln(1−t)/t dt, x ≤ 1
+  const li2 = x => {
+    if (x === 0) return 0;
+    if (x === 1) return Math.PI * Math.PI / 6;
+    if (x < 0) { const l = Math.log1p(-x); return -li2(x / (x - 1)) - 0.5 * l * l; }
+    if (x > 0.5) return Math.PI * Math.PI / 6 - Math.log(x) * Math.log1p(-x) - li2(1 - x);
+    let s = 0, p = x;
+    for (let k = 1; k < 200; k++) { const t = p / (k * k); s += t; if (t < NA_EPS * s) break; p *= x; }
+    return s;
+  };
+  def('dilogaritmo', 'real -> real', a => {
+    const x = num(a[0], 1, 'dilogaritmo');
+    if (x > 1) vm.error('«dilogaritmo»: para x > 1 el dilogaritmo es complejo');
+    return li2(x);
+  }, 'dilogaritmo(x) — Li₂(x) = Σ xᵏ/k², para x ≤ 1 · dilogaritmo(1) = π²/6');
+
+  // ₂F₁(a, b; c; z), z < 1
+  const f21serie = (a, b, c, z) => {
+    let s = 1, t = 1;
+    for (let k = 0; k < 200000; k++) {
+      t *= (a + k) * (b + k) / ((c + k) * (k + 1)) * z;
+      s += t;
+      if (Math.abs(t) < NA_EPS * Math.abs(s)) break;
+      if (t === 0) break;
+    }
+    return s;
+  };
+  def('hipergeometrica', 'real, real, real, real -> real', a => {
+    const A = num(a[0], 1, 'hipergeometrica'), B = num(a[1], 2, 'hipergeometrica'), C = num(a[2], 3, 'hipergeometrica'), z = num(a[3], 4, 'hipergeometrica');
+    if (C <= 0 && Number.isInteger(C)) vm.error('«hipergeometrica»: c no puede ser 0 ni un entero negativo');
+    if (z === 1) {
+      if (C - A - B <= 0) vm.error('«hipergeometrica»: en z = 1 la serie converge solo si c − a − b > 0');
+      return Math.exp(lnGamma(C) + lnGamma(C - A - B) - lnGamma(C - A) - lnGamma(C - B));
+    }
+    if (z > 1) vm.error('«hipergeometrica»: para z > 1 el resultado es complejo (está definida para z < 1)');
+    if (z < 0) return Math.pow(1 - z, -A) * f21serie(A, C - B, C, z / (z - 1));     // Pfaff
+    return f21serie(A, B, C, z);
+  }, 'hipergeometrica(a, b, c, z) — la ₂F₁ de Gauss, para z < 1 · hipergeometrica(1, 1, 2, z) = −ln(1−z)/z');
+
+  // Bessel I de orden entero
+  def('besselI', 'entero, real -> real', a => {
+    const n = Math.abs(ent(a[0], 1, 'besselI')), x = num(a[1], 2, 'besselI');
+    const ax = Math.abs(x);
+    let r;
+    if (ax <= 30 + n) {
+      const h = ax / 2;
+      let t = Math.exp(n * Math.log(h || 1e-300) - lnGamma(n + 1));
+      if (ax === 0) return n === 0 ? 1 : 0;
+      let s = t;
+      for (let k = 1; k < 1000; k++) { t *= h * h / (k * (k + n)); s += t; if (t < NA_EPS * s) break; }
+      r = s;
+    } else {
+      const mu = 4 * n * n;
+      let s = 1, t = 1;
+      for (let k = 1; k < 30; k++) {
+        const t2 = -t * (mu - (2 * k - 1) * (2 * k - 1)) / (k * 8 * ax);
+        if (Math.abs(t2) > Math.abs(t)) break;
+        t = t2; s += t;
+        if (Math.abs(t) < NA_EPS * Math.abs(s)) break;
+      }
+      r = Math.exp(ax) / Math.sqrt(2 * Math.PI * ax) * s;
+    }
+    return (x < 0 && n % 2 === 1) ? -r : r;
+  }, 'besselI(n, x) — la Bessel modificada de primera especie Iₙ(x), de orden entero · la distribución de von Mises, el calor en un cilindro');
+
+  // poligamma ψ⁽ⁿ⁾(x), x > 0
+  const B2k = [1 / 6, -1 / 30, 1 / 42, -1 / 30, 5 / 66, -691 / 2730, 7 / 6, -3617 / 510, 43867 / 798, -174611 / 330];
+  const fact = n => { let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; };
+  const poligamma = (n, x) => {
+    if (n === 0) return digamma(x);
+    let acc = 0;
+    const sg = (n % 2 === 1) ? 1 : -1;            // (−1)^(n+1)
+    const nf = fact(n);
+    while (x < 15) { acc += sg * nf / Math.pow(x, n + 1); x += 1; }
+    let s = fact(n - 1) / Math.pow(x, n) + nf / (2 * Math.pow(x, n + 1));
+    for (let k = 1; k <= B2k.length; k++) {
+      const t = B2k[k - 1] * fact(2 * k + n - 1) / (fact(2 * k) * Math.pow(x, 2 * k + n));
+      s += t;
+      if (Math.abs(t) < NA_EPS * Math.abs(s)) break;
+    }
+    return acc + sg * s;
+  };
+  def('trigamma', 'real -> real', a => {
+    const x = num(a[0], 1, 'trigamma');
+    if (!(x > 0)) vm.error('«trigamma»: está implementada para x > 0');
+    return poligamma(1, x);
+  }, 'trigamma(x) — ψ′(x), la derivada de digamma · trigamma(1) = π²/6');
+  def('poligamma', 'entero, real -> real', a => {
+    const n = ent(a[0], 1, 'poligamma'), x = num(a[1], 2, 'poligamma');
+    if (n < 0) vm.error('«poligamma»: el orden debe ser 0 o más');
+    if (n > 20) vm.error('«poligamma»: el orden máximo es 20');
+    if (!(x > 0)) vm.error('«poligamma»: está implementada para x > 0');
+    return poligamma(n, x);
+  }, 'poligamma(n, x) — ψ⁽ⁿ⁾(x), la n-ésima derivada de digamma (n = 0 es digamma)');
+  real1('sinc', x => x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x),
+    'sinc(x) — sen(πx)/(πx), la normalizada (como NumPy) · la respuesta de un filtro ideal');
+
+  // ─────────────────────────────────────────────── distribuciones
+  const lnBeta = (p, q) => lnGamma(p) + lnGamma(q) - lnGamma(p + q);
+  const d3 = (nombre, doc, f) => def(nombre, 'real, real, real -> real', a => f(...a.map((v, i) => num(v, i + 1, nombre))), doc);
+  d3('gammaDensidad', 'gammaDensidad(x, forma, escala) — la densidad de una gamma(k, θ) · media kθ', (x, k, th) => {
+    positivo(k, 2, 'gammaDensidad', 'la forma'); positivo(th, 3, 'gammaDensidad', 'la escala');
+    if (x < 0) return 0;
+    if (x === 0) return k < 1 ? Infinity : (k === 1 ? 1 / th : 0);
+    return Math.exp((k - 1) * Math.log(x) - x / th - lnGamma(k) - k * Math.log(th));
+  });
+  d3('gammaAcumulada', 'gammaAcumulada(x, forma, escala) — P(X ≤ x) de una gamma(k, θ)', (x, k, th) => {
+    positivo(k, 2, 'gammaAcumulada', 'la forma'); positivo(th, 3, 'gammaAcumulada', 'la escala');
+    return x <= 0 ? 0 : gammaP(k, x / th);
+  });
+  d3('betaDensidad', 'betaDensidad(x, a, b) — la densidad de una beta(a, b) en [0, 1] · una proporción incierta', (x, p, q) => {
+    positivo(p, 2, 'betaDensidad', 'a'); positivo(q, 3, 'betaDensidad', 'b');
+    if (x < 0 || x > 1) return 0;
+    if (x === 0) return p < 1 ? Infinity : (p === 1 ? Math.exp(-lnBeta(p, q)) : 0);
+    if (x === 1) return q < 1 ? Infinity : (q === 1 ? Math.exp(-lnBeta(p, q)) : 0);
+    return Math.exp((p - 1) * Math.log(x) + (q - 1) * Math.log1p(-x) - lnBeta(p, q));
+  });
+  d3('betaAcumulada', 'betaAcumulada(x, a, b) — P(X ≤ x) de una beta(a, b)', (x, p, q) => {
+    positivo(p, 2, 'betaAcumulada', 'a'); positivo(q, 3, 'betaAcumulada', 'b');
+    if (x <= 0) return 0; if (x >= 1) return 1;
+    return betaI(p, q, x);
+  });
+  d3('weibullDensidad', 'weibullDensidad(x, forma, escala) — la densidad de una Weibull(k, λ) · la vida de una pieza', (x, k, l) => {
+    positivo(k, 2, 'weibullDensidad', 'la forma'); positivo(l, 3, 'weibullDensidad', 'la escala');
+    if (x < 0) return 0;
+    const z = x / l;
+    return k / l * Math.pow(z, k - 1) * Math.exp(-Math.pow(z, k));
+  });
+  d3('weibullAcumulada', 'weibullAcumulada(x, forma, escala) — P(X ≤ x) = 1 − e^(−(x/λ)ᵏ)', (x, k, l) => {
+    positivo(k, 2, 'weibullAcumulada', 'la forma'); positivo(l, 3, 'weibullAcumulada', 'la escala');
+    return x <= 0 ? 0 : -Math.expm1(-Math.pow(x / l, k));
+  });
+  d3('lognormalDensidad', 'lognormalDensidad(x, mu, sigma) — la densidad de una lognormal (ln X es normal(μ, σ)) · ingresos, tamaños', (x, mu, s) => {
+    positivo(s, 3, 'lognormalDensidad', 'sigma');
+    if (x <= 0) return 0;
+    const z = (Math.log(x) - mu) / s;
+    return Math.exp(-0.5 * z * z) / (x * s * Math.sqrt(2 * Math.PI));
+  });
+  d3('lognormalAcumulada', 'lognormalAcumulada(x, mu, sigma) — P(X ≤ x) de una lognormal', (x, mu, s) => {
+    positivo(s, 3, 'lognormalAcumulada', 'sigma');
+    if (x <= 0) return 0;
+    return 0.5 * erfc(-(Math.log(x) - mu) / (s * Math.SQRT2));
+  });
+  d3('cauchyDensidad', 'cauchyDensidad(x, x0, gamma) — la densidad de Cauchy (sin media ni varianza) · una resonancia', (x, x0, g) => {
+    positivo(g, 3, 'cauchyDensidad', 'gamma');
+    const z = (x - x0) / g;
+    return 1 / (Math.PI * g * (1 + z * z));
+  });
+  d3('cauchyAcumulada', 'cauchyAcumulada(x, x0, gamma) — P(X ≤ x) = 1/2 + arctan((x − x0)/γ)/π', (x, x0, g) => {
+    positivo(g, 3, 'cauchyAcumulada', 'gamma');
+    return 0.5 + Math.atan((x - x0) / g) / Math.PI;
+  });
+  d3('logisticaDensidad', 'logisticaDensidad(x, mu, s) — la densidad logística · el crecimiento con techo', (x, mu, s) => {
+    positivo(s, 3, 'logisticaDensidad', 's');
+    const z = -Math.abs(x - mu) / s, e = Math.exp(z);
+    return e / (s * (1 + e) * (1 + e));
+  });
+  d3('logisticaAcumulada', 'logisticaAcumulada(x, mu, s) — P(X ≤ x) = 1/(1 + e^(−(x−μ)/s))', (x, mu, s) => {
+    positivo(s, 3, 'logisticaAcumulada', 's');
+    const z = (x - mu) / s;
+    return z >= 0 ? 1 / (1 + Math.exp(-z)) : Math.exp(z) / (1 + Math.exp(z));
+  });
+  def('exponencialDensidad', 'real, real -> real', a => {
+    const x = num(a[0], 1, 'exponencialDensidad'), l = positivo(a[1], 2, 'exponencialDensidad', 'lambda');
+    return x < 0 ? 0 : l * Math.exp(-l * x);
+  }, 'exponencialDensidad(x, lambda) — λe^(−λx) · el tiempo entre llegadas');
+  def('tStudentDensidad', 'real, real -> real', a => {
+    const t = num(a[0], 1, 'tStudentDensidad'), v = positivo(a[1], 2, 'tStudentDensidad', 'los grados de libertad');
+    return Math.exp(lnGamma((v + 1) / 2) - lnGamma(v / 2) - 0.5 * Math.log(v * Math.PI) - (v + 1) / 2 * Math.log1p(t * t / v));
+  }, 'tStudentDensidad(t, gl) — la densidad de la t de Student');
+  def('chiCuadradoDensidad', 'real, real -> real', a => {
+    const x = num(a[0], 1, 'chiCuadradoDensidad'), k = positivo(a[1], 2, 'chiCuadradoDensidad', 'los grados de libertad');
+    if (x < 0) return 0;
+    if (x === 0) return k < 2 ? Infinity : (k === 2 ? 0.5 : 0);
+    return Math.exp((k / 2 - 1) * Math.log(x) - x / 2 - lnGamma(k / 2) - (k / 2) * Math.LN2);
+  }, 'chiCuadradoDensidad(x, gl) — la densidad de la χ²');
+  d3('fisherDensidad', 'fisherDensidad(x, gl1, gl2) — la densidad de la F de Fisher–Snedecor', (x, d1, d2) => {
+    positivo(d1, 2, 'fisherDensidad', 'gl1'); positivo(d2, 3, 'fisherDensidad', 'gl2');
+    if (x < 0) return 0;
+    if (x === 0) return d1 < 2 ? Infinity : (d1 === 2 ? 1 : 0);
+    return Math.exp(0.5 * (d1 * Math.log(d1 * x) + d2 * Math.log(d2) - (d1 + d2) * Math.log(d1 * x + d2)) - Math.log(x) - lnBeta(d1 / 2, d2 / 2));
+  });
+  def('geometricaProb', 'entero, real -> real', a => {
+    const k = ent(a[0], 1, 'geometricaProb'), p = prob(a[1], 2, 'geometricaProb');
+    if (k < 1) return 0;
+    return Math.exp((k - 1) * Math.log1p(-p) + Math.log(p));
+  }, 'geometricaProb(k, p) — P(el primer éxito llega en el intento k), k ≥ 1');
+  def('binomialNegativaProb', 'entero, real, real -> real', a => {
+    const k = ent(a[0], 1, 'binomialNegativaProb'), r = positivo(a[1], 2, 'binomialNegativaProb', 'r'), p = prob(a[2], 3, 'binomialNegativaProb');
+    if (k < 0) return 0;
+    return Math.exp(lnGamma(k + r) - lnGamma(r) - lnGamma(k + 1) + r * Math.log(p) + k * Math.log1p(-p));
+  }, 'binomialNegativaProb(k, r, p) — P(k fracasos antes del éxito número r) · conteos con más dispersión que una Poisson');
+  def('hipergeometricaProb', 'entero, entero, entero, entero -> real', a => {
+    const k = ent(a[0], 1, 'hipergeometricaProb'), N = ent(a[1], 2, 'hipergeometricaProb'), K = ent(a[2], 3, 'hipergeometricaProb'), n = ent(a[3], 4, 'hipergeometricaProb');
+    if (N < 0 || K < 0 || n < 0 || K > N || n > N) vm.error('«hipergeometricaProb»: hace falta 0 ≤ K ≤ N y 0 ≤ n ≤ N');
+    if (k < Math.max(0, n + K - N) || k > Math.min(n, K)) return 0;
+    const lc = (m, j) => lnGamma(m + 1) - lnGamma(j + 1) - lnGamma(m - j + 1);
+    return Math.exp(lc(K, k) + lc(N - K, n - k) - lc(N, n));
+  }, 'hipergeometricaProb(k, N, K, n) — P(k aciertos al sacar n sin devolver, de N con K buenos) · el control de calidad por lotes');
+
+  // ─────────────────────────────────────────────── muestreo con el azar sembrado de numerico
+  const muestra = (nombre, firmaN, doc, generar) => def(nombre, '... -> cualquiera', a => {
+    const params = a.slice(0, firmaN);
+    if (params.length < firmaN) vm.error(`«${nombre}» necesita ${firmaN} parámetro(s)`);
+    const g = generar(params);
+    if (a.length > firmaN) {
+      const n = ent(a[firmaN], firmaN + 1, nombre);
+      if (n < 0) vm.error(`«${nombre}»: la cantidad no puede ser negativa`);
+      vm.cobrar(n);
+      const out = [];
+      for (let i = 0; i < n; i++) out.push(g());
+      return vm.nuevaLista(out);
+    }
+    return g();
+  }, doc);
+  const gammaMT = k => {
+    if (k < 1) { const u = uniforme(); return gammaMT(k + 1) * Math.pow(u || 1e-300, 1 / k); }
+    const d = k - 1 / 3, c = 1 / Math.sqrt(9 * d);
+    for (;;) {
+      let x, v;
+      do { x = normalE(); v = 1 + c * x; } while (v <= 0);
+      v = v * v * v;
+      const u = uniforme();
+      if (u < 1 - 0.0331 * x * x * x * x) return d * v;
+      if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
+    }
+  };
+  muestra('azarExponencial', 1, 'azarExponencial(lambda, cantidad?) — un tiempo de espera de media 1/λ · con cantidad, una lista', ([l]) => {
+    positivo(l, 1, 'azarExponencial', 'lambda');
+    return () => -Math.log1p(-uniforme()) / l;
+  });
+  muestra('azarGamma', 2, 'azarGamma(forma, escala, cantidad?) — una gamma(k, θ) (Marsaglia–Tsang)', ([k, th]) => {
+    positivo(k, 1, 'azarGamma', 'la forma'); positivo(th, 2, 'azarGamma', 'la escala');
+    return () => gammaMT(k) * th;
+  });
+  muestra('azarBeta', 2, 'azarBeta(a, b, cantidad?) — una beta(a, b): una proporción al azar', ([p, q]) => {
+    positivo(p, 1, 'azarBeta', 'a'); positivo(q, 2, 'azarBeta', 'b');
+    return () => { const x = gammaMT(p), y = gammaMT(q); return x / (x + y); };
+  });
+  muestra('azarChiCuadrado', 1, 'azarChiCuadrado(gl, cantidad?) — una χ² con gl grados de libertad', ([k]) => {
+    positivo(k, 1, 'azarChiCuadrado', 'los grados de libertad');
+    return () => 2 * gammaMT(k / 2);
+  });
+  muestra('azarTStudent', 1, 'azarTStudent(gl, cantidad?) — una t de Student', ([v]) => {
+    positivo(v, 1, 'azarTStudent', 'los grados de libertad');
+    return () => normalE() / Math.sqrt(2 * gammaMT(v / 2) / v);
+  });
+  muestra('azarPoisson', 1, 'azarPoisson(lambda, cantidad?) — cuántas llegadas en un intervalo de media λ (Knuth hasta 30; PTRS después)', ([l]) => {
+    num(l, 1, 'azarPoisson');
+    if (l < 0) vm.error('«azarPoisson»: lambda no puede ser negativa');
+    if (l === 0) return () => 0;
+    if (l < 30) {
+      const L = Math.exp(-l);
+      return () => { let k = 0, p = 1; for (;;) { p *= uniforme(); if (p <= L) return k; k++; } };
+    }
+    // PTRS (Hörmann 1993)
+    const slam = Math.sqrt(l), loglam = Math.log(l);
+    const b = 0.931 + 2.53 * slam, aa = -0.059 + 0.02483 * b, invalpha = 1.1239 + 1.1328 / (b - 3.4), vr = 0.9277 - 3.6224 / (b - 2);
+    return () => {
+      for (;;) {
+        const U = uniforme() - 0.5, V = uniforme(), us = 0.5 - Math.abs(U);
+        const k = Math.floor((2 * aa / us + b) * U + l + 0.43);
+        if (us >= 0.07 && V <= vr) return k;
+        if (k < 0 || (us < 0.013 && V > us)) continue;
+        if (Math.log(V) + Math.log(invalpha) - Math.log(aa / (us * us) + b) <= -l + k * loglam - lnGamma(k + 1)) return k;
+      }
+    };
+  });
+  muestra('azarBinomial', 2, 'azarBinomial(n, p, cantidad?) — cuántos éxitos en n intentos (inversión o BTRS)', ([n, p]) => {
+    ent(n, 1, 'azarBinomial'); prob(p, 2, 'azarBinomial');
+    if (n < 0) vm.error('«azarBinomial»: n no puede ser negativo');
+    const voltear = p > 0.5, pp = voltear ? 1 - p : p;
+    const ajustar = k => voltear ? n - k : k;
+    if (pp === 0) return () => ajustar(0);
+    if (n * pp < 10) {
+      // inversión: recorre la probabilidad acumulada
+      const q = 1 - pp, s = pp / q, a0 = (n + 1) * s, r0 = Math.pow(q, n);
+      return () => {
+        let r = r0, u = uniforme(), x = 0;
+        while (u > r) { u -= r; x++; if (x > n) { x = n; break; } r *= (a0 / x - s); }
+        return ajustar(x);
+      };
+    }
+    // BTRS (Hörmann 1993)
+    const q = 1 - pp, spq = Math.sqrt(n * pp * q);
+    const b = 1.15 + 2.53 * spq, aa = -0.0873 + 0.0248 * b + 0.01 * pp, c = n * pp + 0.5, vr = 0.92 - 4.2 / b;
+    const alpha = (2.83 + 5.1 / b) * spq, lpq = Math.log(pp / q), m = Math.floor((n + 1) * pp);
+    const h = lnGamma(m + 1) + lnGamma(n - m + 1);
+    return () => {
+      for (;;) {
+        const u = uniforme() - 0.5, v0 = uniforme(), us = 0.5 - Math.abs(u);
+        const k = Math.floor((2 * aa / us + b) * u + c);
+        if (k < 0 || k > n) continue;
+        if (us >= 0.07 && v0 <= vr) return ajustar(k);
+        const v = Math.log(v0 * alpha / (aa / (us * us) + b));
+        if (v <= h - lnGamma(k + 1) - lnGamma(n - k + 1) + (k - m) * lpq) return ajustar(k);
+      }
+    };
+  });
+  muestra('azarLogNormal', 2, 'azarLogNormal(mu, sigma, cantidad?) — e^(μ + σZ)', ([mu, s]) => {
+    num(mu, 1, 'azarLogNormal'); positivo(s, 2, 'azarLogNormal', 'sigma');
+    return () => Math.exp(mu + s * normalE());
+  });
+  muestra('azarWeibull', 2, 'azarWeibull(forma, escala, cantidad?) — una Weibull(k, λ)', ([k, l]) => {
+    positivo(k, 1, 'azarWeibull', 'la forma'); positivo(l, 2, 'azarWeibull', 'la escala');
+    return () => l * Math.pow(-Math.log1p(-uniforme()), 1 / k);
+  });
+  muestra('azarCauchy', 2, 'azarCauchy(x0, gamma, cantidad?) — una Cauchy (colas pesadas: la media no converge)', ([x0, g]) => {
+    num(x0, 1, 'azarCauchy'); positivo(g, 2, 'azarCauchy', 'gamma');
+    return () => x0 + g * Math.tan(Math.PI * (uniforme() - 0.5));
+  });
+}
+
+
 
 global.EspanolLike = { crearMotor, lexer, parser, compilar, verificarTipos, desensamblar, VM,
   repr, tipoDe, T, tipoATexto, ObjLista, ObjDic, ObjCierre, ObjNativa, ObjNodo, ObjEstilo, OP, OP_NOMBRE, generarJS,
   tiposGlobales, ErrorFuente, firma, textoATipo, aridadDe, instalarEdsl, instalarClasico,
   serializar, deserializar, verificarBytecode: verificar, aTexto, deTexto, ErrorBytecode,
   Modulos, enlazar, exportacionesDe, SEP_MODULO, nombreGlobalModulo, CLAVE_EDSL, claveEdsl,
-  version: '4.1', perfil: typeof C1EN_ABIERTOS !== 'undefined' ? 'C1EÑ' : 'Ñ',
+  version: '4.1-c1en', perfil: typeof C1EN_ABIERTOS !== 'undefined' ? 'C1EÑ' : 'Ñ',
   abiertos: typeof C1EN_ABIERTOS !== 'undefined' ? C1EN_ABIERTOS : [] };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

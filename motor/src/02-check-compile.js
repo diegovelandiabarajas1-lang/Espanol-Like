@@ -122,7 +122,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       nodo.linea, nodo.col, `a partir de aquí «${nombre}» ya no es la de Ñ; si es a propósito, ponle otro nombre para que se lea`));
   }
 
-  // (4.1) Los registros del archivo: nombre → { campos, metodos }.
+  // (motor-exp) Los registros del archivo: nombre → { campos, metodos }.
   const registros = new Map();
   // Los registros que llegan de otro archivo con su constructor importado.
   if (enlace) for (const [, i] of enlace.nombres) {
@@ -130,6 +130,21 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
     if (f && !registros.has(f.nombre)) registros.set(f.nombre, f);
   }
   const tipoReg = nombre => registros.get(nombre) || null;
+  // (motor-exp N1) ¿«arreglo» es el de numerico (o NEÑ), y no uno del programa?
+  function esArregloDeNumerico(amb) {
+    const v = amb.buscar('arreglo');
+    if (!v) return false;
+    const imp = enlace && enlace.nombres.get('arreglo');
+    if (imp) return v === raiz.vars.get('arreglo') &&
+      (imp.global === nombreGlobalModulo(claveEdsl('numerico'), 'arreglo') || imp.global === nombreGlobalModulo(claveEdsl('nen'), 'arreglo'));
+    return v === raiz.vars.get('arreglo') && Object.prototype.hasOwnProperty.call(globalesTipos, 'arreglo');
+  }
+  function llevaLiteralReal(n) {
+    if (n.tipo === 'Literal') return n.tipoLit === T.real;
+    if (n.tipo === 'Unario' && n.op === '-') return llevaLiteralReal(n.expr);
+    if (n.tipo === 'ListaLit') return n.items.some(llevaLiteralReal);
+    return false;
+  }
   function campoDe(r, nombre) { return r.campos.find(c => c.nombre === nombre) || null; }
   function sinCampo(n, r, nombre) {
     const lista = r.campos.map(c => c.nombre).concat([...r.metodos.keys()]);
@@ -137,7 +152,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
     return err(n, `«${r.nombre}» no tiene «${nombre}»`,
       cerca ? `¿querías decir «${cerca}»? tiene: ${lista.join(', ')}` : `tiene: ${lista.join(', ')}`);
   }
-  // (4.1) Genéricos. «unificar» aprende qué es cada variable de tipo a
+  // (motor-exp) Genéricos. «unificar» aprende qué es cada variable de tipo a
   // partir de un argumento y devuelve un mensaje si choca con lo aprendido.
   function unificar(param, arg, vinc) {
     if (!param || !arg) return null;
@@ -244,7 +259,12 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
             'añade un «devolver» al final de la función');
         return;
       }
-      case 'Bloque': return bloqueTipos(n, new Ambito(amb));
+      case 'Bloque':
+        // (motor-exp N4.11) la ley 7: la puerta de atrás es explícita, visible y avisada
+        if (n.sinComprobar) avisos.push(new ErrorFuente('seguridad',
+          '«sinComprobar»: aquí, en el ejecutable (n-compilar) y en los núcleos de C1EÑ en nativo y en la GPU, un índice fuera de rango o una división entre cero NO se dicen: el resultado es indefinido',
+          n.linea, n.col, 'la VM y C1EÑ en jit siguen comprobando: pruébalo ahí antes; quita el bloque si algo no cuadra'));
+        return bloqueTipos(n, new Ambito(amb));
       case 'DeclTipo': return;   // ya registrado al empezar
       case 'Producir': expr(n.valor, amb); return;
       case 'Si': {
@@ -324,6 +344,9 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           return err(n, `«${n.nombre}» es un módulo, no un valor`,
             `sirve para «${n.nombre}.algo»; si necesitas pasar una de sus funciones, tráela con «usar … de …»`);
         marcarUso(v);
+        // (motor-exp N4.9) dentro de un genérico, un valor de tipo T vale lo que
+        // valga (se indexa, se suma…): se sabe qué es en cada llamada
+        if (v.tipo && v.tipo.k === 'var') return T.cualquiera;
         return v.tipo;
       }
       case 'Asignacion': {
@@ -369,6 +392,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         // «-a» sobre un arreglo le cambia el signo a todos sus números.
         if (n.op === '-') {
           if (t.k === 'arreglo') return T.arreglo;
+          if (t.k === 'grande') return T.grande;
           if (!esNum(t)) err(n, `«-» necesita un número y recibió ${tipoATexto(t)}`);
           return t;
         }
@@ -377,7 +401,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       case 'Binario': {
         const a = expr(n.izq, amb), b = expr(n.der, amb);
         const op = n.op;
-        // (4.1) «a ?? b»: si a puede ser nulo, sale b; el tipo es el de
+        // (motor-exp) «a ?? b»: si a puede ser nulo, sale b; el tipo es el de
         // los dos si coinciden.
         if (op === '??') {
           if (a.k === 'nulo') return b;
@@ -392,7 +416,10 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           // sea un tipo. La VM lo vuelve a comprobar para lo que llegue como
           // «cualquiera», y las dos reglas tienen que decir lo mismo.
           const dosFechas = a.k === 'fecha' && b.k === 'fecha';
-          if (!(dosFechas || (esNum(a) && esNum(b)) || (a.k === 'texto' && b.k === 'texto') ||
+          // (motor-exp N1) un grande se compara con otro grande o con un número
+          const conGrande = (a.k === 'grande' || b.k === 'grande') &&
+            (a.k === 'grande' || esNum(a)) && (b.k === 'grande' || esNum(b));
+          if (!(dosFechas || conGrande || (esNum(a) && esNum(b)) || (a.k === 'texto' && b.k === 'texto') ||
                 a.k === 'cualquiera' || b.k === 'cualquiera'))
             err(n, `no se pueden comparar ${tipoATexto(a)} y ${tipoATexto(b)} con «${op}»`,
               // La misma pista que da la VM. Si las dos reglas dicen cosas
@@ -407,6 +434,15 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         // Un arreglo se opera con otro arreglo o con un número, y el resultado
         // es un arreglo. Esto es lo que deja escribir «a * 2 + b» en vez de un
         // bucle, y que el verificador lo tipe sin ejecutar nada.
+        // (motor-exp N1) un grande con otro grande o con un número es un grande
+        if ((a.k === 'grande' || b.k === 'grande') && ['+', '-', '*', '/', '//', '%', '**'].includes(op)) {
+          const otro = a.k === 'grande' ? b : a;
+          if (otro.k === 'grande' || esNum(otro)) return T.grande;
+          if (otro.k === 'arreglo') return T.arreglo;   // (motor-exp N4.5) con un i64/u64, exacto
+          err(n, `«${op}»: un grande se opera con otro grande o con un número, y llegó ${tipoATexto(otro)}`,
+            'para pasar un texto a grande: grande("3.14159")');
+          return T.grande;
+        }
         if (a.k === 'arreglo' || b.k === 'arreglo') {
           if (['+', '-', '*', '/', '//', '%', '**'].includes(op)) {
             const otro = a.k === 'arreglo' ? b : a;
@@ -440,9 +476,16 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       }
       case 'Llamada': {
         const ft = expr(n.callee, amb);
+        // (motor-exp N1) «arreglo([1.0, 2.0])»: el «.0» se pierde al ejecutar
+        // (1.0 y 1 son el mismo número), así que el arreglo salía de enteros. El
+        // verificador sí lo ve en el texto: si la lista literal lleva un real
+        // escrito con punto o exponente, se le pasa «"real"» como tipo.
+        if (n.callee.tipo === 'Variable' && n.callee.nombre === 'arreglo' && n.args.length === 1 &&
+            n.args[0].tipo === 'ListaLit' && esArregloDeNumerico(amb) && llevaLiteralReal(n.args[0]))
+          n.args.push({ tipo: 'Literal', valor: 'real', tipoLit: T.texto, linea: n.linea, col: n.col });
         const nom = n.callee.tipo === 'Variable' ? `«${n.callee.nombre}»`
           : n.callee.tipo === 'Propiedad' ? `«${n.callee.nombre}»` : 'la función';
-        // (4.1) Argumentos con nombre y valores por defecto. Se resuelven
+        // (motor-exp) Argumentos con nombre y valores por defecto. Se resuelven
         // AQUÍ, donde se sabe a qué función se llama, y se reescriben los
         // argumentos del nodo en su orden: el compilador y el JIT no se enteran.
         // Lo que no llega y tiene defecto viaja como « faltante».
@@ -481,7 +524,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
             err(n, `${nom} espera ${rango} argumento(s) y recibió ${args.length}`);
             return ft.ret;
           }
-          // (4.1) Genéricos: cada variable de tipo toma el tipo de lo que
+          // (motor-exp) Genéricos: cada variable de tipo toma el tipo de lo que
           // llega, y tiene que ser el MISMO en todas partes.
           const vinc = ft.genericos ? new Map() : null;
           for (let i = 0; i < args.length; i++) {
@@ -508,7 +551,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         if (o.k === 'lista') { if (!esNum(i)) err(n, `el índice de una lista debe ser entero y es ${tipoATexto(i)}`); return o.elem; }
         if (o.k === 'texto') return T.texto;
         if (o.k === 'dic') return o.valor;
-        // a[i] sobre un arreglo (4.1): un número si es de 1 dimensión, una
+        // a[i] sobre un arreglo (motor-exp): un número si es de 1 dimensión, una
         // vista de la fila si tiene más. El número de dimensiones no está en el
         // tipo, así que el resultado es «cualquiera»; el índice sí se comprueba.
         if (o.k === 'arreglo') { if (!esNum(i)) err(n, `el índice de un arreglo debe ser entero y es ${tipoATexto(i)}`); return T.cualquiera; }
@@ -531,7 +574,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         const o = expr(n.obj, amb);
         // dic<texto,real> accedido con «.» debe seguir siendo real, no «cualquiera»
         if (o.k === 'dic') return o.valor;
-        // (4.1) Un registro: el verificador SABE qué campos tiene. Es la
+        // (motor-exp) Un registro: el verificador SABE qué campos tiene. Es la
         // razón de que existan: «p.nombre» mal escrito se para aquí, no al
         // ejecutar.
         if (o.k === 'registro') {
@@ -782,7 +825,7 @@ function compilar(ast, nombreScript, enlace) {
     if (!ctx.padre) return -1;
     const l = buscarLocal(ctx.padre, nombre);
     if (l !== -1) {
-      // (4.1) Al pausar una corrutina su pila se guarda aparte; un
+      // (motor-exp) Al pausar una corrutina su pila se guarda aparte; un
       // cierre que apuntara a una de sus variables quedaría mirando a otra
       // cosa. Hasta que eso tenga solución, se dice aquí y no se adivina.
       if (ctx.padre.fn.corrutina)
@@ -811,7 +854,7 @@ function compilar(ast, nombreScript, enlace) {
         return;
       }
       case 'Bloque': ambitoAbrir(); for (const s of n.cuerpo) sent(s); ambitoCerrar(n.linea); return;
-      // (4.1) Un registro. No hay opcode nuevo: se llama a la nativa
+      // (motor-exp) Un registro. No hay opcode nuevo: se llama a la nativa
       // interna « registro» con el nombre, los campos y los métodos (que ya
       // están definidos, porque las funciones van primero), y lo que devuelve
       // —el constructor— queda como global con el nombre del tipo. Todo son
@@ -1033,12 +1076,12 @@ function compilar(ast, nombreScript, enlace) {
     sub.fn.enlace = enl;
     sub.fn.ast = n;
     sub.fn.nombresParams = n.params.map(p => p.nombre);
-    // (4.1) Cuántos argumentos son obligatorios. Viaja en el .elb como una
+    // (motor-exp) Cuántos argumentos son obligatorios. Viaja en el .elb como una
     // constante marcadora (« minimos:N»): así el formato no cambia y un .elb
-    // sin valores por defecto es idéntico al de la 4.0.
+    // sin valores por defecto es idéntico al del LTS.
     const primero = n.params.findIndex(p => p.defecto);
     if (primero >= 0) { sub.fn.minimos = primero; sub.fn.chunk.cte(' minimos:' + primero); }
-    // (4.1) Generador o asíncrona: viaja igual, como constante marcadora.
+    // (motor-exp) Generador o asíncrona: viaja igual, como constante marcadora.
     if (n.corrutina) { sub.fn.corrutina = n.corrutina; sub.fn.chunk.cte(' corrutina:' + n.corrutina); }
     c = sub;
     ambitoAbrir();
@@ -1154,7 +1197,7 @@ function compilar(ast, nombreScript, enlace) {
         return emit(m[n.op], n.linea);
       }
       case 'Llamada': {
-        // (4.1) «a?.m(x)»: si a es nulo, nulo, y la llamada no ocurre.
+        // (motor-exp) «a?.m(x)»: si a es nulo, nulo, y la llamada no ocurre.
         if (n.callee.tipo === 'Propiedad' && n.callee.opcional) {
           expr(n.callee.obj);
           emit(OP.DUP, n.linea); emit(OP.NULO, n.linea); emit(OP.EQ, n.linea);
@@ -1213,7 +1256,7 @@ function compilar(ast, nombreScript, enlace) {
   // cuando A importa B y B importa A, A ya tiene definidas todas sus funciones
   // antes de que empiece B, así que B las ve. Lo que B no ve son los valores que
   // A calcula después, y eso se dice con un mensaje que nombra el ciclo.
-  // (4.1) Los registros van justo después de las funciones —sus
+  // (motor-exp) Los registros van justo después de las funciones —sus
   // métodos son funciones y tienen que existir ya— y antes que todo lo demás:
   // así «Punto(1, 2)» funciona aunque el «tipo» esté más abajo.
   for (const s of ast.cuerpo) if (s.tipo === 'DeclTipo')

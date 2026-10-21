@@ -70,7 +70,7 @@ const archivos = {
   crearCarpeta: r => intenta('no se pudo crear ' + r, () => { fs.mkdirSync(r, { recursive: true }); }),
   borrar: r => { if (!fs.existsSync(r)) return false; intenta('no se pudo borrar ' + r, () => fs.rmSync(r)); return true; },
   tamano: r => intenta('no existe ' + r, () => fs.statSync(r).size),
-  // (4.1, S2)
+  // (motor-exp, S2)
   copiar: (a, b) => intenta('no se pudo copiar ' + a + ' a ' + b, () => fs.cpSync(a, b, { recursive: true })),
   mover: (a, b) => intenta('no se pudo mover ' + a + ' a ' + b, () => fs.renameSync(a, b)),
   info: r => {
@@ -149,7 +149,7 @@ const modulos = {
   },
 };
 
-// (4.1, S2) La entrada se lee de verdad línea a línea. En la 4.0 se leía
+// (motor-exp, S2) La entrada se lee de verdad línea a línea. En el LTS se leía
 // ENTERA de golpe, y en una terminal eso es esperar al Ctrl+D: un programa que
 // pregunta «¿cómo te llamas?» se quedaba colgado sin enseñar nada. Ahora se
 // lee lo que haya llegado (en una terminal, hasta que se pulsa Intro) y se
@@ -207,13 +207,13 @@ const sistema = {
   ejecutar(orden, extra, op) {
     // Sin shell, igual que en la versión de QuickJS: la orden y sus argumentos
     // van por separado y un dato con espacios no se convierte en otra orden.
-    // (4.1, S2) op: { entrada, carpeta, entorno, espera } — todas opcionales.
+    // (motor-exp, S2) op: { entrada, carpeta, entorno, espera } — todas opcionales.
     try {
       const salida = execFileSync(orden, extra, opcionesProceso(op, true));
       return { codigo: 0, salida, error: '' };
     } catch (e) { return resultadoFallido(e); }
   },
-  // (4.1, S2) Lo mismo sin esperar: «listo» recibe el resultado.
+  // (motor-exp, S2) Lo mismo sin esperar: «listo» recibe el resultado.
   ejecutarFondo(orden, extra, op, listo) {
     const hijo = execFile(orden, extra, opcionesProceso(op, false), (e, salida, error) => {
       if (!e) return listo({ codigo: 0, salida: String(salida), error: String(error) });
@@ -293,7 +293,7 @@ const red = typeof fetch === 'function' ? {
   },
 } : null;
 
-// (4.1, S2) Lo que llega de fuera cuando el programa principal ya acabó
+// (motor-exp, S2) Lo que llega de fuera cuando el programa principal ya acabó
 // —un temporizador, una respuesta, una petición al servidor— es un turno. Si
 // falla, se dice y el proceso acabará con código 1, pero lo demás sigue: un
 // servidor no se cae porque una petición falle.
@@ -302,8 +302,8 @@ function turno(vm, fn, args) {
   try { vm.nuevoTurno(); vm.invocar(fn, args || []); }
   catch (e) { errorEnTurno(e); }
 }
-// El reloj. En la 4.0 la consola no tenía: «luego» y «cada» solo funcionaban
-// en el IDE. Desde la 4.1 funcionan aquí, y con ellos «dormir» y lo asíncrono.
+// El reloj. En el LTS la consola no tenía: «luego», «cada» y (en el clon)
+// «dormir» y todo lo asíncrono solo funcionaban en el IDE.
 const temporizadores = new Map();
 let sigTemp = 1;
 const tiempo = {
@@ -385,6 +385,9 @@ if (esBytecode) {
     if (p) r = m.correr(p.fn, [], p.modulos);
   } else r = m.ejecutarBytecode(bytecode);
 } else r = m.ejecutar(fuente, claveRaiz);
+// (motor-exp N4.11) el aviso de «sinComprobar» sale siempre (por la salida de errores):
+// es la ley 7, la puerta de atrás se ve
+for (const w of (r.avisos || [])) if (w.fase === 'seguridad') process.stderr.write('aviso: ' + (w.formato ? w.formato() : w.message) + '\n');
 if (!r.ok) {
   for (const e of r.errores) console.log(e.formato ? e.formato() : e.message);
   process.exit(1);

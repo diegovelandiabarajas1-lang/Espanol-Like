@@ -118,8 +118,161 @@ const TIPOS_ARR = {
   // difusión y «trozo» funcionan sin tocar nada, y solo quien de verdad lee o
   // escribe un número multiplica por la anchura.
   complejo: { ctor: Float64Array, ent: false, anchura: 2 },
+  // (motor-exp N4.2) PRECISIÓN SIMPLE Y MEDIA. «real32» es el float de C, el de
+  // las GPU: la mitad de memoria, y en una GPU de consumo hasta 32 veces más
+  // rápido que «real». «real16» es el half (IEEE binary16): 11 bits de mantisa,
+  // hasta 65504. La regla, la misma en jit, nativo y GPU: cada operación se
+  // hace en 64 bits y el resultado se REDONDEA una vez al tipo del arreglo.
+  // Para + − × ÷ y la raíz eso es exactamente la aritmética de 32 (o de 16)
+  // bits de verdad, porque 53 ≥ 2·24 + 2: redondear dos veces no cambia nada.
+  // En la VM un real16 ocupa 4 bytes (Node 22 no trae Float16Array); en un
+  // archivo binario y en la GPU, los suyos.
+  real32: { ctor: Float32Array, ent: false, bits: 32 },
+  real16: { ctor: Float32Array, ent: false, bits: 16 },
+  // (motor-exp N4.5) TIPOS DE MÁQUINA: los enteros de C con su tamaño, como los
+  // dtypes de NumPy. Guardar en uno lo ENVUELVE (200 en un i8 es −56): es lo
+  // que hace el hardware y lo que hacen C, CUDA y NumPy. «entero» sigue siendo
+  // el de siempre (i32, y se escribe también así). i64 y u64 viven en
+  // BigInt64Array: sus cuentas son exactas en los 64 bits, y un elemento que no
+  // cabe en 2^53 se lee como un «grande» exacto.
+  i8:  { ctor: Int8Array,   ent: true, bits: 8,  signo: true },
+  u8:  { ctor: Uint8Array,  ent: true, bits: 8,  signo: false },
+  i16: { ctor: Int16Array,  ent: true, bits: 16, signo: true },
+  u16: { ctor: Uint16Array, ent: true, bits: 16, signo: false },
+  u32: { ctor: Uint32Array, ent: true, bits: 32, signo: false },
+  i64: { ctor: BigInt64Array,  ent: true, bits: 64, signo: true,  big: true },
+  u64: { ctor: BigUint64Array, ent: true, bits: 64, signo: false, big: true },
 };
+// los nombres de NumPy y de C que son otro nombre de uno que ya hay
+const ALIAS_TIPO = { i32: 'entero', f64: 'real', f32: 'real32', f16: 'real16' };
+// bits y signo de los enteros, «entero» incluido
+const ENT_INFO = { i8: [8, true], u8: [8, false], i16: [16, true], u16: [16, false], entero: [32, true], u32: [32, false], i64: [64, true], u64: [64, false] };
+const esEntMaq = t => ENT_INFO[t] !== undefined;
+const esBig = t => t === 'i64' || t === 'u64';
+// el entero con signo de b bits, o sin signo
+const ENT_DE = (b, s) => ({ '8,true': 'i8', '8,false': 'u8', '16,true': 'i16', '16,false': 'u16', '32,true': 'entero', '32,false': 'u32', '64,true': 'i64', '64,false': 'u64' })[`${b},${s}`];
 const ANCHO = t => (TIPOS_ARR[t] && TIPOS_ARR[t].anchura) || 1;
+// (motor-exp N4.2) Los tipos de coma flotante, del más ancho al más estrecho.
+const TIPOS_FLOT = ['real', 'real32', 'real16'];
+const esFlot = t => t === 'real' || t === 'real32' || t === 'real16';
+// El tipo de una operación entre dos arreglos (o un arreglo y un número), como
+// en PyTorch: un número suelto no ensancha un arreglo (x32 * 2.5 sigue siendo
+// real32), un entero con un real32 da real32, y entre dos de coma flotante gana
+// el más ancho. «/» y «**» nunca dan entero.
+function tipoAritmetico(tA, tB, op, esA, esB) {
+  // (motor-exp N4.5) los enteros de máquina, como NumPy: entre dos, el que cabe
+  // los dos (i8 + u8 → i16, i32 + u32 → i64; i64 + u64 no cabe y da real); un
+  // número suelto entero adopta el tipo del arreglo (y uno con decimales da
+  // real); con un arreglo de coma flotante, ese. «/» y «**» dan real.
+  const mA = esA && esEntMaq(tA) && tA !== 'entero', mB = esB && esEntMaq(tB) && tB !== 'entero';
+  if (mA || mB) {
+    const flA = esA && esFlot(tA), flB = esB && esFlot(tB);
+    // con un arreglo de coma flotante gana el de coma flotante, sea cual sea el
+    // entero: la regla de N4.2 para «entero» (la de PyTorch), igual para todos;
+    // así i8 + real16 e i32 + real16 dan lo mismo (real16). NumPy, en cambio,
+    // ensancha el real según el entero (i16 + f16 → f32): ver EXPERIMENTAL.md.
+    if (flA || flB) return flA ? tA : tB;
+    if (op === '/' || op === '**') return 'real';
+    const ia = esA ? ENT_INFO[tA] : null, ib = esB ? ENT_INFO[tB] : null;
+    if (!esA || !esB) {                                  // con un número suelto
+      const s = esA ? b0(tB) : b0(tA);
+      if (s === 'real') return 'real';
+      return mA ? tA : tB;
+    }
+    if (!ia || !ib) return 'real';                       // con bool (o algo que no es entero)
+    if (ia[1] === ib[1]) return ENT_DE(Math.max(ia[0], ib[0]), ia[1]);
+    const [bs, bu] = ia[1] ? [ia[0], ib[0]] : [ib[0], ia[0]];
+    if (bs > bu) return ENT_DE(bs, true);
+    if (bu === 64) return 'real';
+    return ENT_DE(bu * 2, true);
+  }
+  const fA = esA && esFlot(tA) ? tA : null, fB = esB && esFlot(tB) ? tB : null;
+  if (fA || fB) {
+    for (const t of TIPOS_FLOT) if (fA === t || fB === t) return t;
+  }
+  const entero = tA === 'entero' && tB === 'entero' && op !== '/' && op !== '**';
+  return entero ? 'entero' : 'real';
+}
+// el «tipo» de un número suelto
+const b0 = t => (t === 'entero' ? 'entero' : 'real');
+// Redondear al half más cercano (empates a par), lo que hace Math.f16round en
+// los JavaScript que lo tienen: subnormales desde 2^-24, y de 65520 en adelante
+// infinito. Todo exacto: dividir y multiplicar por una potencia de dos no
+// redondea.
+// El exponente sale de los bits del double (sin Math.log2: diez veces más rápido).
+const R16_F = new Float64Array(1), R16_U = new Uint32Array(R16_F.buffer), R16_ALTO = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1 ? 1 : 0;
+const R16_Q = Array.from({ length: 41 }, (_, k) => 2 ** Math.max(k - 25 - 10, -24));   // el cuanto para el exponente k − 25
+function redondear16(x) {
+  if (x !== x || x === 0) return x;
+  R16_F[0] = x;
+  const E = ((R16_U[R16_ALTO] >>> 20) & 0x7ff) - 1023;
+  if (E >= 16) return x > 0 ? Infinity : -Infinity;      // 65536 o más (o infinito)
+  if (E < -25) return x > 0 ? 0 : -0;                    // por debajo de 2^-25: a cero
+  const a = x < 0 ? -x : x;
+  if (a >= 65520) return x > 0 ? Infinity : -Infinity;
+  const q = R16_Q[E + 25];
+  const y = a / q;
+  let r = Math.floor(y);
+  const f = y - r;
+  if (f > 0.5 || (f === 0.5 && r % 2 === 1)) r += 1;
+  const v = r * q;
+  return x < 0 ? -v : v;
+}
+// Los 16 bits IEEE de un half (x ya redondeado con redondear16) y al revés: para
+// los archivos binarios, que llevan los 2 bytes de verdad (float16 de NumPy).
+function bitsDe16(x) {
+  if (x !== x) return 0x7e00;
+  const sg = (x < 0 || Object.is(x, -0)) ? 0x8000 : 0, a = Math.abs(x);
+  if (a === Infinity) return sg | 0x7c00;
+  if (a === 0) return sg;
+  if (a < 6.103515625e-05) return sg | Math.round(a / 5.960464477539063e-08);
+  let e = Math.floor(Math.log2(a));
+  if (2 ** e > a) e--; else if (2 ** (e + 1) <= a) e++;
+  return sg | ((e + 15) << 10) | Math.round((a / 2 ** e - 1) * 1024);
+}
+function deBits16(h) {
+  const sg = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, m = h & 1023;
+  if (e === 0) return sg * m * 5.960464477539063e-08;
+  if (e === 31) return m ? NaN : sg * Infinity;
+  return sg * (1 + m / 1024) * 2 ** (e - 15);
+}
+// Lo que se guarda en un arreglo de ese tipo (real32 lo redondea Float32Array solo).
+const guardable = (tipo, x) => (tipo === 'i64' || tipo === 'u64') ? aBig64(x)
+  : typeof x === 'bigint' ? deBigA(tipo, x)
+  : (x && x.clase === 'grande') ? guardable(tipo, ENT_INFO[tipo] ? aBig64(x) : Number(x.m) * Math.pow(10, x.e))
+  : (tipo === 'real16' ? redondear16(x) : x);
+// un BigInt (de un i64/u64) guardado en otro tipo: a un entero, sus bits de abajo
+// (como el «(int8_t)» de C); a coma flotante, el real más cercano
+function deBigA(tipo, x) {
+  if (ENT_INFO[tipo]) return Number(BigInt.asUintN(32, x));      // el arreglo envuelve el resto
+  if (tipo === 'bool') return x !== 0n ? 1 : 0;
+  return tipo === 'real16' ? redondear16(Number(x)) : Number(x);
+}
+// (motor-exp N4.5) un número (o un grande exacto) a BigInt para un i64/u64:
+// se trunca como al guardar en cualquier entero; infinito o NaN no caben
+function aBig64(x) {
+  if (typeof x === 'bigint') return x;
+  if (x && x.clase === 'grande') {
+    if (x.e >= 0) return x.m * (10n ** BigInt(x.e));
+    return x.m / (10n ** BigInt(-x.e));
+  }
+  if (!Number.isFinite(x)) throw new ErrorTiempoEjecucion(`${x} no cabe en un entero de 64 bits`);
+  return BigInt(Math.trunc(x));
+}
+// y al revés: lo que se lee de un i64/u64 es un número si cabe exacto, y si no un grande exacto
+function deBig64(v) {
+  if (typeof v !== 'bigint') return v;
+  if (v >= -9007199254740992n && v <= 9007199254740992n) return Number(v);
+  return new ObjGrande(v, 0, Math.max(50, grCifras(v)), true);
+}
+// Los dígitos más cortos que vuelven al mismo número EN ESE TIPO: un real32 con
+// 0.1 dentro se imprime «0.1» y no «0.100000001490116», como en NumPy.
+function cortoFlot(x, tipo) {
+  if (!Number.isFinite(x) || Number.isInteger(x)) return x;
+  const r = tipo === 'real16' ? redondear16 : Math.fround, hasta = tipo === 'real16' ? 5 : 9;
+  for (let p = 1; p <= hasta; p++) { const v = Number(x.toPrecision(p)); if (r(v) === x) return v; }
+  return x;
+}
 
 function zancadasDe(forma) {
   const z = new Array(forma.length);
@@ -227,7 +380,7 @@ class ObjNativa {
 
 const esObj = v => v !== null && typeof v === 'object';
 
-// ── (4.1) corrutinas ────────────────────────────────────────────────
+// ── (motor-exp) corrutinas ────────────────────────────────────────────────
 // Un generador o una función asíncrona en pausa. Mientras está en pausa, su
 // trozo de pila y sus marcos viven aquí, con posiciones relativas; al
 // reanudarla se copian encima de la pila de la VM y se sigue donde se quedó.
@@ -255,7 +408,7 @@ class ObjLongitudGen {
   constructor(vm, g) { this.vm = vm; this.g = g; }
   valueOf() { return this.vm.genAvanzar(this.g) ? Infinity : -Infinity; }
 }
-// (4.1, fase S1) Lo que viene de C y no es un número ni un texto: un
+// (motor-exp, fase S1) Lo que viene de C y no es un número ni un texto: un
 // puntero, un bloque de memoria o una retrollamada registrada. Ñ no puede
 // hacer cuentas con ellos —no hay aritmética de punteros por accidente—, solo
 // guardarlos, compararlos y devolvérselos al mismo C.
@@ -276,7 +429,7 @@ class ObjOpaco {
 }
 // La señal que devuelve el bucle de despacho cuando una corrutina se pausa.
 const SUSPENDIDO = { suspendido: true };
-// (4.1) El valor que recibe un parámetro con defecto cuando no llega. Es
+// (motor-exp) El valor que recibe un parámetro con defecto cuando no llega. Es
 // único y el programa no lo puede escribir (su global es « faltante»).
 const FALTANTE = new ObjNativa(' faltante', 0, () => null, '');
 const aridadTexto = fn => (fn.minimos !== undefined && fn.minimos < fn.aridad ? `entre ${fn.minimos} y ${fn.aridad}` : String(fn.aridad));
@@ -303,6 +456,24 @@ const aridadTexto = fn => (fn.minimos !== undefined && fn.minimos < fn.aridad ? 
 // «switch» dentro del bucle, V8 no puede especializar la operación y se queda a
 // la mitad de velocidad. Son seis líneas repetidas seis veces, y se midió que
 // vale la pena.
+// (motor-exp N1) Una copia de aplicarOp/aplicarOpEsc por cada combinación de
+// tipos (Float64Array o Int32Array en el destino y en los operandos). Con una
+// sola función, V8 ve los dos tipos en el mismo bucle y lo compila genérico:
+// la mitad de rápido (5,2 ms contra 2,6 por millón, medido). Cada copia es una
+// función nueva con su propia información de tipos. Si el entorno no deja
+// compilar en caliente (CSP), se usa la de siempre.
+const _copiasOp = new Map();
+function opMonomorfa(fn, d, x, y) {
+  if (!jitPermitido()) return fn;
+  const t = v => (v instanceof Float64Array ? 'F' : v instanceof Int32Array ? 'I' : 'O');
+  const clave = fn.name + t(d) + t(x) + (y && typeof y === 'object' ? t(y) : 'n');
+  let f = _copiasOp.get(clave);
+  if (!f) {
+    try { f = new Function('unaOp', 'return ' + fn.toString())(unaOp); } catch (e) { f = fn; }
+    _copiasOp.set(clave, f);
+  }
+  return f;
+}
 function aplicarOp(d, x, y, n, op, vm) {
   switch (op) {
     case '+': for (let i = 0; i < n; i++) d[i] = x[i] + y[i]; return;
@@ -420,7 +591,8 @@ function reprArreglo(v, prof) {
     }
     const x = v.datos[p];
     if (v.tipo === 'bool') return x ? 'cierto' : 'falso';
-    return v.tipo === 'entero' ? String(x) : repr(x, 1);
+    if (v.tipo === 'real32' || v.tipo === 'real16') return repr(cortoFlot(x, v.tipo), 1);
+    return v.tipo === 'entero' || esEntMaq(v.tipo) ? String(x) : repr(x, 1);
   };
   const BORDE = 3, MAX = 1000;
   // Recursivo por ejes, que es lo que hace que una matriz se lea como una
@@ -473,7 +645,7 @@ function repr(v, prof) {
     return '[' + v.items.map(x => repr(x, prof + 1)).join(', ') + ']';
   }
   if (v instanceof ObjDic && v.tipoReg) {
-    // (4.1) Un registro se imprime con su tipo: Punto{x: 1, y: 2}.
+    // (motor-exp) Un registro se imprime con su tipo: Punto{x: 1, y: 2}.
     if (prof > 4) return v.tipoReg.nombre + '{…}';
     return v.tipoReg.nombre + '{' + [...v.mapa].map(([k, x]) => `${k}: ${repr(x, prof + 1)}`).join(', ') + '}';
   }
@@ -493,6 +665,7 @@ function repr(v, prof) {
   if (v instanceof ObjTabla)
     return `<tabla ${v.filas}×${v.cols.length}: ${v.cols.map(c => c.nombre).join(', ')}>`;
   if (v instanceof ObjArreglo) return reprArreglo(v, prof);
+  if (v instanceof ObjGrande) return grATexto(v);
   if (v instanceof ObjNodo) {
     if (v.forma === 'texto') return `<nodo texto ${JSON.stringify(String(v.valor).slice(0, 24))}>`;
     if (v.forma === 'elemento') return `<nodo ${v.etiqueta}${v.hijos.length ? ' · ' + v.hijos.length + ' hijo' + (v.hijos.length > 1 ? 's' : '') : ''}>`;
@@ -528,13 +701,15 @@ function tipoDe(v) {
   if (v instanceof ObjFecha) return 'fecha';
   if (v instanceof ObjTabla) return 'tabla';
   if (v instanceof ObjArreglo) return 'arreglo';
+  if (v instanceof ObjGrande) return 'grande';
   if (v instanceof ObjGenerador) return v.clase;
   if (v instanceof ObjPromesa) return 'promesa';
   if (v instanceof ObjOpaco) return v.clase;
   return 'funcion';
 }
 const verdad = v => !(v === null || v === undefined || v === false || v === 0 || v === '' ||
-                      (v instanceof ObjLista && v.items.length === 0));
+                      (v instanceof ObjLista && v.items.length === 0) ||
+                      (v instanceof ObjGrande && v.m === 0n));
 // Compara en profundidad. El tercer parámetro lleva los pares que ya se están
 // comparando más arriba en la recursión: sin él, dos listas que se contienen a
 // sí mismas hacen que la recursión no termine nunca.
@@ -548,6 +723,8 @@ function iguales(a, b, enCurso) {
   // el mismo instante son iguales, como dos listas con los mismos elementos.
   if (a instanceof ObjFecha || b instanceof ObjFecha)
     return a instanceof ObjFecha && b instanceof ObjFecha && a.ms === b.ms;
+  // (motor-exp N1) un grande es igual a otro grande o a un número del mismo valor
+  if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeIgual(a, b);
   if (a instanceof ObjArreglo || b instanceof ObjArreglo) {
     if (!(a instanceof ObjArreglo) || !(b instanceof ObjArreglo)) return false;
     if (a.forma.length !== b.forma.length) return false;
@@ -569,7 +746,7 @@ function iguales(a, b, enCurso) {
     }
     return true;
   }
-  // (4.1) Dos registros de tipos distintos no son iguales aunque
+  // (motor-exp) Dos registros de tipos distintos no son iguales aunque
   // tengan los mismos campos; un registro tampoco es igual a un diccionario.
   if (a instanceof ObjDic && b instanceof ObjDic && (a.tipoReg || null) !== (b.tipoReg || null)) return false;
   const dosListas = a instanceof ObjLista && b instanceof ObjLista;
@@ -647,7 +824,7 @@ class VM {
     this.stack = new Array(65536);
     this.sp = 0;
     this.frames = [];
-    this.pausa = null;         // (4.1) una corrutina pidió pausarse
+    this.pausa = null;         // (motor-exp) una corrutina pidió pausarse
     this.corrutinas = [];      // las que están corriendo ahora, la de dentro al final
     this.globals = new Map();
     this.upAbiertas = [];
@@ -865,7 +1042,7 @@ class VM {
       if (o.marca) { o.marca = false; nuevo.push(o); vivos++; }
       else {
         this.stats.liberados++;
-        // (4.1, S2) Un leerLineas que nadie terminó de recorrer (se cortó
+        // (motor-exp, S2) Un leerLineas que nadie terminó de recorrer (se cortó
         // con «romper») cierra aquí su archivo, cuando ya no lo ve nadie.
         if (o instanceof ObjGenerador && o.alAcabar && o.estado !== 'terminado') { o.estado = 'terminado'; try { o.alAcabar(); } catch (_) {} }
       }
@@ -949,7 +1126,7 @@ class VM {
         return;
       }
       if (fn.aridad !== nArgs) {
-        // (4.1) Los que faltan y tienen valor por defecto llegan como
+        // (motor-exp) Los que faltan y tienen valor por defecto llegan como
         // « faltante»; la propia función pone el defecto al empezar.
         if (fn.minimos !== undefined && nArgs >= fn.minimos && nArgs < fn.aridad) {
           while (nArgs < fn.aridad) { this.empujar(FALTANTE); nArgs++; }
@@ -1049,10 +1226,10 @@ class VM {
     let r;
     try { r = this.correr(framesGuardados); }
     catch (e) {
-      // (4.1) Un «lanzar» que nadie capturó dentro de la función llamada
+      // (motor-exp) Un «lanzar» que nadie capturó dentro de la función llamada
       // desde una nativa (mapear, filtrar, una retrollamada de C) sigue hacia
       // fuera: el «intentar» que rodea a la nativa todavía puede capturarlo.
-      // En la 4.0 se quedaba «fatal» y no lo capturaba nadie.
+      // En el LTS se quedaba «fatal» y no lo capturaba nadie.
       if (e instanceof ErrorTiempoEjecucion && e.valorLanzado !== undefined) e.fatal = false;
       this.frames.length = framesGuardados;
       this.sp = spGuardado;
@@ -1200,6 +1377,7 @@ class VM {
         case 20 /*NEG*/: {
           const a = this.sacar();
           if (a instanceof ObjArreglo) { this.empujar(this.arrArit(a, -1, '*')); break; }
+          if (a instanceof ObjGrande) { this.empujar(grNeg(a)); break; }
           if (typeof a !== 'number') this.error(`«-» necesita un número y recibió ${tipoDe(a)}`);
           this.empujar(-a); break;
         }
@@ -1207,10 +1385,10 @@ class VM {
 
         case 22 /*EQ*/: { const b = this.sacar(), a = this.sacar(); this.empujar(iguales(a, b)); break; }
         case 23 /*NEQ*/: { const b = this.sacar(), a = this.sacar(); this.empujar(!iguales(a, b)); break; }
-        case 24 /*LT*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '<'); this.empujar(a < b); break; }
-        case 25 /*LE*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '<='); this.empujar(a <= b); break; }
-        case 26 /*GT*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '>'); this.empujar(a > b); break; }
-        case 27 /*GE*/: { const b = this.sacar(), a = this.sacar(); this.cmp(a, b, '>='); this.empujar(a >= b); break; }
+        case 24 /*LT*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '<') ? grandeCmp(this, a, b, '<') < 0 : a < b); break; }
+        case 25 /*LE*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '<=') ? grandeCmp(this, a, b, '<=') <= 0 : a <= b); break; }
+        case 26 /*GT*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '>') ? grandeCmp(this, a, b, '>') > 0 : a > b); break; }
+        case 27 /*GE*/: { const b = this.sacar(), a = this.sacar(); this.empujar(this.cmp(a, b, '>=') ? grandeCmp(this, a, b, '>=') >= 0 : a >= b); break; }
 
         case 28 /*JMP*/: f.ip += code[f.ip] + 1; break;
         case 29 /*JMP_FALSE*/: { const off = code[f.ip++]; if (!verdad(this.mirar(0))) f.ip += off; break; }
@@ -1220,7 +1398,7 @@ class VM {
         case 32 /*CALL*/: {
           const n = code[f.ip++];
           this.llamarValor(this.stack[this.sp - n - 1], n);
-          // (4.1) « producir» o « esperar» pidieron pausar la corrutina.
+          // (motor-exp) « producir» o « esperar» pidieron pausar la corrutina.
           if (this.pausa !== null) return SUSPENDIDO;
           recargar(); break;
         }
@@ -1286,7 +1464,7 @@ class VM {
             v instanceof ObjError ? v.mensaje : `error sin capturar: ${repr(v, 1)}`);
           e.fatal = true;            // ya se desenrolló; no volver a buscarle sitio
           e.linea = this.lineaActual;
-          e.valorLanzado = v;        // (4.1) por si cruza el borde de una corrutina
+          e.valorLanzado = v;        // (motor-exp) por si cruza el borde de una corrutina
           throw e;
         }
 
@@ -1305,6 +1483,9 @@ class VM {
   // alguno es otra cosa. Así añadir arreglos no cuesta un microsegundo en el
   // 99% de los programas, que no los usan.
   aritOtro(a, b, op) {
+    // (motor-exp N4.5) un grande entero con un arreglo i64/u64: la cuenta exacta del arreglo
+    if ((a instanceof ObjArreglo && b instanceof ObjGrande) || (b instanceof ObjArreglo && a instanceof ObjGrande)) return this.arrArit(a, b, op);
+    if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeArit(this, a, b, op);
     if (a instanceof ObjArreglo || b instanceof ObjArreglo) return this.arrArit(a, b, op);
     if (op === '+') return this.sumar(a, b);
     this.error(`«${op}» necesita dos números y recibió ${tipoDe(a)} y ${tipoDe(b)}`);
@@ -1315,6 +1496,17 @@ class VM {
   // de «mapear(lista, fn(x) { … })», donde cada elemento paga una llamada.
   arrArit(a, b, op) {
     const esA = a instanceof ObjArreglo, esB = b instanceof ObjArreglo;
+    // (motor-exp N4.5) un grande suelto con un i64/u64: tiene que ser un entero exacto
+    if ((esA && b instanceof ObjGrande) || (esB && a instanceof ObjGrande)) {
+      const x = esA ? a : b, g = esA ? b : a;
+      if (!esBig(x.tipo))
+        this.error(`«${op}»: un grande se opera con arreglos i64 o u64, y este es ${x.tipo}`, 'pásalo a número con aNumero(g), o el arreglo a "i64"');
+      const v = aBig64(g);
+      if (!g.exacto || (g.e < 0 && v * (10n ** BigInt(-g.e)) !== g.m))
+        this.error(`«${op}»: con un arreglo ${x.tipo} el grande tiene que ser un entero exacto`);
+      if (op === '/' || op === '**') this.error(`«${op}» de un arreglo ${x.tipo} con un grande todavía no`, 'pásalos a real con aTipo(a, "real")');
+      return this.arrAritEnt(esA ? a : v, esA ? v : b, op, esA, esB, x.tipo);
+    }
     if (esA && !esB && typeof b !== 'number')
       this.error(`«${op}»: un arreglo se opera con otro arreglo o con un número, y llegó ${tipoDe(b)}`);
     if (esB && !esA && typeof a !== 'number')
@@ -1326,10 +1518,125 @@ class VM {
 
     // El tipo del resultado: entero solo si los dos lo son y la operación lo
     // conserva. Dividir siempre da real, como en el resto del lenguaje.
+    // (motor-exp N4.2) real32 y real16 se conservan: ver «tipoAritmetico».
     const tA = esA ? a.tipo : (Number.isInteger(a) ? 'entero' : 'real');
     const tB = esB ? b.tipo : (Number.isInteger(b) ? 'entero' : 'real');
-    const entero = tA === 'entero' && tB === 'entero' && op !== '/' && op !== '**';
-    const tipo = entero ? 'entero' : 'real';
+    const tipo = tipoAritmetico(tA, tB, op, esA, esB);
+    const entero = tipo === 'entero';
+    // (motor-exp N4.5) un resultado real con un i64/u64 dentro: se pasa a real antes
+    if (!esEntMaq(tipo) && ((esA && esBig(a.tipo)) || (esB && esBig(b.tipo)))) {
+      const aR = esA && esBig(a.tipo) ? this.arrAReal(a) : a, bR = esB && esBig(b.tipo) ? this.arrAReal(b) : b;
+      const out = this.arrAritR(aR, bR, op, esA, esB, tipo);
+      if (tipo === 'real16') this.arrRedondear(out);
+      return out;
+    }
+    // (motor-exp N2) grande y con C1EÑ: por los núcleos de NEÑ (GPU si la hay)
+    if (!entero && !esEntMaq(tipo) && this.nenArit) { const r = this.nenArit(a, b, op, tipo); if (r) return r; }
+    // (motor-exp N4.5) los enteros (de máquina y «entero») van por su camino exacto
+    // («entero» sigue por el camino de siempre, que es el rápido; los de hasta 16
+    // bits también, porque en un double sus cuentas son exactas; el «*» de 32 bits
+    // y todo lo de 64 necesitan el camino exacto)
+    if (tipo === 'entero' && op === '*') return this.arrAritEnt(a, b, op, esA, esB, tipo);
+    if (esEntMaq(tipo) && tipo !== 'entero') {
+      if (esBig(tipo) || (op === '*' && ENT_INFO[tipo][0] === 32) ||
+        (esA && esBig(a.tipo)) || (esB && esBig(b.tipo))) return this.arrAritEnt(a, b, op, esA, esB, tipo);
+      if (!esA && !Number.isInteger(a)) this.error(`«${op}»: un arreglo ${tipo} se opera con enteros y llegó ${a}`);
+      if (!esB && !Number.isInteger(b)) this.error(`«${op}»: un arreglo ${tipo} se opera con enteros y llegó ${b}`);
+      return this.arrAritR(a, b, op, esA, esB, tipo);
+    }
+    const out = this.arrAritR(a, b, op, esA, esB, tipo);
+    if (tipo === 'real16') this.arrRedondear(out);
+    return out;
+  }
+  // (motor-exp N4.5) un i64/u64 como real (exacto hasta 2^53)
+  arrAReal(x) {
+    const o = this.arrNuevo(x.forma, 'real'), d = o.datos; let i = 0;
+    for (const p of x.posiciones()) d[i++] = Number(x.datos[p]);
+    this.cobrar(x.tamano);
+    return o;
+  }
+  // (motor-exp N4.5) Aritmética de enteros, EXACTA y con el envoltorio del tipo:
+  // hasta 32 bits con números (el producto de 32 con Math.imul, que da los 32
+  // bits de abajo exactos), los de 64 con BigInt. // y % redondean hacia abajo,
+  // como siempre en Ñ.
+  arrAritEnt(a, b, op, esA, esB, tipo) {
+    const f = esA && esB ? difundir(a.forma, b.forma) : (esA ? a.forma.slice() : b.forma.slice());
+    if (f === null)
+      this.error(`«${op}»: las formas ${a.forma.join('×')} y ${b.forma.join('×')} no se pueden difundir`,
+        'de derecha a izquierda, cada par de ejes tiene que ser igual o uno de los dos ser 1');
+    if (!esA && typeof a !== 'bigint' && !Number.isInteger(a)) this.error(`«${op}»: un arreglo ${tipo} se opera con enteros y llegó ${a}`);
+    if (!esB && typeof b !== 'bigint' && !Number.isInteger(b)) this.error(`«${op}»: un arreglo ${tipo} se opera con enteros y llegó ${b}`);
+    const out = this.arrNuevo(f, tipo);
+    const n = out.tamano, d = out.datos, [bits] = ENT_INFO[tipo];
+    this.cobrar(n);
+    // el camino rápido del «*» de 32 bits (Math.imul da los 32 bits de abajo exactos)
+    if (bits === 32 && op === '*' && !(esA && esBig(a.tipo)) && !(esB && esBig(b.tipo))) {
+      if (esA && esB && a.seguida && b.seguida && a.tamano === n && b.tamano === n) {
+        const x = a.datos, y = b.datos, oa = a.desp || 0, ob = b.desp || 0;
+        for (let i = 0; i < n; i++) d[i] = Math.imul(x[oa + i], y[ob + i]);
+        return out;
+      }
+      if (esA !== esB && (esA ? a : b).seguida) {
+        const v = esA ? a : b, x = v.datos, o = v.desp || 0, k = Number(esA ? b : a);
+        for (let i = 0; i < n; i++) d[i] = Math.imul(x[o + i], k);
+        return out;
+      }
+    }
+    const za = esA ? zancadasDifundidas(a, f) : null, zb = esB ? zancadasDifundidas(b, f) : null;
+    const nd = f.length, ix = new Array(nd).fill(0);
+    const big = bits === 64;
+    const sa = !esA ? (big ? BigInt(a) : a) : 0, sb = !esB ? (big ? BigInt(b) : b) : 0;
+    for (let k = 0; k < n; k++) {
+      let pa = esA ? a.desp : 0, pb = esB ? b.desp : 0;
+      for (let q = 0; q < nd; q++) { if (esA) pa += ix[q] * za[q]; if (esB) pb += ix[q] * zb[q]; }
+      let x = esA ? a.datos[pa] : sa, y = esB ? b.datos[pb] : sb;
+      if (big) {
+        if (typeof x !== 'bigint') x = BigInt(x);
+        if (typeof y !== 'bigint') y = BigInt(y);
+        let r;
+        switch (op) {
+          case '+': r = x + y; break;
+          case '-': r = x - y; break;
+          case '*': r = x * y; break;
+          case '//': case '%': {
+            if (y === 0n) this.error(op === '//' ? 'división entre cero' : 'módulo entre cero');
+            let q = x / y;
+            if ((x % y !== 0n) && ((x < 0n) !== (y < 0n))) q -= 1n;
+            r = op === '//' ? q : x - q * y;
+            break;
+          }
+          default: this.error(`«${op}» no se puede aplicar a un arreglo ${tipo}`);
+        }
+        d[k] = r;                                   // BigInt64Array y BigUint64Array envuelven a 64 bits
+      } else {
+        if (typeof x === 'bigint') x = Number(x);
+        if (typeof y === 'bigint') y = Number(y);
+        let r;
+        switch (op) {
+          case '+': r = x + y; break;
+          case '-': r = x - y; break;
+          case '*': r = bits === 32 ? Math.imul(x, y) : x * y; break;
+          case '//': if (y === 0) this.error('división entre cero'); r = Math.floor(x / y); break;
+          case '%': if (y === 0) this.error('módulo entre cero'); r = x - y * Math.floor(x / y); break;
+          default: this.error(`«${op}» no se puede aplicar a un arreglo ${tipo}`);
+        }
+        d[k] = r;                                   // el arreglo del tipo lo envuelve al guardar
+      }
+      for (let q = nd - 1; q >= 0; q--) { if (++ix[q] < f[q]) break; ix[q] = 0; }
+    }
+    return out;
+  }
+  // (motor-exp N4.2) Un arreglo real16 vive en un Float32Array: tras escribir
+  // en él se redondea cada número a 16 bits. Es lo que hace que «guardar»
+  // signifique lo mismo que en un half de verdad.
+  arrRedondear(o) {
+    if (o.tipo !== 'real16') return o;
+    const d = o.datos;   // «datos» y no «_d»: si estaba en la GPU, baja primero
+    for (let i = 0; i < d.length; i++) d[i] = redondear16(d[i]);
+    return o;
+  }
+  tipoFlotante(t) { return t === 'real32' || t === 'real16' ? t : 'real'; }
+  arrAritR(a, b, op, esA, esB, tipo) {
 
     const f = esA && esB ? difundir(a.forma, b.forma) : (esA ? a.forma.slice() : b.forma.slice());
     if (f === null)
@@ -1348,11 +1655,11 @@ class VM {
       a.forma.length === b.forma.length && a.forma.every((x, i) => x === b.forma[i]);
     if (mismaForma) {
       const x = a.datos, y = b.datos;
-      aplicarOp(d, x, y, n, op, this);
+      opMonomorfa(aplicarOp, d, x, y)(d, x, y, n, op, this);
       return out;
     }
-    if (esA && !esB && a.seguida) { aplicarOpEsc(d, a.datos, b, n, op, false, this); return out; }
-    if (esB && !esA && b.seguida) { aplicarOpEsc(d, b.datos, a, n, op, true, this); return out; }
+    if (esA && !esB && a.seguida) { const x = a.datos; opMonomorfa(aplicarOpEsc, d, x, null)(d, x, b, n, op, false, this); return out; }
+    if (esB && !esA && b.seguida) { const x = b.datos; opMonomorfa(aplicarOpEsc, d, x, null)(d, x, a, n, op, true, this); return out; }
 
     // El camino general: vistas, transpuestas y difusión de verdad. Recorre por
     // zancadas, que es lo único que vale para cualquier forma.
@@ -1442,6 +1749,11 @@ class VM {
   // no haya podido romper en silencio ninguna de las ciento cincuenta funciones
   // que ya había: ninguna lo acepta hasta que se la enseña a propósito.
   nadaDeComplejos(x, f) {
+    // (motor-exp N4.5) los de 64 bits van por las funciones que los conocen (aritmética,
+    // comparar, aTipo, bits, suma, aListaA, a[i], archivos); el resto, después de aTipo
+    if (x instanceof ObjArreglo && (x.tipo === 'i64' || x.tipo === 'u64'))
+      this.error(f ? `«${f}» todavía no trabaja con arreglos ${x.tipo}` : `esta operación todavía no trabaja con arreglos ${x.tipo}`,
+        'pásalo antes con aTipo(a, "real") —exacto hasta 2^53— o a un entero más pequeño');
     if (x instanceof ObjArreglo && x.tipo === 'complejo')
       this.error(f ? `«${f}» todavía no sabe trabajar con arreglos complejos`
                    : 'esta operación todavía no sabe trabajar con arreglos complejos',
@@ -1457,13 +1769,15 @@ class VM {
   // «seno(x)» en «seno(arreglo)» sin escribir nada nuevo.
   arrUnaria(x, fn, tipo) {
     this.nadaDeComplejos(x, null);
+    // (motor-exp N4.2) un resultado real de un real32 (o real16) se queda en su tipo
+    if (tipo === 'real') tipo = this.tipoFlotante(x.tipo);
     const out = this.arrNuevo(x.forma, tipo || (x.tipo === 'bool' ? 'real' : x.tipo));
     const d = out.datos, n = out.tamano;
     this.cobrar(n);
-    if (x.seguida) { const s = x.datos; for (let i = 0; i < n; i++) d[i] = fn(s[i]); return out; }
+    if (x.seguida) { const s = x.datos; for (let i = 0; i < n; i++) d[i] = fn(s[i]); return this.arrRedondear(out); }
     let i = 0;
     for (const p of x.posiciones()) d[i++] = fn(x.datos[p]);
-    return out;
+    return this.arrRedondear(out);
   }
 
   // Comparar elemento a elemento da un arreglo de «bool», que es la mitad del
@@ -1510,8 +1824,14 @@ class VM {
     const out = this.arrNuevo(f, 'bool');
     const d = out.datos, n = out.tamano;
     this.cobrar(n);
-    const cmp = CMP_ARR[op];
+    let cmp = CMP_ARR[op];
     if (!cmp) this.error(`«${op}» no es una comparación`);
+    // (motor-exp N4.5) un i64/u64 guarda BigInt: «<» entre BigInt y número ya es
+    // exacto en JavaScript; la igualdad necesita la suelta (1n == 1)
+    if ((esA && esBig(a.tipo)) || (esB && esBig(b.tipo))) {
+      // eslint-disable-next-line eqeqeq
+      if (op === '==') cmp = (x, y) => x == y; else if (op === '!=') cmp = (x, y) => x != y;
+    }
     if (esA && esB && a.seguida && b.seguida && a.tamano === n && b.tamano === n) {
       const x = a.datos, y = b.datos;
       for (let i = 0; i < n; i++) d[i] = cmp(x[i], y[i]) ? 1 : 0;
@@ -1543,10 +1863,22 @@ class VM {
   // puente que usan las reducciones que ya existían para listas.
   arrValores(x) {
     this.nadaDeComplejos(x, null);
-    const out = new Array(x.tamano);
-    let i = 0;
-    for (const p of x.posiciones()) out[i++] = x.datos[p];
-    this.cobrar(x.tamano);
+    const n = x.tamano, out = new Array(n), d = x.datos;
+    this.cobrar(n);
+    if (n === 0) return out;
+    // (motor-exp N1) seguido: un bucle; si no, un odómetro sobre las zancadas.
+    // El generador «posiciones» costaba 40 ns por número: suma() de un millón
+    // tardaba 43 ms.
+    if (x.seguida) { const o = x.desp || 0; for (let i = 0; i < n; i++) out[i] = d[o + i]; return out; }
+    const f = x.forma, z = x.zancadas, nd = f.length, ix = new Array(nd).fill(0);
+    let p = x.desp;
+    for (let k = 0; k < n; k++) {
+      out[k] = d[p];
+      for (let q = nd - 1; q >= 0; q--) {
+        if (++ix[q] < f[q]) { p += z[q]; break; }
+        p -= (f[q] - 1) * z[q]; ix[q] = 0;
+      }
+    }
     return out;
   }
 
@@ -1599,6 +1931,8 @@ class VM {
     if (typeof a === 'string' && typeof b === 'string') return a + b;
     if (a instanceof ObjLista && b instanceof ObjLista) return this.nuevaLista(a.items.concat(b.items));
     if (a instanceof ObjArreglo || b instanceof ObjArreglo) return this.arrArit(a, b, '+');
+    if ((a instanceof ObjArreglo && b instanceof ObjGrande) || (b instanceof ObjArreglo && a instanceof ObjGrande)) return this.arrArit(a, b, '+');
+    if (a instanceof ObjGrande || b instanceof ObjGrande) return grandeArit(this, a, b, '+');
     if (typeof a === 'string' || typeof b === 'string')
       this.error(`no se puede sumar ${tipoDe(a)} y ${tipoDe(b)}`,
         `convierte con texto(...): por ejemplo "total: " + texto(${repr(typeof a === 'string' ? b : a, 1)})`);
@@ -1608,7 +1942,14 @@ class VM {
     if (typeof a !== 'number' || typeof b !== 'number')
       this.error(`«${op}» necesita dos números y recibió ${tipoDe(a)} y ${tipoDe(b)}`);
   }
+  // Devuelve cierto si es una comparación con un grande (la hace quien llama con
+  // grandeCmp); si no, valida y devuelve falso, y la hace JavaScript.
   cmp(a, b, op) {
+    if (a instanceof ObjGrande || b instanceof ObjGrande) {
+      const ok = x => x instanceof ObjGrande || typeof x === 'number';
+      if (!ok(a) || !ok(b)) this.error(`no se pueden comparar ${tipoDe(a)} y ${tipoDe(b)} con «${op}»`);
+      return true;
+    }
     // Dos fechas sí: es la razón de que «fecha» sea un tipo y no un texto ni un
     // número. Una fecha con un número NO, aunque por dentro sea un número:
     // dejarlo pasar es justo el error que el tipo viene a quitar.
@@ -1640,7 +1981,7 @@ class VM {
     }
     this.error(`no se puede recorrer ni medir un valor de tipo ${tipoDe(o)}`);
   }
-  // ── (4.1) corrutinas ──────────────────────────────────────────────
+  // ── (motor-exp) corrutinas ──────────────────────────────────────────────
   nuevaCorrutina(cierre, args) {
     const asinc = cierre.fn.corrutina === 'asincrona';
     const g = this.registrar(new ObjGenerador(cierre, args, asinc));
@@ -1656,7 +1997,7 @@ class VM {
   // termine con un error en vez de con un valor (una promesa que falló).
   reanudar(g, enviado, lanzar) {
     if (g.estado === 'terminado') return { fin: true, valor: null };
-    // (4.1, S2) Un generador hecho en la biblioteca (leerLineas): no hay
+    // (motor-exp, S2) Un generador hecho en la biblioteca (leerLineas): no hay
     // pila que guardar, solo una función que da el siguiente valor.
     if (g.nativo) {
       const x = g.nativo();
@@ -1757,13 +2098,13 @@ class VM {
     for (const f of cola) f(ok, valor);
   }
 
-  // (4.1) «p.distancia» sin llamar: una función que ya lleva su «yo».
+  // (motor-exp) «p.distancia» sin llamar: una función que ya lleva su «yo».
   // Se crea al pedirla; «p.distancia(q)» la crea y la llama en el acto.
   metodoAtado(o, nombre, m) {
     const ar = m instanceof ObjCierre ? m.fn.aridad - 1 : -1;
     return new ObjNativa(o.tipoReg.nombre + '.' + nombre, ar, (args, vm) => vm.invocar(m, [o, ...args]));
   }
-  // ── a[i] sobre un arreglo (4.1) ──────────────────────────────────
+  // ── a[i] sobre un arreglo (motor-exp) ──────────────────────────────────
   // Hasta ahora un arreglo solo se leía con elemento(a, i, j) y se escribía con
   // ponerElemento(a, i, j, v). a[i] hace lo mismo con la sintaxis de una lista:
   //   · 1 dimensión  → el número de esa posición (lo mismo que elemento)
@@ -1793,7 +2134,7 @@ class VM {
     if (o instanceof ObjGenerador) return o.actual;
     if (o instanceof ObjArreglo) {
       const k = this.arrIndice(o, i);
-      if (o.forma.length === 1) return o.datos[o.desp + k * o.zancadas[0]];
+      if (o.forma.length === 1) return deBig64(o.datos[o.desp + k * o.zancadas[0]]);
       return this.arrFila(o, k);
     }
     if (o instanceof ObjError) {
@@ -1815,7 +2156,7 @@ class VM {
       return o[k];
     }
     if (o instanceof ObjDic && o.tipoReg) {
-      // (4.1) Un registro: un campo, o un método ya atado a este registro.
+      // (motor-exp) Un registro: un campo, o un método ya atado a este registro.
       if (o.mapa.has(i)) return o.mapa.get(i);
       const m = o.tipoReg.metodos.get(i);
       if (m) return this.metodoAtado(o, i, m);
@@ -1836,8 +2177,9 @@ class VM {
         this.error(`a[${i}] = … solo vale en un arreglo de 1 dimensión y este tiene ${o.forma.length}`,
           'baja hasta el número: a[i][j] = v');
       // Mismo control que ponerElemento: en un arreglo solo entran números.
-      const x = (typeof v === 'boolean' && o.tipo === 'bool') ? (v ? 1 : 0) : this.exigeNum(v, 2, 'a[i] =');
-      o.datos[o.desp + k * o.zancadas[0]] = x;
+      const x = (typeof v === 'boolean' && o.tipo === 'bool') ? (v ? 1 : 0)
+        : (esBig(o.tipo) && v instanceof ObjGrande) ? v : this.exigeNum(v, 2, 'a[i] =');
+      o.datos[o.desp + k * o.zancadas[0]] = guardable(o.tipo, x);
       return;
     }
     if (o instanceof ObjLista) {
@@ -1885,7 +2227,7 @@ class VM {
       // eslint-disable-next-line no-new-func
       const cie = (typeof gen === 'string' ? null : gen.cierres) || [];
       // «LI» es la clase ObjLista: el código generado la usa para el camino
-      // rápido de a[i] y de «para x en lista» sin pasar por rt (4.1).
+      // rápido de a[i] y de «para x en lista» sin pasar por rt (motor-exp).
       const factoria = new Function('rt', 'nt', 'pr', 'cf', 'LI', '"use strict";return ' + src);
       fn.jit = factoria(rt, nat.map(x => x.nat.fn), (typeof gen === 'string' ? null : gen.protos) || [],
                         cie.map(x => x.cl), ObjLista);
@@ -1968,7 +2310,7 @@ function crearRT(vm) {
     // «call» y argumentos sueltos cuesta mucho menos, porque no se asigna el
     // array y V8 puede meter la llamada en línea. La nativa atada, que es una
     // llamada directa de toda la vida, cuesta 1,25 ns: ese es el suelo.
-    // (4.1) Para la autollamada directa: el tope y el error, sin pasar
+    // (motor-exp) Para la autollamada directa: el tope y el error, sin pasar
     // por yaN. Es el mismo mensaje que da yaN.
     MAX: MAX_FRAMES,
     desborde() { vm.profJS--; vm.error('desbordamiento de pila: demasiadas llamadas anidadas', 'suele indicar una recursión sin caso base'); },
@@ -2026,11 +2368,12 @@ function crearRT(vm) {
     pow(a, b) { if (typeof a === 'number' && typeof b === 'number') return Math.pow(a, b);
                 return vm.aritOtro(a, b, '**'); },
     neg(a) { if (a instanceof ObjArreglo) return vm.arrArit(a, -1, '*');
+             if (a instanceof ObjGrande) return grNeg(a);
              if (typeof a !== 'number') vm.error(`«-» necesita un número y recibió ${tipoDe(a)}`); return -a; },
-    lt(a, b) { vm.cmp(a, b, '<'); return a < b; },
-    le(a, b) { vm.cmp(a, b, '<='); return a <= b; },
-    gt(a, b) { vm.cmp(a, b, '>'); return a > b; },
-    ge(a, b) { vm.cmp(a, b, '>='); return a >= b; },
+    lt(a, b) { return vm.cmp(a, b, '<') ? grandeCmp(vm, a, b, '<') < 0 : a < b; },
+    le(a, b) { return vm.cmp(a, b, '<=') ? grandeCmp(vm, a, b, '<=') <= 0 : a <= b; },
+    gt(a, b) { return vm.cmp(a, b, '>') ? grandeCmp(vm, a, b, '>') > 0 : a > b; },
+    ge(a, b) { return vm.cmp(a, b, '>=') ? grandeCmp(vm, a, b, '>=') >= 0 : a >= b; },
     // La red contra bucles infinitos, dentro del código traducido. El JS que
     // genera el JIT no pasa por el bucle de despacho, así que no contaba nada:
     // «mientras cierto» dentro de una función se colgaba para siempre, y una
@@ -2062,7 +2405,7 @@ function generarJS(fn, vm) {
   // acabar en «new Function». Se comprueba de las dos maneras —por la bandera
   // y por la ausencia de AST— para que quitar una sin querer no abra la puerta.
   if (fn.deDisco) { fn.jitEstado = 'rechazada'; return null; }
-  // (4.1) Una corrutina se pausa a mitad, y una función de JavaScript
+  // (motor-exp) Una corrutina se pausa a mitad, y una función de JavaScript
   // no: se queda en el intérprete, que sí sabe guardar dónde iba.
   if (fn.corrutina) { fn.jitEstado = 'rechazada'; return null; }
   const ast = fn.ast;
@@ -2098,7 +2441,7 @@ function generarJS(fn, vm) {
   // nombre aparece aquí igual. Una local capturada se compila como una CAJA
   // —un ObjUpvalue cerrado— para que la función y el cierre compartan la misma
   // variable y no dos copias: si el cierre le escribe, el de fuera lo ve.
-  // El nombre de la función de JavaScript que se está generando (4.1:
+  // El nombre de la función de JavaScript que se está generando (motor-exp:
   // lo usa la autollamada directa).
   // Lleva prefijo propio: un parámetro o una local del programa nunca empieza
   // por «_yo$», así que no puede taparlo.
@@ -2196,7 +2539,7 @@ function generarJS(fn, vm) {
   }
   const nativas = [];
   const iNativa = new Map();
-  // (4.1) Una nativa de la biblioteca que el JIT conoce por dentro
+  // (motor-exp) Una nativa de la biblioteca que el JIT conoce por dentro
   // —«rango», «agregar»— y para la que emite código propio en vez de llamarla.
   // Se ata igual que las demás aunque su aridad sea variable, por dos razones:
   // queda en la lista de invalidación (si alguien redefine el nombre, se tira
@@ -2263,7 +2606,7 @@ function generarJS(fn, vm) {
       }
       case 'Para': {
         const it = '_it$' + (nTmp++), i = '_i$' + (nTmp++);
-        // (4.1) «para i en rango(…)» sin construir la lista. Antes,
+        // (motor-exp) «para i en rango(…)» sin construir la lista. Antes,
         // rango(2000000) llenaba dos millones de casillas para recorrerlas una
         // vez. Los argumentos se validan con la misma función que usa la
         // nativa, así que los errores —y el tope de 5 millones— son los mismos.
@@ -2340,7 +2683,7 @@ function generarJS(fn, vm) {
         const d = n.destino;
         if (d.tipo === 'Variable') return escribirVar(d.nombre, ex(n.valor));
         if (d.tipo === 'Indice') {
-          // (4.1) El mismo camino rápido para escribir. El orden de
+          // (motor-exp) El mismo camino rápido para escribir. El orden de
           // evaluación no cambia: objeto, índice, valor.
           const x = tmp(), y = tmp(), z = tmp();
           return `((${x}=${ex(d.obj)}, ${y}=${ex(d.indice)}, ${z}=${ex(n.valor)}, ${x} instanceof LI && typeof ${y} === 'number' && ${y} >= 0 && ${y} < ${x}.items.length && (${y} | 0) === ${y})` +
@@ -2350,7 +2693,7 @@ function generarJS(fn, vm) {
         return rendirse();
       }
       case 'Unario': return n.op === '-' ? `rt.neg(${ex(n.expr)})` : `(!rt.verdad(${ex(n.expr)}))`;
-      // (4.1) las tres formas nuevas de expresión
+      // (motor-exp) las tres formas nuevas de expresión
       case 'SiExpr': return `(${verdadJS(ex(n.cond))} ? ${ex(n.entonces)} : ${ex(n.sino)})`;
       case 'Binario': {
         const a = () => ex(n.izq), b = () => ex(n.der);
@@ -2412,7 +2755,7 @@ function generarJS(fn, vm) {
                  ` : rt.call(${v}, [${as.join(',')}]))`;
         }
         if (n.callee.tipo === 'Variable' && !declarada(n.callee.nombre) && n.args.length === 2) {
-          // (4.1) agregar(lista, x): un push. Si el primero no es una
+          // (motor-exp) agregar(lista, x): un push. Si el primero no es una
           // lista, la nativa de siempre da el error de siempre.
           const k = conocida(gl(n.callee.nombre), 'agregar');
           if (k >= 0) {
@@ -2430,7 +2773,7 @@ function generarJS(fn, vm) {
           // dos cosas se arreglan solas: mientras no haya código se va por el
           // camino de siempre, y en cuanto lo hay se va derecho.
           const j = n.args.length <= 4 ? atarCierre(gl(n.callee.nombre), n.args.length) : -1;
-          // (4.1) La función se llama a sí misma por su nombre —fib(n-1)—:
+          // (motor-exp) La función se llama a sí misma por su nombre —fib(n-1)—:
           // el código que se está generando ES el destino, así que se llama
           // derecho a sí mismo, sin guardia de «jit» ni yaN. Lo que no se salta
           // es el control de profundidad. Si el nombre se reasigna después, el
@@ -2457,7 +2800,7 @@ function generarJS(fn, vm) {
         return `rt.call(${ex(n.callee)}, [${n.args.map(ex).join(',')}])`;
       }
       case 'Indice': {
-        // (4.1) Camino rápido de a[i] para una lista con un índice entero
+        // (motor-exp) Camino rápido de a[i] para una lista con un índice entero
         // dentro de rango, que es casi siempre. Todo lo demás —negativos,
         // textos, diccionarios, arreglos, errores— sigue yendo a idxg, que es
         // el mismo código del intérprete.
@@ -2526,5 +2869,6 @@ function generarJS(fn, vm) {
 
 if (typeof module !== 'undefined') module.exports = {
   VM, ErrorTiempoEjecucion, ObjLista, ObjDic, ObjCierre, ObjNativa, ObjUpvalue, ObjNodo, ObjError, ObjEstilo,
-  repr, tipoDe, verdad, iguales, generarJS, ObjFecha, isoDeFecha, ObjTabla,
+  repr, tipoDe, verdad, iguales, generarJS, ObjFecha, isoDeFecha, ObjTabla, redondear16, bitsDe16, deBits16, tipoAritmetico, esFlot, guardable, cortoFlot,
+  ALIAS_TIPO, ENT_INFO, esEntMaq, esBig, aBig64, deBig64, ENT_DE,
 };

@@ -158,8 +158,10 @@ function instalarProbar(vm) {
     }, 'debeSerCerca(a, b, tolerancia?) — para números con decimales');
     const comparar = (nombre, ok, texto) => def(nombre, 'cualquiera, cualquiera -> nulo', a => {
       cuenta();
-      vm.cmp(a[0], a[1], nombre);
-      if (!ok(a[0], a[1])) falla(`${v(a[0])} no es ${texto} ${v(a[1])}`);
+      // (motor-exp N1) con un grande, la comparación la hace grandeCmp
+      const conGrande = vm.cmp(a[0], a[1], nombre);
+      const s = conGrande ? grandeCmp(vm, a[0], a[1], nombre) : 0;
+      if (!(conGrande ? ok(s, 0) : ok(a[0], a[1]))) falla(`${v(a[0])} no es ${texto} ${v(a[1])}`);
       return null;
     }, `que el primero sea ${texto} el segundo · también vale para fechas`);
     comparar('debeSerMayor', (x, y) => x > y, 'mayor que');
