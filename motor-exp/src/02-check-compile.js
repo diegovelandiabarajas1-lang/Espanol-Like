@@ -339,6 +339,9 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           return err(n, `«${n.nombre}» es un módulo, no un valor`,
             `sirve para «${n.nombre}.algo»; si necesitas pasar una de sus funciones, tráela con «usar … de …»`);
         marcarUso(v);
+        // (motor-exp N4.9) dentro de un genérico, un valor de tipo T vale lo que
+        // valga (se indexa, se suma…): se sabe qué es en cada llamada
+        if (v.tipo && v.tipo.k === 'var') return T.cualquiera;
         return v.tipo;
       }
       case 'Asignacion': {

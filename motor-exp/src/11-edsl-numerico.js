@@ -26,6 +26,21 @@
 // ============================================================================
 'use strict';
 
+// (motor-exp N4.9) Los límites de cada tipo de número de un arreglo:
+// [épsilon, el más bajo, el más alto]. El épsilon es la distancia de 1 al
+// siguiente número del tipo (en los enteros, 1). Los de 64 bits van en BigInt
+// (salen como «grande» exacto). Los usan epsilonTipo, minimoTipo y maximoTipo
+// aquí y dentro de los núcleos de C1EÑ, donde son constantes del núcleo.
+const LIMITES_TIPO = {
+  real: [2 ** -52, -1.7976931348623157e308, 1.7976931348623157e308],
+  real32: [2 ** -23, -3.4028234663852886e38, 3.4028234663852886e38],
+  real16: [2 ** -10, -65504, 65504],
+  entero: [1, -2147483648, 2147483647], i8: [1, -128, 127], u8: [1, 0, 255],
+  i16: [1, -32768, 32767], u16: [1, 0, 65535], u32: [1, 0, 4294967295],
+  i64: [1, -(2n ** 63n), 2n ** 63n - 1n], u64: [1, 0n, 2n ** 64n - 1n],
+  bool: [1, 0, 1],
+};
+
 function instalarNumerico(vm) {
   const L = items => vm.nuevaLista(items);
   const D = () => vm.nuevoDic();
@@ -1209,6 +1224,25 @@ function instalarNumerico(vm) {
       'cuántos números tiene en total');
     def('tipoArreglo', 'arreglo -> texto', a => arrC(a[0], 1, 'tipoArreglo').tipo,
       '"real", "entero", "bool", "complejo", "real32", "real16" o un entero de máquina ("i8" … "u64") — el tipo de TODOS sus números');
+    // (motor-exp N4.9) los límites del tipo de los números de un arreglo (o de un
+    // tipo dicho por su nombre): para escribir un núcleo genérico que valga igual
+    // con real, real32 o entero. Dentro de un núcleo son constantes.
+    const limite = (a, k, f) => {
+      let t = a[0];
+      if (t instanceof ObjArreglo) t = t.tipo;
+      else if (typeof t === 'string') t = ALIAS_TIPO[t] || t;
+      else vm.error(`«${f}»: el argumento 1 debe ser un arreglo o el nombre de un tipo y es ${tipoDe(a[0])}`, `${f}(a) · ${f}("real32")`);
+      const l = LIMITES_TIPO[t];
+      if (!l) vm.error(`«${f}»: ${t === 'complejo' ? 'los complejos no tienen un orden' : `no conozco el tipo «${t}»`}`,
+        `los que hay: ${Object.keys(LIMITES_TIPO).join(', ')}`);
+      return deBig64(l[k]);
+    };
+    def('epsilonTipo', 'arreglo|texto -> real', a => limite(a, 0, 'epsilonTipo'),
+      'epsilonTipo(a) · epsilonTipo("real32") — la distancia de 1 al siguiente número del tipo: 2^−52 en real, 2^−23 en real32, 2^−10 en real16, 1 en los enteros');
+    def('minimoTipo', 'arreglo|texto -> cualquiera', a => limite(a, 1, 'minimoTipo'),
+      'minimoTipo(a) · minimoTipo("i16") — el número más bajo que cabe en el tipo (−32768 en i16, el real más negativo en real)');
+    def('maximoTipo', 'arreglo|texto -> cualquiera', a => limite(a, 2, 'maximoTipo'),
+      'maximoTipo(a) · maximoTipo("u8") — el número más alto que cabe en el tipo (255 en u8, 3,4·10^38 en real32)');
     def('esVista', 'arreglo -> bool', a => arrC(a[0], 1, 'esVista').base !== null,
       'dice si comparte memoria con otro arreglo en vez de tener la suya');
 

@@ -77,6 +77,8 @@ const PISTA_PALABRA = Object.assign(Object.create(null), {
 // comunes del idioma habría roto cualquier programa que las use de nombre.
 // «var y = 1» compila.
 
+// (motor-exp N4.9) los tipos de los números de un arreglo, con los alias de NumPy y de C
+const ELEM_ARREGLO = new Set(['real', 'entero', 'bool', 'complejo', 'real32', 'real16', 'i8', 'u8', 'i16', 'u16', 'u32', 'i64', 'u64', 'i32', 'f64', 'f32', 'f16']);
 const TIPOS_BASE = new Set(['entero', 'real', 'texto', 'bool', 'nulo', 'lista', 'dic', 'funcion', 'nodo', 'estilo', 'error', 'fecha', 'tabla', 'arreglo', 'grande', 'cualquiera']);
 
 function lexer(fuente) {
@@ -288,6 +290,8 @@ function tipoATexto(t) {
     case 'modulo': return `módulo «${t.ruta || t.clave}»`;
     case 'registro': return t.nombre;
     case 'var': return t.nombre;
+    case 'elem': return t.nombre;
+    case 'arreglo': return t.elem ? `arreglo<${tipoATexto(t.elem)}>` : 'arreglo';
     default: return t.k;
   }
 }
@@ -536,6 +540,23 @@ function parser(toks, fuenteNombre, opciones) {
         `tipos válidos: ${[...TIPOS_BASE].join(', ')}`);
     if (nombre === 'lista' && comprobar('OP', '<')) {
       p++; const e = parseTipo(); exigir('OP', '>', 'falta «>» al cerrar lista<…>'); return T.lista(e);
+    }
+    // (motor-exp N4.9) arreglo<real32>, arreglo<T>: el tipo de sus números. El
+    // verificador no lo puede saber (un arreglo no lleva su tipo de elemento en
+    // el tipo estático); lo comprueba C1EÑ al lanzar un núcleo, y la T se une
+    // con lo que llegue, como en una plantilla.
+    if (nombre === 'arreglo' && comprobar('OP', '<')) {
+      p++;
+      const e = ver();
+      if (e.tipo !== 'IDENT') throw new ErrorFuente('sintaxis', `se esperaba el tipo de los números del arreglo y llegó «${e.valor}»`, e.linea, e.col);
+      p++;
+      let elem;
+      if (esVarTipo(e.valor)) elem = { k: 'var', nombre: e.valor };
+      else if (ELEM_ARREGLO.has(e.valor)) elem = { k: 'elem', nombre: e.valor };
+      else throw new ErrorFuente('tipos', `«${e.valor}» no es un tipo de los números de un arreglo`, e.linea, e.col,
+        `los que hay: ${[...ELEM_ARREGLO].join(', ')}, o una variable de tipo (fn f<T>(a: arreglo<T>))`);
+      exigir('OP', '>', 'falta «>» al cerrar arreglo<…>');
+      return { k: 'arreglo', elem };
     }
     if (nombre === 'dic' && comprobar('OP', '<')) {
       p++; const c = parseTipo(); exigir(',', ','); const v = parseTipo();
@@ -1595,6 +1616,9 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           return err(n, `«${n.nombre}» es un módulo, no un valor`,
             `sirve para «${n.nombre}.algo»; si necesitas pasar una de sus funciones, tráela con «usar … de …»`);
         marcarUso(v);
+        // (motor-exp N4.9) dentro de un genérico, un valor de tipo T vale lo que
+        // valga (se indexa, se suma…): se sabe qué es en cada llamada
+        if (v.tipo && v.tipo.k === 'var') return T.cualquiera;
         return v.tipo;
       }
       case 'Asignacion': {
@@ -9641,6 +9665,21 @@ function instalarTexto(vm) {
 //                         son genéricos como «contiene» — se quedan en el núcleo.
 // ============================================================================
 
+// (motor-exp N4.9) Los límites de cada tipo de número de un arreglo:
+// [épsilon, el más bajo, el más alto]. El épsilon es la distancia de 1 al
+// siguiente número del tipo (en los enteros, 1). Los de 64 bits van en BigInt
+// (salen como «grande» exacto). Los usan epsilonTipo, minimoTipo y maximoTipo
+// aquí y dentro de los núcleos de C1EÑ, donde son constantes del núcleo.
+const LIMITES_TIPO = {
+  real: [2 ** -52, -1.7976931348623157e308, 1.7976931348623157e308],
+  real32: [2 ** -23, -3.4028234663852886e38, 3.4028234663852886e38],
+  real16: [2 ** -10, -65504, 65504],
+  entero: [1, -2147483648, 2147483647], i8: [1, -128, 127], u8: [1, 0, 255],
+  i16: [1, -32768, 32767], u16: [1, 0, 65535], u32: [1, 0, 4294967295],
+  i64: [1, -(2n ** 63n), 2n ** 63n - 1n], u64: [1, 0n, 2n ** 64n - 1n],
+  bool: [1, 0, 1],
+};
+
 function instalarNumerico(vm) {
   const L = items => vm.nuevaLista(items);
   const D = () => vm.nuevoDic();
@@ -10824,6 +10863,25 @@ function instalarNumerico(vm) {
       'cuántos números tiene en total');
     def('tipoArreglo', 'arreglo -> texto', a => arrC(a[0], 1, 'tipoArreglo').tipo,
       '"real", "entero", "bool", "complejo", "real32", "real16" o un entero de máquina ("i8" … "u64") — el tipo de TODOS sus números');
+    // (motor-exp N4.9) los límites del tipo de los números de un arreglo (o de un
+    // tipo dicho por su nombre): para escribir un núcleo genérico que valga igual
+    // con real, real32 o entero. Dentro de un núcleo son constantes.
+    const limite = (a, k, f) => {
+      let t = a[0];
+      if (t instanceof ObjArreglo) t = t.tipo;
+      else if (typeof t === 'string') t = ALIAS_TIPO[t] || t;
+      else vm.error(`«${f}»: el argumento 1 debe ser un arreglo o el nombre de un tipo y es ${tipoDe(a[0])}`, `${f}(a) · ${f}("real32")`);
+      const l = LIMITES_TIPO[t];
+      if (!l) vm.error(`«${f}»: ${t === 'complejo' ? 'los complejos no tienen un orden' : `no conozco el tipo «${t}»`}`,
+        `los que hay: ${Object.keys(LIMITES_TIPO).join(', ')}`);
+      return deBig64(l[k]);
+    };
+    def('epsilonTipo', 'arreglo|texto -> real', a => limite(a, 0, 'epsilonTipo'),
+      'epsilonTipo(a) · epsilonTipo("real32") — la distancia de 1 al siguiente número del tipo: 2^−52 en real, 2^−23 en real32, 2^−10 en real16, 1 en los enteros');
+    def('minimoTipo', 'arreglo|texto -> cualquiera', a => limite(a, 1, 'minimoTipo'),
+      'minimoTipo(a) · minimoTipo("i16") — el número más bajo que cabe en el tipo (−32768 en i16, el real más negativo en real)');
+    def('maximoTipo', 'arreglo|texto -> cualquiera', a => limite(a, 2, 'maximoTipo'),
+      'maximoTipo(a) · maximoTipo("u8") — el número más alto que cabe en el tipo (255 en u8, 3,4·10^38 en real32)');
     def('esVista', 'arreglo -> bool', a => arrC(a[0], 1, 'esVista').base !== null,
       'dice si comparte memoria con otro arreglo en vez de tener la suya');
 
@@ -14034,6 +14092,10 @@ const C1EN_FUNCIONES = {
   atomicoLeer: 2, atomicoEscribir: 3, atomicoSumar: 3, atomicoCambiar: 3, atomicoComparar: 4,
   cerrarCandado: 2, abrirCandado: 2, esperarMientras: 3, despertar: 2, vallaMemoria: 0,
   barreraHilos: 0, numeroHilos: 0,
+  // (motor-exp N4.9) plantillas: el tipo de los números de un arreglo y sus
+  // límites son CONSTANTES del núcleo (cada tipo de argumento es otro núcleo), así
+  // que «si tipoArreglo(a) == "real32" { … }» se decide al compilar
+  tipoArreglo: 1, epsilonTipo: 1, minimoTipo: 1, maximoTipo: 1,
 };
 // (motor-exp N4.7) los atómicos: «s» = es una sentencia (no devuelve nada), «b» =
 // bloquea (solo en «hilos»), «v» = cuántos valores además del arreglo y el índice
@@ -14062,7 +14124,8 @@ const C1EN_LISTA = 'raiz, exp, log, log10, seno, coseno, tangente, arcoseno, arc
   ' (y en paraleloBloques: barrera, hilosPorBloque, numeroBloques, compartido y compartidoEntero;' +
   ' y de bits: bitsY, bitsO, bitsXor, bitsNo, desplazarIzq y desplazarDer;' +
   ' y atómicos: atomicoLeer, atomicoEscribir, atomicoSumar, atomicoCambiar, atomicoComparar, vallaMemoria;' +
-  ' y en hilos: barreraHilos, numeroHilos, cerrarCandado, abrirCandado, esperarMientras y despertar)';
+  ' y en hilos: barreraHilos, numeroHilos, cerrarCandado, abrirCandado, esperarMientras y despertar;' +
+  ' y constantes del tipo: tipoArreglo (comparado con un texto), epsilonTipo, minimoTipo y maximoTipo)';
 
 function instalarNenC1en(vm, def, host) {
   const c1en = crearC1en(vm);
@@ -14576,8 +14639,8 @@ function crearC1en(vm) {
   // porque «/» siempre divide en real y los enteros se convierten exactos.
   function tipoDeArg(v, anot, quien, k, nombre) {
     if (v instanceof ObjArreglo) {
-      if (anot && anot.k && anot.k !== 'arreglo' && anot.k !== 'cualquiera')
-        vm.error(`«${quien}»: «${nombre}» está anotado como ${anot.k} y llegó un arreglo`);
+      if (anot && anot.k && anot.k !== 'arreglo' && anot.k !== 'cualquiera' && anot.k !== 'var')
+        vm.error(`«${quien}»: «${nombre}» está anotado como ${tipoATexto(anot)} y llegó un arreglo`);
       // (motor-exp N4.2) un real32 entra como float*: se lee en double, se calcula en
       // double y se guarda redondeado a float, igual en jit, nativo y GPU. Un real16
       // todavía no (habría que redondear cada escritura a 16 bits dentro del núcleo).
@@ -14588,6 +14651,8 @@ function crearC1en(vm) {
       if (C1EN_ENT_C[v.tipo]) return `${v.tipo}*`;
       return v.tipo === 'entero' ? 'i32*' : (v.tipo === 'real' ? 'f64*' : (v.tipo === 'real32' ? 'f32*' : 'otro*'));
     }
+    if (anot && anot.k === 'arreglo' && (typeof v === 'boolean' || typeof v === 'number'))     // (motor-exp N4.9)
+      vm.error(`«${quien}»: «${nombre}» está anotado como ${tipoATexto(anot)} y llegó ${typeof v === 'boolean' ? 'un bool' : 'un número'}`);
     if (typeof v === 'boolean') return 'bool';
     if (typeof v === 'number') {
       if (anot && anot.k === 'real') return 'real';
@@ -14633,7 +14698,77 @@ function crearC1en(vm) {
         : `«${quien}»: la función recibe ${fn.aridad} parámetro(s) y le llegan ${args.length + 2} (el bloque, el hilo y ${args.length} argumento(s))`,
       nIdx === 1 ? 'el primer parámetro es siempre el índice del hilo: funcion(i, a, b) con paralelo(n, f, a, b)'
         : 'los dos primeros son el bloque y el hilo dentro del bloque: funcion(b, t, a, x) con paraleloBloques(bloques, hilos, f, a, x)');
-    return args.map((v, k) => tipoDeArg(v, ast.params[k + nIdx].anotacion, quien, k + 2 + nIdx, ast.params[k + nIdx].nombre));
+    const tipos = args.map((v, k) => tipoDeArg(v, ast.params[k + nIdx].anotacion, quien, k + 2 + nIdx, ast.params[k + nIdx].nombre));
+    plantilla(ast, args, tipos, quien, nIdx);
+    return tipos;
+  }
+
+  // ── (motor-exp N4.9) plantillas: el núcleo genérico se instancia por tipos ──
+  // Un núcleo ya era un núcleo por cada firma de tipos con que se lanza (la caché
+  // va por la firma). Lo que añaden las anotaciones genéricas es la COMPROBACIÓN
+  // y la conversión, como en una plantilla de C++:
+  //   fn f<T>(i, a: arreglo<T>, b: arreglo<T>, k: T)   a y b con números del mismo tipo;
+  //                                                    k es de ese tipo (entero → tiene que
+  //                                                    ser entero; real/real32 → entra como real)
+  //   fn f(i, a: arreglo<real32>)                      a tiene que ser real32
+  //   fn f<T>(i, a: T, b: T)                           a y b del mismo tipo (arreglos o números)
+  // Primero se unen los arreglos y después los números, así que el orden de los
+  // parámetros no importa.
+  function plantilla(ast, args, tipos, quien, nIdx) {
+    const vinc = new Map();               // T → { como: 'elem' | 'arreglo' | 'valor', t, de }
+    const desc = b => b.como === 'elem' ? `números ${b.t}` : b.como === 'arreglo' ? `arreglo ${b.t}` : `número ${b.t === 'ent' ? 'entero' : 'real'}`;
+    const unir = (T, b, nombre) => {
+      const ya = vinc.get(T);
+      if (!ya) { vinc.set(T, Object.assign({ de: nombre }, b)); return; }
+      if (ya.como === b.como && ya.t === b.t) return;
+      vm.error(`«${quien}»: ${T} no puede ser a la vez ${desc(ya)} (por «${ya.de}») y ${desc(b)} (por «${nombre}»)`,
+        b.como === 'elem' || ya.como === 'elem' ? 'pásalos del mismo tipo: aTipo(a, "real32") convierte' : null);
+    };
+    // 1) los arreglos
+    args.forEach((v, k) => {
+      const p = ast.params[k + nIdx], an = p.anotacion;
+      if (!an || !(v instanceof ObjArreglo)) return;
+      if (an.k === 'var') unir(an.nombre, { como: 'arreglo', t: v.tipo }, p.nombre);
+      else if (an.k === 'arreglo' && an.elem) {
+        if (an.elem.k === 'var') unir(an.elem.nombre, { como: 'elem', t: v.tipo }, p.nombre);
+        else {
+          const quiere = ALIAS_TIPO[an.elem.nombre] || an.elem.nombre;
+          if (v.tipo !== quiere)
+            vm.error(`«${quien}»: «${p.nombre}» está anotado como arreglo<${an.elem.nombre}> y llegó un arreglo ${v.tipo}`,
+              `conviértelo antes: aTipo(${p.nombre}, "${quiere}")`);
+        }
+      }
+    });
+    // 2) los números
+    args.forEach((v, k) => {
+      const p = ast.params[k + nIdx], an = p.anotacion;
+      if (!an || an.k !== 'var' || v instanceof ObjArreglo) return;
+      if (typeof v !== 'number') vm.error(`«${quien}»: «${p.nombre}» es de tipo ${an.nombre}, y a un núcleo solo entran números y arreglos con tipo`);
+      const ya = vinc.get(an.nombre);
+      if (ya && ya.como === 'arreglo')
+        vm.error(`«${quien}»: ${an.nombre} no puede ser a la vez arreglo ${ya.t} (por «${ya.de}») y un número (por «${p.nombre}»)`);
+      if (ya && ya.como === 'elem') {
+        // T es el tipo de los números de un arreglo: el número entra como ese tipo
+        if (ENT_INFO[ya.t] || ya.t === 'bool') {
+          if (!Number.isInteger(v)) vm.error(`«${quien}»: «${p.nombre}» es ${an.nombre} = ${ya.t} (el tipo de «${ya.de}») y llegó ${repr(v, 1)}`,
+            'pasa un entero, o el arreglo como real');
+          tipos[k] = 'ent';
+        } else tipos[k] = 'real';
+        return;
+      }
+      const t = Number.isInteger(v) && Math.abs(v) <= 9007199254740992 ? 'ent' : 'real';
+      if (ya && ya.como === 'valor' && (ya.t === 'ent' || ya.t === 'real')) {
+        // varios números con la misma T: entero y real se unen en real, como en Ñ
+        if (ya.t !== t) { ya.t = 'real'; }
+        return;
+      }
+      unir(an.nombre, { como: 'valor', t }, p.nombre);
+    });
+    // los números de una T que acabó en real entran todos como real
+    args.forEach((v, k) => {
+      const an = ast.params[k + nIdx].anotacion;
+      if (an && an.k === 'var' && typeof v === 'number') { const b = vinc.get(an.nombre); if (b && b.como === 'valor' && b.t === 'real') tipos[k] = 'real'; }
+    });
   }
 
   function lanzarError(modelo, i, codigo, quien, nh) {
@@ -15560,6 +15695,9 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
     // (motor-exp N4.8) para repartir un «paralelo» entre varias GPU: si hay
     // atómicos o vallas (hilos que se hablan) y si el índice del hilo se reasigna
     atomicos: false, iReasignado: false,
+    // (motor-exp N4.9) lo que se sabe al compilar: el valor de cada expresión
+    // constante, y la rama que toca de cada «si» con condición constante
+    constantes: new Map(), siFijo: new Map(),
   };
   const asc = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9_]/g, '_');
   let nVars = 0;
@@ -15684,9 +15822,92 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
   };
 
   function tx(n) {
+    // (motor-exp N4.9) lo que se sabe al compilar (el tipo de un arreglo, sus
+    // límites, y lo que se calcula con eso) es una constante del núcleo
+    if (n.tipo !== 'Literal') {
+      const c = constante(n);
+      if (c) {
+        if (c.t === 'texto') no(n, '«tipoArreglo» dentro de un núcleo solo se compara con un texto', 'si tipoArreglo(a) == "real32" { … } sino { … }');
+        M.constantes.set(n, c.v);
+        M.tipos.set(n, c.t);
+        return c.t;
+      }
+    }
     const t = tx0(n);
     M.tipos.set(n, t);
     return t;
+  }
+  // (motor-exp N4.9) El valor de una expresión que no depende de nada del hilo:
+  // { v, t } o null. Entran los literales, tipoArreglo(a) (un texto), los límites
+  // del tipo, y las comparaciones, «no», «y», «o» y «-» de constantes. Lo de un
+  // literal suelto no se guarda (ya se emite como literal).
+  function tipoElemDe(a, f) {
+    if (a.tipo === 'Literal' && typeof a.valor === 'string') {
+      const t = ALIAS_TIPO[a.valor] || a.valor;
+      if (!LIMITES_TIPO[t]) no(a, `«${f}»: no conozco el tipo «${a.valor}»`, `los que hay: ${Object.keys(LIMITES_TIPO).join(', ')}`);
+      return t;
+    }
+    const info = a.tipo === 'Variable' ? buscar(a.nombre) : null;
+    if (!info || !info.arr) no(a, `«${f}» dentro de un núcleo recibe un arreglo que sea un parámetro, por su nombre, o el nombre de un tipo`, `${f}(a) · ${f}("real32")`);
+    return info.arr === 'real' ? (info.f32 ? 'real32' : 'real') : (info.ent || 'entero');
+  }
+  function constante(n) {
+    switch (n.tipo) {
+      case 'Literal':
+        if (typeof n.valor === 'boolean') return { v: n.valor, t: 'bool' };
+        if (typeof n.valor === 'number') return { v: n.valor, t: n.tipoLit && (n.tipoLit === T.real || n.tipoLit.k === 'real') ? 'real' : (Number.isInteger(n.valor) ? 'ent' : 'real') };
+        if (typeof n.valor === 'string') return { v: n.valor, t: 'texto' };
+        return null;
+      case 'Llamada': {
+        if (n.callee.tipo !== 'Variable' || buscar(n.callee.nombre)) return null;
+        const g = vm.globals.get(globalDeEnlace(enl, n.callee.nombre));
+        if (!(g instanceof ObjNativa) || (g.edsl && g.edsl !== 'numerico' && g.edsl !== 'nen')) return null;
+        const f = g.nombreCorto || g.nombre;
+        if (f !== 'tipoArreglo' && f !== 'epsilonTipo' && f !== 'minimoTipo' && f !== 'maximoTipo') return null;
+        if (n.args.length !== 1) no(n, `«${f}» recibe un argumento`);
+        const t = tipoElemDe(n.args[0], f);
+        if (f === 'tipoArreglo') return { v: t, t: 'texto' };
+        const v = LIMITES_TIPO[t][f === 'epsilonTipo' ? 0 : f === 'minimoTipo' ? 1 : 2];
+        if (typeof v === 'bigint') no(n, `«${f}(${t})» no cabe en un número del núcleo`, 'los de 64 bits todavía no entran en los núcleos');
+        return { v, t: f === 'epsilonTipo' || esFlot(t) ? 'real' : 'ent' };
+      }
+      case 'Unario': {
+        const c = constante(n.expr);
+        if (!c) return null;
+        if (n.op === 'no') return c.t === 'bool' ? { v: !c.v, t: 'bool' } : null;
+        if (n.expr.tipo === 'Literal') return null;       // «-2.0» lo escribe el emisor, como siempre
+        return c.t === 'ent' || c.t === 'real' ? { v: -c.v, t: c.t } : null;
+      }
+      case 'Binario': {
+        const a = constante(n.izq);
+        if (!a) return null;
+        const b = constante(n.der);
+        if (!b) return null;
+        if (n.izq.tipo === 'Literal' && n.der.tipo === 'Literal' && a.t !== 'texto' && b.t !== 'texto') return null;   // eso ya lo hace el emisor
+        const op = n.op;
+        if (a.t === 'texto' || b.t === 'texto') {
+          if (a.t !== b.t) no(n, 'se compara un texto con algo que no es texto');
+          if (op !== '==' && op !== '!=') no(n, `los textos de tipoArreglo solo se comparan con == o !=`);
+          return { v: op === '==' ? a.v === b.v : a.v !== b.v, t: 'bool' };
+        }
+        if (op === 'y' || op === 'o') {
+          if (a.t !== 'bool' || b.t !== 'bool') return null;
+          return { v: op === 'y' ? a.v && b.v : a.v || b.v, t: 'bool' };
+        }
+        const num = x => x.t === 'ent' || x.t === 'real';
+        if (!num(a) || !num(b)) return null;
+        switch (op) {
+          case '==': return { v: a.v === b.v, t: 'bool' };
+          case '!=': return { v: a.v !== b.v, t: 'bool' };
+          case '<': return { v: a.v < b.v, t: 'bool' };
+          case '>': return { v: a.v > b.v, t: 'bool' };
+          case '<=': return { v: a.v <= b.v, t: 'bool' };
+          case '>=': return { v: a.v >= b.v, t: 'bool' };
+          default: return null;            // la aritmética la hace el núcleo, con sus reglas
+        }
+      }
+      default: return null;
+    }
   }
   function tx0(n) {
     switch (n.tipo) {
@@ -15931,6 +16152,15 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
         return;
       }
       case 'Si': {
+        // (motor-exp N4.9) una condición que se sabe al compilar: solo existe la
+        // rama que toca (la otra ni se mira, y puede no valer para este tipo)
+        const k = n.cond.tipo !== 'Literal' ? constante(n.cond) : null;
+        if (k && k.t === 'bool') {
+          tx(n.cond);
+          M.siFijo.set(n, k.v);
+          if (k.v) ts(n.entonces); else if (n.sino) ts(n.sino);
+          return;
+        }
         if (tx(n.cond) !== 'bool') no(n.cond, 'la condición de «si» tiene que ser un bool', 'compara: si x > 0 { … }');
         ts(n.entonces);
         if (n.sino) ts(n.sino);
@@ -16051,6 +16281,9 @@ function c1enEmitir(M, destino) {
   const conv = (c, de, a) => (a === 'real' ? aReal(c, de) : c);
   const lit = (v, t) => {
     if (t === 'bool') return js ? String(v) : (v ? '1' : '0');
+    // (motor-exp N4.9) un negativo (de minimoTipo, o de una constante del núcleo)
+    // va entre paréntesis y con su signo; −0 también
+    if (typeof v === 'number' && (v < 0 || Object.is(v, -0))) return `(-${lit(-v, t)})`;
     if (t === 'ent') return js ? String(v) : `${v}LL`;
     if (v === Infinity) return js ? 'Infinity' : 'C1EN_INF';
     if (js) return String(v);
@@ -16107,6 +16340,7 @@ function c1enEmitir(M, destino) {
 
   function ex(n) {
     const t = tipoDe(n);
+    if (M.constantes.has(n)) return lit(M.constantes.get(n), t);     // (motor-exp N4.9)
     switch (n.tipo) {
       case 'Literal': return lit(n.valor, t);
       case 'Variable': {
@@ -16256,6 +16490,11 @@ function c1enEmitir(M, destino) {
         return asignacion(e);
       }
       case 'Si': {
+        if (M.siFijo.has(n)) {                 // (motor-exp N4.9) la rama que toca, y nada más
+          const r = M.siFijo.get(n) ? n.entonces : n.sino;
+          if (r) { L('{'); ind += 2; st(r); ind -= 2; L('}'); }
+          return;
+        }
         const c = tmp('bool');
         const antes = fallas;
         L(`${c} = ${ex(n.cond)};`);

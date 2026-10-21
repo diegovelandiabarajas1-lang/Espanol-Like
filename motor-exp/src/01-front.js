@@ -76,6 +76,8 @@ const PISTA_PALABRA = Object.assign(Object.create(null), {
 // comunes del idioma habría roto cualquier programa que las use de nombre.
 // «var y = 1» compila.
 
+// (motor-exp N4.9) los tipos de los números de un arreglo, con los alias de NumPy y de C
+const ELEM_ARREGLO = new Set(['real', 'entero', 'bool', 'complejo', 'real32', 'real16', 'i8', 'u8', 'i16', 'u16', 'u32', 'i64', 'u64', 'i32', 'f64', 'f32', 'f16']);
 const TIPOS_BASE = new Set(['entero', 'real', 'texto', 'bool', 'nulo', 'lista', 'dic', 'funcion', 'nodo', 'estilo', 'error', 'fecha', 'tabla', 'arreglo', 'grande', 'cualquiera']);
 
 function lexer(fuente) {
@@ -287,6 +289,8 @@ function tipoATexto(t) {
     case 'modulo': return `módulo «${t.ruta || t.clave}»`;
     case 'registro': return t.nombre;
     case 'var': return t.nombre;
+    case 'elem': return t.nombre;
+    case 'arreglo': return t.elem ? `arreglo<${tipoATexto(t.elem)}>` : 'arreglo';
     default: return t.k;
   }
 }
@@ -535,6 +539,23 @@ function parser(toks, fuenteNombre, opciones) {
         `tipos válidos: ${[...TIPOS_BASE].join(', ')}`);
     if (nombre === 'lista' && comprobar('OP', '<')) {
       p++; const e = parseTipo(); exigir('OP', '>', 'falta «>» al cerrar lista<…>'); return T.lista(e);
+    }
+    // (motor-exp N4.9) arreglo<real32>, arreglo<T>: el tipo de sus números. El
+    // verificador no lo puede saber (un arreglo no lleva su tipo de elemento en
+    // el tipo estático); lo comprueba C1EÑ al lanzar un núcleo, y la T se une
+    // con lo que llegue, como en una plantilla.
+    if (nombre === 'arreglo' && comprobar('OP', '<')) {
+      p++;
+      const e = ver();
+      if (e.tipo !== 'IDENT') throw new ErrorFuente('sintaxis', `se esperaba el tipo de los números del arreglo y llegó «${e.valor}»`, e.linea, e.col);
+      p++;
+      let elem;
+      if (esVarTipo(e.valor)) elem = { k: 'var', nombre: e.valor };
+      else if (ELEM_ARREGLO.has(e.valor)) elem = { k: 'elem', nombre: e.valor };
+      else throw new ErrorFuente('tipos', `«${e.valor}» no es un tipo de los números de un arreglo`, e.linea, e.col,
+        `los que hay: ${[...ELEM_ARREGLO].join(', ')}, o una variable de tipo (fn f<T>(a: arreglo<T>))`);
+      exigir('OP', '>', 'falta «>» al cerrar arreglo<…>');
+      return { k: 'arreglo', elem };
     }
     if (nombre === 'dic' && comprobar('OP', '<')) {
       p++; const c = parseTipo(); exigir(',', ','); const v = parseTipo();

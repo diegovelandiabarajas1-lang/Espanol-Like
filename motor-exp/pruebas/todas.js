@@ -53,6 +53,7 @@ const SUITES = [
   ['exp: lengua franca', 'exp-lengua-franca.js', 'motor-exp N4.6: Ñ como biblioteca de C (n-compilar --biblioteca), llamada desde C, C++, Python, Rust y Go; tres a la vez; valgrind; la DLL de Windows'],
   ['exp: hilos', 'exp-hilos.js', 'motor-exp N4.7: hilos(n, f) de la CPU con barreras, candados, esperas y atómicos (jit = nativo), y atómicos en paralelo (jit, nativo, GPU simulada)'],
   ['exp: varias GPU', 'exp-varias-gpu.js', 'motor-exp N4.8: paraleloRepartido entre las GPU (= paralelo al bit), colaGpu(k), enGpu(k, f) y copias de GPU a GPU (simulador de 1, 2 y 3 GPU)'],
+  ['exp: plantillas', 'exp-plantillas.js', 'motor-exp N4.9: núcleos genéricos (arreglo<T>, k: T), tipoArreglo y los límites del tipo como constantes, la rama que toca de cada «si» constante (jit = nativo = GPU simulada = VM)'],
   ['exp: sin runtime', 'exp-aot.js --rapida', 'motor-exp N4.1: el programa como ejecutable nativo, igual a la VM letra por letra (la completa: exp-aot.js)'],
 ];
 
