@@ -1468,6 +1468,81 @@ intenta exportar un generador.
 - Pendiente: pasar `lista<real>` como `(const double*, n)` sin asas, y los arreglos de Ñ por la
   ABI. Para eso faltan los arreglos en el AOT.
 
+## Fase N4.7 · Hilos y memoria compartida con control fino (21-oct-2026)
+
+`paralelo` reparte millones de índices sin prometer que estén vivos a la vez, y por eso dentro
+de un `paralelo` nadie puede esperar a nadie. Ahora hay además **`hilos(n, f)`**: n hilos de la
+CPU (hasta 256) que **existen a la vez**, con lo necesario para coordinarse: barreras, candados,
+esperas y atómicos.
+
+```
+usar hilos, barreraHilos, cerrarCandado, abrirCandado, esperarMientras, atomicoSumar, atomicoLeer de "nen"
+fn contar(t, cuenta, fase) {
+  para k en rango(1000) { atomicoSumar(cuenta, 0, 1) }     # sin carreras
+  barreraHilos()                                            # todos esperan a todos
+  fase[t] = atomicoLeer(cuenta, 0)                          # y aquí ya ven el total: 4000
+}
+hilos(4, contar, cuenta, fase)
+```
+
+| dentro de un núcleo | qué es | dónde |
+|---|---|---|
+| `atomicoLeer(a, i)` · `atomicoEscribir(a, i, v)` | leer y escribir de una vez | cualquier núcleo |
+| `atomicoSumar(a, i, v)` · `atomicoCambiar(a, i, v)` | `a[i] += v` y `a[i] = v`; devuelven lo que había | cualquier núcleo |
+| `atomicoComparar(a, i, esperado, nuevo)` | el CAS: pone `nuevo` solo si había `esperado`; devuelve lo que había | cualquier núcleo |
+| `vallaMemoria()` | lo escrito antes lo ven los demás antes que lo de después | cualquier núcleo |
+| `barreraHilos()` · `numeroHilos()` | todos esperan a todos · cuántos son | `hilos` |
+| `cerrarCandado(c, k)` · `abrirCandado(c, k)` | un candado en `c[k]` (0 abierto, 1 cerrado) | `hilos` |
+| `esperarMientras(a, i, v)` · `despertar(a, i)` | esperar a que `a[i]` deje de valer `v` · avisar (opcional) | `hilos` |
+
+Los atómicos trabajan sobre arreglos enteros de 32 bits (`entero` o `u32`, que envuelve). Lo que
+espera solo vale en `hilos`, y se dice al compilar: en `paralelo` o en la GPU esperar a otro hilo
+puede no acabar nunca.
+
+### Los dispositivos
+
+- **jit**: cada hilo es un generador y se turnan en orden fijo. Lo que espera cede el turno. Si en
+  una ronda nadie avanza, es un **interbloqueo**, y se dice con la línea y el hilo más bajo de los
+  que esperan. También se caza una barrera a la que no llegan todos. Da siempre lo mismo: es la
+  referencia.
+- **nativo**: n **hilos del sistema de verdad** (pthreads, o `CreateThread` en Windows). Atómicos
+  `__atomic` secuencialmente consistentes, esperas activas que ceden el procesador
+  (`sched_yield`/`SwitchToThread`), y una barrera propia que sabe si alguien terminó o se fue a
+  otra. Si un hilo falla, los demás lo ven y salen. Una espera que dura más de
+  `C1EN_HILOS_ESPERA_S` segundos (60 por defecto) se da por interbloqueo y se nombra el mismo hilo
+  que en jit.
+- **gpu**: `hilos` corre en la CPU (nativo, o jit si no hay compilador de C), porque una GPU no
+  tiene hilos que se esperen. Los **atómicos** sí van a la GPU dentro de `paralelo` y
+  `paraleloBloques` (`atomicAdd`, `atomicExch`, `atomicCAS`, `__threadfence`). El simulador y la
+  cabecera de clang los traen, y el PTX es `atom.global.add` de verdad.
+
+### Y la biblioteca de N4.6, desde varios hilos
+
+La biblioteca que hace `n-compilar --biblioteca` ya se puede llamar desde varios hilos. Cada
+llamada entra de una en una por un cerrojo (SRWLOCK en Windows, pthread_mutex en los demás), así
+que el conteo de referencias no necesita ser atómico, y el error sigue siendo de cada hilo.
+Probado con 8 hilos y 48.000 llamadas.
+
+### Qué se probó (`pruebas/exp-hilos.js`, 16 pruebas, en `todas.js`)
+
+- En **jit y nativo, con salidas idénticas**: un contador atómico con barrera, un candado que
+  protege una suma que no es atómica (8 hilos × 500), productor y consumidor con
+  `esperarMientras`, un CAS que gana uno solo, 10 fases con barreras entre 6 hilos y un u32 que
+  envuelve.
+- Los errores con su línea: el interbloqueo, la barrera a la que no llegan todos, el índice fuera,
+  y lo que no vale (esperar en `paralelo`, un atómico sobre un real, 1000 hilos).
+- **Atómicos en `paralelo`** en jit, nativo y GPU (simulada): 50.000 índices sacan turno con
+  `atomicoSumar` (cada turno una vez), el máximo con un bucle de CAS y un intercambio.
+- `codigoC` de un núcleo de hilos compila para Windows. El atómico de la GPU es `atom.global.add`
+  en el PTX de clang.
+- `exp-lengua-franca.js`: 8 hilos llamando a la misma biblioteca.
+
+### Qué cambió
+
+- `paralelo` y `paraleloBloques` no cambian; ganan los atómicos.
+- Pendiente: los atómicos de 64 bits y de coma flotante (`atomicAdd` de real ya está como
+  `sumarAtomico`), y la memoria compartida del bloque con atómicos.
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -1493,7 +1568,7 @@ intenta exportar un generador.
 | N4.4 | **el modelo de la GPU en manos del programa**: `paraleloBloques(bloques, hilos, f(b, t, …))`, `compartido`, `barrera`, `hilosPorBloque`, `numeroBloques`; jit con generadores, nativo con corrutinas, GPU tal cual; barreras vigiladas | C1EÑ | **hecha** (por confirmar en la T4) |
 | N4.5 | **tipos de máquina**: arreglos `i8 u8 i16 u16 u32 i64 u64` (envuelven como C; promoción de NumPy; 64 bits exactos con BigInt), alias `i32 f64 f32 f16`, bits (`bitsY`… `desplazarDer`, `contarBits`), E/S binaria de todos, núcleos de C1EÑ con enteros de 8–32 bits y bits | VM, numerico, stdlib, C1EÑ | **hecha** (al bit contra NumPy) |
 | N4.6 | **ser la lengua franca**: `n-compilar --biblioteca` → `.so`/`.dll`/`.dylib` + `.h` + `.py`, ABI de C con asas para lo que no es escalar, errores como errno, varias bibliotecas por proceso; probado desde C, C++, Python, Rust y Go | AOT, util | **hecha** (por confirmar en Windows) |
-| N4.7 | hilos y memoria compartida con control fino | AOT (`N_RC_ATOMICO`), VM | pendiente |
+| N4.7 | **hilos y memoria compartida con control fino**: `hilos(n, f)` con barreras, candados, esperas y atómicos (jit con interbloqueos cazados = nativo con hilos del sistema); atómicos en `paralelo` hasta la GPU; la biblioteca de N4.6 desde varios hilos | C1EÑ, AOT | **hecha** (por confirmar en Windows) |
 | N4.8 | varias GPU desde un solo programa | C1EÑ | pendiente |
 | N4.9 | plantillas (genéricos) en los núcleos | C1EÑ, verificador | pendiente |
 | N4.10 | interoperabilidad directa (C y C++ sin capa) | AOT, FFI | pendiente |

@@ -530,6 +530,33 @@ function emitirBiblioteca(bib, ctx) {
   E('#else');
   E('#define N_EXPORTA __attribute__((visibility("default")))');
   E('#endif');
+  // (motor-exp N4.7) se puede llamar desde varios hilos: cada llamada entra de una
+  // en una por un cerrojo (el conteo de referencias de los valores no es atómico,
+  // y así no hace falta que lo sea). El error sigue siendo por hilo.
+  E('#if defined(_WIN32)');
+  E('#ifndef WIN32_LEAN_AND_MEAN');
+  E('#define WIN32_LEAN_AND_MEAN');
+  E('#endif');
+  E('#include <windows.h>');
+  E('static SRWLOCK lib_cerrojo = SRWLOCK_INIT;');
+  E('#define N_BLOQ() AcquireSRWLockExclusive(&lib_cerrojo)');
+  E('#define N_DESBLOQ() ReleaseSRWLockExclusive(&lib_cerrojo)');
+  E('#else');
+  E('#include <pthread.h>');
+  E('static pthread_mutex_t lib_cerrojo = PTHREAD_MUTEX_INITIALIZER;');
+  E('#define N_BLOQ() pthread_mutex_lock(&lib_cerrojo)');
+  E('#define N_DESBLOQ() pthread_mutex_unlock(&lib_cerrojo)');
+  E('#endif');
+  // una función exportada = su cuerpo (static, «_i») y una envoltura con el cerrojo
+  const conCerrojo = (firmaC, cuerpoC) => {
+    const m = /^(.*?)\b(\w+)\((.*)\)$/.exec(firmaC);
+    const [, ret, nombre, ps] = m;
+    const nombres = ps.trim() === 'void' ? [] : ps.split(',').map(x => x.trim().split(/[\s*]+/).pop());
+    E(`static ${ret}${nombre}_i(${ps}) { ${cuerpoC} }`);
+    const llamada = `${nombre}_i(${nombres.join(', ')})`;
+    if (ret.trim() === 'void') E(`N_EXPORTA ${firmaC} { N_BLOQ(); ${llamada}; N_DESBLOQ(); }`);
+    else E(`N_EXPORTA ${firmaC} { N_BLOQ(); ${ret.trim()} r_ = ${llamada}; N_DESBLOQ(); return r_; }`);
+  };
   E(`typedef struct ${VT} ${VT};`);
   E('static int lib_estado = 0;   /* 0 sin arrancar · 1 bien · 2 falló el arranque */');
   E('static char* lib_error_inicio = NULL;');
@@ -549,7 +576,7 @@ function emitirBiblioteca(bib, ctx) {
   E('  if (N_FALLO(r)) { n_api_guardar_error(); lib_error_inicio = strdup(n_api_error()); lib_estado = 2; return 0; }');
   E('  n_dec(r); lib_estado = 1; return 1;');
   E('}');
-  E(`N_EXPORTA int ${P}iniciar(void) { n_api_limpiar_error(); return lib_iniciar(); }`);
+  conCerrojo(`int ${P}iniciar(void)`, 'n_api_limpiar_error(); return lib_iniciar();');
   E(`N_EXPORTA const char* ${P}error(void) { return n_api_error(); }`);
   E(`N_EXPORTA void ${P}liberar(void* p) { free(p); }`);
   // la API de las asas
@@ -577,14 +604,15 @@ function emitirBiblioteca(bib, ctx) {
     [`int ${P}dic_poner(${VT}* dic, const ${VT}* clave, const ${VT}* x)`, 'return n_api_poner(dic, clave, x);', 'hacer', 'clave y x siguen siendo tuyos'],
     [`${VT}* ${P}llamar(const ${VT}* f, const ${VT}* const* args, int n)`, `n_api_limpiar_error(); if (!lib_iniciar()) return NULL; return (${VT}*)n_api_llamar(f, (const void* const*)args, n);`, 'llamar', 'una función de Ñ que te llegó en un asa'],
   ];
-  for (const [f, cuerpo] of api) E(`N_EXPORTA ${f} { ${cuerpo} }`);
+  for (const [f, cuerpo] of api) conCerrojo(f, cuerpo);
   // cada función exportada
   for (const f of exp) {
     const g = idGlobal(f.nombre);
     const n = f.params.length, d = porDefecto(f), ret = d === '' ? 'return;' : `return ${d};`;
     E('');
     E(`/* Ñ: ${comentario(firmaN(f))} */`);
-    E(`N_EXPORTA ${firma(f, false)} {`);
+    const fi = firma(f, false), fiI = fi.replace(`${f.c}(`, `${f.c}_i(`);
+    E(`static ${fiI} {`);
     E('  n_api_limpiar_error();');
     E(`  if (!lib_iniciar()) ${ret}`);
     E(`  if (!GD[${g}]) { n_api_poner_error(${cTexto(`«${f.nombre}» no está definida`)}); ${ret} }`);
@@ -611,6 +639,10 @@ function emitirBiblioteca(bib, ctx) {
       default: E(`  return (${VT}*)n_api_asa(r_);`);
     }
     E('}');
+    // la envoltura exportada, con el cerrojo (motor-exp N4.7)
+    const llam = `${f.c}_i(${f.abiPs.map(p => p.cc).join(', ')})`;
+    if (f.abiRet.clase === 'nulo') E(`N_EXPORTA ${fi} { N_BLOQ(); ${llam}; N_DESBLOQ(); }`);
+    else E(`N_EXPORTA ${fi} { N_BLOQ(); ${tyR(f.abiRet)} r_ = ${llam}; N_DESBLOQ(); return r_; }`);
   }
 
   // ── la cabecera ──
@@ -629,7 +661,8 @@ function emitirBiblioteca(bib, ctx) {
   H(' *');
   H(` * Errores: si una llamada falla devuelve 0, NaN o NULL, y ${P}error() dice por qué (el mismo mensaje`);
   H(` * que la VM de Ñ, con la línea); si va bien, ${P}error() es NULL. Lo de nivel superior del programa`);
-  H(` * corre una vez, en la primera llamada (o en ${P}iniciar()). Un hilo a la vez.`);
+  H(` * corre una vez, en la primera llamada (o en ${P}iniciar()). Se puede llamar desde varios hilos:`);
+  H(' * las llamadas entran de una en una (un cerrojo), y el error es de cada hilo.');
   H(' */');
   H(`#ifndef ${GU}`);
   H(`#define ${GU}`);
