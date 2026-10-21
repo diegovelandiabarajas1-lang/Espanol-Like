@@ -34,4 +34,10 @@ extern "C" __device__ double __nv_fmod(double, double); __device__ inline double
 __device__ inline double __longlong_as_double(long long x) { return __builtin_bit_cast(double, x); }
 __device__ inline int atomicAdd(int* p, int v) { return __nvvm_atom_add_gen_i(p, v); }
 __device__ inline double atomicAdd(double* p, double v) { return __nvvm_atom_add_gen_d(p, v); }
+__device__ inline unsigned int atomicAdd(unsigned int* p, unsigned int v) { return (unsigned int)__nvvm_atom_add_gen_i((int*)p, (int)v); }
+__device__ inline int atomicExch(int* p, int v) { return __nvvm_atom_xchg_gen_i(p, v); }
+__device__ inline unsigned int atomicExch(unsigned int* p, unsigned int v) { return (unsigned int)__nvvm_atom_xchg_gen_i((int*)p, (int)v); }
+__device__ inline int atomicCAS(int* p, int e, int v) { return __nvvm_atom_cas_gen_i(p, e, v); }
+__device__ inline unsigned int atomicCAS(unsigned int* p, unsigned int e, unsigned int v) { return (unsigned int)__nvvm_atom_cas_gen_i((int*)p, (int)e, (int)v); }
+__device__ inline void __threadfence(void) { __nvvm_membar_gl(); }
 __device__ inline unsigned long long atomicMin(unsigned long long* p, unsigned long long v) { return __nvvm_atom_min_gen_ull(p, v); }

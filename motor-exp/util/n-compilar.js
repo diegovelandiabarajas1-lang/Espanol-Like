@@ -140,7 +140,7 @@ function objetoNrt() {
   return o;
 }
 const flags = biblioteca
-  ? BASE.concat([mac ? '-dynamiclib' : '-shared', '-o', salida, c, objetoNrt(), '-lm']).concat(win ? ['-static-libgcc'] : [])
+  ? BASE.concat([mac ? '-dynamiclib' : '-shared', '-o', salida, c, objetoNrt(), '-lm']).concat(win ? ['-static-libgcc'] : ['-pthread'])
   : BASE.concat(['-o', salida, c, objetoNrt(), '-lm']).concat(win ? ['-Wl,--stack,67108864'] : []);
 const r = spawnSync(comp, flags, { encoding: 'utf8' });
 if (r.status !== 0) {

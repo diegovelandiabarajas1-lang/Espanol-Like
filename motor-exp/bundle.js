@@ -14028,7 +14028,21 @@ const C1EN_FUNCIONES = {
   // (motor-exp N4.5) las operaciones de bits de C, sobre los enteros del núcleo
   // (64 bits con signo); el resultado tiene que caber exacto en un número de Ñ
   bitsY: 2, bitsO: 2, bitsXor: 2, bitsNo: 1, desplazarIzq: 2, desplazarDer: 2,
+  // (motor-exp N4.7) memoria compartida con control fino: atómicos sobre arreglos
+  // enteros (en cualquier núcleo), y candados, esperas y barreras entre hilos de
+  // la CPU (solo en los núcleos de «hilos», donde todos los hilos están vivos a la vez)
+  atomicoLeer: 2, atomicoEscribir: 3, atomicoSumar: 3, atomicoCambiar: 3, atomicoComparar: 4,
+  cerrarCandado: 2, abrirCandado: 2, esperarMientras: 3, despertar: 2, vallaMemoria: 0,
+  barreraHilos: 0, numeroHilos: 0,
 };
+// (motor-exp N4.7) los atómicos: «s» = es una sentencia (no devuelve nada), «b» =
+// bloquea (solo en «hilos»), «v» = cuántos valores además del arreglo y el índice
+const C1EN_ATOMICOS = {
+  atomicoLeer: { v: 0 }, atomicoSumar: { v: 1 }, atomicoCambiar: { v: 1 }, atomicoComparar: { v: 2 },
+  atomicoEscribir: { v: 1, s: true }, abrirCandado: { v: 0, s: true }, despertar: { v: 0, s: true },
+  cerrarCandado: { v: 0, s: true, b: true }, esperarMientras: { v: 1, s: true, b: true },
+};
+const C1EN_MAX_HILOS_SO = 256;     // (motor-exp N4.7) hilos del sistema en un núcleo de «hilos»
 // (motor-exp N4.5) «&», «|» y «^» en JavaScript: con enteros de 32 bits, los
 // operadores de siempre (dan lo mismo que en 64); si no, con BigInt. NaN si el
 // resultado no cabe exacto en un número de Ñ (más de 2^53), y el núcleo falla.
@@ -14046,7 +14060,9 @@ const C1EN_TRASC_JS = { exp: 'Math.exp', log: 'Math.log', log10: 'Math.log10', s
 const C1EN_LISTA = 'raiz, exp, log, log10, seno, coseno, tangente, arcoseno, arcocoseno, arcotangente, ' +
   'angulo, absoluto, piso, techo, minimo, maximo, entero, real, longitud, tamano, azarHilo y sumarAtomico' +
   ' (y en paraleloBloques: barrera, hilosPorBloque, numeroBloques, compartido y compartidoEntero;' +
-  ' y de bits: bitsY, bitsO, bitsXor, bitsNo, desplazarIzq y desplazarDer)';
+  ' y de bits: bitsY, bitsO, bitsXor, bitsNo, desplazarIzq y desplazarDer;' +
+  ' y atómicos: atomicoLeer, atomicoEscribir, atomicoSumar, atomicoCambiar, atomicoComparar, vallaMemoria;' +
+  ' y en hilos: barreraHilos, numeroHilos, cerrarCandado, abrirCandado, esperarMientras y despertar)';
 
 function instalarNenC1en(vm, def, host) {
   const c1en = crearC1en(vm);
@@ -14130,6 +14146,29 @@ function instalarNenC1en(vm, def, host) {
   def('numeroBloques', ' -> entero', soloNucleo('numeroBloques'), 'numeroBloques() — dentro de un núcleo de bloques: cuántos bloques tiene la cuadrícula');
   def('compartido', 'entero -> cualquiera', soloNucleo('compartido'), 'fijo s = compartido(256) — dentro de un núcleo de bloques: memoria del bloque, que ven todos sus hilos (empieza a cero)');
   def('compartidoEntero', 'entero -> cualquiera', soloNucleo('compartidoEntero'), 'fijo s = compartidoEntero(256) — como compartido, de enteros');
+  // ── (motor-exp N4.7) hilos de la CPU y memoria compartida con control fino ──
+  def('hilos', '... -> nulo', a => {
+    if (a.length < 2) vm.error('«hilos» necesita cuántos hilos y la función', 'hilos(4, funcion(t, a) { … }, a)');
+    vm.exigeFuncion(a[1], 2, 'hilos');
+    c1en.hilos(a[0], a[1], a.slice(2), 'hilos');
+    return null;
+  }, 'hilos(n, funcion(t, …) { … }, …) — n hilos de la CPU A LA VEZ (hasta 256), cada uno con su «t»: pueden esperarse (barreraHilos), cerrar candados (cerrarCandado/abrirCandado), esperar a que algo cambie (esperarMientras) y tocar memoria compartida con atómicos · en jit, los hilos se turnan y un interbloqueo se caza; en nativo son hilos de verdad');
+  const soloEnNucleo = (nombre, donde) => () => vm.error(`«${nombre}» solo tiene sentido dentro de un núcleo${donde ? ' de ' + donde : ''}`,
+    donde === 'hilos' ? 'hilos(n, funcion(t, a) { … }, a)' : 'paralelo(n, funcion(i, a) { … atomicoSumar(a, 0, 1) … }, a), o hilos(n, …)');
+  for (const [nombre, firma, donde, ayuda] of [
+    ['atomicoLeer', 'arreglo, entero -> entero', '', 'atomicoLeer(a, i) — dentro de un núcleo: lee a[i] de un arreglo entero de una vez, sin que otro hilo lo pise a medias'],
+    ['atomicoEscribir', 'arreglo, entero, entero -> nulo', '', 'atomicoEscribir(a, i, v) — dentro de un núcleo: escribe a[i] de una vez'],
+    ['atomicoSumar', 'arreglo, entero, entero -> entero', '', 'atomicoSumar(a, i, v) — dentro de un núcleo: a[i] += v sin carreras; devuelve lo que había'],
+    ['atomicoCambiar', 'arreglo, entero, entero -> entero', '', 'atomicoCambiar(a, i, v) — dentro de un núcleo: pone v y devuelve lo que había'],
+    ['atomicoComparar', 'arreglo, entero, entero, entero -> entero', '', 'atomicoComparar(a, i, esperado, nuevo) — dentro de un núcleo: si a[i] es «esperado» pone «nuevo»; devuelve lo que había (el CAS)'],
+    ['vallaMemoria', ' -> nulo', '', 'vallaMemoria() — dentro de un núcleo: lo escrito antes lo ven los demás hilos antes que lo de después'],
+    ['cerrarCandado', 'arreglo, entero -> nulo', 'hilos', 'cerrarCandado(c, k) — en un núcleo de hilos: espera a que el candado c[k] esté abierto (0) y lo cierra (1)'],
+    ['abrirCandado', 'arreglo, entero -> nulo', 'hilos', 'abrirCandado(c, k) — abre el candado c[k]'],
+    ['esperarMientras', 'arreglo, entero, entero -> nulo', 'hilos', 'esperarMientras(a, i, v) — en un núcleo de hilos: espera mientras a[i] valga v'],
+    ['despertar', 'arreglo, entero -> nulo', 'hilos', 'despertar(a, i) — avisa a quien espera en a[i] (opcional: esperarMientras mira solo)'],
+    ['barreraHilos', ' -> nulo', 'hilos', 'barreraHilos() — en un núcleo de hilos: cada hilo espera a que lleguen todos'],
+    ['numeroHilos', ' -> entero', 'hilos', 'numeroHilos() — en un núcleo de hilos: cuántos son'],
+  ]) def(nombre, firma, soloEnNucleo(nombre, donde), ayuda);
 
   def('dispositivo', ' -> texto', () => c1en.describir(),
     'dispositivo() — dónde corre «paralelo» ahora: "gpu: Tesla T4 (0)", "nativo: gcc …" o "jit"');
@@ -14528,7 +14567,7 @@ function crearC1en(vm) {
     const fn = cierre.fn;
     let m = cache.get(fn);
     if (!m) { m = new Map(); cache.set(fn, m); }
-    const clave = (bloques ? 'B:' : '') + tipos.join(',');
+    const clave = (bloques === 'hilos' ? 'H:' : bloques ? 'B:' : '') + tipos.join(',');
     let r = m.get(clave);
     if (!r) {
       r = { modelo: c1enAnalizar(vm, cierre, tipos, quien, bloques), js: null, c: null, cuda: null, fnNativa: null, gpu: new Map() };
@@ -14555,7 +14594,7 @@ function crearC1en(vm) {
 
   function lanzarError(modelo, i, codigo, quien, nh) {
     const s = modelo.sitios[codigo] || { linea: '?', texto: 'fallo desconocido' };
-    const quienHilo = nh ? `el hilo ${i % nh} del bloque ${Math.floor(i / nh)}` : `el hilo i = ${i}`;   // (motor-exp N4.4)
+    const quienHilo = nh === 'hilos' ? `el hilo t = ${i}` : nh ? `el hilo ${i % nh} del bloque ${Math.floor(i / nh)}` : `el hilo i = ${i}`;   // (motor-exp N4.4, N4.7)
     vm.error(`«${quien}»: ${quienHilo} falló en la línea ${s.linea}: ${s.texto}`, s.pista || null);
   }
 
@@ -14588,6 +14627,40 @@ function crearC1en(vm) {
     }
     if (fallo && colaActual && colaActual.logica) { colaActual.errores.push([r.modelo, fallo, quien, nh]); return; }
     if (fallo) lanzarError(r.modelo, fallo[0], fallo[1], quien, nh);
+  }
+
+  // ── (motor-exp N4.7) hilos de la CPU, todos vivos a la vez ─────────────────
+  // A diferencia de «paralelo» (que puede correr los índices en el orden y con
+  // los hilos que quiera), aquí los n hilos existen A LA VEZ, así que pueden
+  // esperarse unos a otros. Siempre en la CPU: en «nativo», n hilos del sistema
+  // de verdad; en «jit», n generadores que se turnan en un orden fijo, que dan
+  // siempre lo mismo y cazan los interbloqueos. Con la GPU elegida, van a nativo
+  // (o a jit si no hay compilador de C): una GPU no tiene hilos que esperen.
+  function hilos(n, cierre, args, quien) {
+    if (!Number.isInteger(n) || n < 1 || n > C1EN_MAX_HILOS_SO)
+      vm.error(`«${quien}»: los hilos van de 1 a ${C1EN_MAX_HILOS_SO} y llegó ${repr(n, 1)}`,
+        'son hilos del sistema que existen a la vez; para millones de índices está «paralelo»');
+    if (!(cierre instanceof ObjCierre)) vm.error(`«${quien}»: el núcleo tiene que ser una función de Ñ, no una de la biblioteca`);
+    const tipos = tiposParaLlamada(cierre, args, quien);
+    tipos.forEach((t, k) => { if (t === 'otro*') prepararArreglo(args[k], quien, k + 3); });
+    const r = modeloDe(cierre, tipos, quien, 'hilos');
+    elegirInicial();
+    vm.cobrar(n);
+    const preps = [], arrs = [];
+    args.forEach((v, k) => {
+      if (v instanceof ObjArreglo) { arrs.push({ x: v, k: k + 3 }); preps[k] = prepararArreglo(v, quien, k + 3, false); }
+    });
+    exigirSinSolape(arrs, quien);
+    const dondeCorre = actual === 'jit' ? 'jit' : (c1enNativo() ? 'nativo' : 'jit');
+    let fallo = null;
+    try {
+      if (dondeCorre === 'jit') fallo = correrJS(r, n, args, preps, { hilos: n });
+      else fallo = correrNativo(r, n, args, preps, quien, { hilos: n });
+    } finally {
+      for (const p of preps) if (p && p.devolver) p.devolver();
+    }
+    if (fallo && fallo[1] === 0xfffffe) vm.error(`«${quien}»: el sistema no dejó lanzar ${n} hilos`, 'prueba con menos');
+    if (fallo) lanzarError(r.modelo, fallo[0], fallo[1], quien, 'hilos');
   }
 
   // Lo que «paralelo» promete y lo que no:
@@ -14652,6 +14725,7 @@ function crearC1en(vm) {
       // eslint-disable-next-line no-new-func
       r.js = new Function('"use strict"; return ' + src)();
     }
+    if (geo && geo.hilos) return r.js(geo.hilos, ...expandir(args, preps, false));   // (motor-exp N4.7)
     if (geo) return r.js(geo.nb, geo.nh, ...expandir(args, preps, false));
     return r.js(n, ...expandir(args, preps, false));
   }
@@ -14660,8 +14734,9 @@ function crearC1en(vm) {
     const na = c1enNativo();
     if (!r.fnNativa) {
       if (!r.c) r.c = c1enEmitir(r.modelo, 'c');
-      const firma = geo ? ['int64_t nb', 'int64_t nh'] : ['int64_t n'];
-      for (const p of r.modelo.params.slice(geo ? 2 : 1)) {
+      const hilosSO = !!(geo && geo.hilos);
+      const firma = hilosSO ? ['int64_t nh'] : geo ? ['int64_t nb', 'int64_t nh'] : ['int64_t n'];
+      for (const p of r.modelo.params.slice(geo && !hilosSO ? 2 : 1)) {
         if (p.arr) { firma.push(`${c1enTipoElem(p, false)} *`); firma.push('int64_t'); }
         else firma.push(p.tipoEntrada === 'real' ? 'double' : 'int64_t');
       }
@@ -14670,7 +14745,8 @@ function crearC1en(vm) {
       catch (e) { vm.error(`«${quien}»: no se pudo compilar el núcleo en C: ${e.message}`, 'esto es un fallo de C1EÑ, no de tu programa: avísalo con el código de codigoC(f)'); }
     }
     const err = new BigUint64Array([0xffffffffffffffffn]);
-    if (geo) r.fnNativa(geo.nb, geo.nh, ...expandir(args, preps, true), err);
+    if (geo && geo.hilos) r.fnNativa(geo.hilos, ...expandir(args, preps, true), err);
+    else if (geo) r.fnNativa(geo.nb, geo.nh, ...expandir(args, preps, true), err);
     else r.fnNativa(n, ...expandir(args, preps, true), err);
     return c1enLeerClave(err[0]);
   }
@@ -14757,10 +14833,11 @@ function crearC1en(vm) {
     if (!fn.ast || fn.deDisco) vm.error(`«${quien}»: esta función no trae su código fuente (vino de bytecode)`);
     const ps = fn.ast.params;
     // (motor-exp N4.4) un núcleo que usa barrera, compartido o la cuadrícula es de paraleloBloques: (b, t, …)
-    const bloques = c1enUsaBloques(fn.ast.cuerpo);
-    const nIdx = bloques ? 2 : 1;
+    const bloques = c1enUsaBloques(fn.ast.cuerpo) || (c1enUsaHilos(fn.ast.cuerpo) ? 'hilos' : false);   // (motor-exp N4.7)
+    if (bloques === 'hilos' && destino === 'cuda') vm.error(`«${quien}»: un núcleo de hilos (barreraHilos, candados, esperarMientras) es de la CPU: no tiene CUDA`, 'mira su C con codigoC(f)');
+    const nIdx = bloques === true ? 2 : 1;
     if (ejemplos.length > ps.length - nIdx)
-      vm.error(`«${quien}»: la función tiene ${ps.length - nIdx} parámetro(s) además de ${bloques ? 'el bloque y el hilo' : 'el índice'} y llegaron ${ejemplos.length} ejemplos`);
+      vm.error(`«${quien}»: la función tiene ${ps.length - nIdx} parámetro(s) además de ${bloques === true ? 'el bloque y el hilo' : 'el índice'} y llegaron ${ejemplos.length} ejemplos`);
     // Sin ejemplo, el tipo sale de la anotación; sin anotación, de cómo se usa:
     // si se indexa es un arreglo real, y si no, un número real.
     const tipos = [];
@@ -15102,7 +15179,7 @@ function crearC1en(vm) {
     get dispositivo() { elegirInicial(); return actual; },
     nuevaCola, conCola, esperarCola, colaLista, soltarCola, subir, medir,
     get gpu() { elegirInicial(); return actual === 'gpu' ? indiceGpu : null; },
-    usar, describir, disponibles, paralelo, paraleloBloques, codigo, kernel, reducir, liberarResidentes,
+    usar, describir, disponibles, paralelo, paraleloBloques, hilos, codigo, kernel, reducir, liberarResidentes,
     // Para las pruebas y para quien quiera ver el JavaScript que corre en "jit".
     codigoJS(cierre, ejemplos) {
       const r = modeloDe(cierre, tiposParaLlamada(cierre, ejemplos, 'codigoJS'), 'codigoJS');
@@ -15113,6 +15190,19 @@ function crearC1en(vm) {
 }
 
 // (motor-exp N4.4) ¿Usa el cuerpo barrera(), compartido…, hilosPorBloque() o numeroBloques()?
+// (motor-exp N4.7) ¿Es un núcleo de «hilos»? (usa barreraHilos, numeroHilos o lo que bloquea)
+function c1enUsaHilos(n) {
+  const NOMBRES = new Set(['barreraHilos', 'numeroHilos', 'cerrarCandado', 'esperarMientras']);
+  let si = false;
+  const ver = x => {
+    if (si || !x || typeof x !== 'object') return;
+    if (Array.isArray(x)) { x.forEach(ver); return; }
+    if (x.tipo === 'Llamada' && x.callee && x.callee.tipo === 'Variable' && NOMBRES.has(x.callee.nombre)) { si = true; return; }
+    for (const k in x) if (k !== 'linea' && k !== 'col') ver(x[k]);
+  };
+  ver(n);
+  return si;
+}
 function c1enUsaBloques(n) {
   const NOMBRES = new Set(['barrera', 'compartido', 'compartidoEntero', 'hilosPorBloque', 'numeroBloques']);
   const ver = x => {
@@ -15253,7 +15343,7 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
   const M = {
     nombre: nombreFn, linea: ast.linea, ast: ast.cuerpo, params: [], vars: [], tipos: new Map(), arrDe: new Map(),
     sitios: [null], sitioDe: new Map(), llamadas: new Map(), porNodo: new Map(),
-    bloques: !!bloques, compartidos: [], barreras: 0,
+    bloques: bloques === true, hilos: bloques === 'hilos', compartidos: [], barreras: 0,
   };
   const asc = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9_]/g, '_');
   let nVars = 0;
@@ -15355,6 +15445,27 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
     return info;
   };
 
+  // (motor-exp N4.7) un atómico: el arreglo (entero de 32 bits), el índice y los valores enteros
+  const analizarAtomico = (n, f) => {
+    const d = C1EN_ATOMICOS[f];
+    if (n.args.length !== 2 + d.v) no(n, `«${f}» recibe (arreglo, índice${d.v === 1 ? ', valor' : d.v === 2 ? ', esperado, nuevo' : ''})`);
+    if (d.b && !M.hilos)
+      no(n, `«${f}» solo vale en un núcleo de «hilos»`, 'en «paralelo» y en la GPU los hilos no tienen por qué estar vivos a la vez, y esperar a otro puede no acabar nunca: hilos(n, funcion(t, …) { … }, …)');
+    const info = arregloDe(n.args[0], `«${f}»`);
+    if (info.compartido) no(n, `«${f}» sobre la memoria compartida del bloque todavía no: usa un arreglo que llegue como argumento`);
+    if (info.arr !== 'ent' || (info.ent && info.ent !== 'u32'))
+      no(n, `«${f}» trabaja sobre arreglos enteros de 32 bits («entero» o «u32») y «${info.nombre}» es ${info.ent || (info.arr === 'real' ? (info.f32 ? 'real32' : 'real') : 'entero')}`,
+        'los atómicos de la CPU y de la GPU son de enteros: guarda contadores y candados en un arreglo "entero"');
+    for (let k = 1; k < n.args.length; k++) {
+      const t = tx(n.args[k]);
+      if (t !== 'ent') no(n, `«${f}»: el argumento ${k + 1} tiene que ser entero`);
+    }
+    sitio(n, 'idx', `el índice se sale del arreglo «${info.nombre}»`, `los índices válidos van de 0 a longitud(${info.nombre}) − 1`);
+    if (d.b) sitio(n, 'espera', 'todos los hilos se quedaron esperando: un interbloqueo (nadie va a abrir el candado ni a cambiar el valor)',
+      'mira el orden en que se cierran los candados (siempre en el mismo orden en todos los hilos) y que alguien cambie lo que se espera');
+    return info;
+  };
+
   function tx(n) {
     const t = tx0(n);
     M.tipos.set(n, t);
@@ -15435,6 +15546,17 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
           return 'ent';
         }
         if (f === 'longitud' || f === 'tamano') { arregloDe(n.args[0], `«${f}»`); return 'ent'; }
+        if (C1EN_ATOMICOS[f] !== undefined) {         // (motor-exp N4.7)
+          if (C1EN_ATOMICOS[f].s) no(n, `«${f}» es una sentencia: no devuelve nada que usar`);
+          analizarAtomico(n, f);
+          return 'ent';
+        }
+        if (f === 'numeroHilos') {
+          if (!M.hilos) no(n, '«numeroHilos()» solo existe en los núcleos de «hilos»', 'hilos(n, funcion(t, …) { … }, …)');
+          if (n.args.length) no(n, '«numeroHilos()» no recibe argumentos');
+          return 'ent';
+        }
+        if (f === 'barreraHilos' || f === 'vallaMemoria') no(n, `«${f}()» es una sentencia: no devuelve nada que usar`);
         const ts = n.args.map(tx);
         for (let k = 0; k < ts.length; k++) if (!esNum(ts[k])) no(n, `«${f}» necesita números y el argumento ${k + 1} es bool`);
         if (f === 'azarHilo') {
@@ -15561,6 +15683,21 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
             M.barreras++;
             return;
           }
+          // (motor-exp N4.7) atómicos, candados, esperas, vallas y la barrera de los hilos
+          if (C1EN_ATOMICOS[f] !== undefined) {
+            if (f === 'atomicoLeer') no(e, '«atomicoLeer» sin usar lo que lee no hace nada', 'guárdalo: fijo v = atomicoLeer(a, i)');
+            analizarAtomico(e, f);
+            return;
+          }
+          if (f === 'vallaMemoria') { if (e.args.length) no(e, '«vallaMemoria()» no recibe argumentos'); return; }
+          if (f === 'barreraHilos') {
+            if (!M.hilos) no(e, '«barreraHilos()» solo existe en los núcleos de «hilos»', 'hilos(n, funcion(t, …) { … barreraHilos() … }, …) · en paraleloBloques, la del bloque es barrera()');
+            if (e.args.length) no(e, '«barreraHilos()» no recibe argumentos');
+            sitio(e, 'barrera', 'no todos los hilos llegaron a esta barrera (uno terminó, o fue a otra)',
+              'todos los hilos tienen que pasar por las mismas barreras: no la pongas en un «si» que no todos toman ni salgas antes con devolver');
+            sitio(e, 'espera', 'todos los hilos se quedaron esperando: un interbloqueo', 'alguien espera en un candado o en esperarMientras mientras los demás esperan en la barrera');
+            return;
+          }
           if (f !== 'sumarAtomico') no(e, `el resultado de «${f}» no se usa`, 'guárdalo en una variable o en un arreglo');
           if (e.args.length !== 3) no(e, '«sumarAtomico» recibe (arreglo, índice, valor)');
           const info = arregloDe(e.args[0], '«sumarAtomico»');
@@ -15572,7 +15709,7 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
           sitio(e, 'idx', `el índice se sale del arreglo «${info.nombre}»`, `los índices válidos van de 0 a longitud(${info.nombre}) − 1`);
           return;
         }
-        no(n, 'esta expresión no hace nada', 'en un núcleo las sentencias son asignaciones, si, mientras, para y sumarAtomico');
+        no(n, 'esta expresión no hace nada', 'en un núcleo las sentencias son asignaciones, si, mientras, para, sumarAtomico y los atómicos');
         return;
       }
       case 'Si': {
@@ -15816,6 +15953,9 @@ function c1enEmitir(M, destino) {
         return `(${a} = ${conv(a0(), t0, t)}, ${b} = ${conv(ex(as[1]), tipoDe(as[1]), t)}, ${b} ${f === 'minimo' ? '<' : '>'} ${a} ? ${b} : ${a})`;
       }
       case 'azarHilo': return `${js ? 'c1enAzar' : 'c1en_azar'}(${a0()}, ${ex(as[1])}, ${ex(as[2])})`;
+      // (motor-exp N4.7) los atómicos que devuelven algo: lo que había en a[i]
+      case 'atomicoLeer': case 'atomicoSumar': case 'atomicoCambiar': case 'atomicoComparar': return atomicoExpr(n, f);
+      case 'numeroHilos': return 'c1en_nh';
       // (motor-exp N4.5) bits: en C, los operadores de C en 64 bits; en JS, lo
       // mismo con números (o BigInt, ver c1enBits); los dos comprueban lo mismo
       case 'bitsY': case 'bitsO': case 'bitsXor': {
@@ -15886,7 +16026,11 @@ function c1enEmitir(M, destino) {
           else L(`c1en_barrera(c1en_h, ${id});`);
           return;
         }
-        if (e.tipo === 'Llamada') return sumarAtomico(e);
+        if (e.tipo === 'Llamada') {
+          const f = M.llamadas.get(e);
+          if (C1EN_ATOMICOS[f] !== undefined || f === 'vallaMemoria' || f === 'barreraHilos') return atomicoSentencia(e, f);   // (motor-exp N4.7)
+          return sumarAtomico(e);
+        }
         return asignacion(e);
       }
       case 'Si': {
@@ -16001,6 +16145,100 @@ function c1enEmitir(M, destino) {
     L(`if (!${enRango(tj, info.cnN)}) ${FALLA_S(M.sitio(d, 'idx'))}`);
     L(`${info.cn}[${tj}] = ${elem === 'real' ? tv : guardarEnt(tv, info)};`);
   }
+  // ── (motor-exp N4.7) atómicos, candados, esperas y la barrera de los hilos ──
+  // El elemento es de 32 bits (int32_t o uint32_t). En C, los __atomic de gcc y
+  // clang (secuencialmente consistentes); en CUDA, atomicAdd/Exch/CAS; en jit los
+  // hilos se turnan y nadie interrumpe a nadie, así que basta la operación tal cual.
+  const tipoAtom = info => (info.ent === 'u32' ? (cu ? 'unsigned int' : 'uint32_t') : (cu ? 'int' : 'int32_t'));
+  const valAtom = (v, info) => (js ? (info.ent === 'u32' ? `((${v}) >>> 0)` : `((${v}) | 0)`) : guardarEnt(v, info));
+  function atomicoExpr(n, f) {
+    const info = M.arrDe.get(n.args[0]);
+    const tj = tmp('ent');
+    const a = info.cn, el = `${a}[${tj}]`, idx = M.sitio(n, 'idx');
+    const v1 = n.args[2] ? ex(n.args[2]) : null, v2 = n.args[3] ? ex(n.args[3]) : null;
+    let op;
+    if (js) {
+      const o = tmp('ent');
+      if (f === 'atomicoLeer') op = el;
+      else if (f === 'atomicoSumar') op = `(${o} = ${el}, ${el} = ${o} + (${v1}), ${o})`;
+      else if (f === 'atomicoCambiar') op = `(${o} = ${el}, ${el} = (${v1}), ${o})`;
+      else op = `(${o} = ${el}, (${o} === ${valAtom(v1, info)}) ? (${el} = (${v2})) : 0, ${o})`;
+    } else if (cu) {
+      const ty = tipoAtom(info);
+      if (f === 'atomicoLeer') op = `(${TY.ent})atomicAdd(&${el}, (${ty})0)`;
+      else if (f === 'atomicoSumar') op = `(${TY.ent})atomicAdd(&${el}, ${valAtom(v1, info)})`;
+      else if (f === 'atomicoCambiar') op = `(${TY.ent})atomicExch(&${el}, ${valAtom(v1, info)})`;
+      else op = `(${TY.ent})atomicCAS(&${el}, ${valAtom(v1, info)}, ${valAtom(v2, info)})`;
+    } else {
+      if (f === 'atomicoLeer') op = `(${TY.ent})__atomic_load_n(&${el}, __ATOMIC_SEQ_CST)`;
+      else if (f === 'atomicoSumar') op = `(${TY.ent})__atomic_fetch_add(&${el}, ${valAtom(v1, info)}, __ATOMIC_SEQ_CST)`;
+      else if (f === 'atomicoCambiar') op = `(${TY.ent})__atomic_exchange_n(&${el}, ${valAtom(v1, info)}, __ATOMIC_SEQ_CST)`;
+      else op = `(${TY.ent})__sync_val_compare_and_swap(&${el}, ${valAtom(v1, info)}, ${valAtom(v2, info)})`;
+    }
+    return `(${tj} = ${ex(n.args[1])}, ${enRango(tj, info.cnN)} ? ${op} : ${FALLA(idx)})`;
+  }
+  // las que esperan: en jit el generador cede el turno («yield»): la primera vez
+  // que no puede seguir cede −1−2·sitio (llegó a esperar: eso es avanzar), y las
+  // siguientes −2−2·sitio (sigue igual: si todos están así, es un interbloqueo).
+  // En C, una espera activa que cede el procesador, mira si otro hilo falló y,
+  // pasado el tiempo máximo, lo da por interbloqueo.
+  const esperaJS = (cond, sitioEsp) => {
+    const w = tmp('ent');
+    L(`${w} = ${-1 - 2 * sitioEsp};`);
+    L(`while (${cond}) { yield ${w}; ${w} = ${-2 - 2 * sitioEsp}; }`);
+  };
+  const esperaC = (cond, sitioEsp) => {
+    L(`c1en_esp_inicio(&c1en_esp);`);
+    L(`while (${cond}) { int r_ = c1en_esperar(c1en_ctl, &c1en_esp); if (r_ == 1) return C1EN_ABORTO; if (r_) { *c1en_blando = 1; ${FALLA_S(sitioEsp)} } }`);
+  };
+  function atomicoSentencia(e, f) {
+    if (f === 'vallaMemoria') { if (!js) L(cu ? '__threadfence();' : '__atomic_thread_fence(__ATOMIC_SEQ_CST);'); return; }
+    if (f === 'barreraHilos') {
+      const id = M.sitio(e, 'barrera'), esp = M.sitio(e, 'espera');
+      if (js) L(`yield ${id};`);
+      else L(`{ int r_ = c1en_barrera_hilos(c1en_ctl, ${id}); if (r_ == 1) return C1EN_ABORTO; if (r_ == 2) { *c1en_blando = 1; ${FALLA_S(id)} } if (r_ == 3) { *c1en_blando = 1; ${FALLA_S(esp)} } }`);
+      return;
+    }
+    if (f === 'atomicoSumar' || f === 'atomicoCambiar' || f === 'atomicoComparar') {
+      const antes = fallas;
+      L(`${atomicoExpr(e, f)};`);
+      comprobar(antes);
+      return;
+    }
+    const info = M.arrDe.get(e.args[0]);
+    const tj = tmp('ent'), antes = fallas;
+    L(`${tj} = ${ex(e.args[1])};`);
+    const v = e.args[2] ? tmp('ent') : null;
+    if (v) L(`${v} = ${ex(e.args[2])};`);
+    comprobar(antes);
+    L(`if (!${enRango(tj, info.cnN)}) ${FALLA_S(M.sitio(e, 'idx'))}`);
+    const el = `${info.cn}[${tj}]`;
+    if (f === 'atomicoEscribir') {
+      if (js) L(`${el} = ${v};`);
+      else if (cu) L(`atomicExch(&${el}, ${valAtom(v, info)});`);
+      else L(`__atomic_store_n(&${el}, ${valAtom(v, info)}, __ATOMIC_SEQ_CST);`);
+      return;
+    }
+    if (f === 'despertar') return;                 // las esperas miran solas: avisar es opcional
+    if (f === 'abrirCandado') {
+      if (js) L(`${el} = 0;`);
+      else L(`__atomic_store_n(&${el}, 0, __ATOMIC_RELEASE);`);
+      return;
+    }
+    const esp = M.sitio(e, 'espera');
+    if (f === 'cerrarCandado') {
+      if (js) { esperaJS(`${el} !== 0`, esp); L(`${el} = 1;`); }
+      else {
+        const ty = tipoAtom(info), c0 = tmp('ent');
+        esperaC(`!({ ${ty} e_ = 0; __atomic_compare_exchange_n(&${el}, &e_, (${ty})1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED); })`, esp);
+        void c0;
+      }
+      return;
+    }
+    // esperarMientras(a, i, v)
+    if (js) esperaJS(`${el} === ${valAtom(v, info)}`, esp);
+    else esperaC(`__atomic_load_n(&${el}, __ATOMIC_ACQUIRE) == ${valAtom(v, info)}`, esp);
+  }
   function sumarAtomico(e) {
     const info = M.arrDe.get(e.args[0]);
     const tj = tmp('ent'), tv = tmp(info.arr === 'real' ? 'real' : 'ent');
@@ -16028,6 +16266,7 @@ function c1enEmitir(M, destino) {
 
   // ── el envoltorio de cada destino ──
   if (M.bloques) return c1enEnvolverBloques(M, destino, lineas.join('\n'), temps, TY);
+  if (M.hilos) return c1enEnvolverHilos(M, destino, lineas.join('\n'), temps, TY);   // (motor-exp N4.7)
   const firmaCuerpo = [], llamada0 = [], firmaNucleo = [], desemp = [];
   M.params.forEach((p, k) => {
     if (p.arr) {
@@ -16204,6 +16443,173 @@ static uint64_t c1en_correr_bloque(c1en_hb* hs, int64_t nh, int64_t b) {
   return peor;
 }
 `;
+// ============================================================================
+//  (motor-exp N4.7) Los núcleos de «hilos»: n hilos de la CPU, vivos a la vez
+// ============================================================================
+//   · jit: cada hilo es un GENERADOR y se turnan en orden fijo (0, 1, 2… por
+//     rondas). Lo que espera cede el turno; si en una ronda nadie avanza —todos
+//     esperan algo que nadie va a cambiar—, es un interbloqueo y se dice con la
+//     línea. Da siempre lo mismo: es la referencia.
+//   · nativo: n hilos del sistema de verdad (pthreads, o los de Windows). Las
+//     esperas son activas y ceden el procesador; si un hilo falla, los demás lo
+//     ven y salen; si una espera dura más de C1EN_HILOS_ESPERA_S segundos (60
+//     por defecto), se da por interbloqueo.
+const C1EN_HILOS_SO_C = `
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#include <sched.h>
+#include <time.h>
+#endif
+#include <stdlib.h>
+#include <string.h>
+#define C1EN_ABORTO 0xffffffLL
+typedef struct { int64_t n, vivos, llegados, generacion, sitio; int abortado; double limite_ms; } c1en_ctl_t;
+typedef struct { uint64_t vueltas; double t0; } c1en_esp_t;
+static double c1en_ms(void) {
+#ifdef _WIN32
+  return (double)GetTickCount64();
+#else
+  struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
+#endif
+}
+static void c1en_ceder(void) {
+#ifdef _WIN32
+  SwitchToThread();
+#else
+  sched_yield();
+#endif
+}
+static void c1en_esp_inicio(c1en_esp_t* e) { e->vueltas = 0; e->t0 = 0; }
+/* una vuelta de espera: 1 = otro hilo falló (salir), 3 = pasó el tiempo máximo */
+static int c1en_esperar(c1en_ctl_t* c, c1en_esp_t* e) {
+  if (__atomic_load_n(&c->abortado, __ATOMIC_ACQUIRE)) return 1;
+  if ((++e->vueltas & 1023) == 0) {
+    double t = c1en_ms();
+    if (e->t0 == 0) e->t0 = t; else if (t - e->t0 > c->limite_ms) return 3;
+  }
+  c1en_ceder();
+  return 0;
+}
+/* la barrera de todos los hilos: 0 bien, 1 otro falló, 2 no llegaron todos
+   (uno terminó o fue a otra barrera), 3 pasó el tiempo máximo */
+static int c1en_barrera_hilos(c1en_ctl_t* c, int64_t sitio) {
+  int64_t g = __atomic_load_n(&c->generacion, __ATOMIC_ACQUIRE);
+  int64_t libre = -1;
+  if (!__atomic_compare_exchange_n(&c->sitio, &libre, sitio, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE) && libre != sitio) return 2;
+  if (__atomic_add_fetch(&c->llegados, 1, __ATOMIC_ACQ_REL) == c->n) {
+    __atomic_store_n(&c->llegados, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&c->sitio, -1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&c->generacion, 1, __ATOMIC_RELEASE);
+    return 0;
+  }
+  c1en_esp_t e; c1en_esp_inicio(&e);
+  while (__atomic_load_n(&c->generacion, __ATOMIC_ACQUIRE) == g) {
+    if (__atomic_load_n(&c->vivos, __ATOMIC_ACQUIRE) < c->n) return 2;
+    int r = c1en_esperar(c, &e); if (r) return r;
+  }
+  return 0;
+}
+`;
+function c1enEnvolverHilos(M, destino, cuerpo, temps, TY) {
+  const js = destino === 'js', cu = destino === 'cuda';
+  if (cu) throw new Error('un núcleo de hilos no tiene CUDA');
+  const firmaCuerpo = [], llamada0 = [], firmaNucleo = [], campos = [], deCampos = [];
+  M.params.forEach((p, k) => {
+    if (p.arr) {
+      const ty = c1enTipoElem(p, false);
+      firmaCuerpo.push(`${ty}* ${p.cn}`, `${TY.ent} ${p.cnN}`);
+      firmaNucleo.push(`${ty}* ${p.cn}`, `${TY.ent} ${p.cnN}`);
+      campos.push(`${ty}* ${p.cn};`, `${TY.ent} ${p.cnN};`); deCampos.push(`a->${p.cn}`, `a->${p.cnN}`);
+      llamada0.push(p.cn, p.cnN);
+    } else {
+      const ty = p.tipoEntrada === 'real' ? 'double' : TY.ent;
+      firmaCuerpo.push(`${ty} ${p.entrada}`);
+      if (k === 0) return;
+      firmaNucleo.push(`${ty} ${p.entrada}`);
+      campos.push(`${ty} ${p.entrada};`); deCampos.push(`a->${p.entrada}`);
+      llamada0.push(p.entrada);
+    }
+  });
+  const locales = [];
+  for (const p of M.params) if (!p.arr) locales.push([p.cn, p.tipo]);
+  for (const v of M.vars) locales.push([v.cn, v.tipo]);
+  for (const [nm, t] of temps) locales.push([nm, t]);
+  const argsCuerpo = firmaCuerpo.slice(1).map(x => x.split(' ').pop());
+  if (js) {
+    const decl = locales.map(([nm, t]) => `${nm} = ${t === 'bool' ? 'false' : '0'}`);
+    return `(function () {\n` +
+      `  ${c1enMezclar.toString()}\n  ${c1enAzar.toString()}\n  ${c1enBits.toString()}\n` +
+      `  // C1EÑ — «${M.nombre}» (línea ${M.linea}), destino jit, núcleo de hilos\n` +
+      `  function* cuerpo(${['p0', 'c1en_nh'].concat(argsCuerpo).join(', ')}) {\n` +
+      `    let f = 0, vueltas = 0;\n` + (decl.length ? `    let ${decl.join(', ')};\n` : '') +
+      cuerpo.split('\n').map(l => '  ' + l).join('\n') + `\n    return 0;\n  }\n` +
+      // el planificador: rondas en orden fijo; 0 corre, 1 en la barrera, 2 terminó
+      `  return function nucleo(${['c1en_nh'].concat(argsCuerpo).join(', ')}) {\n` +
+      `    const nh = c1en_nh, hs = new Array(nh), est = new Uint8Array(nh), bar = new Int32Array(nh), esp = new Int32Array(nh);\n` +
+      `    for (let t = 0; t < nh; t++) hs[t] = cuerpo(${['t', 'nh'].concat(argsCuerpo).join(', ')});\n` +
+      `    let vivos = nh;\n` +
+      `    while (vivos > 0) {\n` +
+      `      let avanza = false, enBarrera = 0;\n` +
+      `      for (let t = 0; t < nh; t++) {\n` +
+      `        if (est[t] !== 0) { if (est[t] === 1) enBarrera++; continue; }\n` +
+      `        const r = hs[t].next();\n` +
+      `        if (r.done) { est[t] = 2; vivos--; avanza = true; if (r.value !== 0) return [t, r.value]; continue; }\n` +
+      `        const v = r.value;\n` +
+      `        if (v >= 0) { est[t] = 1; bar[t] = v; enBarrera++; avanza = true; }\n` +
+      `        else { const k = -v - 1; esp[t] = k >> 1; if ((k & 1) === 0) avanza = true; }\n` +
+      `      }\n` +
+      `      if (vivos > 0 && enBarrera === vivos) {\n` +
+      `        let b0 = -1;\n` +
+      `        for (let t = 0; t < nh; t++) if (est[t] === 1) { if (b0 < 0) b0 = bar[t]; else if (bar[t] !== b0) return [t, bar[t]]; }\n` +
+      `        if (vivos < nh) { for (let t = 0; t < nh; t++) if (est[t] === 1) return [t, bar[t]]; }\n` +
+      `        for (let t = 0; t < nh; t++) if (est[t] === 1) est[t] = 0;\n` +
+      `        continue;\n` +
+      `      }\n` +
+      `      if (!avanza && vivos > 0) { for (let t = 0; t < nh; t++) if (est[t] === 0) return [t, esp[t]]; }\n` +
+      `    }\n` +
+      `    return null;\n  };\n})()`;
+  }
+  const decl = locales.map(([nm, t]) => `  ${TY[t]} ${nm} = 0;`).join('\n');
+  const titulo = `/* C1EÑ — generado desde la función «${M.nombre}» (línea ${M.linea}): un núcleo de hilos (CPU).\n` +
+    '   Compilar con: gcc -O2 -shared -fPIC -ffp-contract=off [-pthread] (sin FMA). */\n';
+  const cab = C1EN_CABECERA_C + C1EN_PRELUDIO;
+  // «c1en_blando»: el fallo es de los que TODOS los hilos acaban viendo (un
+  // interbloqueo, una barrera a la que no llegan todos): no se avisa a los demás
+  // para que salgan, porque cada uno lo verá y se nombrará el de índice más bajo,
+  // como en jit
+  const fCuerpo = `static ${TY.ent} c1en_cuerpo(${[firmaCuerpo[0], `${TY.ent} c1en_nh`, 'c1en_ctl_t* c1en_ctl', 'int* c1en_blando'].concat(firmaCuerpo.slice(1)).join(', ')}) {\n` +
+    `  ${TY.ent} f = 0, vueltas = 0; c1en_esp_t c1en_esp; (void)c1en_esp; (void)c1en_nh;\n${decl}\n${cuerpo}\n  (void)vueltas;\n  return 0;\n}\n`;
+  return titulo + cab + C1EN_HILOS_SO_C + '\n' + fCuerpo + '\n' +
+    `typedef struct { c1en_ctl_t* ctl; int64_t t; int64_t res; int blando; ${campos.join(' ')} } c1en_ah;\n` +
+    `#ifdef _WIN32\nstatic DWORD WINAPI c1en_hilo(void* p) {\n#else\nstatic void* c1en_hilo(void* p) {\n#endif\n` +
+    `  c1en_ah* a = (c1en_ah*)p;\n` +
+    `  a->res = c1en_cuerpo(${['a->t', 'a->ctl->n', 'a->ctl', '&a->blando'].concat(deCampos).join(', ')});\n` +
+    `  if (a->res != 0 && a->res != C1EN_ABORTO && !a->blando) __atomic_store_n(&a->ctl->abortado, 1, __ATOMIC_RELEASE);\n` +
+    `  __atomic_sub_fetch(&a->ctl->vivos, 1, __ATOMIC_ACQ_REL);\n  return 0;\n}\n` +
+    `void c1en_nucleo(${['int64_t nh'].concat(firmaNucleo).join(', ')}, uint64_t* c1en_err) {\n` +
+    `  c1en_ctl_t ctl; memset(&ctl, 0, sizeof ctl); ctl.n = nh; ctl.vivos = nh; ctl.sitio = -1;\n` +
+    `  { const char* s_ = getenv("C1EN_HILOS_ESPERA_S"); double l = s_ ? atof(s_) : 60.0; ctl.limite_ms = (l > 0 ? l : 60.0) * 1000.0; }\n` +
+    `  c1en_ah* as = (c1en_ah*)calloc((size_t)nh, sizeof(c1en_ah));\n` +
+    `#ifdef _WIN32\n  HANDLE* hs = (HANDLE*)calloc((size_t)nh, sizeof(HANDLE));\n#else\n  pthread_t* hs = (pthread_t*)calloc((size_t)nh, sizeof(pthread_t));\n#endif\n` +
+    `  int64_t lanzados = 0;\n` +
+    `  for (int64_t t = 0; t < nh; t++) {\n` +
+    `    as[t].ctl = &ctl; as[t].t = t;${llamada0.length ? ' ' : ''}${M.params.filter(p => p.arr).map(p => `as[t].${p.cn} = ${p.cn}; as[t].${p.cnN} = ${p.cnN};`).concat(M.params.slice(1).filter(p => !p.arr).map(p => `as[t].${p.entrada} = ${p.entrada};`)).join(' ')}\n` +
+    `#ifdef _WIN32\n    hs[t] = CreateThread(NULL, 0, c1en_hilo, &as[t], 0, NULL); if (!hs[t]) break;\n` +
+    `#else\n    if (pthread_create(&hs[t], NULL, c1en_hilo, &as[t]) != 0) break;\n#endif\n` +
+    `    lanzados++;\n  }\n` +
+    `  if (lanzados < nh) {               /* no se pudieron lanzar todos: los que corren salen */\n` +
+    `    __atomic_store_n(&ctl.abortado, 1, __ATOMIC_RELEASE);\n` +
+    `    __atomic_sub_fetch(&ctl.vivos, nh - lanzados, __ATOMIC_ACQ_REL);\n  }\n` +
+    `  for (int64_t t = 0; t < lanzados; t++) {\n` +
+    `#ifdef _WIN32\n    WaitForSingleObject(hs[t], INFINITE); CloseHandle(hs[t]);\n#else\n    pthread_join(hs[t], NULL);\n#endif\n  }\n` +
+    `  for (int64_t t = 0; t < lanzados; t++) if (as[t].res != 0 && as[t].res != C1EN_ABORTO) {\n` +
+    `    uint64_t k = ((uint64_t)t << 24) | (uint64_t)as[t].res; if (k < c1en_err[0]) c1en_err[0] = k;\n  }\n` +
+    `  if (lanzados < nh && c1en_err[0] == ~0ULL) c1en_err[0] = 0xfffffffffffffffeULL;\n` +
+    `  free(hs); free(as);\n}\n`;
+}
+
 function c1enEnvolverBloques(M, destino, cuerpo, temps, TY) {
   const js = destino === 'js', cu = destino === 'cuda';
   const firmaCuerpo = [], llamada0 = [], firmaNucleo = [], desemp = [], campos = [], deCampos = [];

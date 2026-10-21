@@ -51,6 +51,7 @@ const SUITES = [
   ['exp: bloques', 'exp-bloques.js', 'motor-exp N4.4: paraleloBloques — bloques, hilos, memoria compartida y barreras, igual en jit, nativo y GPU (simulada)'],
   ['exp: tipos de máquina', 'exp-tipos.js', 'motor-exp N4.5: i8 u8 i16 u16 u32 i64 u64 — aritmética y bits al bit contra NumPy, 64 bits exactos, y en los núcleos de jit, nativo y GPU (simulada)'],
   ['exp: lengua franca', 'exp-lengua-franca.js', 'motor-exp N4.6: Ñ como biblioteca de C (n-compilar --biblioteca), llamada desde C, C++, Python, Rust y Go; tres a la vez; valgrind; la DLL de Windows'],
+  ['exp: hilos', 'exp-hilos.js', 'motor-exp N4.7: hilos(n, f) de la CPU con barreras, candados, esperas y atómicos (jit = nativo), y atómicos en paralelo (jit, nativo, GPU simulada)'],
   ['exp: sin runtime', 'exp-aot.js --rapida', 'motor-exp N4.1: el programa como ejecutable nativo, igual a la VM letra por letra (la completa: exp-aot.js)'],
 ];
 

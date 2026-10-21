@@ -59,6 +59,12 @@ static inline double atomicAdd(double* p, double v) { double o = *p; *p = o + v;
 /* (motor-exp N4.5) los de float y unsigned int, que CUDA también tiene */
 static inline float atomicAdd(float* p, float v) { float o = *p; *p = o + v; return o; }
 static inline unsigned int atomicAdd(unsigned int* p, unsigned int v) { unsigned int o = *p; *p = o + v; return o; }
+/* (motor-exp N4.7) atomicExch y atomicCAS, como en CUDA */
+static inline int atomicExch(int* p, int v) { int o = *p; *p = v; return o; }
+static inline unsigned int atomicExch(unsigned int* p, unsigned int v) { unsigned int o = *p; *p = v; return o; }
+static inline int atomicCAS(int* p, int e, int v) { int o = *p; if (o == e) *p = v; return o; }
+static inline unsigned int atomicCAS(unsigned int* p, unsigned int e, unsigned int v) { unsigned int o = *p; if (o == e) *p = v; return o; }
+static inline void __threadfence(void) {}
 static inline unsigned long long atomicMin(unsigned long long* p, unsigned long long v) {
   unsigned long long o = *p; if (v < o) *p = v; return o;
 }

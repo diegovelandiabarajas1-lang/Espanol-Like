@@ -222,6 +222,50 @@ comprobar('un error de Ñ: NaN/0/NULL y <prefijo>error() con el mensaje, la pist
 comprobar('«salir» en una biblioteca no cierra el programa; un entero de más de 2^53 y un tipo de vuelta equivocado se dicen',
   L[20] === esperadoC[20] && L[23] === esperadoC[23] && L[25] === esperadoC[25]);
 
+// (motor-exp N4.7) desde varios hilos a la vez: las llamadas entran de una en una
+// (el cerrojo) y el error es de cada hilo
+escribir('hilos.c', `#define __USE_MINGW_ANSI_STDIO 1
+#include <stdio.h>
+#include <math.h>
+#include "mates.h"
+#ifdef _WIN32
+#include <windows.h>
+#define HILO DWORD WINAPI
+#else
+#include <pthread.h>
+#define HILO void*
+#endif
+static double sumas[8]; static int errores_mal[8], errores_bien[8];
+static HILO trabajar(void* p) {
+  int k = (int)(long long)p; double s = 0;
+  for (int i = 0; i < 3000; i++) {
+    s += mates_hipotenusa(3, 4);
+    mates_valor* c = mates_cuadrados(4); double xs[4]; mates_valor_reales(c, xs, 4); s += xs[3]; mates_valor_soltar(c);
+    if (k % 2) { mates_dividir(1, 0); if (mates_error()) errores_mal[k]++; }
+    else { mates_hipotenusa(1, 1); if (!mates_error()) errores_bien[k]++; }
+  }
+  sumas[k] = s; return 0;
+}
+int main(void) {
+#ifdef _WIN32
+  HANDLE h[8]; for (int k = 0; k < 8; k++) h[k] = CreateThread(NULL, 0, trabajar, (void*)(long long)k, 0, NULL);
+  for (int k = 0; k < 8; k++) { WaitForSingleObject(h[k], INFINITE); CloseHandle(h[k]); }
+#else
+  pthread_t h[8]; for (int k = 0; k < 8; k++) pthread_create(&h[k], NULL, trabajar, (void*)(long long)k);
+  for (int k = 0; k < 8; k++) pthread_join(h[k], NULL);
+#endif
+  int bien = 1; for (int k = 0; k < 8; k++) { if (sumas[k] != 3000 * 14.0) bien = 0; if (k % 2 ? errores_mal[k] != 3000 : errores_bien[k] != 3000) bien = 0; }
+  printf("%s %lld\\n", bien ? "bien" : "mal", (long long)mates_cuantas());
+  return 0;
+}
+`);
+{
+  const bh = correr(cc, ['-O1', path.join(tmp, 'hilos.c'), '-o', path.join(tmp, 'hilos' + EXE), '-I', tmp].concat(enlazar(tmp, ['mates']), WIN ? [] : ['-pthread'], ['-lm']));
+  const rh = bh.ok ? correr(path.join(tmp, 'hilos' + EXE), []) : bh;
+  comprobar('desde 8 hilos a la vez (N4.7): 48.000 llamadas sin romper nada, y el error de cada hilo es suyo',
+    rh.ok && /^mates: lista\nbien \d+$/.test(rh.out), rh.out + rh.err);
+}
+
 // lo mismo que la VM
 escribir('vm.esl', `usar hipotenusa, saludo, cuadrados, resumen, sumador, aplicar de "mates.esl"
 imprimir("hipotenusa", hipotenusa(3, 4))
