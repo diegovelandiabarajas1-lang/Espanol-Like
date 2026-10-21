@@ -24,6 +24,7 @@
 //       limpieza (sin setjmp: ninguna referencia se pierde).
 // ============================================================================
 'use strict';
+const { leerCabecera } = require('../util/cabecera-c.js');
 
 const OPS = ['CONST', 'NULO', 'CIERTO', 'FALSO', 'POP', 'DUP',
   'GET_LOCAL', 'SET_LOCAL', 'GET_GLOBAL', 'SET_GLOBAL', 'DEF_GLOBAL', 'GET_UP', 'SET_UP',
@@ -194,10 +195,13 @@ function compilarAOT(fnPrincipal, opciones) {
       if (it.op === OP.PROP_GET) idTexto(consts[it.arg]);
     }
   });
+  // (motor-exp N4.10) lo que el programa enlaza de C
+  const enl = buscarEnlaces(fns, decod, opciones.leerArchivo || (r => fs.readFileSync(r, 'utf8')));
   // lo que usa de la biblioteca y no está en C
   const faltan = [];
   for (const g of globales.keys()) {
     if (definidos.has(g)) continue;
+    if (g === G_NATIVA || g === G_CABECERA) continue;
     if (NATIVAS_C.has(nombreC(g)) || VALORES_C[g]) continue;
     if (globalesMotor.has(g)) faltan.push(g.includes(SEP) ? `«${g.split(SEP)[1]}» de "${g.split(SEP)[0].slice(2)}"` : `«${g}»`);
   }
@@ -224,6 +228,7 @@ function compilarAOT(fnPrincipal, opciones) {
   fns.forEach((f, j) => E(`static const NFn FN${j} = { ${cTexto(f.nombre)}, ${f.aridad}, ${f.minimos !== undefined ? f.minimos : -1}, ${f.nUpvalues}, ${f.corrutina ? 1 : 0}, F${j} };`));
 
   fns.forEach((f, j) => emitirFuncion(f, j, decod[j]));
+  emitirEnlaces(enl, E, cTexto, globales.has(G_NATIVA) || globales.has(G_CABECERA));
 
   // los textos constantes, en UTF-16
   E('static void iniciar_constantes(void) {');
@@ -235,12 +240,14 @@ function compilarAOT(fnPrincipal, opciones) {
   for (const [g, k] of globales) {
     if (NATIVAS_C.has(nombreC(g)) && !definidos.has(g)) E(`  G[${k}] = n_buscar_nativa(${cTexto(nombreC(g))}); GD[${k}] = 1;`);
     else if (VALORES_C[g] && !definidos.has(g)) E(`  G[${k}] = ${VALORES_C[g]}; GD[${k}] = 1;`);
+    else if (g === G_NATIVA && !definidos.has(g)) E(`  G[${k}] = n_nativa_nueva("nativa", -1, NNAT_nativa, NULL); GD[${k}] = 1;`);
+    else if (g === G_CABECERA && !definidos.has(g)) E(`  G[${k}] = n_nativa_nueva("cabeceraNativa", 2, NNAT_cabecera, NULL); GD[${k}] = 1;`);
   }
   E('}');
   // (motor-exp N4.6) una biblioteca de C en vez de un programa
   if (opciones.biblioteca) {
     const b = emitirBiblioteca(opciones.biblioteca, { E, idGlobal, modulos, idFn, cTexto });
-    return { c: out.join('\n') + '\n', h: b.h, py: b.py, exporta: b.exporta, funciones: fns.length, textos: textos.size, globales: globales.size };
+    return { c: out.join('\n') + '\n', h: b.h, py: b.py, exporta: b.exporta, funciones: fns.length, textos: textos.size, globales: globales.size, enlazar: enl.bibliotecas };
   }
   E('int main(int argc, char** argv) {');
   E('  n_iniciar(argc, argv);');
@@ -257,7 +264,7 @@ function compilarAOT(fnPrincipal, opciones) {
   E('  fflush(stdout);');
   E('  return 0;');
   E('}');
-  return { c: out.join('\n') + '\n', funciones: fns.length, textos: textos.size, globales: globales.size };
+  return { c: out.join('\n') + '\n', funciones: fns.length, textos: textos.size, globales: globales.size, enlazar: enl.bibliotecas };
 
   function emitirFuncion(f, j, ins) {
     const consts = f.chunk.consts;
@@ -847,4 +854,153 @@ def iniciar():
   return { h: h.join('\n') + '\n', py: py.join('\n') + '\n', exporta: exp.map(f => ({ nombre: f.nombre, c: f.c, firma: firma(f, true) })) };
 }
 
-module.exports = { compilarAOT, ErrorAOT, NATIVAS_C, exportacionesBiblioteca };
+// ============================================================================
+//  (motor-exp N4.10) C llamado directamente: nativa(...) y cabeceraNativa(...)
+// ============================================================================
+// En la VM las dos pasan por koffi. Aquí la firma (o la cabecera entera) se lee
+// AL COMPILAR, cada función lleva un envoltorio de C que convierte los valores
+// de Ñ y llama al símbolo de verdad (declarado con su nombre de enlace, así no
+// choca con lo que ya declaran <math.h> y compañía), y n-compilar le pasa la
+// biblioteca al enlazador. Ver aot/nrt_enlace.inc.
+const G_NATIVA = 'nativa', G_CABECERA = 'ñ:nativo' + SEP + 'cabeceraNativa';
+// Los tipos de C que el ejecutable sabe pasar: [clase, tipo de C para declarar]
+const TIPOS_ENLACE = {
+  double: ['real', 'double'], float: ['real', 'float'], 'long double': null,
+  char: ['ent', 'char'], 'signed char': ['ent', 'signed char'], 'unsigned char': ['nat', 'unsigned char'],
+  short: ['ent', 'short'], 'unsigned short': ['nat', 'unsigned short'], int: ['ent', 'int'], 'unsigned int': ['nat', 'unsigned int'],
+  long: ['ent', 'long'], 'unsigned long': ['nat', 'unsigned long'], 'long long': ['ent', 'long long'], 'unsigned long long': ['nat', 'unsigned long long'],
+  int8_t: ['ent', 'int8_t'], uint8_t: ['nat', 'uint8_t'], int16_t: ['ent', 'int16_t'], uint16_t: ['nat', 'uint16_t'],
+  int32_t: ['ent', 'int32_t'], uint32_t: ['nat', 'uint32_t'], int64_t: ['ent', 'int64_t'], uint64_t: ['nat', 'uint64_t'],
+  size_t: ['nat', 'size_t'], ssize_t: ['ent', 'ptrdiff_t'], ptrdiff_t: ['ent', 'ptrdiff_t'], intptr_t: ['ent', 'intptr_t'], uintptr_t: ['nat', 'uintptr_t'],
+  bool: ['bool', '_Bool'], _Bool: ['bool', '_Bool'], void: ['void', 'void'],
+};
+function normalTipoC(t) {
+  let s = String(t).replace(/\b(const|volatile|restrict|__restrict|__restrict__|struct|enum|union)\b/g, ' ').replace(/\s*\*\s*/g, ' * ').replace(/\s+/g, ' ').trim();
+  s = s.replace(/\bsigned (short|int|long)/g, '$1').replace(/\bshort int\b/g, 'short').replace(/\blong long int\b/g, 'long long')
+    .replace(/\blong int\b/g, 'long').replace(/\bunsigned$/, 'unsigned int').replace(/^unsigned \*/, 'unsigned int *');
+  return s;
+}
+// la clase de un tipo de C: { k: 'real'|'ent'|'nat'|'bool'|'texto'|'void', c } o { no: 'por qué' }
+function claseTipoC(t, alias, estructuras, tiposFn) {
+  let s = normalTipoC(t);
+  for (let v = 0; v < 20 && alias.has(s); v++) s = normalTipoC(alias.get(s));
+  if (s === 'char *') return { k: 'texto', c: 'const char*' };
+  if (s.endsWith('*')) return { no: `pasa un puntero (${t})`, que: `un puntero (${t})` };
+  if (tiposFn.has(s)) return { no: `lleva una retrollamada (${t})`, que: `una retrollamada (${t})` };
+  if (estructuras.has(s)) return { no: `pasa una estructura (${s}) por valor`, que: `una estructura (${s}) por valor` };
+  const e = TIPOS_ENLACE[s];
+  if (!e) return { no: `usa el tipo «${t}», que no sé pasar`, que: `el tipo «${t}», que no sé pasar` };
+  return { k: e[0], c: e[1] };
+}
+// Lo que el programa enlaza: las llamadas nativa("lib", "firma") y
+// cabeceraNativa("lib", "geo.h") con los dos textos escritos tal cual.
+function buscarEnlaces(fns, decod, leerArchivo) {
+  const funciones = [], cabeceras = [], bibliotecas = [];
+  const vistas = new Map();
+  const bib = b => { if (!bibliotecas.includes(b)) bibliotecas.push(b); };
+  fns.forEach((f, j) => {
+    const ins = decod[j], consts = f.chunk.consts;
+    for (let k = 0; k + 3 < ins.length; k++) {
+      const a = ins[k];
+      if (a.op !== OP.GET_GLOBAL || (consts[a.arg] !== G_NATIVA && consts[a.arg] !== G_CABECERA)) continue;
+      const b = ins[k + 1], c = ins[k + 2], d = ins[k + 3];
+      if (b.op !== OP.CONST || c.op !== OP.CONST || d.op !== OP.CALL || d.arg !== 2) continue;
+      const lib = consts[b.arg], seg = consts[c.arg];
+      if (typeof lib !== 'string' || typeof seg !== 'string') continue;
+      const clave = consts[a.arg] + '\u0001' + lib + '\u0001' + seg;
+      if (vistas.has(clave)) continue;
+      vistas.set(clave, true);
+      bib(lib);
+      if (consts[a.arg] === G_NATIVA) {
+        if (/\.\.\./.test(seg)) throw new ErrorAOT(`nativa(${JSON.stringify(lib)}, ${JSON.stringify(seg)}): una función con «...» no se puede llamar (C no dice de qué tipo es cada argumento de más)`);
+        if (/_(Out|Inout)_/.test(seg)) throw new ErrorAOT(`nativa(${JSON.stringify(lib)}, ${JSON.stringify(seg)}): los parámetros de salida (_Out_, _Inout_) todavía no van en el ejecutable`);
+        const h = leerCabecera(seg + ';');
+        if (h.funciones.length !== 1) throw new ErrorAOT(`nativa(${JSON.stringify(lib)}, ${JSON.stringify(seg)}): no entiendo esa firma de C`);
+        const fn = h.funciones[0];
+        const cl = enlazable(fn, new Map(), new Set(), new Set());
+        if (cl.no) throw new ErrorAOT(`nativa(${JSON.stringify(lib)}, ${JSON.stringify(seg)}): «${fn.nombre}» ${cl.no}: en el ejecutable, todavía no (en la VM sí)`);
+        funciones.push({ lib, proto: seg, fn, cl });
+      } else {
+        let texto;
+        try { texto = leerArchivo(seg); }
+        catch (e) { throw new ErrorAOT(`cabeceraNativa(${JSON.stringify(lib)}, ${JSON.stringify(seg)}): no se pudo leer la cabecera al compilar (${e.message})`); }
+        const h = leerCabecera(texto);
+        const alias = new Map(h.alias.map(([n, t]) => [normalTipoC(n), t]));
+        const estructuras = new Set(h.estructuras.map(e => e.nombre).concat(h.opacos));
+        const tiposFn = new Set(h.tiposFuncion.map(t => t.nombre));
+        const funs = h.funciones.map(fn => ({ fn, cl: enlazable(fn, alias, estructuras, tiposFn) }));
+        cabeceras.push({ lib, ruta: seg, h, funs });
+      }
+    }
+  });
+  return { funciones, cabeceras, bibliotecas };
+}
+function enlazable(fn, alias, estructuras, tiposFn) {
+  const ret = claseTipoC(fn.ret, alias, estructuras, tiposFn);
+  if (ret.no) return { no: `devuelve ${ret.que}` };
+  const ps = [];
+  for (const p of fn.params) {
+    const c = claseTipoC(p.tipo, alias, estructuras, tiposFn);
+    if (c.no) return { no: c.no };
+    if (c.k === 'void') return { no: 'tiene un parámetro void' };
+    ps.push(c);
+  }
+  return { ret, ps };
+}
+function emitirEnlaces(enl, E, cTexto, usa) {
+  if (!usa && !enl.funciones.length && !enl.cabeceras.length) return;
+  let q = 0;
+  E('/* ── (motor-exp N4.10) C llamado directamente: un envoltorio por función ── */');
+  const envoltorio = (fn, cl) => {
+    const k = q++;
+    const decl = cl.ps.length ? cl.ps.map(p => p.c).join(', ') : 'void';
+    E(`extern ${cl.ret.c} NXS${k}(${decl}) __asm__(N_SIM(${cTexto(fn.nombre)})) N_DEBIL;`);
+    E(`static NV NX${k}(NV* a, int n, void* x) {`);
+    E('  (void)n; (void)x;');
+    const libres = [];
+    cl.ps.forEach((p, i) => {
+      if (p.k === 'real') E(`  double d${i}; if (!n_c_numero(a[${i}], &d${i}, ${cTexto(fn.nombre)}, ${i + 1})) goto fallo;`);
+      else if (p.k === 'ent' || p.k === 'nat') E(`  int64_t d${i}; if (!n_c_entero(a[${i}], &d${i}, ${cTexto(fn.nombre)}, ${i + 1})) goto fallo;`);
+      else if (p.k === 'bool') E(`  int d${i}; if (!n_c_bool(a[${i}], &d${i}, ${cTexto(fn.nombre)}, ${i + 1})) goto fallo;`);
+      else if (p.k === 'texto') { E(`  char* d${i} = NULL; if (!n_c_texto(a[${i}], &d${i}, ${cTexto(fn.nombre)}, ${i + 1})) goto fallo;`); libres.push(i); }
+    });
+    const args = cl.ps.map((p, i) => (p.k === 'nat' ? `(${p.c})(uint64_t)d${i}` : `(${p.c})d${i}`)).join(', ');
+    const llamada = `NXS${k}(${args})`;
+    const soltar = libres.map(i => `free(d${i}); `).join('');
+    const r = cl.ret;
+    if (r.k === 'void') E(`  ${llamada}; ${soltar}return n_nulo();`);
+    else {
+      E(`  ${r.c} r = ${llamada};`);
+      if (soltar) E(`  ${soltar}`);
+      const conv = r.k === 'real' ? 'n_num((double)r)' : r.k === 'ent' ? `n_c_de_entero((int64_t)r, ${cTexto(fn.nombre)})`
+        : r.k === 'nat' ? `n_c_de_natural((uint64_t)r, ${cTexto(fn.nombre)})` : r.k === 'bool' ? 'n_bool(r)' : 'n_c_de_texto(r)';
+      E(`  return ${conv};`);
+    }
+    E(`fallo: ${soltar}return N_ERR;`);
+    E('}');
+    return k;
+  };
+  const filas = enl.funciones.map(e => {
+    const k = envoltorio(e.fn, e.cl);
+    return `{ ${cTexto(e.lib)}, ${cTexto(e.proto)}, ${cTexto(e.fn.nombre)}, ${e.cl.ps.length}, NX${k}, (const void*)&NXS${k} }`;
+  });
+  E(`static const NEnlace NENL[${Math.max(1, filas.length)}] = { ${filas.length ? filas.join(',\n  ') : '{ 0 }'} };`);
+  E(`static NV NNAT_nativa(NV* a, int n, void* x) { (void)x; return n_c_nativa(a, n, NENL, ${filas.length}); }`);
+  const cabs = enl.cabeceras.map((c, j) => {
+    const cs = c.h.constantes.map(([n, v]) => (typeof v === 'string' ? `{ ${cTexto(n)}, 0, ${cTexto(v)} }` : `{ ${cTexto(n)}, ${cNumero(v)}, NULL }`));
+    E(`static const NEnlaceConst NCK${j}[${Math.max(1, cs.length)}] = { ${cs.length ? cs.join(', ') : '{ 0 }'} };`);
+    const fs2 = c.funs.map(({ fn, cl }) => {
+      if (cl.no) return `{ ${cTexto(fn.nombre)}, ${fn.params.length}, NULL, NULL, ${cTexto(cl.no)} }`;
+      const k = envoltorio(fn, cl);
+      return `{ ${cTexto(fn.nombre)}, ${cl.ps.length}, NX${k}, (const void*)&NXS${k}, NULL }`;
+    });
+    E(`static const NEnlaceFun NCF${j}[${Math.max(1, fs2.length)}] = { ${fs2.length ? fs2.join(',\n  ') : '{ 0 }'} };`);
+    const om = c.h.omitidas.map(([n, por]) => cTexto(`${n}: ${por}`));
+    E(`static const char* const NCO${j}[${Math.max(1, om.length)}] = { ${om.length ? om.join(', ') : 'NULL'} };`);
+    return `{ ${cTexto(c.lib)}, ${cTexto(c.ruta)}, NCK${j}, ${cs.length}, NCF${j}, ${fs2.length}, NCO${j}, ${om.length} }`;
+  });
+  E(`static const NCabecera NCAB[${Math.max(1, cabs.length)}] = { ${cabs.length ? cabs.join(',\n  ') : '{ 0 }'} };`);
+  E(`static NV NNAT_cabecera(NV* a, int n, void* x) { (void)x; return n_c_cabecera(a, n, NCAB, ${cabs.length}); }`);
+}
+
+module.exports = { compilarAOT, ErrorAOT, NATIVAS_C, exportacionesBiblioteca, normalTipoC };

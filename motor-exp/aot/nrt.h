@@ -197,6 +197,43 @@ void n_salida(NV texto);                          /* una línea */
 extern NV n_faltante;
 extern NV n_nativa_registro;
 
+/* ── (motor-exp N4.10) C llamado directamente: ver nrt_enlace.inc ───────── */
+/* «sim» es la dirección del símbolo de C: con enlace débil (Linux, macOS) es
+   NULL si la biblioteca no lo trae, y eso se dice como en la VM */
+typedef struct { const char* biblioteca; const char* proto; const char* nombre; int aridad; NNatC f; const void* sim; } NEnlace;
+typedef struct { const char* nombre; double num; const char* texto; } NEnlaceConst;
+/* una función de la cabecera: con «f», lista para llamar; sin «f», «por» dice
+   por qué el ejecutable todavía no la sabe llamar */
+typedef struct { const char* nombre; int aridad; NNatC f; const void* sim; const char* por; } NEnlaceFun;
+typedef struct {
+  const char* biblioteca; const char* ruta;
+  const NEnlaceConst* consts; int nconst;
+  const NEnlaceFun* funs; int nfun;
+  const char* const* omitidas; int nomit;
+} NCabecera;
+#if defined(_WIN32)
+#define N_DEBIL
+#else
+#define N_DEBIL __attribute__((weak))
+#endif
+int n_c_numero(NV v, double* x, const char* f, int i);
+int n_c_entero(NV v, int64_t* x, const char* f, int i);
+int n_c_bool(NV v, int* x, const char* f, int i);
+int n_c_texto(NV v, char** x, const char* f, int i);
+NV n_c_de_entero(int64_t r, const char* f);
+NV n_c_de_natural(uint64_t r, const char* f);
+NV n_c_de_texto(const char* s);
+NV n_c_nativa(NV* a, int n, const NEnlace* t, int nt);
+NV n_c_cabecera(NV* a, int n, const NCabecera* t, int nt);
+/* el nombre de un símbolo de C tal como lo ve el enlazador (en macOS lleva «_» delante) */
+#define N_SIM_STR2(x) #x
+#define N_SIM_STR(x) N_SIM_STR2(x)
+#ifdef __USER_LABEL_PREFIX__
+#define N_SIM(s) N_SIM_STR(__USER_LABEL_PREFIX__) s
+#else
+#define N_SIM(s) s
+#endif
+
 /* ── (motor-exp N4.6) Ñ como biblioteca de C: ver nrt_biblioteca.inc ─────── */
 void n_iniciar_biblioteca(void);
 void n_api_limpiar_error(void);

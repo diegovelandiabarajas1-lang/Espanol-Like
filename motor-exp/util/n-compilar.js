@@ -9,6 +9,9 @@
 //   node motor-exp/util/n-compilar.js mates.esl --biblioteca [-o carpeta] [--prefijo p_]
 //        (motor-exp N4.6) una BIBLIOTECA de C: libmates.so (mates.dll, libmates.dylib) con las
 //        funciones «publico», más mates.h (C, C++, Rust, Go…) y mates.py (Python, con ctypes)
+//   (motor-exp N4.10) nativa("libgeo.so", "double f(double)") y cabeceraNativa("libgeo.so", "geo.h")
+//        se enlazan DIRECTAMENTE (sin koffi): la firma y la cabecera se leen al compilar y la
+//        biblioteca va al enlazador. --enlazar archivo añade otro .o, .a o -lalgo.
 //
 // El compilador de C (gcc, clang o el de mingw en Windows) solo hace falta
 // AQUÍ, al construir; quien reciba el ejecutable no necesita nada. Se elige con
@@ -35,6 +38,7 @@ function uso() {
 const args = process.argv.slice(2);
 let entrada = null, salida = null, archC = null, cc = process.env.C1EN_CC || null, ejecutar = false, argsProg = [], banderas = [];
 let biblioteca = false, prefijo = null;
+const enlazarExtra = [];      // (motor-exp N4.10) --enlazar archivo.o / libalgo.a / -lalgo
 while (args.length) {
   const a = args.shift();
   if (a === '-o') salida = args.shift();
@@ -43,6 +47,7 @@ while (args.length) {
   else if (a === '--ejecutar') { ejecutar = true; argsProg = args.splice(0); }
   else if (a === '--biblioteca') biblioteca = true;
   else if (a === '--prefijo') prefijo = args.shift();
+  else if (a === '--enlazar') enlazarExtra.push(args.shift());
   else if (a.startsWith('--cflag=')) banderas.push(a.slice(8));
   else if (a.startsWith('-')) uso();
   else if (!entrada) entrada = a;
@@ -93,7 +98,12 @@ if (!a.ok) {
 }
 let res;
 try {
-  const op = { globalesMotor: new Set(m.vm.globals.keys()), modulos: a.modulos };
+  // (motor-exp N4.10) las cabeceras de cabeceraNativa se leen al compilar: junto al programa, o desde aquí
+  const leerArchivo = r => {
+    for (const x of [path.resolve(path.dirname(entrada), r), path.resolve(r)]) if (fs.existsSync(x)) return fs.readFileSync(x, 'utf8');
+    throw new Error('no existe (se buscó junto al programa y en la carpeta actual)');
+  };
+  const op = { globalesMotor: new Set(m.vm.globals.keys()), modulos: a.modulos, leerArchivo };
   if (biblioteca) op.biblioteca = { nombre: identC(nombreBase), prefijo, exporta: exportacionesBiblioteca(a.ast), archivos: archivosBib };
   res = compilarAOT(a.fn, op);
 }
@@ -139,11 +149,46 @@ function objetoNrt() {
   fs.renameSync(t, o);
   return o;
 }
+// (motor-exp N4.10) las bibliotecas de nativa(…) y cabeceraNativa(…): un archivo que
+// existe (junto al programa o desde aquí) va tal cual al enlazador, con su carpeta
+// en el rpath para encontrarlo al correr; un nombre del sistema («libm.so.6»,
+// «kernel32.dll», «libz.dylib») va como -l
+function enlaces() {
+  const out = [];
+  for (const b of (res.enlazar || [])) {
+    const cand = [path.resolve(path.dirname(entrada), b), path.resolve(b)].find(x => fs.existsSync(x));
+    if (cand) {
+      out.push(cand);
+      if (!win && /\.(so(\.\d+)*|dylib)$/.test(cand)) out.push(`-Wl,-rpath,${path.dirname(cand)}`);
+      continue;
+    }
+    const base = path.basename(b);
+    let m2;
+    if (win && (m2 = /^(.+)\.dll$/i.exec(base))) out.push('-l' + m2[1]);
+    else if (mac && (m2 = /^lib(.+?)(\.\d+)*\.dylib$/.exec(base))) out.push('-l' + m2[1]);
+    else if ((m2 = /^lib(.+?)\.so(\.\d+)*$/.exec(base))) out.push(mac || win ? '-l' + m2[1] : '-l:' + base);
+    else out.push('-l' + base.replace(/^lib/, '').replace(/\.(a|lib)$/, ''));
+  }
+  const todo = out.concat(enlazarExtra);
+  // las funciones de C se declaran con enlace débil (si la biblioteca no trae una,
+  // vale NULL y se dice al usarla, como en la VM); con «--as-needed», que es lo
+  // de siempre en Ubuntu, una biblioteca que solo se usa así se quitaría
+  return todo.length && !win && !mac ? ['-Wl,--no-as-needed'].concat(todo) : todo;
+}
 const flags = biblioteca
-  ? BASE.concat([mac ? '-dynamiclib' : '-shared', '-o', salida, c, objetoNrt(), '-lm']).concat(win ? ['-static-libgcc'] : ['-pthread'])
-  : BASE.concat(['-o', salida, c, objetoNrt(), '-lm']).concat(win ? ['-Wl,--stack,67108864'] : []);
+  ? BASE.concat([mac ? '-dynamiclib' : '-shared', '-o', salida, c, objetoNrt()]).concat(enlaces(), ['-lm']).concat(win ? ['-static-libgcc'] : ['-pthread'])
+  : BASE.concat(['-o', salida, c, objetoNrt()]).concat(enlaces(), ['-lm']).concat(win ? ['-Wl,--stack,67108864'] : []);
 const r = spawnSync(comp, flags, { encoding: 'utf8' });
 if (r.status !== 0) {
+  // (motor-exp N4.10) en Windows no hay enlace débil: una función que la cabecera
+  // declara y la DLL no trae se dice aquí, con su nombre
+  const faltan = [...new Set([...String(r.stderr || '').matchAll(/undefined reference to `([A-Za-z_]\w*)'/g)].map(x => x[1]))]
+    .filter(n => res.c.includes(`__asm__(N_SIM("${n}"))`));
+  if (faltan.length) {
+    console.log(`[ejecutable] ${faltan.map(n => `«${n}»`).join(', ')}: lo declara la cabecera (o la firma de nativa) y la biblioteca no lo trae` +
+      (win ? ' (en Windows eso se sabe al enlazar; en Linux y macOS el ejecutable lo dice al usarla, como la VM)' : ''));
+    process.exit(1);
+  }
   console.log(`[ejecutable] ${comp} no lo compiló (el C está en ${c}):`);
   console.log(String(r.stderr || '').split('\n').slice(0, 20).join('\n'));
   process.exit(1);

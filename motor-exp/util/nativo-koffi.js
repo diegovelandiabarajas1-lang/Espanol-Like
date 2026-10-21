@@ -273,7 +273,95 @@ function crear() {
   const tamano = t => koffi.sizeof(tipoMem(t));
   const direccion = b => koffi.address(b);
 
-  return { cargar, descargar, estructura, funcion, abiertas: () => [...abiertas.keys()],
+  // (motor-exp N4.10) cabeceraNativa(biblioteca, "geo.h"): todo lo de la cabecera
+  // de una vez, sin escribir firmas. Se registran los tipos (opacos, alias,
+  // estructuras y uniones con sus arreglos fijos, punteros a función) y se
+  // declara cada función con su firma tal cual. Lo que no se puede (una
+  // variádica, un símbolo que no está en la biblioteca, un tipo raro) vuelve en
+  // «omitidas» con el porqué, en español. Un puntero a una estructura que no es
+  // «const» entra y sale: lo que C escribe se ve en el diccionario de Ñ.
+  const estructurasC = new Map();       // nombre → huella (de una cabecera)
+  function cabecera(biblioteca, ruta) {
+    let src;
+    try { src = require('fs').readFileSync(ruta, 'utf8'); }
+    catch (e) { throw new Error(`no se pudo leer la cabecera «${ruta}»: ${e.code === 'ENOENT' ? 'no existe' : enEspanol(e)}`); }
+    const h = require('./cabecera-c.js').leerCabecera(src);
+    cargar(biblioteca);
+    const entrada = abiertas.get(biblioteca);
+    const omitidas = h.omitidas.slice();
+    const conocido = n => { try { koffi.type(n); return true; } catch (_) { return false; } };
+    const tipoK = t => {                  // «double[3]», «GeoPunto[2][2]» → koffi.array
+      const m = /^(.*?)((?:\[\d+\])+)$/.exec(t);
+      if (!m) return t;
+      let r = m[1].trim();
+      const dims = [...m[2].matchAll(/\[(\d+)\]/g)].map(x => +x[1]);
+      for (let k = dims.length - 1; k >= 0; k--) r = koffi.array(r, dims[k]);
+      return r;
+    };
+    for (const n of h.opacos) {
+      if (tiposC.has(n) || conocido(n)) continue;
+      try { koffi.opaque(n); tiposC.set(n, n); } catch (e) { omitidas.push([n, enEspanol(e)]); }
+    }
+    const pendientes = h.alias.slice();
+    const ponerAlias = () => {
+      for (let k = pendientes.length - 1; k >= 0; k--) {
+        const [n, t] = pendientes[k];
+        if (conocido(n)) { pendientes.splice(k, 1); continue; }
+        if (!conocido(t.replace(/\s*\*+$/, '').replace(/^const\s+/, ''))) continue;
+        try { koffi.alias(n, t); } catch (e) { omitidas.push([n, enEspanol(e)]); }
+        pendientes.splice(k, 1);
+      }
+    };
+    ponerAlias();
+    for (const e of h.estructuras) {
+      const huella = e.campos.map(([c, t]) => c + ':' + t).join(',') + (e.union ? '|u' : '');
+      const antes = estructurasC.get(e.nombre);
+      if (antes === huella) continue;
+      if (antes !== undefined || estructuras.has(e.nombre)) { omitidas.push([e.nombre, 'ya hay una estructura con ese nombre y otros campos']); continue; }
+      ponerAlias();
+      try {
+        const campos = {};
+        for (const [c, t] of e.campos) campos[c] = tipoK(t);
+        (e.union ? koffi.union : koffi.struct)(e.nombre, campos);
+        estructurasC.set(e.nombre, huella);
+      } catch (err) { omitidas.push([e.nombre, enEspanol(err)]); }
+    }
+    ponerAlias();
+    for (const [n] of pendientes) omitidas.push([n, 'es un typedef de un tipo que no conozco']);
+    const funcionesTipo = new Set();
+    for (const f of h.tiposFuncion) {
+      try { if (!tiposC.has(f.nombre)) { koffi.proto(f.proto); tiposC.set(f.nombre, f.proto); } funcionesTipo.add(f.nombre); }
+      catch (e) { omitidas.push([f.nombre, enEspanol(e)]); }
+    }
+    const funciones = [];
+    const esEstructura = t => estructurasC.has(t) || estructuras.has(t);
+    for (const f of h.funciones) {
+      // la firma para koffi: los tipos de función van por puntero, y un puntero
+      // no «const» a una estructura entra y sale
+      const ps = f.params.map(p => {
+        let t = p.tipo;
+        if (funcionesTipo.has(t)) t += ' *';
+        const m = /^(const\s+)?([A-Za-z_]\w*)\s*\*$/.exec(t);
+        if (m && !m[1] && esEstructura(m[2])) t = '_Inout_ ' + t;
+        return `${t} ${p.nombre}`;
+      });
+      const proto = `${f.ret} ${f.nombre}(${ps.join(', ')})`;
+      let fn;
+      try { fn = entrada.lib.func(proto); }
+      catch (e) {
+        const t = enEspanol(e);
+        omitidas.push([f.nombre, /symbol|símbolo|find|encontr/i.test(t) ? `no está en la biblioteca «${biblioteca}»` : t]);
+        continue;
+      }
+      const llamar = envolver(fn, entrada, biblioteca);
+      llamar.enSitio = true;
+      llamar.firmaC = f.proto;
+      funciones.push({ nombre: f.nombre, llamar });
+    }
+    return { funciones, constantes: h.constantes, omitidas, estructuras: h.estructuras.map(e => e.nombre) };
+  }
+
+  return { cargar, descargar, estructura, funcion, abiertas: () => [...abiertas.keys()], cabecera,
            funcionC, tipoC, registrar, desregistrar, leer, escribir, tamano, direccion,
            memoria: n => Buffer.alloc(n), errno: () => koffi.errno() };
 }
