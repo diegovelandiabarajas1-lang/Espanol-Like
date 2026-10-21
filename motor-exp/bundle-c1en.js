@@ -14080,8 +14080,16 @@ function instalarNenC1en(vm, def, host) {
     if (!v.cola.viva) vm.error(`«${f}»: esa cola ya se soltó`, 'crea otra con colaGpu()');
     return v.cola;
   };
-  def('colaGpu', ' -> cualquiera', () => new ObjOpaco('cola', null, { cola: c1en.nuevaCola() }),
-    'colaGpu() — una cola de trabajo de la GPU: lo que se lance en ella con enCola no hace esperar a la CPU');
+  // (motor-exp N4.8) colaGpu(k): la cola es de la GPU k, y lo que se lance en ella va a esa GPU
+  const exigeIndiceGpu = (v, k, f) => {
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) vm.error(`«${f}»: el argumento ${k} es el índice de la GPU, un entero desde 0, y es ${typeof v === 'number' ? v : tipoDe(v)}`);
+    return v;
+  };
+  def('colaGpu', '... -> cualquiera', a => {
+    if (a.length > 1) vm.error('«colaGpu» recibe, como mucho, el índice de la GPU', 'colaGpu() · colaGpu(1)');
+    const k = a.length ? exigeIndiceGpu(a[0], 1, 'colaGpu') : null;
+    return new ObjOpaco('cola', null, { cola: c1en.nuevaCola(k) });
+  }, 'colaGpu() · colaGpu(k) — una cola de trabajo de la GPU actual (o de la GPU k): lo que se lance en ella con enCola va a esa GPU y no hace esperar a la CPU');
   def('enCola', 'cualquiera, funcion -> cualquiera', a => {
     const c = exigeCola(a[0], 1, 'enCola');
     vm.exigeFuncion(a[1], 2, 'enCola');
@@ -14120,6 +14128,25 @@ function instalarNenC1en(vm, def, host) {
     vm.exigeFuncion(a[0], 1, 'medirGpu');
     return c1en.medir(() => vm.invocar(a[0], []));
   }, 'medirGpu(fn() { … }) — los milisegundos que tarda en la GPU lo que la función lanza (con eventos de CUDA); en jit y nativo, el reloj');
+
+  // (motor-exp N4.8) varias GPU desde un solo programa
+  def('numeroGpus', ' -> entero', () => c1en.numeroGpus(),
+    'numeroGpus() — cuántas GPU hay en esta máquina (0 si ninguna), se use o no la GPU');
+  def('enGpu', 'entero, funcion -> cualquiera', a => {
+    const k = exigeIndiceGpu(a[0], 1, 'enGpu');
+    vm.exigeFuncion(a[1], 2, 'enGpu');
+    return c1en.conGpu(k, () => vm.invocar(a[1], []), 'enGpu');
+  }, 'enGpu(k, fn() { … }) — lo que la función lance en la GPU va a la GPU k; al salir vuelve la de antes. En jit y nativo solo corre la función');
+  def('paraleloRepartido', '... -> nulo', a => {
+    if (a.length < 2) vm.error('«paraleloRepartido» necesita al menos el número de hilos y la función',
+      'paraleloRepartido(n, funcion(i, a, b) { … }, a, b)');
+    const n = a[0];
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 0)
+      vm.error(`«paraleloRepartido»: el número de hilos tiene que ser un entero no negativo y es ${typeof n === 'number' ? n : tipoDe(n)}`);
+    vm.exigeFuncion(a[1], 2, 'paraleloRepartido');
+    c1en.paraleloRepartido(n, a[1], a.slice(2), 'paraleloRepartido');
+    return null;
+  }, 'paraleloRepartido(n, funcion(i, a, b) { a[i] = … }, a, b) — como paralelo, pero los n índices se reparten entre todas las GPU de la máquina; da lo mismo que paralelo, al bit');
 
   def('paralelo', '... -> nulo', a => {
     if (a.length < 2) vm.error('«paralelo» necesita al menos el número de hilos y la función',
@@ -14499,6 +14526,8 @@ function crearC1en(vm) {
   function asegurarResidente(x, vista, cu, sinSubir, c, escribe) {
     c = c || colaUsada();
     let reg = residentes.get(x);
+    // (motor-exp N4.8) la copia buena está en OTRA GPU: de GPU a GPU, sin pasar por Node
+    if (reg && reg.gpu !== indiceGpu && reg.bytes === vista.byteLength && reg.enGpu && cu.entreGpus && !enUso.has(reg)) moverDeGpu(x, reg, cu, c);
     if (reg && (reg.gpu !== indiceGpu || reg.bytes !== vista.byteLength)) { sincronizarHost(x, true); reg = null; }
     if (!reg) {
       const d = reservarMem(cu, vista.byteLength, c);
@@ -14514,6 +14543,21 @@ function crearC1en(vm) {
     if (reg.tocado) { usar1(cu, reg, c, true); if (!sinSubir) cu.subir(reg.d, vista, c.s); reg.tocado = false; }
     usar1(cu, reg, c, escribe !== false);
     return reg;
+  }
+
+  // (motor-exp N4.8) Lleva un residente de su GPU a la actual con una copia
+  // directa entre las dos. Antes se espera a todo lo de la GPU de origen (quien
+  // lo escribió o lo lee puede estar en cualquiera de sus colas); la copia vuelve
+  // hecha. La memoria de origen va a la reserva de SU GPU.
+  function moverDeGpu(x, reg, cu, c) {
+    const g0 = reg.gpu;
+    cu.usar(g0);
+    try { cu.sincronizar(); } finally { cu.usar(indiceGpu); }
+    const d = reservarMem(cu, reg.bytes, c);
+    if (!cu.copiarEntre(d, indiceGpu, reg.d, g0, reg.bytes)) { soltarMem(cu, d, reg.bytes, indiceGpu, c); return; }
+    soltarMem(cu, reg.d, reg.bytes, g0, null);
+    reg.d = d; reg.gpu = indiceGpu; reg.esc = null; reg.lectores = null;
+    if (finalizador) { finalizador.unregister(x); finalizador.register(x, { d, gpu: indiceGpu, bytes: reg.bytes }, x); }
   }
 
   // Dos argumentos que comparten memoria sin ser el mismo arreglo (una vista y
@@ -14706,6 +14750,132 @@ function crearC1en(vm) {
     // dice el error en el mismo sitio en los tres dispositivos
     if (fallo && colaActual && colaActual.logica) { colaActual.errores.push([r.modelo, fallo, quien]); return; }
     if (fallo) lanzarError(r.modelo, fallo[0], fallo[1], quien);
+  }
+
+  // ── (motor-exp N4.8) un «paralelo» repartido entre todas las GPU ───────────
+  // Cada GPU corre un tramo seguido de los índices, [desde, hasta), con el mismo
+  // núcleo (c1en_tramo: la i es la global, así que el cuerpo, los fallos y su
+  // clave son los de siempre). Cada una recibe una copia ENTERA de los arreglos,
+  // porque el cuerpo puede leer cualquier elemento. De vuelta:
+  //  · un arreglo que el núcleo escribe solo en a[i] (la i del hilo, sin
+  //    reasignarla) baja de cada GPU solo su tramo;
+  //  · uno que se escribe en otros sitios baja entero de cada GPU, y se queda lo
+  //    que cada una cambió, elemento a elemento (comparando los bits con lo que
+  //    había). Es lo mismo que paralelo mientras dos hilos no escriban el mismo
+  //    elemento, que ya es la regla de paralelo;
+  //  · uno que no se escribe no baja.
+  // Los atómicos y las vallas no cruzan de una GPU a otra (cada GPU tendría su
+  // propio contador): un núcleo con ellos no se reparte, y es un error en los
+  // tres dispositivos, para que un programa no valga en jit y falle con dos GPU.
+  // Siempre espera a que todo termine y dice el error enseguida: no va en colas.
+  // Con una GPU (o en jit y nativo) es un «paralelo» normal: los mismos bits.
+  function paraleloRepartido(n, cierre, args, quien) {
+    if (n > C1EN_MAX_HILOS) vm.error(`«${quien}»: ${n} hilos son demasiados; el máximo es 2^40`);
+    if (!(cierre instanceof ObjCierre)) vm.error(`«${quien}»: el núcleo tiene que ser una función de Ñ, no una de la biblioteca`);
+    const tipos = tiposParaLlamada(cierre, args, quien);
+    tipos.forEach((t, k) => { if (t === 'otro*') prepararArreglo(args[k], quien, k + 3); });
+    const r = modeloDe(cierre, tipos, quien);
+    if (r.modelo.atomicos)
+      vm.error(`«${quien}»: el núcleo usa atómicos o vallas, y esos no cruzan de una GPU a otra`,
+        'usa paralelo (en una sola GPU), o reparte tú: enGpu(k, …) con un arreglo de resultados por GPU, y súmalos al final');
+    elegirInicial();
+    vm.cobrar(n);
+    if (n === 0) return;
+    const preps = [], arrs = [];
+    args.forEach((v, k) => {
+      if (v instanceof ObjArreglo) { arrs.push({ x: v, k: k + 3 }); preps[k] = prepararArreglo(v, quien, k + 3, false); }
+    });
+    exigirSinSolape(arrs, quien);
+    let fallo = null;
+    const antesCola = colaActual;
+    colaActual = null;              // no va en colas: la de siempre, y se espera
+    try {
+      if (actual === 'jit') fallo = correrJS(r, n, args, preps);
+      else if (actual === 'nativo') fallo = correrNativo(r, n, args, preps, quien);
+      else if (c1enCuda().dispositivos.length > 1) fallo = correrRepartido(r, n, args, preps, quien);
+      else fallo = correrGpu(r, n, args, preps, quien);
+    } finally {
+      colaActual = antesCola;
+      for (const p of preps) if (p && p.devolver) p.devolver();
+    }
+    if (fallo) lanzarError(r.modelo, fallo[0], fallo[1], quien);
+  }
+
+  function correrRepartido(r, n, args, preps, quien) {
+    const cu = c1enCuda();
+    const G = cu.dispositivos.length;
+    // tramos seguidos, en múltiplos del bloque
+    const porGpu = Math.ceil(Math.ceil(n / G) / C1EN_HILOS_BLOQUE) * C1EN_HILOS_BLOQUE;
+    const tramos = [];
+    for (let g = 0; g < G; g++) {
+      const desde = g * porGpu, hasta = Math.min(n, desde + porGpu);
+      if (desde < hasta) tramos.push({ g, desde, hasta, mem: [], d: [], de: null });
+    }
+    if (!r.cuda) r.cuda = c1enEmitir(r.modelo, 'cuda');
+    if (!r.tramo) r.tramo = new Map();
+    const modo = args.map((v, k) => {
+      if (!(v instanceof ObjArreglo)) return null;
+      const p = r.modelo.params[k + 1];
+      return !p.escrito ? 'nada' : (p.fueraDeI || r.modelo.iReasignado) ? 'cambios' : 'tramo';
+    });
+    const originales = args.map((v, k) => (modo[k] === 'cambios' ? preps[k].vista.slice() : null));
+    const antes = indiceGpu;
+    let clave = 0xffffffffffffffffn;
+    try {
+      // 1) a cada GPU: subir y lanzar. El lanzamiento no espera, así que mientras
+      //    una GPU calcula se sube lo de la siguiente: calculan a la vez.
+      for (const t of tramos) {
+        cu.usar(t.g); indiceGpu = t.g;
+        let fun = r.tramo.get(t.g);
+        if (!fun) {
+          try { fun = cu.compilar(r.cuda, ['c1en_tramo']).c1en_tramo; }
+          catch (e) { vm.error(`«${quien}»: no se pudo compilar el núcleo para la GPU ${t.g}: ${e.message}`, 'esto es un fallo de C1EÑ, no de tu programa: avísalo con el código de codigoCuda(f)'); }
+          r.tramo.set(t.g, fun);
+        }
+        const lanz = [{ t: 'i64', v: t.desde }, { t: 'i64', v: t.hasta }];
+        args.forEach((v, k) => {
+          if (v instanceof ObjArreglo) {
+            const vista = preps[k].vista;
+            const d = cu.reservar(Math.max(8, vista.byteLength));
+            t.mem.push(d); t.d[k] = d;
+            cu.subir(d, vista, null);
+            lanz.push({ t: 'ptr', v: d }, { t: 'i64', v: vista.length });
+          } else if (typeof v === 'boolean') lanz.push({ t: 'i64', v: v ? 1 : 0 });
+          else lanz.push({ t: r.modelo.params[k + 1].tipoEntrada === 'real' ? 'f64' : 'i64', v });
+        });
+        t.de = cu.reservar(8); t.mem.push(t.de);
+        cu.subir(t.de, new BigUint64Array([0xffffffffffffffffn]), null);
+        lanz.push({ t: 'ptr', v: t.de });
+        cu.lanzar(fun, c1enBloques(t.hasta - t.desde, cu), C1EN_HILOS_BLOQUE, lanz, null);
+      }
+      // 2) de cada GPU, lo suyo (bajar espera a su núcleo)
+      for (const t of tramos) {
+        cu.usar(t.g); indiceGpu = t.g;
+        const e = new BigUint64Array(1);
+        cu.bajar(e, t.de, null);
+        if (e[0] < clave) clave = e[0];     // la i es global: el menor de todas es el de paralelo
+        args.forEach((v, k) => {
+          const vista = preps[k] && preps[k].vista;
+          if (modo[k] === 'tramo') {
+            const lo = Math.min(t.desde, vista.length), hi = Math.min(t.hasta, vista.length);
+            if (lo < hi) cu.bajar(vista.subarray(lo, hi), t.d[k] + BigInt(lo * vista.BYTES_PER_ELEMENT), null);
+          } else if (modo[k] === 'cambios') {
+            const tmp = new vista.constructor(vista.length);
+            cu.bajar(tmp, t.d[k], null);
+            c1enMezclarCambios(vista, tmp, originales[k]);
+          }
+        });
+      }
+    } catch (e) {
+      if (e instanceof ErrorTiempoEjecucion) throw e;
+      vm.error(`«${quien}»: la GPU falló: ${e.message}`);
+    } finally {
+      for (const t of tramos) {
+        try { cu.usar(t.g); for (const d of t.mem) cu.liberar(d); } catch (_) { /* nada */ }
+      }
+      indiceGpu = antes; cu.usar(antes);
+    }
+    return c1enLeerClave(clave);
   }
 
   // Los argumentos ya expandidos: un arreglo pasa como (datos, número de
@@ -15095,19 +15265,44 @@ function crearC1en(vm) {
   }
 
   // ── (motor-exp N4.3) colas para el programa ─────────────────────────────────
-  function nuevaCola() {
+  // (motor-exp N4.8) «k»: la GPU de la cola (si no, la actual). Fuera de la GPU
+  // la cola es lógica y el índice no cuenta.
+  function nuevaCola(k) {
     elegirInicial();
-    const c = { s: null, gpu: indiceGpu, ev: null, pendientes: [], errores: [], legado: false, viva: true, logica: true };
+    const g = actual === 'gpu' && k !== null && k !== undefined ? exigirGpu(k, 'colaGpu') : indiceGpu;
+    const c = { s: null, gpu: g, ev: null, pendientes: [], errores: [], legado: false, viva: true, logica: true };
     if (actual === 'gpu') {
       const cu = c1enCuda();
-      if (cu.asincrono) { c.s = cu.nuevaCola(); c.logica = false; colasVivas++; }
+      if (cu.asincrono) { c.s = enSuGpu(c, cu2 => cu2.nuevaCola()); c.logica = false; colasVivas++; }
     }
     return c;
   }
+  // (motor-exp N4.8) lo que se lance en una cola va a SU GPU, sea cual sea la actual
   function conCola(c, f) {
-    const antes = colaActual;
-    colaActual = c;
-    try { return f(); } finally { colaActual = antes; }
+    return conGpu(c.gpu, () => {
+      const antes = colaActual;
+      colaActual = c;
+      try { return f(); } finally { colaActual = antes; }
+    });
+  }
+  // ── (motor-exp N4.8) varias GPU desde un solo programa ─────────────────────
+  function numeroGpus() { const cu = c1enCuda(); return cu ? cu.dispositivos.length : 0; }
+  function exigirGpu(k, quien) {
+    const cu = c1enCuda(), cuantas = cu ? cu.dispositivos.length : 0;
+    if (k >= cuantas) vm.error(`«${quien}»: no hay GPU ${k}: esta máquina tiene ${cuantas}`,
+      cuantas ? `los índices van de 0 a ${cuantas - 1}; numeroGpus() dice cuántas hay` : 'numeroGpus() dice cuántas hay');
+    return k;
+  }
+  // Corre f con la GPU k como la actual y deja la de antes al salir. Fuera de la
+  // GPU (jit o nativo) solo corre f: el mismo programa vale en los tres.
+  function conGpu(k, f, quien) {
+    elegirInicial();
+    if (actual !== 'gpu') return f();
+    if (quien) exigirGpu(k, quien);
+    if (k === indiceGpu) return f();
+    const cu = c1enCuda(), antes = indiceGpu;
+    cu.usar(k); indiceGpu = k;
+    try { return f(); } finally { indiceGpu = antes; cu.usar(antes); }
   }
   function enSuGpu(c, f) {
     const cu = c1enCuda();
@@ -15180,6 +15375,7 @@ function crearC1en(vm) {
     get dispositivo() { elegirInicial(); return actual; },
     nuevaCola, conCola, esperarCola, colaLista, soltarCola, subir, medir,
     get gpu() { elegirInicial(); return actual === 'gpu' ? indiceGpu : null; },
+    numeroGpus, conGpu, paraleloRepartido,
     usar, describir, disponibles, paralelo, paraleloBloques, hilos, codigo, kernel, reducir, liberarResidentes,
     // Para las pruebas y para quien quiera ver el JavaScript que corre en "jit".
     codigoJS(cierre, ejemplos) {
@@ -15214,6 +15410,23 @@ function c1enUsaBloques(n) {
     return false;
   };
   return ver(n);
+}
+// (motor-exp N4.8) lo que una GPU cambió de un arreglo: los elementos cuyos
+// bits difieren de los de antes pasan a «destino». Se compara en bits (un NaN
+// es igual a sí mismo, y −0 distinto de +0), en palabras de 32 o menos.
+function c1enMezclarCambios(destino, suyo, antes) {
+  const B = destino.BYTES_PER_ELEMENT;
+  const V = B >= 4 ? Uint32Array : B === 2 ? Uint16Array : Uint8Array;
+  const w = B >= 4 ? B / 4 : 1;
+  const vd = new V(destino.buffer, destino.byteOffset, destino.length * w);
+  const vs = new V(suyo.buffer, suyo.byteOffset, suyo.length * w);
+  const va = new V(antes.buffer, antes.byteOffset, antes.length * w);
+  for (let j = 0; j < destino.length; j++) {
+    const o = j * w;
+    let cambia = false;
+    for (let q = 0; q < w; q++) if (vs[o + q] !== va[o + q]) { cambia = true; break; }
+    if (cambia) for (let q = 0; q < w; q++) vd[o + q] = vs[o + q];
+  }
 }
 function c1enLeerClave(k) {
   if (k === 0xffffffffffffffffn) return null;
@@ -15345,6 +15558,9 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
     nombre: nombreFn, linea: ast.linea, ast: ast.cuerpo, params: [], vars: [], tipos: new Map(), arrDe: new Map(),
     sitios: [null], sitioDe: new Map(), llamadas: new Map(), porNodo: new Map(),
     bloques: bloques === true, hilos: bloques === 'hilos', compartidos: [], barreras: 0,
+    // (motor-exp N4.8) para repartir un «paralelo» entre varias GPU: si hay
+    // atómicos o vallas (hilos que se hablan) y si el índice del hilo se reasigna
+    atomicos: false, iReasignado: false,
   };
   const asc = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9_]/g, '_');
   let nVars = 0;
@@ -15453,6 +15669,7 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
     if (d.b && !M.hilos)
       no(n, `«${f}» solo vale en un núcleo de «hilos»`, 'en «paralelo» y en la GPU los hilos no tienen por qué estar vivos a la vez, y esperar a otro puede no acabar nunca: hilos(n, funcion(t, …) { … }, …)');
     const info = arregloDe(n.args[0], `«${f}»`);
+    M.atomicos = true;
     if (info.compartido) no(n, `«${f}» sobre la memoria compartida del bloque todavía no: usa un arreglo que llegue como argumento`);
     if (info.arr !== 'ent' || (info.ent && info.ent !== 'u32'))
       no(n, `«${f}» trabaja sobre arreglos enteros de 32 bits («entero» o «u32») y «${info.nombre}» es ${info.ent || (info.arr === 'real' ? (info.f32 ? 'real32' : 'real') : 'entero')}`,
@@ -15690,7 +15907,7 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
             analizarAtomico(e, f);
             return;
           }
-          if (f === 'vallaMemoria') { if (e.args.length) no(e, '«vallaMemoria()» no recibe argumentos'); return; }
+          if (f === 'vallaMemoria') { if (e.args.length) no(e, '«vallaMemoria()» no recibe argumentos'); M.atomicos = true; return; }
           if (f === 'barreraHilos') {
             if (!M.hilos) no(e, '«barreraHilos()» solo existe en los núcleos de «hilos»', 'hilos(n, funcion(t, …) { … barreraHilos() … }, …) · en paraleloBloques, la del bloque es barrera()');
             if (e.args.length) no(e, '«barreraHilos()» no recibe argumentos');
@@ -15702,6 +15919,7 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
           if (f !== 'sumarAtomico') no(e, `el resultado de «${f}» no se usa`, 'guárdalo en una variable o en un arreglo');
           if (e.args.length !== 3) no(e, '«sumarAtomico» recibe (arreglo, índice, valor)');
           const info = arregloDe(e.args[0], '«sumarAtomico»');
+          M.atomicos = true;
           const tj = tx(e.args[1]), tv = tx(e.args[2]);
           if (tj !== 'ent') no(e, 'el índice de «sumarAtomico» tiene que ser entero');
           if (!esNum(tv)) no(e, '«sumarAtomico» suma números');
@@ -15769,6 +15987,7 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
       if (!info) no(e, `asigna a «${d.nombre}», que es de fuera del núcleo`, 'el núcleo solo escribe en sus variables y en sus arreglos');
       if (info.arr) no(e, `reasigna el arreglo «${d.nombre}»`, `escribe en sus elementos: ${d.nombre}[i] = …`);
       if (info.fijo) no(e, `«${d.nombre}» es fija`);
+      if (info === M.params[0]) M.iReasignado = true;      // (motor-exp N4.8)
       let t = tx(e.valor);
       if (e.op !== '=') {
         if (info.tipo === null) no(e, `«${d.nombre}» se usa antes de tener valor`);
@@ -15781,6 +16000,9 @@ function c1enAnalizar(vm, cierre, tiposArgs, quien, bloques) {
     }
     if (d.tipo === 'Indice') {
       const info = arregloDe(d.obj, 'asignar por índice');
+      // (motor-exp N4.8) quién escribe dónde: «a[i] = …» con la i del hilo, o en otro sitio
+      info.escrito = true;
+      if (!(d.indice.tipo === 'Variable' && buscar(d.indice.nombre) === M.params[0])) info.fueraDeI = true;
       if (tx(d.indice) !== 'ent') no(e, `el índice de «${info.nombre}» tiene que ser entero`, 'usa piso(x)');
       sitio(d, 'idx', `el índice se sale del arreglo «${info.nombre}»`, `los índices válidos van de 0 a longitud(${info.nombre}) − 1`);
       let t = tx(e.valor);
@@ -16331,12 +16553,22 @@ function c1enEmitir(M, destino) {
   }
   const todosDesemp = ['*(long long*)p[0]'].concat(desemp.map(s => s.replace(/p\[(\d+)\]/, (_, q) => `p[${+q + 1}]`)))
     .concat([`*(unsigned long long**)p[${desemp.length + 1}]`]).join(', ');
+  const todosTramo = ['*(long long*)p[0]', '*(long long*)p[1]'].concat(desemp.map(s => s.replace(/p\[(\d+)\]/, (_, q) => `p[${+q + 2}]`)))
+    .concat([`*(unsigned long long**)p[${desemp.length + 2}]`]).join(', ');
   return titulo + cab + '\n' + fCuerpo + '\n' +
     `extern "C" __global__ void c1en_nucleo(long long n${firmaNucleo.length ? ', ' + firmaNucleo.join(', ') : ''}, unsigned long long* c1en_err) {\n` +
     `  for (long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (long long)blockDim.x * gridDim.x) {\n` +
     `    long long c = c1en_cuerpo(${llamada0.join(', ')});\n` +
     `    if (c != 0) atomicMin(c1en_err, ((unsigned long long)i << 24) | (unsigned long long)c);\n  }\n}\n` +
-    c1enEmulador('c1en_nucleo', todosDesemp);
+    c1enEmulador('c1en_nucleo', todosDesemp) +
+    // (motor-exp N4.8) el mismo núcleo para un tramo [desde, hasta) de los índices:
+    // es lo que corre cada GPU en paraleloRepartido. La i es la de siempre (la
+    // global), así que el cuerpo, los fallos y su clave son los mismos.
+    `extern "C" __global__ void c1en_tramo(long long desde, long long n${firmaNucleo.length ? ', ' + firmaNucleo.join(', ') : ''}, unsigned long long* c1en_err) {\n` +
+    `  for (long long i = desde + (long long)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (long long)blockDim.x * gridDim.x) {\n` +
+    `    long long c = c1en_cuerpo(${llamada0.join(', ')});\n` +
+    `    if (c != 0) atomicMin(c1en_err, ((unsigned long long)i << 24) | (unsigned long long)c);\n  }\n}\n` +
+    c1enEmulador('c1en_tramo', todosTramo);
 }
 
 // ============================================================================
