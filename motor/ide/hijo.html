@@ -206,7 +206,7 @@
     irA('consola');
     motor = nuevoMotor();
     const r = motor.ejecutar(src);
-    anf.volcar();   // 4.1: la página se vuelca al acabar, no nodo a nodo
+    anf.volcar();   // motor-exp: la página se vuelca al acabar, no nodo a nodo
     ultimoFn = r.fn || null;
     if (!r.ok) for (const e of r.errores) linea(fmtErr(e), 'err');
     aPadre({

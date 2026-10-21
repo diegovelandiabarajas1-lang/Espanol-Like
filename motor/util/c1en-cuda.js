@@ -9,6 +9,13 @@
 //   cuda.reservar(bytes) · cuda.subir(d, typed) · cuda.bajar(typed, d) · cuda.liberar(d)
 //   cuda.lanzar(f, bloques, hilos, [{ t: 'i64' | 'f64' | 'i32' | 'ptr', v }])
 //   cuda.sincronizar()
+//   (motor-exp N4.3) colas (streams) y eventos, si el driver los trae (cuda.asincrono):
+//   cuda.nuevaCola() · cuda.esperarCola(s) · cuda.colaLista(s) · cuda.soltarCola(s)
+//   cuda.nuevoEvento(conTiempo) · cuda.marcar(e, s) · cuda.colaEspera(s, e) · cuda.esperarEvento(e)
+//   cuda.eventoListo(e) · cuda.tiempoEntre(a, b) · cuda.soltarEvento(e)
+//   lanzar(f, b, h, args, s), subir(d, typed, s) y bajar(typed, d, s) aceptan la cola (null = la de siempre)
+//   (motor-exp N4.8) cuda.copiarEntre(dDst, gDst, dSrc, gSrc, bytes) copia de una GPU a otra
+//   (cuMemcpyPeer; false si el driver no la trae) · cuda.accesoDirecto(a, b): si van sin pasar por el host
 //
 // POR QUÉ ASÍ. La Driver API es una biblioteca de C normal (libcuda.so, que
 // instala el driver de NVIDIA) y NVRTC otra (libnvrtc.so, del toolkit). Las dos
@@ -29,6 +36,9 @@
 // tiene su contexto y su caché de módulos, y no hay que pensar en qué contexto
 // está activo en cada hilo. Aun así «usar(k)» cambia de GPU dentro del mismo
 // proceso: cada GPU tiene su contexto primario, y los módulos se cargan por GPU.
+// (motor-exp N4.8) Y desde N4.8 un solo programa puede usarlas a la vez: una
+// cola por GPU (colaGpu(k)), enGpu(k, f) y paraleloRepartido, con copias
+// directas de una a otra (copiarEntre). Un proceso por GPU sigue valiendo.
 //
 // Variables de entorno:
 //   C1EN_GPU=k              la GPU inicial (por defecto 0)
@@ -111,6 +121,36 @@ function crear() {
          'unsigned int bx, unsigned int by, unsigned int bz, unsigned int shmem, void *stream, void *params, void *extra)');
     decl('int cuGetErrorName(int error, _Out_ const char **pStr)');                        // (CUresult, const char**)
   } catch (e) { motivo = e.message; return null; }
+  // (motor-exp N4.3) Lo asíncrono: colas (CUstream), eventos (CUevent) y copias
+  // que no esperan. Si el driver no los trae, todo sigue funcionando en la cola
+  // de siempre (la «legacy», null) y «asincrono» queda en falso.
+  let asincrono = true;
+  try {
+    decl('int cuStreamCreate(_Out_ void **phStream, unsigned int Flags)');                 // (CUstream*, unsigned)
+    decl('int cuStreamDestroy_v2(void *hStream)');                                         // (CUstream)
+    decl('int cuStreamSynchronize(void *hStream)');                                        // (CUstream)
+    decl('int cuStreamQuery(void *hStream)');                                              // (CUstream) → 0 o CUDA_ERROR_NOT_READY (600)
+    decl('int cuStreamWaitEvent(void *hStream, void *hEvent, unsigned int Flags)');        // (CUstream, CUevent, unsigned)
+    decl('int cuEventCreate(_Out_ void **phEvent, unsigned int Flags)');                   // (CUevent*, unsigned)
+    decl('int cuEventDestroy_v2(void *hEvent)');                                           // (CUevent)
+    decl('int cuEventRecord(void *hEvent, void *hStream)');                                // (CUevent, CUstream)
+    decl('int cuEventSynchronize(void *hEvent)');                                          // (CUevent)
+    decl('int cuEventQuery(void *hEvent)');                                                // (CUevent) → 0 o 600
+    decl('int cuEventElapsedTime(_Out_ float *pMilliseconds, void *hStart, void *hEnd)');  // (float*, CUevent, CUevent)
+    decl('int cuMemcpyHtoDAsync_v2(uint64_t dstDevice, const void *srcHost, size_t ByteCount, void *hStream)');
+    decl('int cuMemcpyDtoHAsync_v2(void *dstHost, uint64_t srcDevice, size_t ByteCount, void *hStream)');
+  } catch (_) { asincrono = false; }
+  // (motor-exp N4.8) Copias entre dos GPU sin pasar por la memoria de Node. Con
+  // el acceso directo encendido (si el par lo admite) van por PCIe/NVLink; si
+  // no, el driver las hace pasar por su propia memoria intermedia. Las dos
+  // formas dan los mismos bytes.
+  let entreGpus = true;
+  try {
+    // CUresult cuMemcpyPeer(CUdeviceptr dst, CUcontext dstCtx, CUdeviceptr src, CUcontext srcCtx, size_t n)
+    decl('int cuMemcpyPeer(uint64_t dstDevice, void *dstContext, uint64_t srcDevice, void *srcContext, size_t ByteCount)');
+    decl('int cuDeviceCanAccessPeer(_Out_ int *canAccessPeer, int dev, int peerDev)');      // (int*, CUdevice, CUdevice)
+    decl('int cuCtxEnablePeerAccess(void *peerContext, unsigned int Flags)');              // (CUcontext, unsigned)
+  } catch (_) { entreGpus = false; }
 
   const nombreError = (r) => {
     const s = [null];
@@ -189,7 +229,7 @@ function crear() {
   let actual = Number(process.env.C1EN_GPU || 0);
   if (!Number.isInteger(actual) || actual < 0 || actual >= dispositivos.length) actual = 0;
   const contextos = new Map();         // índice → CUcontext
-  const modulos = new Map();           // `${índice}\0${fuente}` → { nombre: CUfunction }
+  const modulos = new Map();           // `${índice}\0${fuente}` → { m: CUmodule, funciones: { nombre: CUfunction } }
 
   // El contexto PRIMARIO de cada GPU, el mismo que usa el runtime de CUDA: así
   // C1EÑ convive con cualquier otra cosa del proceso que use la GPU (y no hay
@@ -206,12 +246,51 @@ function crear() {
   }
   let activado = -1;
   const asegurar = () => { if (activado !== actual) { activar(actual); activado = actual; } };
+  function contexto(k) { if (!contextos.has(k)) { activar(k); activado = k; } return contextos.get(k); }
+
+  // (motor-exp N4.8) el acceso directo entre dos GPU, encendido la primera vez
+  // que se copia entre ellas (en los dos sentidos). Que no se pueda no es un
+  // error: la copia sigue funcionando, pasando por el driver.
+  const directos = new Map();          // `${a},${b}` → true / false
+  function directo(a, b) {
+    const clave = `${a},${b}`;
+    if (directos.has(clave)) return directos.get(clave);
+    let si = false;
+    try {
+      const p = [0];
+      if (C.cuDeviceCanAccessPeer(p, dispositivos[a].dev, dispositivos[b].dev) === 0 && p[0]) {
+        const otro = contexto(b);
+        contexto(a); activar(a); activado = a;
+        const r = C.cuCtxEnablePeerAccess(otro, 0);
+        si = r === 0 || r === 704;                     // 704: CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED
+      }
+    } catch (_) { si = false; }
+    directos.set(clave, si);
+    return si;
+  }
+  // Copia «bytes» de la memoria «dSrc» de la GPU «gSrc» a «dDst» de la GPU
+  // «gDst». Vuelve cuando la copia está hecha: cuMemcpyPeer va en la cola de
+  // siempre, y las colas de C1EÑ no esperan a esa, así que se espera aquí al
+  // contexto de destino (quien llama ya esperó a quien escribió el origen).
+  function copiarEntre(dDst, gDst, dSrc, gSrc, bytes) {
+    if (!entreGpus) return false;
+    directo(gDst, gSrc); directo(gSrc, gDst);
+    const cd = contexto(gDst), cs = contexto(gSrc);
+    activar(gDst); activado = gDst;
+    ok(C.cuMemcpyPeer(big(dDst), cd, big(dSrc), cs, bytes), 'cuMemcpyPeer');
+    ok(C.cuCtxSynchronize(), 'cuCtxSynchronize');
+    cuentas.entreGpus++; cuentas.bytesEntreGpus += bytes;
+    asegurar();
+    return true;
+  }
 
   function compilar(fuente, nombres) {
     const clave = `${actual}\0${fuente}`;
-    const ya = modulos.get(clave);
-    if (ya) return ya;
     asegurar();
+    // (motor-exp N4.8) el módulo se carga una vez; las funciones se buscan cuando
+    // alguien las pide (paralelo pide c1en_nucleo y paraleloRepartido c1en_tramo)
+    const ya = modulos.get(clave);
+    if (ya) { buscarFunciones(ya, nombres); return ya.funciones; }
     const cc = dispositivos[actual].cc;
     const arch = `-arch=compute_${cc[0]}${cc[1]}`;
     // Las opciones de exactitud: sin FMA, sin aplanar subnormales y con división
@@ -234,14 +313,18 @@ function crear() {
     }
     const m = [null];
     ok(C.cuModuleLoadData(m, ptx), 'cuModuleLoadData');
-    const out = {};
+    const mod = { m: m[0], funciones: {} };
+    buscarFunciones(mod, nombres);
+    modulos.set(clave, mod);
+    return mod.funciones;
+  }
+  function buscarFunciones(mod, nombres) {
     for (const nm of nombres) {
+      if (mod.funciones[nm]) continue;
       const f = [null];
-      ok(C.cuModuleGetFunction(f, m[0], nm), `cuModuleGetFunction(${nm})`);
-      out[nm] = f[0];
+      ok(C.cuModuleGetFunction(f, mod.m, nm), `cuModuleGetFunction(${nm})`);
+      mod.funciones[nm] = f[0];
     }
-    modulos.set(clave, out);
-    return out;
   }
 
   const big = v => (typeof v === 'bigint' ? v : BigInt(v));
@@ -254,25 +337,41 @@ function crear() {
   function liberar(d) { asegurar(); ok(C.cuMemFree_v2(big(d)), 'cuMemFree'); }
   // Cuentas del tráfico por el PCIe, para saber si la residencia está haciendo
   // su trabajo: con C1EN_ESTADISTICAS=1 se imprimen al salir.
-  const cuentas = { subidas: 0, bytesSubidos: 0, bajadas: 0, bytesBajados: 0, lanzamientos: 0 };
+  const cuentas = { subidas: 0, bytesSubidos: 0, bajadas: 0, bytesBajados: 0, lanzamientos: 0, entreGpus: 0, bytesEntreGpus: 0 };
   if (process.env.C1EN_ESTADISTICAS) process.on('exit', () => {
     const mb = b => (b / 1048576).toFixed(1) + ' MB';
-    process.stderr.write(`[c1en gpu] ${cuentas.lanzamientos} lanzamientos · ${cuentas.subidas} subidas (${mb(cuentas.bytesSubidos)}) · ${cuentas.bajadas} bajadas (${mb(cuentas.bytesBajados)})\n`);
+    process.stderr.write(`[c1en gpu] ${cuentas.lanzamientos} lanzamientos · ${cuentas.subidas} subidas (${mb(cuentas.bytesSubidos)}) · ${cuentas.bajadas} bajadas (${mb(cuentas.bytesBajados)})${cuentas.entreGpus ? ` · ${cuentas.entreGpus} entre GPU (${mb(cuentas.bytesEntreGpus)})` : ''}\n`);
   });
-  function subir(d, typed) { asegurar(); cuentas.subidas++; cuentas.bytesSubidos += typed.byteLength; ok(C.cuMemcpyHtoD_v2(big(d), typed, typed.byteLength), 'cuMemcpyHtoD'); }
-  function bajar(typed, d) { asegurar(); cuentas.bajadas++; cuentas.bytesBajados += typed.byteLength; ok(C.cuMemcpyDtoH_v2(typed, big(d), typed.byteLength), 'cuMemcpyDtoH'); }
+  // (motor-exp N4.3) Con una cola, la subida es asíncrona: desde memoria normal
+  // (no fijada) el driver copia los bytes a su zona intermedia antes de volver,
+  // así que el arreglo de JavaScript se puede tocar en cuanto vuelve, y la copia
+  // al dispositivo va en orden dentro de la cola, sin parar a la CPU. La bajada
+  // espera a que la cola termine (la CPU va a leer).
+  function subir(d, typed, s) {
+    asegurar(); cuentas.subidas++; cuentas.bytesSubidos += typed.byteLength;
+    if (s && asincrono) ok(C.cuMemcpyHtoDAsync_v2(big(d), typed, typed.byteLength, s), 'cuMemcpyHtoDAsync');
+    else ok(C.cuMemcpyHtoD_v2(big(d), typed, typed.byteLength), 'cuMemcpyHtoD');
+  }
+  function bajar(typed, d, s) {
+    asegurar(); cuentas.bajadas++; cuentas.bytesBajados += typed.byteLength;
+    if (s && asincrono) ok(C.cuStreamSynchronize(s), 'cuStreamSynchronize');
+    ok(C.cuMemcpyDtoH_v2(typed, big(d), typed.byteLength), 'cuMemcpyDtoH');
+  }
 
   // kernelParams es un arreglo de PUNTEROS, uno por argumento, cada uno a la
   // memoria donde está el VALOR de ese argumento (8 bytes cada uno: los i32 van
   // en los 4 bajos, que en x86-64 —little endian— es donde los lee el driver).
   // El driver copia los valores en el momento del lanzamiento, así que la
   // memoria se puede soltar en cuanto cuLaunchKernel vuelve.
-  function lanzar(fun, bloques, hilos, args) {
+  // (motor-exp N4.3) kernelParams lleva un NULL de más al final: el driver no
+  // lo mira (sabe cuántos parámetros tiene el núcleo), y al simulador le dice
+  // dónde acaba la lista para copiar los valores si deja el núcleo en cola.
+  function lanzar(fun, bloques, hilos, args, s) {
     cuentas.lanzamientos++;
     asegurar();
     const n = args.length;
     const valores = koffi.alloc('uint64_t', Math.max(1, n));
-    const punteros = koffi.alloc('uint64_t', Math.max(1, n));
+    const punteros = koffi.alloc('uint64_t', n + 1);
     try {
       const base = big(koffi.address(valores));
       args.forEach((a, j) => {
@@ -283,13 +382,38 @@ function crear() {
         else koffi.encode(valores, off, 'int64_t', BigInt(a.v));
         koffi.encode(punteros, off, 'uint64_t', base + BigInt(off));
       });
-      ok(C.cuLaunchKernel(fun, bloques, 1, 1, hilos, 1, 1, 0, null, punteros, null), 'cuLaunchKernel');
+      koffi.encode(punteros, 8 * n, 'uint64_t', 0n);
+      ok(C.cuLaunchKernel(fun, bloques, 1, 1, hilos, 1, 1, 0, (s && asincrono) ? s : null, punteros, null), 'cuLaunchKernel');
     } finally {
       koffi.free(valores);
       koffi.free(punteros);
     }
   }
   function sincronizar() { asegurar(); ok(C.cuCtxSynchronize(), 'cuCtxSynchronize'); }
+
+  // ── (motor-exp N4.3) colas y eventos ─────────────────────────────────────────
+  // Las colas son NO BLOQUEANTES (CU_STREAM_NON_BLOCKING = 1): no esperan a la
+  // cola de siempre ni ella a ellas, así que el orden entre colas lo pone quien
+  // las usa, con eventos (cuStreamWaitEvent). Es lo que deja que una cola copie
+  // mientras otra calcula.
+  const NO_LISTO = 600;   // CUDA_ERROR_NOT_READY
+  function exigirAsinc(que) { if (!asincrono) throw new Error(`este driver no trae colas (${que})`); }
+  function nuevaCola() { exigirAsinc('cuStreamCreate'); asegurar(); const p = [null]; ok(C.cuStreamCreate(p, 1), 'cuStreamCreate'); return p[0]; }
+  function soltarCola(s) { if (s && asincrono) { asegurar(); ok(C.cuStreamDestroy_v2(s), 'cuStreamDestroy'); } }
+  function esperarCola(s) { asegurar(); if (asincrono) ok(C.cuStreamSynchronize(s || null), 'cuStreamSynchronize'); else ok(C.cuCtxSynchronize(), 'cuCtxSynchronize'); }
+  function colaLista(s) {
+    if (!asincrono) return true;
+    asegurar(); const r = C.cuStreamQuery(s || null);
+    if (r === NO_LISTO) return false; ok(r, 'cuStreamQuery'); return true;
+  }
+  // CU_EVENT_DISABLE_TIMING = 2: los de orden no miden tiempo (son más baratos)
+  function nuevoEvento(conTiempo) { exigirAsinc('cuEventCreate'); asegurar(); const p = [null]; ok(C.cuEventCreate(p, conTiempo ? 0 : 2), 'cuEventCreate'); return p[0]; }
+  function soltarEvento(e) { if (e && asincrono) { asegurar(); ok(C.cuEventDestroy_v2(e), 'cuEventDestroy'); } }
+  function marcar(e, s) { asegurar(); ok(C.cuEventRecord(e, s || null), 'cuEventRecord'); }
+  function colaEspera(s, e) { asegurar(); ok(C.cuStreamWaitEvent(s || null, e, 0), 'cuStreamWaitEvent'); }
+  function esperarEvento(e) { asegurar(); ok(C.cuEventSynchronize(e), 'cuEventSynchronize'); }
+  function eventoListo(e) { asegurar(); const r = C.cuEventQuery(e); if (r === NO_LISTO) return false; ok(r, 'cuEventQuery'); return true; }
+  function tiempoEntre(a, b) { asegurar(); const ms = [0]; ok(C.cuEventElapsedTime(ms, a, b), 'cuEventElapsedTime'); return ms[0]; }
 
   const dv = [0];
   C.cuDriverGetVersion(dv);
@@ -305,6 +429,9 @@ function crear() {
     driver: `${Math.floor(dv[0] / 1000)}.${(dv[0] % 1000) / 10}`,
     nvrtc: versionNvrtc, rutaNvrtc: nombreNvrtc,
     compilar, reservar, liberar, subir, bajar, lanzar, sincronizar,
+    asincrono, nuevaCola, soltarCola, esperarCola, colaLista, nuevoEvento, soltarEvento, marcar, colaEspera,
+    esperarEvento, eventoListo, tiempoEntre, cuentas,
+    entreGpus, copiarEntre, accesoDirecto: (a, b) => directo(a, b),
   };
 }
 

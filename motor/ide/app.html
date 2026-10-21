@@ -130,7 +130,7 @@
   });
 
   const r = motor.ejecutar(FUENTE);
-  anf.volcar();   // 4.1: la página se vuelca al acabar, no nodo a nodo
+  anf.volcar();   // motor-exp: la página se vuelca al acabar, no nodo a nodo
   if (!r.ok) {
     for (const e of (r.errores || [])) linea(e.formato ? e.formato() : String(e.message || e), 'err');
   }

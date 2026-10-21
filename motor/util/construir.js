@@ -29,7 +29,7 @@ global.EspanolLike = { crearMotor, lexer, parser, compilar, verificarTipos, dese
   tiposGlobales, ErrorFuente, firma, textoATipo, aridadDe, instalarEdsl, instalarClasico,
   serializar, deserializar, verificarBytecode: verificar, aTexto, deTexto, ErrorBytecode,
   Modulos, enlazar, exportacionesDe, SEP_MODULO, nombreGlobalModulo, CLAVE_EDSL, claveEdsl,
-  version: '4.1', perfil: typeof C1EN_ABIERTOS !== 'undefined' ? 'C1EÑ' : 'Ñ',
+  version: '4.1-c1en', perfil: typeof C1EN_ABIERTOS !== 'undefined' ? 'C1EÑ' : 'Ñ',
   abiertos: typeof C1EN_ABIERTOS !== 'undefined' ? C1EN_ABIERTOS : [] };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 `;
@@ -39,3 +39,4 @@ console.log('bundle.js', bundle.length, 'bytes');
 const bundleC1en = armar(['numerico', 'nen'], 'C1EÑ') + pie;
 fs.writeFileSync(R.bundleC1en, bundleC1en);
 console.log('bundle-c1en.js', bundleC1en.length, 'bytes');
+require('./construir-web.js');   // (motor-exp P6) n-web.js, para <script type="text/ñ">

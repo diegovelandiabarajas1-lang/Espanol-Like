@@ -224,7 +224,7 @@ console.log('\n── 5b. el motor como ejecutable ──');
   if (!hayQjsc) saltar('el motor como ejecutable', 'no hay qjsc en esta máquina');
   else {
     const r = spawnSync(process.execPath, [R.util('construir-binario.js')], { encoding: 'utf8' });
-    const bin = path.join(R.proyecto, process.platform === 'win32' ? 'n.exe' : 'n');
+    const bin = R.salida(process.platform === 'win32' ? 'n.exe' : 'n');
     comprobar('se construye', r.status === 0 && fs.existsSync(bin), (r.stdout || '') + (r.stderr || ''));
     if (fs.existsSync(bin)) {
       const tam = fs.statSync(bin).size;
@@ -275,7 +275,7 @@ intentar { leerArregloBinario("${binN}", "texto", [4]) } capturar (e) { imprimir
   comprobar('un entero ocupa 4 bytes, con los extremos de int32', l[2] === '16 [7, -8, 2147483647, -2147483648]', l[2]);
   comprobar('una vista no contigua se escribe en orden lógico', l[3] === '[[1, 4], [2, 5], [3, 6]]', l[3]);
   comprobar('la forma tiene que cuadrar con los bytes', /32 bytes/.test(l[4] || ''), l[4]);
-  comprobar('y el tipo es real o entero', /«real» o «entero»/.test(l[5] || ''), l[5]);
+  comprobar('y el tipo es uno de los de los arreglos (real … u64)', /«real», «entero», «real32», «real16», «i8», .*«u64», no/.test(l[5] || ''), l[5]);   // (motor-exp N4.2, N4.5)
   // Y el formato es el de NumPy de verdad: lo lee Python sin más.
   const py = spawnSync('python3', ['-c', `import numpy as n,sys;a=n.fromfile(sys.argv[1],dtype=n.float64);print(a.tolist())`, bin], { encoding: 'utf8' });
   if (py.status === 0) comprobar('NumPy lee el archivo tal cual', py.stdout.trim() === '[0.0, 0.0, 0.0, 0.0]', py.stdout + py.stderr);

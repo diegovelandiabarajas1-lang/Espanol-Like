@@ -48,7 +48,7 @@ const { spawnSync } = require('child_process');
 // para que la prueba pueda mirar las de Windows desde Linux.
 function banderasPara(plataforma) {
   const win = plataforma === 'win32';
-  return ['-O2', '-shared'].concat(win ? [] : ['-fPIC'],
+  return (process.env.C1EN_OPT ? process.env.C1EN_OPT.split(/\s+/).filter(Boolean) : ['-O2']).concat(['-shared']).concat(win ? [] : ['-fPIC'],
     ['-ffp-contract=off', '-fno-fast-math', '-fwrapv', '-std=gnu11'],
     win ? [] : ['-Wl,-z,nodelete']);
 }

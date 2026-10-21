@@ -84,7 +84,7 @@ function exportacionesDe(ast) {
     if (!s.publico) continue;
     if (s.tipo === 'DeclFuncion') {
       const t = tipoDeFuncion(s);
-      // (4.1) El constructor de un «publico tipo» lleva la forma del
+      // (motor-exp) El constructor de un «publico tipo» lleva la forma del
       // registro —campos y métodos— para que el archivo que lo importa pueda
       // comprobar «p.x» igual que el que lo declara.
       if (s.esConstructor) {

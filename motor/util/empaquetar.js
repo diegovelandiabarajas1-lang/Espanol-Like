@@ -75,7 +75,7 @@ if (fs.statSync(principal).isDirectory()) {
   process.exit(2);
 }
 const nombre = path.basename(principal).replace(/\.esl$/i, '');
-const salida = path.resolve(args[1] || path.join(R.proyecto, 'dist', nombre));
+const salida = path.resolve(args[1] || R.salida(path.join('dist', nombre)));
 const dirApp = path.dirname(principal);
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 20) { console.log(`hace falta Node 20 o más nuevo para empaquetar (este es ${process.version})`); process.exit(2); }
