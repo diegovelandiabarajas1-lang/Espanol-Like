@@ -1920,6 +1920,88 @@ Medido en la nube (nativo, 200.000 hilos que leen 64 enteros seguidos cada uno, 
   textos concatena, y quitarlo cambiaría lo que hace un programa correcto); y quitar
   comprobaciones también en los núcleos de biblioteca de NEÑ.
 
+## Fase P6 · Ñ en cualquier página web: `<script type="text/ñ">` (21-oct-2026)
+
+Hasta ahora, Ñ en la web era el IDE o una app exportada: un HTML hecho por el motor. Ahora
+**cualquier página** habla Ñ con una etiqueta:
+
+```html
+<script src="https://cdn.jsdelivr.net/gh/diegovelandiabarajas1-lang/Espanol-Like@motor-exp/motor-exp/n-web.js"></script>
+
+<script type="text/ñ" src="app.esl"></script>
+<script type="text/ñ">
+  pintar(etiqueta("h1", "Hola desde Ñ"))
+  pintar(boton("clic", fn() { imprimir("¡clic!") }))
+</script>
+```
+
+**Cómo funciona.** El navegador no ejecuta una etiqueta `<script>` cuyo tipo no conoce: la deja
+quieta, con su texto dentro. `n-web.js` las busca cuando la página termina de leerse, trae el
+código de las que tienen `src` y las corre **en orden**, como hace el navegador con las de
+JavaScript. Es lo mismo que hacen Babel (`text/babel`) y Brython con Python.
+
+`n-web.js` (1,5 MB; 430 KB con gzip) es un solo archivo con tres partes:
+
+- el motor (`bundle.js`: verificador, VM y JIT a JavaScript, todos los eDSL);
+- el anfitrión de la página del IDE (`ide/anfitrion.js`: página, lienzo, tiempo, red, guardar);
+- el cargador (`web/cargador.js`).
+
+Lo hace `util/construir.js` al final, así que siempre va con el motor del mismo commit.
+
+- Se acepta `type="text/ñ"` y `type="text/n"`, en mayúsculas o en minúsculas.
+- **Una página de Ñ** (lo que pone `pintar`) para todas las etiquetas. Va justo después de la
+  primera etiqueta de Ñ, o dentro de lo que diga `data-destino="#app"`. Debajo va el lienzo y
+  una consola que solo aparece si hay algo que decir. Los estilos base se quedan dentro de esas
+  cajas: la página que la acoge no se toca.
+- **Cada etiqueta es un programa aparte** en el mismo motor. Lo que una le da a otra va con
+  `usar`. `usar … de "lib/x.esl"` trae el archivo relativo a la página o a quien lo importa: se
+  traen por adelantado los que se nombran y, si falta uno, se pide en el momento.
+- `imprimir` sale en la consola del navegador y en la de la página. Un error sale en rojo, con
+  el texto de la VM y su línea, contada desde el principio de su etiqueta. Por ejemplo:
+  `la etiqueta de Ñ número 1: [ejecución] índice 5 fuera de rango … (línea 3)`. Las demás
+  etiquetas siguen.
+- Desde JavaScript: `Ñ.ejecutar(fuente)`, `Ñ.motor`, `Ñ.listo` (una promesa), y cada etiqueta
+  dispara `load` o `error`.
+- `guardar`/`recuperar` usan `localStorage` con un prefijo por página. Los permisos de red, igual
+  que en las apps exportadas.
+- **Lo que no hay en el navegador:** archivos, procesos, FFI ni C1EÑ nativo o GPU. Eso es de
+  Node. `paralelo` corre en jit.
+
+**Desde dónde se carga.** Con jsDelivr el archivo sale del propio GitHub, gratis:
+`https://cdn.jsdelivr.net/gh/diegovelandiabarajas1-lang/Espanol-Like@motor-exp/motor-exp/n-web.js`.
+
+- El repositorio tiene que ser **público**.
+- Con `@motor-exp` (una rama), jsDelivr tarda hasta 12 h en ver un cambio. Con
+  `@<commit>` o una etiqueta de versión (`@v4.1`) es fijo para siempre.
+- `raw.githubusercontent.com` **no** sirve: manda `text/plain` con `nosniff`, y el navegador se
+  niega a correrlo como script.
+- Abierta como archivo (`file://`), una página solo puede usar el código dentro de la etiqueta:
+  el navegador no deja leer otros archivos, y el error lo dice.
+
+`web/ejemplo.html` es una página de ejemplo, con un contador.
+
+### Qué se probó (`pruebas/exp-web-script.js`, 13 pruebas, en `todas.js`)
+
+En un **Chromium de verdad** (Playwright), con las páginas servidas por HTTP:
+
+- el código dentro de la etiqueta (con la sangría quitada) y el de `src="app.esl"`, que importa
+  un módulo con `usar`, corren en orden; los acentos y la ñ llegan bien;
+- `text/N` vale, y una etiqueta de JavaScript de la misma página corre como siempre;
+- la página de Ñ va donde toca, y `data-destino` funciona;
+- el clic en un botón llega a la función de Ñ, que repinta;
+- `Ñ.ejecutar` desde JavaScript;
+- un error de ejecución y un `src` que no existe salen con su texto y las demás etiquetas siguen;
+  ninguno es un error de JavaScript.
+
+### Qué cambió
+
+- `web/cargador.js` (nuevo), `util/construir-web.js` (nuevo; lo llama `util/construir.js`) y
+  `n-web.js` (generado, en git como los bundles).
+- `web/ejemplo.html` (nuevo).
+- Pendiente: las etiquetas que se añaden a la página después de cargarla (con un
+  `MutationObserver`), y el número de línea del HTML en los errores de una etiqueta con el
+  código dentro.
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -1934,6 +2016,7 @@ Medido en la nube (nativo, 200.000 hilos que leen 64 enteros seguidos cada uno, 
 | D1 | `bytes`, `conjunto`, `patron`, archivos grandes línea a línea, `unir`/`pivotar` | VM, eDSL | pendiente |
 | S1–S2 | FFI con firmas de C, arreglos sin copiar, salidas, retrollamadas, memoria, en fondo; reloj en consola, `servir`, archivos, rutas, procesos, entrada interactiva | VM, biblioteca, anfitrión de Node | **hecha** |
 | S3 | puente a npm (`usar x de "npm:paquete"`), FFI en QuickJS, variádicas | anfitrión | pendiente |
+| P6 | **Ñ en cualquier página**: `<script type="text/ñ">` (y `text/n`) con `n-web.js` desde jsDelivr; en orden, `src` con `usar`, eventos, `data-destino`, errores con su línea | anfitrión web | **hecha** |
 | P2–P5 | PWA, servidor desplegable, ventana web de escritorio, instalador | anfitrión | pendiente |
 | W1 | Windows: C1EÑ nativo enlaza (sin `-z nodelete`), sonda del compilador, rutas en `fuera`, tolerancia y limpieza de NEÑ, `errorC` con `ucrtbase.dll` | anfitrión de Node, pruebas | **hecha** (`errorC` por confirmar en Windows) |
 | N1 | NEÑ: numerico y datos dentro, tipo `grande` y enteros exactos, 43 funciones de amplitud, volumen (reducciones, `por` por bloques), cuaderno de velocidad en GPU | verificador, VM, JIT, NEÑ, C1EÑ | **hecha** (tiempos de la T4 por medir en Kaggle) |

@@ -39,3 +39,4 @@ console.log('bundle.js', bundle.length, 'bytes');
 const bundleC1en = armar(['numerico', 'nen'], 'C1EÑ') + pie;
 fs.writeFileSync(R.bundleC1en, bundleC1en);
 console.log('bundle-c1en.js', bundleC1en.length, 'bytes');
+require('./construir-web.js');   // (motor-exp P6) n-web.js, para <script type="text/ñ">
