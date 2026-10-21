@@ -1234,6 +1234,8 @@ NAT(nat_entorno) {
 NAT(nat_salir) {
   (void)extra; int c = 0;
   if (n) { NUM(a[0], 1, "salir"); c = (int)(int32_t)(int64_t)a[0].u.n; }
+  /* (motor-exp N4.6) una biblioteca no cierra el programa que la usa */
+  { extern int n_en_biblioteca; if (n_en_biblioteca) return ERR("«salir» dentro de una biblioteca: el programa que la usa es el que decide cuándo terminar"); }
   fflush(stdout); exit(c);
   return n_nulo();
 }
@@ -1371,3 +1373,5 @@ void n_iniciar(int argc, char** argv) {
   setvbuf(stdout, bufsal, _IOFBF, sizeof bufsal);
   n_hilo.valor = n_hilo.mensaje = n_hilo.pista = n_hilo.tipo = n_nulo();
 }
+
+#include "nrt_biblioteca.inc"    /* (motor-exp N4.6) Ñ como biblioteca de C */

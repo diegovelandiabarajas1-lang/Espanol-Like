@@ -59,6 +59,7 @@ if (esC1en) {
 //   · la de publicar va sin esqueleto, porque claude.ai se lo pone encima.
 const salida = esC1en ? 'c1en.html' : 'espanol-like-v4.html';
 fs.writeFileSync(R.motor + (esC1en ? '/publicar-c1en.html' : '/publicar-ide.html'), padre);
+fs.mkdirSync(require('path').dirname(R.entrega(salida)), { recursive: true });   // (salida/ no va en git: puede no existir)
 fs.writeFileSync(R.entrega(salida), envolver(padre, esC1en ? 'C1EÑ' : 'Español-Like'));
 
 function envolver(cuerpo, titulo) {

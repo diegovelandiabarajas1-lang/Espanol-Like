@@ -64,9 +64,20 @@ else if (!hay('gcc')) { saltadas++; console.log('  (sin gcc: no se compara con C
 else {
   const fuente = `#include <math.h>
 double c_f16(double x) { return (double)(_Float16)x; }
+/* (Windows) el fmaf de la biblioteca de mingw no es exacto en los desbordes:
+   fmaf(3.4e38, 2, -3.4e38) le da infinito, y la respuesta es 3.4e38. Ahí la
+   referencia es la instrucción del procesador (vfmadd, exacta por definición),
+   que tienen todos los x86 desde 2013. Sin ella, la comparación se salta. */
+#if defined(_WIN32)
+__attribute__((target("fma"))) static float fma_hw(float a, float b, float c) { return __builtin_fmaf(a, b, c); }
+int c_fma_fiable(void) { __builtin_cpu_init(); return __builtin_cpu_supports("fma"); }
+__attribute__((target("fma"))) void c_fmafv(const float* a, const float* b, const float* c, float* y, long long n) { for (long long i = 0; i < n; i++) y[i] = fma_hw(a[i], b[i], c[i]); }
+#else
+int c_fma_fiable(void) { return 1; }
+void c_fmafv(const float* a, const float* b, const float* c, float* y, long long n) { for (long long i = 0; i < n; i++) y[i] = fmaf(a[i], b[i], c[i]); }
+#endif
 float c_fmaf(float a, float b, float c) { return fmaf(a, b, c); }
 void c_f16v(const double* x, double* y, long long n) { for (long long i = 0; i < n; i++) y[i] = (double)(_Float16)x[i]; }
-void c_fmafv(const float* a, const float* b, const float* c, float* y, long long n) { for (long long i = 0; i < n; i++) y[i] = fmaf(a[i], b[i], c[i]); }
 void c_ops32(int op, const float* a, const float* b, float* y, long long n) {
   for (long long i = 0; i < n; i++) { float x = a[i], z = b[i];
     y[i] = op == 0 ? x + z : op == 1 ? x - z : op == 2 ? x * z : op == 3 ? x / z : sqrtf(fabsf(x)); }
@@ -85,6 +96,7 @@ void c_ops16(int op, const float* a, const float* b, float* y, long long n) {
     C = {
       f16v: lib.func('void c_f16v(const double *x, _Out_ double *y, int64_t n)'),
       fmafv: lib.func('void c_fmafv(const float *a, const float *b, const float *c, _Out_ float *y, int64_t n)'),
+      fmaFiable: lib.func('int c_fma_fiable(void)'),
       ops32: lib.func('void c_ops32(int op, const float *a, const float *b, _Out_ float *y, int64_t n)'),
       ops16: lib.func('void c_ops16(int op, const float *a, const float *b, _Out_ float *y, int64_t n)'),
       lib,
@@ -117,7 +129,8 @@ console.log('── redondear a 16 bits');
 }
 
 console.log('── fmaf exacta en JavaScript');
-if (C) {
+if (C && !C.fmaFiable()) { saltadas++; console.log('  (este procesador no tiene FMA y el fmaf de la biblioteca de C no es exacto: no hay con qué comparar)'); }
+else if (C) {
   const N = 3000000, a = new Float32Array(N), b = new Float32Array(N), c = new Float32Array(N);
   for (let i = 0; i < N; i++) {
     const k = i % 6;
@@ -143,7 +156,9 @@ function correrN(src, args, env) {
   const r = spawnSync(process.execPath, [N_NODE, f, ...(args || [])], { encoding: 'utf8', cwd: tmp, env: Object.assign({}, process.env, env || {}), maxBuffer: 1 << 26 });
   return { ok: r.status === 0, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 }
-const leer32 = f => new Float32Array(fs.readFileSync(path.join(tmp, f)).buffer.slice(0));
+// (con su desplazamiento: Node puede devolver un Buffer que es un trozo de un
+// bloque compartido, y leer «.buffer» entero da los bytes de otro archivo)
+const leer32 = f => { const b = fs.readFileSync(path.join(tmp, f)); return new Float32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); };
 const leer16 = f => { const b = fs.readFileSync(path.join(tmp, f)); return new Uint16Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); };
 
 console.log('── aritmética de arreglos en la VM, contra float y _Float16 de C');

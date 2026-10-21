@@ -196,4 +196,36 @@ void n_registrar_modulos(const char* const* claves, const NFn* const* fns, int n
 void n_salida(NV texto);                          /* una línea */
 extern NV n_faltante;
 extern NV n_nativa_registro;
+
+/* ── (motor-exp N4.6) Ñ como biblioteca de C: ver nrt_biblioteca.inc ─────── */
+void n_iniciar_biblioteca(void);
+void n_api_limpiar_error(void);
+void n_api_guardar_error(void);
+void n_api_poner_error(const char* msg);
+const char* n_api_error(void);
+int n_api_de_entero(int64_t x, NV* v);
+int n_api_de_texto(const char* s, NV* v);
+int n_api_a_real(NV r, double* x, const char* quien);
+int n_api_a_entero(NV r, int64_t* x, const char* quien);
+int n_api_a_bool(NV r, int* x, const char* quien);
+int n_api_a_texto(NV r, char** x, const char* quien);
+void* n_api_asa(NV v);
+NV n_api_valor(const void* a);
+void n_api_soltar(void* a);
+const char* n_api_tipo(const void* a);
+double n_api_real(const void* a);
+int n_api_bool(const void* a);
+char* n_api_texto(const void* a);
+char* n_api_repr(const void* a);
+int64_t n_api_largo(const void* a);
+void* n_api_en(const void* a, int64_t i);
+void* n_api_clave(const void* a, int64_t i);
+void* n_api_valor_en(const void* a, int64_t i);
+void* n_api_lista(void);
+void* n_api_lista_reales(const double* x, int64_t n);
+int64_t n_api_copiar_reales(const void* a, double* out, int64_t n);
+int n_api_agregar(void* l, const void* x);
+void* n_api_dic(void);
+int n_api_poner(void* d, const void* k, const void* x);
+void* n_api_llamar(const void* f, const void* const* args, int n);
 #endif

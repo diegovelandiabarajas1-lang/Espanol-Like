@@ -2326,6 +2326,10 @@ function c1enEmitir(M, destino) {
 // con la línea de la barrera. La memoria compartida empieza a cero en los tres.
 const C1EN_HILOS_C = `
 #ifdef _WIN32
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0600
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600          /* IsThreadAFiber (Vista en adelante) */
+#endif
 #include <windows.h>
 #else
 #include <ucontext.h>
@@ -2347,10 +2351,20 @@ typedef struct c1en_hb {
 #ifdef _WIN32
 static __thread void* c1en_plan = 0;
 static void WINAPI c1en_fibra(void* p) { c1en_hb* h = (c1en_hb*)p; h->correr(h); h->estado = 2; for (;;) SwitchToFiber(c1en_plan); }
+/* (motor-exp N4.6, arreglo de Windows) Cada núcleo es su propia DLL con su propio
+   «c1en_plan», pero el hilo es el mismo: el segundo núcleo encontraba el hilo YA
+   convertido en fibra por el primero, ConvertThreadToFiber le devolvía NULL y
+   SwitchToFiber(NULL) tumbaba el proceso sin mensaje. Ahora se pregunta antes, y
+   el hilo se devuelve a hilo al terminar si lo convirtió este núcleo. */
+static int c1en_hilo_entrar(void) {
+  if (IsThreadAFiber()) { c1en_plan = GetCurrentFiber(); return 0; }
+  c1en_plan = ConvertThreadToFiber(0);
+  return c1en_plan != 0;
+}
+static void c1en_hilo_salir(int convertido) { if (convertido) ConvertFiberToThread(); c1en_plan = 0; }
 static void c1en_hb_iniciar(c1en_hb* h) {
-  if (!c1en_plan) c1en_plan = ConvertThreadToFiber(0);
   if (h->fibra) DeleteFiber(h->fibra);
-  h->fibra = CreateFiber(C1EN_PILA, c1en_fibra, h); h->estado = 0;
+  h->fibra = CreateFiberEx(C1EN_PILA, C1EN_PILA, 0, c1en_fibra, h); h->estado = 0;
 }
 static void c1en_hb_seguir(c1en_hb* h) { SwitchToFiber(h->fibra); }
 static void c1en_barrera(c1en_hb* h, int64_t sitio) { h->estado = 1; h->sitio = sitio; SwitchToFiber(c1en_plan); h->estado = 0; }
@@ -2369,6 +2383,8 @@ static void c1en_hb_iniciar(c1en_hb* h) {
 static void c1en_hb_seguir(c1en_hb* h) { c1en_hb_actual = h; swapcontext(&c1en_plan, &h->ctx); }
 static void c1en_barrera(c1en_hb* h, int64_t sitio) { h->estado = 1; h->sitio = sitio; swapcontext(&h->ctx, &c1en_plan); h->estado = 0; }
 static void c1en_hb_soltar(c1en_hb* h) { free(h->pila); h->pila = 0; }
+static int c1en_hilo_entrar(void) { return 0; }
+static void c1en_hilo_salir(int convertido) { (void)convertido; }
 #endif
 /* Un bloque entero, por rondas. Devuelve la peor clave ((hilo global << 24) |
    sitio, todo unos si nada falló): la misma regla que el jit. */
@@ -2477,7 +2493,7 @@ function c1enEnvolverBloques(M, destino, cuerpo, temps, TY) {
       `  h->res = c1en_cuerpo(${['h', 'h->b', 'h->t', 'a->c1en_nb', 'a->c1en_nh'].concat(deCampos, M.compartidos.map(c => `a->${c.cn}`)).join(', ')});\n}\n` +
       `void c1en_nucleo(${nucleoParams.join(', ')}, uint64_t* c1en_err) {\n` +
       `#pragma omp parallel if (c1en_nb > 1)\n  {\n` +
-      `    c1en_hb* hs = (c1en_hb*)calloc((size_t)c1en_nh, sizeof(c1en_hb));\n` +
+      `    c1en_hb* hs = (c1en_hb*)calloc((size_t)c1en_nh, sizeof(c1en_hb));\n    int c1en_conv = c1en_hilo_entrar();\n` +
       `#pragma omp for schedule(dynamic, 1)\n` +
       `    for (int64_t b = 0; b < c1en_nb; b++) {\n` +
       `      ${shDecl}\n` +
@@ -2485,7 +2501,7 @@ function c1enEnvolverBloques(M, destino, cuerpo, temps, TY) {
       `      for (int64_t t = 0; t < c1en_nh; t++) { hs[t].b = b; hs[t].t = t; hs[t].a = &a; hs[t].correr = c1en_correr; }\n` +
       `      uint64_t k = c1en_correr_bloque(hs, c1en_nh, b);\n` +
       `      if (k != ~0ULL) {\n#pragma omp critical (c1en_err)\n        { if (k < c1en_err[0]) c1en_err[0] = k; }\n      }\n    }\n` +
-      `    for (int64_t t = 0; t < c1en_nh; t++) c1en_hb_soltar(&hs[t]);\n    free(hs);\n  }\n}\n`;
+      `    for (int64_t t = 0; t < c1en_nh; t++) c1en_hb_soltar(&hs[t]);\n    free(hs);\n    c1en_hilo_salir(c1en_conv);\n  }\n}\n`;
   }
   const shDecl = M.compartidos.map(c => `  __shared__ ${tyC(c)} ${c.cn}[${c.tam}];\n  for (long long q = c1en_t; q < ${c.tam}; q += c1en_nh) ${c.cn}[q] = 0;\n`).join('');
   const todosDesemp = ['*(long long*)p[0]', '*(long long*)p[1]'].concat(desemp).concat([`*(unsigned long long**)p[${desemp.length + 2}]`]).join(', ');

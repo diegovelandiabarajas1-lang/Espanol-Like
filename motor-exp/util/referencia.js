@@ -893,6 +893,7 @@ pre{margin:0; overflow-x:auto}
 fs.writeFileSync(R.motor + '/publicar-referencia.html', html);
 {
   const corte = html.indexOf('</style>') + '</style>'.length;
+  fs.mkdirSync(require('path').dirname(R.entrega('referencia-stdlib.html')), { recursive: true });   // (salida/ no va en git: puede no existir)
   fs.writeFileSync(R.entrega('referencia-stdlib.html'),
     '<!DOCTYPE html>\n<html lang="es">\n<head>\n<meta charset="utf-8">\n' +
     '<meta name="viewport" content="width=device-width,initial-scale=1">\n' +
