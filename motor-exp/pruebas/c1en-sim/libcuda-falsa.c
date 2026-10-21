@@ -44,6 +44,42 @@ static long long lanzamientos = 0;
 static long long reservas_vivas = 0;
 static long long ops_diferidas = 0;   /* cuántas operaciones esperaron en una cola */
 
+/* (motor-exp N4.8) de qué GPU es cada reserva. El simulador es MÁS estricto que
+   el driver: un núcleo que recibe memoria de otra GPU, o una copia hacia o desde
+   la memoria de otra GPU que no sea la actual, falla (en una GPU de verdad lo
+   primero da CUDA_ERROR_ILLEGAL_ADDRESS o basura). Así se cazan los olvidos de
+   cambiar de contexto. Solo cuMemcpyPeer copia entre dos GPU. */
+#define CUBETAS 4096
+typedef struct reserva_falsa { uintptr_t p; size_t n; int gpu; struct reserva_falsa* sig; } reserva_falsa;
+static reserva_falsa* cubetas[CUBETAS];
+static long long lanzamientos_gpu[16];
+static long long copias_peer = 0;
+static int peer_activo[16][16];
+static unsigned cubeta(uintptr_t p) { return (unsigned)((p >> 4) ^ (p >> 16)) % CUBETAS; }
+static void apuntar(uintptr_t p, size_t n, int gpu) {
+  reserva_falsa* r = (reserva_falsa*)malloc(sizeof *r);
+  r->p = p; r->n = n; r->gpu = gpu; r->sig = cubetas[cubeta(p)]; cubetas[cubeta(p)] = r;
+}
+static void borrar(uintptr_t p) {
+  for (reserva_falsa** q = &cubetas[cubeta(p)]; *q; q = &(*q)->sig)
+    if ((*q)->p == p) { reserva_falsa* r = *q; *q = r->sig; free(r); return; }
+}
+/* la GPU de una reserva por su dirección de inicio (−1: no es una reserva) */
+static int gpu_de(uintptr_t p) {
+  for (reserva_falsa* r = cubetas[cubeta(p)]; r; r = r->sig) if (r->p == p) return r->gpu;
+  return -1;
+}
+/* la GPU de una dirección cualquiera dentro de una reserva (para las copias,
+   que pueden ir a un trozo); más lento, solo para las copias */
+static int gpu_de_dentro(uintptr_t p) {
+  int g = gpu_de(p);
+  if (g >= 0) return g;
+  for (unsigned k = 0; k < CUBETAS; k++)
+    for (reserva_falsa* r = cubetas[k]; r; r = r->sig) if (p >= r->p && p < r->p + (r->n ? r->n : 1)) return r->gpu;
+  return -1;
+}
+static int ajena(uintptr_t p) { int g = gpu_de_dentro(p); return g >= 0 && g != ctx_actual; }
+
 static int num_gpus(void) { const char* s = getenv("C1EN_SIM_GPUS"); return s ? atoi(s) : 2; }
 static int perezoso(void) { const char* s = getenv("C1EN_SIM_PEREZOSO"); return s && *s && *s != '0'; }
 static double ahora_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
@@ -154,17 +190,42 @@ CUresult cuMemAlloc_v2(CUdeviceptr* d, size_t n) {
      núcleo que lo dé por supuesto tiene que fallar aquí también. */
   memset(p, 0xA5, n);
   reservas_vivas++;
+  apuntar((uintptr_t)p, n, ctx_actual);
   *d = (CUdeviceptr)(uintptr_t)p;
   return 0;
 }
 /* Liberar memoria que un núcleo en cola todavía usa sería un fallo de quien
    llama; el simulador termina antes lo pendiente, como hace el driver. */
-CUresult cuMemFree_v2(CUdeviceptr d) { drenar_todo(); free((void*)(uintptr_t)d); reservas_vivas--; return 0; }
-CUresult cuMemcpyHtoD_v2(CUdeviceptr dst, const void* src, size_t n) { drenar_legado(); memcpy((void*)(uintptr_t)dst, src, n); return 0; }
-CUresult cuMemcpyDtoH_v2(void* dst, CUdeviceptr src, size_t n) { drenar_legado(); memcpy(dst, (const void*)(uintptr_t)src, n); return 0; }
+CUresult cuMemFree_v2(CUdeviceptr d) { drenar_todo(); borrar((uintptr_t)d); free((void*)(uintptr_t)d); reservas_vivas--; return 0; }
+CUresult cuMemcpyHtoD_v2(CUdeviceptr dst, const void* src, size_t n) { if (ajena(dst)) return 1; drenar_legado(); memcpy((void*)(uintptr_t)dst, src, n); return 0; }
+CUresult cuMemcpyDtoH_v2(void* dst, CUdeviceptr src, size_t n) { if (ajena(src)) return 1; drenar_legado(); memcpy(dst, (const void*)(uintptr_t)src, n); return 0; }
+/* (motor-exp N4.8) entre dos GPU, cada puntero con su contexto */
+CUresult cuMemcpyPeer(CUdeviceptr dst, void* dctx, CUdeviceptr src, void* sctx, size_t n) {
+  int gd = (int)((int*)dctx - contextos), gs = (int)((int*)sctx - contextos);
+  if (gd < 0 || gd >= num_gpus() || gs < 0 || gs >= num_gpus()) return 201;
+  if (gpu_de_dentro(dst) != gd || gpu_de_dentro(src) != gs) return 1;
+  drenar_todo();
+  memcpy((void*)(uintptr_t)dst, (const void*)(uintptr_t)src, n);
+  copias_peer++;
+  return 0;
+}
+CUresult cuDeviceCanAccessPeer(int* puede, CUdevice a, CUdevice b) {
+  const char* s = getenv("C1EN_SIM_PEER");
+  *puede = a != b && (!s || *s != '0');
+  return 0;
+}
+CUresult cuCtxEnablePeerAccess(void* otro, unsigned int flags) {
+  int g = (int)((int*)otro - contextos);
+  if (ctx_actual < 0) return 201;
+  if (flags != 0 || g < 0 || g >= num_gpus() || g == ctx_actual) return 1;
+  if (peer_activo[ctx_actual][g]) return 704;          /* CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED */
+  peer_activo[ctx_actual][g] = 1;
+  return 0;
+}
 /* Desde memoria normal, la copia asíncrona se lleva los bytes YA (a la zona
    intermedia del driver) y llega al dispositivo en orden dentro de la cola. */
 CUresult cuMemcpyHtoDAsync_v2(CUdeviceptr dst, const void* src, size_t n, void* s) {
+  if (ajena(dst)) return 1;
   op_falsa* o = (op_falsa*)calloc(1, sizeof *o);
   o->tipo = 1; o->dst = (void*)(uintptr_t)dst; o->n = n; o->src = malloc(n ? n : 1); memcpy(o->src, src, n);
   encolar(cola_de(s), o);
@@ -172,6 +233,7 @@ CUresult cuMemcpyHtoDAsync_v2(CUdeviceptr dst, const void* src, size_t n, void* 
 }
 /* Hacia memoria normal, CUDA vuelve cuando la copia terminó. */
 CUresult cuMemcpyDtoHAsync_v2(void* dst, CUdeviceptr src, size_t n, void* s) {
+  if (ajena(src)) return 1;
   drenar(cola_de(s), NULL);
   memcpy(dst, (const void*)(uintptr_t)src, n);
   return 0;
@@ -190,6 +252,9 @@ CUresult cuLaunchKernel(void* f, unsigned int gx, unsigned int gy, unsigned int 
   int k = 0;
   if (params) for (; k < MAX_PARAMS && params[k]; k++) { memcpy(&o->vals[k], params[k], 8); o->ptrs[k] = &o->vals[k]; }
   o->ptrs[k] = NULL;
+  /* (motor-exp N4.8) un puntero de otra GPU en los argumentos: fallo */
+  for (int j = 0; j < k; j++) { int g = gpu_de((uintptr_t)o->vals[j]); if (g >= 0 && g != ctx_actual) { free(o); return 700; } }
+  if (ctx_actual < 16) lanzamientos_gpu[ctx_actual]++;
   encolar(cola_de(stream), o);
   return 0;
 }
@@ -267,6 +332,8 @@ CUresult cuGetErrorName(CUresult e, const char** s) {
     case 218: *s = "CUDA_ERROR_INVALID_PTX"; break;
     case 500: *s = "CUDA_ERROR_NOT_FOUND"; break;
     case 600: *s = "CUDA_ERROR_NOT_READY"; break;
+    case 700: *s = "CUDA_ERROR_ILLEGAL_ADDRESS"; break;
+    case 704: *s = "CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED"; break;
     default: *s = "CUDA_ERROR_UNKNOWN"; break;
   }
   return 0;
@@ -276,3 +343,14 @@ CUresult cuGetErrorName(CUresult e, const char** s) {
 long long c1en_sim_lanzamientos(void) { return lanzamientos; }
 long long c1en_sim_reservas_vivas(void) { return reservas_vivas; }
 long long c1en_sim_diferidas(void) { return ops_diferidas; }
+long long c1en_sim_lanzamientos_gpu(int g) { return g >= 0 && g < 16 ? lanzamientos_gpu[g] : 0; }
+long long c1en_sim_copias_peer(void) { return copias_peer; }
+/* (motor-exp N4.8) con C1EN_SIM_INFORME=1, al salir: cuántos núcleos corrió cada
+   GPU y cuántas copias hubo entre GPUs (para ver que el trabajo se repartió) */
+__attribute__((destructor)) static void informe_al_salir(void) {
+  const char* s = getenv("C1EN_SIM_INFORME");
+  if (!s || !*s || *s == '0') return;
+  fprintf(stderr, "[c1en sim] por GPU:");
+  for (int g = 0; g < num_gpus() && g < 16; g++) fprintf(stderr, " %lld", lanzamientos_gpu[g]);
+  fprintf(stderr, " · entre GPU: %lld\n", copias_peer);
+}

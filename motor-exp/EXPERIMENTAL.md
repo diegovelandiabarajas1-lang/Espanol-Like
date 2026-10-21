@@ -1543,6 +1543,101 @@ Probado con 8 hilos y 48.000 llamadas.
 - Pendiente: los atómicos de 64 bits y de coma flotante (`atomicAdd` de real ya está como
   `sumarAtomico`), y la memoria compartida del bloque con atómicos.
 
+## Fase N4.8 · Varias GPU desde un solo programa (21-oct-2026)
+
+Hasta aquí, con dos GPU (las dos T4 de Kaggle) había que elegir una con
+`usarDispositivo("gpu", k)` o lanzar un proceso por GPU. Ahora un solo programa usa las dos a la
+vez, de tres formas:
+
+```
+usar paralelo, paraleloRepartido, numeroGpus, enGpu, colaGpu, enCola, esperarCola de "nen"
+paraleloRepartido(N, cuadrado, x, y)      # los N índices, la mitad en cada GPU; lo mismo que paralelo, al bit
+fijo q1 = colaGpu(1)                       # una cola de la GPU 1
+enCola(q1, fn() { paralelo(N, llenar, a) })            # va a la GPU 1, sin esperar
+enGpu(1, fn() { paralelo(N, masUno, b, a) })           # lo de dentro va a la GPU 1; al salir, la de antes
+imprimir(numeroGpus())                     # 2
+```
+
+| función | qué hace |
+|---|---|
+| `numeroGpus()` | cuántas GPU hay (0 si ninguna), se esté usando la GPU o no |
+| `colaGpu(k)` | una cola de la GPU k (`colaGpu()` sigue siendo de la actual). Lo que se lanza en ella con `enCola` va a **su** GPU, sea cual sea la actual |
+| `enGpu(k, f)` | corre `f` con la GPU k como la actual y deja la de antes al salir; devuelve lo que devuelva `f`. En jit y nativo solo corre `f` |
+| `paraleloRepartido(n, f, …)` | como `paralelo`, con los n índices repartidos en tramos seguidos entre todas las GPU; espera a que acaben todas |
+
+### Un arreglo pasa de una GPU a otra sin pasar por Node
+
+La residencia de N2 ya recordaba en qué GPU estaba cada arreglo. Si un núcleo de la GPU 0 usa un
+arreglo cuya copia buena está en la GPU 1, antes se bajaba a la CPU y se volvía a subir. Ahora va
+**de GPU a GPU** con `cuMemcpyPeer`: se espera a lo que la GPU 1 tenía pendiente, se copia y la
+memoria vieja vuelve a la reserva de la GPU 1. La primera vez que se copia entre dos GPU se
+enciende el **acceso directo** (`cuCtxEnablePeerAccess`) si el par lo admite. Si no lo admite, el
+driver hace pasar la copia por su propia memoria, y los bytes son los mismos.
+
+### `paraleloRepartido`: lo mismo que `paralelo`, al bit
+
+Cada GPU corre su tramo `[desde, hasta)` con el mismo núcleo, que ahora trae una segunda entrada
+(`c1en_tramo`) donde la `i` es la global. Así el cuerpo, los fallos y su clave son los de
+siempre. Cada GPU recibe una copia **entera** de los arreglos, porque el cuerpo puede leer
+cualquier elemento. De vuelta, el análisis de C1EÑ ya sabe quién escribe dónde:
+
+- un arreglo que el núcleo escribe solo en `a[i]` (con la `i` del hilo, sin reasignarla) baja de
+  cada GPU **solo su tramo**;
+- uno que se escribe en otros sitios (`z[n - 1 - i]`, `w[piso(i / 2)]`, o con la `i` reasignada)
+  baja entero de cada GPU, y se queda **lo que cada una cambió**, elemento a elemento, comparando
+  los bits con lo que había. Es lo mismo que `paralelo` mientras dos hilos no escriban el mismo
+  elemento, y esa ya es la regla de `paralelo`;
+- uno que no se escribe no baja.
+
+El fallo que se dice es el del hilo de índice más bajo de **todas** las GPU, como en `paralelo`.
+
+**Con atómicos o vallas no se reparte**, porque cada GPU tendría su propio contador. Es un error
+en los tres dispositivos, para que un programa no valga en jit y falle con dos GPU. La pista dice
+cómo hacerlo a mano: `enGpu(k, …)` con un arreglo de resultados por GPU, y sumarlos al final.
+
+`paraleloRepartido` no va en colas. Con una sola GPU, o en jit y nativo, es un `paralelo` normal.
+
+### El simulador, ahora con GPU que no se mezclan
+
+`libcuda-falsa.c` ya fingía dos GPU (`C1EN_SIM_GPUS`), pero todas compartían la memoria. Ahora
+recuerda de qué GPU es cada reserva y es **más estricto que el driver**. Un núcleo que recibe
+memoria de otra GPU falla (`CUDA_ERROR_ILLEGAL_ADDRESS`), y una copia con el contexto equivocado
+también. Así se caza cualquier sitio donde C1EÑ olvide cambiar de GPU. Las 95 pruebas de
+`c1en.js` y las de colas, bloques, tipos, hilos y NEÑ pasan con el simulador estricto. Trae
+además `cuMemcpyPeer`, el acceso directo (`C1EN_SIM_PEER=0` lo apaga) y, con
+`C1EN_SIM_INFORME=1`, al salir dice cuántos núcleos corrió cada GPU y cuántas copias hubo entre
+ellas.
+
+### Qué se probó (`pruebas/exp-varias-gpu.js`, 24 pruebas, en `todas.js`)
+
+- `paraleloRepartido` en jit, nativo y GPU simulada con 1, 2 y 3 GPU: **la misma salida, al bit**.
+  Hay arreglos de bajada por tramo y de mezcla de cambios, la `i` reasignada, real, real32 y
+  entero, N = 100.003 (no múltiplo de 256), y en el mismo programa se compara con `paralelo`. Se
+  comprueba que hubo núcleos en todas las GPU.
+- El fallo del hilo más bajo cuando está en la segunda GPU y cuando hay uno en cada una: el mismo
+  mensaje que jit.
+- `atomicoSumar` y `sumarAtomico` en `paraleloRepartido`: error en jit y en GPU.
+- `colaGpu(1)` y `colaGpu(0)` a la vez, un arreglo que pasa de la 1 a la 0 y otro de la 0 a la 1
+  dentro de `enGpu(1, …)`. Da lo mismo que jit, en el acto y en **modo perezoso** (si faltara una
+  espera, saldría basura), con y sin acceso directo, y con copias de GPU a GPU de verdad (sin
+  pasar por Node).
+- `enGpu(5, …)`: «no hay GPU 5» con dos GPU, y en jit solo corre la función.
+- Con `--gpu` corre en las GPU que haya. El cuaderno de Kaggle (`c1en/kaggle-comparar-lenguajes`)
+  la lanza en las dos T4, junto con `exp-hilos.js`.
+
+### Qué cambió
+
+- `src/14-c1en.js`: `numeroGpus`, `enGpu`, `paraleloRepartido`, `colaGpu(k)`; `enCola` cambia a
+  la GPU de su cola; las copias de GPU a GPU en la residencia; el análisis marca qué arreglos se
+  escriben y dónde, y si hay atómicos; el núcleo de CUDA trae `c1en_tramo`.
+- `util/c1en-cuda.js`: `copiarEntre` (`cuMemcpyPeer`), `accesoDirecto`, y un módulo que busca sus
+  funciones cuando alguien las pide (antes, la primera lista de nombres era la única).
+- `pruebas/c1en-sim/libcuda-falsa.c`: memoria por GPU, la comprobación estricta, `cuMemcpyPeer`,
+  el acceso directo y el informe.
+- Pendiente: repartir `paraleloBloques` (por bloques, sería lo mismo), repartir según lo rápida que
+  sea cada GPU (ahora es a partes iguales), y la copia entre GPU asíncrona
+  (`cuMemcpyPeerAsync` en la cola de destino; ahora la copia espera). **Por medir en las dos T4.**
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -1569,7 +1664,7 @@ Probado con 8 hilos y 48.000 llamadas.
 | N4.5 | **tipos de máquina**: arreglos `i8 u8 i16 u16 u32 i64 u64` (envuelven como C; promoción de NumPy; 64 bits exactos con BigInt), alias `i32 f64 f32 f16`, bits (`bitsY`… `desplazarDer`, `contarBits`), E/S binaria de todos, núcleos de C1EÑ con enteros de 8–32 bits y bits | VM, numerico, stdlib, C1EÑ | **hecha** (al bit contra NumPy) |
 | N4.6 | **ser la lengua franca**: `n-compilar --biblioteca` → `.so`/`.dll`/`.dylib` + `.h` + `.py`, ABI de C con asas para lo que no es escalar, errores como errno, varias bibliotecas por proceso; probado desde C, C++, Python, Rust y Go | AOT, util | **hecha** (por confirmar en Windows) |
 | N4.7 | **hilos y memoria compartida con control fino**: `hilos(n, f)` con barreras, candados, esperas y atómicos (jit con interbloqueos cazados = nativo con hilos del sistema); atómicos en `paralelo` hasta la GPU; la biblioteca de N4.6 desde varios hilos | C1EÑ, AOT | **hecha** (por confirmar en Windows) |
-| N4.8 | varias GPU desde un solo programa | C1EÑ | pendiente |
+| N4.8 | **varias GPU desde un solo programa**: `paraleloRepartido` (igual a `paralelo` al bit, con bajada por tramos o mezcla de cambios), `colaGpu(k)`, `enGpu(k, f)`, `numeroGpus()`, copias de GPU a GPU con `cuMemcpyPeer`; simulador con memoria por GPU y estricto | C1EÑ, puente CUDA, simulador | **hecha** (por medir en las dos T4) |
 | N4.9 | plantillas (genéricos) en los núcleos | C1EÑ, verificador | pendiente |
 | N4.10 | interoperabilidad directa (C y C++ sin capa) | AOT, FFI | pendiente |
 | N4.11 | quitar la seguridad donde uno quiere (zonas sin comprobaciones) | AOT, verificador | pendiente |
