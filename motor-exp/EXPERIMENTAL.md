@@ -1638,6 +1638,100 @@ ellas.
   sea cada GPU (ahora es a partes iguales), y la copia entre GPU asíncrona
   (`cuMemcpyPeerAsync` en la cola de destino; ahora la copia espera). **Por medir en las dos T4.**
 
+## Fase N4.9 · Plantillas en los núcleos (21-oct-2026)
+
+Un núcleo de C1EÑ ya era, por dentro, **uno por cada firma de tipos** con que se lanza: la misma
+función con arreglos real y con arreglos entero son dos núcleos compilados. Lo que faltaba era
+poder **escribirlo genérico a propósito**, como una plantilla de C++: decir qué tipos van juntos,
+que se compruebe al lanzar, y poder hacer una cosa distinta según el tipo.
+
+```
+usar paralelo de "nen"
+usar tipoArreglo, epsilonTipo, maximoTipo, bitsY de "numerico"
+fn escalar<T>(i, a: arreglo<T>, b: arreglo<T>, k: T) {
+  si tipoArreglo(a) == "entero" o tipoArreglo(a) == "u8" {
+    b[i] = bitsY(a[i] * k, maximoTipo(a))      # esta rama solo existe en los núcleos de enteros
+  } sino {
+    b[i] = a[i] * k + epsilonTipo(a)           # y esta en los de real y real32
+  }
+}
+paralelo(N, escalar, r, r2, 3)       # real
+paralelo(N, escalar, e, e2, 3)       # entero
+paralelo(N, escalar, f, f2, 3)       # real32
+paralelo(N, escalar, r, e2, 3)       # error: T no puede ser a la vez números real (por «a») y números entero (por «b»)
+```
+
+### Las anotaciones
+
+| se escribe | qué pide | se comprueba |
+|---|---|---|
+| `a: arreglo<real32>` | un arreglo de ese tipo (también los alias `f32`, `i32`…) | al lanzar: «está anotado como arreglo<real32> y llegó un arreglo real», con la pista `aTipo` |
+| `a: arreglo<T>, b: arreglo<T>` | los dos con números del mismo tipo | al lanzar, se diga en el orden que se diga |
+| `k: T` con una `T` de arreglo | el número entra **como ese tipo**: entero si T es entero (un 2,5 es un error), real si T es real o real32 | al lanzar |
+| `a: T, b: T` | los dos del mismo tipo: dos arreglos iguales o dos números | al lanzar |
+
+`arreglo<…>` es sintaxis nueva del parser y vale en cualquier función. El verificador no puede
+saber el tipo de los números de un arreglo (no va en el tipo estático), así que lo comprueba
+C1EÑ al lanzar el núcleo. Además, dentro de un genérico un valor de tipo `T` ahora **vale lo que
+valga** en el verificador: se indexa, se suma y se compara. Antes `a[i]` con `a: T` daba «no se
+puede indexar un valor de tipo T», y eso contradecía la regla de X3.
+
+### Constantes del núcleo y la rama que toca
+
+Dentro de un núcleo, estas expresiones **se saben al compilar**, porque cada firma de tipos es otro
+núcleo:
+
+- `tipoArreglo(a) == "real32"` (y `!=`): el tipo de los números de un parámetro arreglo;
+- `epsilonTipo(a)`, `minimoTipo(a)` y `maximoTipo(a)`: los límites de su tipo (también con el
+  nombre: `maximoTipo("u8")`);
+- y lo que se haga con ellas con `no`, `y`, `o`, `-` y las comparaciones.
+
+Un `si` cuya condición es constante **solo compila la rama que toca**. La otra ni se analiza, y
+puede no valer para ese tipo: `bitsY` sobre un real, o guardar `a[i] * 0.5` en un arreglo entero.
+Es el `if constexpr` de C++. `codigoC(f, …)` lo enseña: la versión entera no trae ni rastro de la
+rama del real. La rama que sí toca se comprueba entera, como siempre.
+
+`epsilonTipo`, `minimoTipo` y `maximoTipo` son también funciones normales de `numerico`, fuera
+de los núcleos: el mismo valor en la VM y en el núcleo. Los de 64 bits salen como `grande`
+exacto, y dentro de un núcleo no entran. Por eso la función genérica, llamada a mano fuera de un
+núcleo, da lo mismo que el núcleo.
+
+| tipo | `epsilonTipo` | `minimoTipo` | `maximoTipo` |
+|---|---|---|---|
+| real | 2^−52 | −1,797…·10^308 | 1,797…·10^308 |
+| real32 | 2^−23 | −3,402…·10^38 | 3,402…·10^38 |
+| real16 | 2^−10 | −65504 | 65504 |
+| entero (i32) | 1 | −2^31 | 2^31 − 1 |
+| i8 · u8 · i16 · u16 · u32 | 1 | −128 · 0 · −32768 · 0 · 0 | 127 · 255 · 32767 · 65535 · 2^32 − 1 |
+| i64 · u64 | 1 | −2^63 · 0 | 2^63 − 1 · 2^64 − 1 (grande) |
+
+### Qué se probó (`pruebas/exp-plantillas.js`, 15 pruebas, en `todas.js`)
+
+- Un núcleo genérico con tres ramas por tipo, lanzado con real, entero, u8 y real32. Jit, nativo
+  y GPU (simulada) dan **lo mismo, al bit**, y la VM, llamando a la función a mano, da lo mismo
+  que el núcleo.
+- `codigoC` de la versión entera: solo la rama del entero.
+- Los 8 errores al lanzar, con su mensaje: dos arreglos de tipos distintos en la misma T, un real
+  en una T entera, `arreglo<real32>` con un real o con un número, `a: T, b: T` con un arreglo real y uno u8, T
+  arreglo y T número a la vez,
+  `tipoArreglo` fuera de una comparación, y que la rama que sí toca tiene que valer.
+- Plantillas en `paraleloBloques` (con memoria compartida y barrera) y en `hilos`: jit = nativo =
+  GPU.
+
+### Qué cambió
+
+- `src/01-front.js`: `arreglo<T>` y `arreglo<real32>` en las anotaciones; `tipoATexto` los
+  escribe.
+- `src/02-check-compile.js`: un valor de tipo `T` vale lo que valga dentro del genérico.
+- `src/11-edsl-numerico.js`: `epsilonTipo`, `minimoTipo`, `maximoTipo` y la tabla `LIMITES_TIPO`.
+- `src/14-c1en.js`: la unión de las T al lanzar (`plantilla`), las constantes del núcleo, el `si`
+  con la rama fija en el análisis y en los tres emisores, y un número que llega a un
+  parámetro `arreglo` ya es un error claro (antes se colaba hasta el análisis).
+- Pendiente: plantillas en los **núcleos de biblioteca** escritos en C (`vm.c1en.kernel`, los de
+  NEÑ: un `nen_gemm<T>` en vez de `nen_dgemm` y `nen_sgemm` por separado), y variables locales
+  del tipo de un arreglo (hoy se calcula en double y se redondea al guardar, que es la regla de
+  N4.2).
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -1665,7 +1759,7 @@ ellas.
 | N4.6 | **ser la lengua franca**: `n-compilar --biblioteca` → `.so`/`.dll`/`.dylib` + `.h` + `.py`, ABI de C con asas para lo que no es escalar, errores como errno, varias bibliotecas por proceso; probado desde C, C++, Python, Rust y Go | AOT, util | **hecha** (por confirmar en Windows) |
 | N4.7 | **hilos y memoria compartida con control fino**: `hilos(n, f)` con barreras, candados, esperas y atómicos (jit con interbloqueos cazados = nativo con hilos del sistema); atómicos en `paralelo` hasta la GPU; la biblioteca de N4.6 desde varios hilos | C1EÑ, AOT | **hecha** (por confirmar en Windows) |
 | N4.8 | **varias GPU desde un solo programa**: `paraleloRepartido` (igual a `paralelo` al bit, con bajada por tramos o mezcla de cambios), `colaGpu(k)`, `enGpu(k, f)`, `numeroGpus()`, copias de GPU a GPU con `cuMemcpyPeer`; simulador con memoria por GPU y estricto | C1EÑ, puente CUDA, simulador | **hecha** (por medir en las dos T4) |
-| N4.9 | plantillas (genéricos) en los núcleos | C1EÑ, verificador | pendiente |
+| N4.9 | **plantillas en los núcleos**: `fn f<T>(i, a: arreglo<T>, k: T)` y `arreglo<real32>` comprobados al lanzar; `tipoArreglo`, `epsilonTipo`, `minimoTipo`, `maximoTipo` como constantes del núcleo; un `si` constante solo compila la rama que toca | C1EÑ, parser, verificador, numerico | **hecha** |
 | N4.10 | interoperabilidad directa (C y C++ sin capa) | AOT, FFI | pendiente |
 | N4.11 | quitar la seguridad donde uno quiere (zonas sin comprobaciones) | AOT, verificador | pendiente |
 
