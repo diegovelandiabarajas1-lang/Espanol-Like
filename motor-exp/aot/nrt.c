@@ -1375,3 +1375,4 @@ void n_iniciar(int argc, char** argv) {
 }
 
 #include "nrt_biblioteca.inc"    /* (motor-exp N4.6) Ñ como biblioteca de C */
+#include "nrt_enlace.inc"        /* (motor-exp N4.10) C llamado directamente, sin capa */

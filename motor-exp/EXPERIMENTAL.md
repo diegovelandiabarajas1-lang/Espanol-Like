@@ -1732,6 +1732,117 @@ núcleo, da lo mismo que el núcleo.
   del tipo de un arreglo (hoy se calcula en double y se redondea al guardar, que es la regla de
   N4.2).
 
+## Fase N4.10 · Interoperabilidad directa: C sin capa (21-oct-2026)
+
+Es el lado inverso de N4.6. Allí Ñ se hacía biblioteca de C; aquí Ñ usa bibliotecas de C **sin
+escribir las firmas a mano** y, en el ejecutable, **sin capa** entre medias.
+
+```
+usar cabeceraNativa de "nativo"
+fijo g = cabeceraNativa("./libgeo.so", "geo.h")     # toda la cabecera, de una vez
+imprimir(g.GEO_VERSION, g.GEO_MAX)                  # los #define (también con cuentas) y los enum
+fijo p = {x: 1, y: 2}
+g.geo_mover(p, 10, 20)                              # void geo_mover(GeoPunto *p, double dx, double dy)
+imprimir(p.x, p.y)                                  # 11 22: lo que C escribe se ve en el diccionario
+g.geo_ordenar(v, 4, funcion(a, b) { devolver a - b })   # typedef int (*GeoCmp)(int, int): una retrollamada
+imprimir(g._omitidas)                               # lo que no se pudo, con su porqué
+```
+
+### `cabeceraNativa`: leer un `.h`
+
+`util/cabecera-c.js` es un lector de cabeceras pequeño, sin compilador. Entiende lo que de verdad
+hay en la cabecera de una biblioteca:
+
+- las firmas de las funciones;
+- los `#define` de números y de textos, también con cuentas (`(1 << 4)`, `GEO_MAX - 1`);
+- los `enum`;
+- las estructuras y uniones, también anidadas y con arreglos fijos (`double pesos[3]`);
+- los `typedef` sencillos, los de puntero a función (que se vuelven retrollamadas) y los tipos
+  opacos (`typedef struct X X;`);
+- y el ruido de siempre: comentarios, `extern "C"`, los `#include`, `__attribute__((…))`,
+  `__declspec(…)` y las macros de exportación (`#define GEO_API …`).
+
+**No es un preprocesador:** no sigue los `#include` (los tipos de `<stdint.h>` se conocen por su
+nombre) y lee las dos ramas de un `#if`. Lo que no entiende no lo inventa: va a `_omitidas` con
+el porqué:
+
+- una variádica (`printf`);
+- una variable global;
+- una `inline` con el cuerpo en la cabecera;
+- una función que la cabecera declara y la biblioteca no trae.
+
+En la VM todo va por koffi, como S1:
+
+- las estructuras por valor van y vuelven como diccionarios;
+- un puntero a estructura que no es `const` **entra y sale**, y lo que C escribe se ve en el
+  **mismo** diccionario que se pasó, como en C;
+- un arreglo de Ñ va a un `int32_t *` sin copiar;
+- un tipo opaco es un `puntero` que se guarda y vuelve a C;
+- un `typedef` de puntero a función acepta una función de Ñ.
+
+### El ejecutable: C llamado directamente
+
+En el ejecutable de `n-compilar`, `nativa("libm.so.6", "double cos(double)")` y
+`cabeceraNativa("./libgeo.so", "geo.h")` **se leen al compilar**, si los dos textos están escritos
+en la llamada:
+
+- cada función lleva un envoltorio de C que convierte los valores de Ñ y llama al símbolo de
+  verdad. Se declara con su nombre de enlace (`__asm__`), así no choca con lo que ya declara
+  `<math.h>`;
+- la biblioteca va al **enlazador**. Un archivo junto al programa va tal cual, con su carpeta en
+  el `rpath`. Un nombre del sistema va como `-l`. `--enlazar` añade otro `.o`, `.a` o `-lalgo`;
+- no hay koffi, ni `dlopen`, ni tabla de firmas al correr. `ldd` ve la biblioteca. Un millón de
+  llamadas a `pow` tardan **0,10 s en el ejecutable y 1,09 s en la VM**;
+- las conversiones son las de la VM (koffi): un número a un entero de C se trunca y envuelve
+  como un molde, un bool solo va a un bool, un texto va a un `char *` en UTF-8, y un entero de
+  64 bits que vuelve y no cabe en 2^53 es un error con las mismas palabras;
+- en Linux y macOS los símbolos son **débiles**: una función que la cabecera declara y la
+  biblioteca no trae vale NULL, y el ejecutable la pone en `_omitidas` igual que la VM. En
+  Windows no hay enlace débil, así que eso se dice al enlazar, con el nombre de la función.
+
+Lo que el ejecutable **todavía no** sabe pasar son los punteros, las estructuras y las
+retrollamadas. Con `cabeceraNativa`, la función está en el diccionario y al llamarla dice
+«en el ejecutable nativo todavía no: pasa un puntero (const GeoCaja *)». En `nativa(…)` se dice
+al compilar. En la VM sí se puede todo.
+
+### Ñ → C → Ñ
+
+Una biblioteca de `n-compilar --biblioteca` (N4.6) se lee desde otro programa de Ñ con su propio
+`.h`: `cabeceraNativa("./libmates.so", "mates.h")`. Los números, los textos y el error de Ñ como
+errno (`mates_error()`) salen igual en la VM y en el ejecutable.
+
+### Qué se probó (`pruebas/exp-interop.js`, 25 pruebas, en `todas.js`)
+
+- El lector, sin compilar nada: 15 funciones con su firma limpia, los `#define` con cuentas y de
+  texto, los enum, las estructuras anidadas con arreglos, el opaco, el puntero a función y las
+  tres omitidas.
+- La VM con `libgeo.so` (`pruebas/interop/geo.h` y `geo.c`, una cabecera con todo lo de arriba):
+  estructuras por valor, por puntero (en el sitio) y anidadas, un arreglo de Ñ a `int32_t *`, el
+  opaco, la retrollamada, `struct GeoPar`, un `uint8_t` que envuelve, y lo omitido.
+- El ejecutable: enlaza, `ldd` ve la biblioteca, y la salida es **la misma que la VM, letra por
+  letra**: constantes, enteros que envuelven, textos, `libm` y `libc`, mil llamadas, lo omitido y
+  el error de 64 bits.
+- Lo que el ejecutable todavía no sabe: los tres mensajes al llamar; `nativa` con un puntero se
+  rechaza al compilar; una firma que no está escrita en la llamada da un error claro al correr.
+- Ñ → C → Ñ, en el ejecutable y en la VM.
+- Para Windows, con mingw: `win.exe` importa `geo_hipotenusa` de `geo.dll` y `cos` de
+  `msvcrt.dll`, y una función que la DLL no trae se dice al enlazar, con su nombre.
+
+### Qué cambió
+
+- `util/cabecera-c.js` (nuevo): el lector de cabeceras.
+- `util/nativo-koffi.js`: `cabecera(biblioteca, ruta)` registra los tipos y declara las funciones.
+- `src/04-stdlib.js`: `cabeceraNativa` en el eDSL `"nativo"`, y los punteros a estructura que
+  entran y salen escriben en el diccionario que se pasó.
+- `aot/compilador.js`: busca las llamadas, lee las firmas y las cabeceras y escribe los
+  envoltorios. `aot/nrt_enlace.inc` (nuevo) trae las conversiones y los diccionarios.
+- `util/n-compilar.js`: lee las cabeceras junto al programa, enlaza las bibliotecas
+  (`--no-as-needed` por los símbolos débiles, `rpath`, `-l`), tiene `--enlazar`, y en Windows
+  nombra la función que falta.
+- Pendiente: en el ejecutable, los punteros a números (cuando el AOT tenga arreglos), las
+  estructuras y las retrollamadas; C++ con nombres decorados (hoy, `extern "C"`); seguir los
+  `#include`.
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -1760,7 +1871,7 @@ núcleo, da lo mismo que el núcleo.
 | N4.7 | **hilos y memoria compartida con control fino**: `hilos(n, f)` con barreras, candados, esperas y atómicos (jit con interbloqueos cazados = nativo con hilos del sistema); atómicos en `paralelo` hasta la GPU; la biblioteca de N4.6 desde varios hilos | C1EÑ, AOT | **hecha** (por confirmar en Windows) |
 | N4.8 | **varias GPU desde un solo programa**: `paraleloRepartido` (igual a `paralelo` al bit, con bajada por tramos o mezcla de cambios), `colaGpu(k)`, `enGpu(k, f)`, `numeroGpus()`, copias de GPU a GPU con `cuMemcpyPeer`; simulador con memoria por GPU y estricto | C1EÑ, puente CUDA, simulador | **hecha** (por medir en las dos T4) |
 | N4.9 | **plantillas en los núcleos**: `fn f<T>(i, a: arreglo<T>, k: T)` y `arreglo<real32>` comprobados al lanzar; `tipoArreglo`, `epsilonTipo`, `minimoTipo`, `maximoTipo` como constantes del núcleo; un `si` constante solo compila la rama que toca | C1EÑ, parser, verificador, numerico | **hecha** |
-| N4.10 | interoperabilidad directa (C y C++ sin capa) | AOT, FFI | pendiente |
+| N4.10 | **interoperabilidad directa**: `cabeceraNativa` lee un `.h` entero (funciones, `#define`, enum, estructuras, opacos, retrollamadas); el ejecutable llama a C sin capa (envoltorios al compilar, la biblioteca al enlazador), igual que la VM; Ñ → C → Ñ | AOT, FFI, anfitrión | **hecha** (en el ejecutable faltan punteros, estructuras y retrollamadas) |
 | N4.11 | quitar la seguridad donde uno quiere (zonas sin comprobaciones) | AOT, verificador | pendiente |
 
 Cada fase deja su sección en este archivo: qué se tocó, qué se probó, qué se rompió.

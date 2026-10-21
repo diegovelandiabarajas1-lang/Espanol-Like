@@ -6929,7 +6929,7 @@ function instalarBiblioteca(vm, host) {
       if (d.dir === 'sale') { const c = [null]; crudos[j] = c; cajas.push({ c, d }); continue; }
       const v = aNativo(args[k], d, ctx, quien, k + 1);
       k++;
-      if (d.dir === 'entra y sale') { const c = [v]; crudos[j] = c; cajas.push({ c, d }); }
+      if (d.dir === 'entra y sale') { const c = [v]; crudos[j] = c; cajas.push({ c, d, orig: args[k - 1] }); }
       else crudos[j] = v;
     }
     return { ctx, crudos, cajas };
@@ -6937,6 +6937,18 @@ function instalarBiblioteca(vm, host) {
   // Y lo que vuelve: el resultado y, detrás, lo que dejaron los de salida.
   // Uno solo va tal cual; varios, en una lista: «fijo [q, r] = dividir(17, 5)».
   function terminarNativa(llamar, r, cajas, quien) {
+    // (motor-exp N4.10) las de una cabecera: un puntero a estructura que entra y
+    // sale escribe en el MISMO diccionario de Ñ que se pasó (como en C)
+    if (cajas && cajas.length && llamar.enSitio) {
+      const quedan = [];
+      for (const cj of cajas) {
+        if (cj.orig instanceof ObjDic && cj.c[0] && typeof cj.c[0] === 'object') {
+          const nuevo = deCrudo(cj.c[0], quien);
+          for (const [k, v] of nuevo.mapa) cj.orig.mapa.set(k, v);
+        } else quedan.push(cj);
+      }
+      cajas = quedan;
+    }
     if (!cajas || !cajas.length) return deNativo(r, llamar.resultado, quien);
     const vals = [];
     if (!llamar.resultado || llamar.resultado.clase !== 'nulo') vals.push(deNativo(r, llamar.resultado, quien));
@@ -7013,6 +7025,28 @@ function instalarBiblioteca(vm, host) {
   // memoria, leerMemoria de "nativo". No son globales para no quitarle nombres a nadie.
   cuerpoNativo = def => {
     const exigeNat = q => { if (!nat || !nat.tipoC) faltaNat(q); };
+    // (motor-exp N4.10) toda una cabecera de C de una vez: sus funciones, sus
+    // constantes (#define y enum) y sus estructuras, sin escribir ninguna firma
+    def('cabeceraNativa', 'texto, texto -> dic', a => {
+      if (!nat || !nat.cabecera) faltaNat('cabeceraNativa');
+      const bib = txt(a[0], 1, 'cabeceraNativa');
+      const ruta = txt(a[1], 2, 'cabeceraNativa');
+      vm.cobrar(500);
+      const h = conNativo('cabeceraNativa', () => nat.cabecera(bib, ruta));
+      if (nDeclaradas + h.funciones.length > MAX_NATIVAS)
+        vm.error(`«cabeceraNativa»: no se declaran más de ${MAX_NATIVAS} funciones nativas en una ejecución, y «${ruta}» trae ${h.funciones.length}`,
+          'léela una vez y guarda el resultado', false, 'nativo');
+      nDeclaradas += h.funciones.length;
+      const d = D();
+      for (const [n, v] of h.constantes) d.mapa.set(n, v);
+      for (const { nombre, llamar } of h.funciones) {
+        const ar = contarEntradas(llamar);
+        if (ar > MAX_ARGS_NAT) { h.omitidas.push([nombre, `tiene ${ar} argumentos y el máximo es ${MAX_ARGS_NAT}`]); continue; }
+        d.mapa.set(nombre, hacerNativa(llamar, nombre, bib, ar, `${llamar.firmaC} — de ${bib} (${ruta})`));
+      }
+      d.mapa.set('_omitidas', L(h.omitidas.map(([n, por]) => `${n}: ${por}`)));
+      return d;
+    }, 'cabeceraNativa(biblioteca, "geo.h") — lee la cabecera de C y devuelve un diccionario con sus funciones y sus constantes, listas para llamar: m.geo_area(caja); lo que no se pudo, en m._omitidas');
     def('tipoNativo', 'texto -> texto', a => {
       exigeNat('tipoNativo');
       return conNativo('tipoNativo', () => nat.tipoC(txt(a[0], 1, 'tipoNativo')));
