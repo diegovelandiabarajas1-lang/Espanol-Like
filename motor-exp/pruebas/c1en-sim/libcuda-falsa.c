@@ -23,7 +23,32 @@
  *
  * Cuántas GPU finge: C1EN_SIM_GPUS (por defecto 2, como Kaggle).
  */
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <stdio.h>
+/* mingw no trae dlfcn.h: en Windows el nucleo simulado es una DLL */
+#define dlopen(ruta, modo) ((void*)LoadLibraryA(ruta))
+#define dlsym(so, nombre) ((void*)GetProcAddress((HMODULE)(so), (nombre)))
+#define dlclose(so) FreeLibrary((HMODULE)(so))
+#define RTLD_NOW 0
+#define RTLD_LOCAL 0
+static const char* dlerror(void) { static char m[64]; snprintf(m, sizeof m, "LoadLibrary: error %lu", (unsigned long)GetLastError()); return m; }
+#else
 #include <dlfcn.h>
+#endif
+#if defined(_WIN32)
+/* msvcrt copia el entorno al arrancar: lo que node pone después con process.env.X (así
+   lo hace c1en.js) getenv() no lo ve, GetEnvironmentVariableA sí. */
+static const char* sim_getenv(const char* nombre) {
+  static char valores[8][1024]; static int k = 0;
+  char* v = valores[k = (k + 1) % 8];
+  DWORD n = GetEnvironmentVariableA(nombre, v, sizeof valores[0]);
+  return (n && n < sizeof valores[0]) ? v : NULL;
+}
+#else
+#define sim_getenv getenv
+#endif
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,8 +105,8 @@ static int gpu_de_dentro(uintptr_t p) {
 }
 static int ajena(uintptr_t p) { int g = gpu_de_dentro(p); return g >= 0 && g != ctx_actual; }
 
-static int num_gpus(void) { const char* s = getenv("C1EN_SIM_GPUS"); return s ? atoi(s) : 2; }
-static int perezoso(void) { const char* s = getenv("C1EN_SIM_PEREZOSO"); return s && *s && *s != '0'; }
+static int num_gpus(void) { const char* s = sim_getenv("C1EN_SIM_GPUS"); return s ? atoi(s) : 2; }
+static int perezoso(void) { const char* s = sim_getenv("C1EN_SIM_PEREZOSO"); return s && *s && *s != '0'; }
 static double ahora_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
 
 /* ── colas, operaciones y eventos ─────────────────────────────────────────── */
@@ -210,7 +235,7 @@ CUresult cuMemcpyPeer(CUdeviceptr dst, void* dctx, CUdeviceptr src, void* sctx, 
   return 0;
 }
 CUresult cuDeviceCanAccessPeer(int* puede, CUdevice a, CUdevice b) {
-  const char* s = getenv("C1EN_SIM_PEER");
+  const char* s = sim_getenv("C1EN_SIM_PEER");
   *puede = a != b && (!s || *s != '0');
   return 0;
 }
@@ -348,7 +373,7 @@ long long c1en_sim_copias_peer(void) { return copias_peer; }
 /* (motor-exp N4.8) con C1EN_SIM_INFORME=1, al salir: cuántos núcleos corrió cada
    GPU y cuántas copias hubo entre GPUs (para ver que el trabajo se repartió) */
 __attribute__((destructor)) static void informe_al_salir(void) {
-  const char* s = getenv("C1EN_SIM_INFORME");
+  const char* s = sim_getenv("C1EN_SIM_INFORME");
   if (!s || !*s || *s == '0') return;
   fprintf(stderr, "[c1en sim] por GPU:");
   for (int g = 0; g < num_gpus() && g < 16; g++) fprintf(stderr, " %lld", lanzamientos_gpu[g]);

@@ -113,7 +113,9 @@ const exportadas = archivo => {
     if (!hay('objdump', '--version')) return null;
     const od = correr('objdump', ['-p', archivo]);
     const tabla = (od.out.split('[Ordinal/Name Pointer] Table')[1] || '').split(/\n\s*\n/)[0];
-    return { nombres: [...tabla.matchAll(/\]\s+(\S+)/g)].map(m => m[1]), dlls: [...od.out.matchAll(/DLL Name: (\S+)/g)].map(m => m[1]) };
+    // cada fila es «[   0] +base[   1]  0000 nombre»: el nombre es la última palabra
+    const nombres = tabla.split('\n').map(l => l.trim()).filter(l => /^\[\s*\d+\]/.test(l)).map(l => l.split(/\s+/).pop());
+    return { nombres, dlls: [...od.out.matchAll(/DLL Name: (\S+)/g)].map(m => m[1]) };
   }
   if (MAC || !hay('nm', '--version')) return null;
   const nm = correr('nm', ['-D', '--defined-only', archivo]);
@@ -343,13 +345,16 @@ mates.avisar('desde Python')
 print(mates.cuantas())
 `);
   const r = correr(PY, [path.join(tmp, 'uso.py')], { env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }) });
-  const P = r.out.split('\n');
+  // Por contenido, no por posición: en Windows la DLL (msvcrt) y Python (ucrt) tienen cada uno su stdout,
+  // y al salir el orden entre lo que imprime la biblioteca y lo que imprime Python no está definido.
+  const P = r.out.split('\n').map(l => l.trim());
+  const tiene = l => P.includes(l);
   comprobar('Python: números, textos, listas y dict de ida y vuelta, y una función de Ñ que se llama desde Python',
-    r.ok && P[1] === '5.0 3628800 ¡Hola, ÑU! True' && P[2] === "[0, 1, 4, 9] {'suma': 6.5, 'n': 3, 'media': 2.1666666666666665}" &&
-      P[3] === '3.5 12.5 FuncionÑ 102.5', r.out + r.err);
+    r.ok && tiene('5.0 3628800 ¡Hola, ÑU! True') && tiene("[0, 1, 4, 9] {'suma': 6.5, 'n': 3, 'media': 2.1666666666666665}") &&
+      tiene('3.5 12.5 FuncionÑ 102.5'), r.out + r.err);
   comprobar('Python: un error de Ñ es una excepción ErrorÑ con el mensaje de la VM',
-    P[4] === 'ErrorÑ: error sin capturar: "no se divide entre cero"' && P[5] === 'ErrorN: la clave "b" no existe en el diccionario' &&
-      /^tipos: /.test(P[6] || ''), P.slice(4, 7).join('\n'));
+    tiene('ErrorÑ: error sin capturar: "no se divide entre cero"') && tiene('ErrorN: la clave "b" no existe en el diccionario') &&
+      P.some(l => /^tipos: /.test(l)), P.filter(l => /^(ErrorÑ|ErrorN|tipos):/.test(l)).join('\n'));
 } else saltar('sin Python');
 
 // ── Rust y Go ───────────────────────────────────────────────────────────────
