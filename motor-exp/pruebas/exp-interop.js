@@ -205,8 +205,12 @@ else {
   escribir('win.esl', aWin(DIRECTO).replace(/"geo\.h"/g, '"geo-win.h"'));
   const c = d.status === 0 ? compilar('win.esl', ['--cc', 'x86_64-w64-mingw32-gcc']) : { ok: false, out: d.stderr };
   const imp = c.ok ? (sh('x86_64-w64-mingw32-objdump', ['-p', path.join(tmp, 'win.exe')]).stdout || '') : '';
-  comprobar('win.exe enlaza e importa geo_hipotenusa de geo.dll y cos de msvcrt.dll',
-    c.ok && /DLL Name: geo\.dll[\s\S]*geo_hipotenusa/.test(imp) && /DLL Name: msvcrt\.dll[\s\S]*\bcos\b/.test(imp), c.out);
+  // cos: con mingw (w64devkit) la libm propia lo mete dentro del .exe y no se importa de msvcrt.dll;
+  // lo que se exige es lo que promete N4.10: importar de geo.dll sin capa. msvcrt.dll sí queda enlazada.
+  const simbolos = c.ok ? (sh('x86_64-w64-mingw32-objdump', ['-t', path.join(tmp, 'win.exe')]).stdout || '') : '';
+  const cosDentro = /\bcos\b/.test(imp) || /\scos$/m.test(simbolos);
+  comprobar('win.exe enlaza e importa geo_hipotenusa de geo.dll, y cos (de msvcrt.dll o de la libm de mingw)',
+    c.ok && /DLL Name: geo\.dll[\s\S]*geo_hipotenusa/.test(imp) && /DLL Name: msvcrt\.dll/.test(imp) && cosDentro, c.out);
   escribir('win2.esl', aWin(DIRECTO));
   const c2 = compilar('win2.esl', ['--cc', 'x86_64-w64-mingw32-gcc']);
   comprobar('con la función que falta: se dice al enlazar, con su nombre', !c2.ok && c2.out.includes('«geo_falta»: lo declara la cabecera'), c2.out);

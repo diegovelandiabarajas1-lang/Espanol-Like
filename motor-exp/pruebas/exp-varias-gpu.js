@@ -44,7 +44,7 @@ else {
   const dirSim = path.join(os.tmpdir(), `c1en-sim-${typeof process.getuid === 'function' ? process.getuid() : 'u'}`);
   fs.mkdirSync(dirSim, { recursive: true });
   const tmpA = path.join(dirSim, `libcuda.${process.pid}.so`), tmpB = path.join(dirSim, `libnvrtc.${process.pid}.so`);
-  const a = spawnSync('gcc', ['-shared', '-fPIC', '-O1', path.join(SIM, 'libcuda-falsa.c'), '-o', tmpA, '-ldl'], { encoding: 'utf8' });
+  const a = spawnSync('gcc', ['-shared', '-fPIC', '-O1', path.join(SIM, 'libcuda-falsa.c'), '-o', tmpA].concat(process.platform === 'win32' ? [] : ['-ldl']), { encoding: 'utf8' });
   const b = spawnSync('gcc', ['-shared', '-fPIC', '-O1', path.join(SIM, 'libnvrtc-falsa.c'), '-o', tmpB], { encoding: 'utf8' });
   if (a.status || b.status) motivoSinGpu = 'no compiló el simulador: ' + a.stderr + b.stderr;
   else {
@@ -210,7 +210,11 @@ for (const [nombre, src] of [['atomicoSumar', ATOMICOS], ['sumarAtomico', SUMAR_
 
 console.log('· colaGpu(k), enGpu(k, f) y copias de GPU a GPU');
 const refDos = correr(DOS_GPU, 'jit');
-comprobar('jit: corre (numeroGpus() = 0, enGpu solo corre la función)', refDos.ok && refDos.out.split('\n')[0] === '0', corto(refDos));
+// numeroGpus() dice cuántas GPU hay aunque no se usen (EXPERIMENTAL.md): 0 sin CUDA, y en una
+// máquina con GPU de verdad (las T4 de Kaggle) las que haya, también en jit
+const gpusEnJit = refDos.out.split('\n')[0];
+comprobar('jit: corre (numeroGpus() dice las GPU que hay, 0 sin CUDA; enGpu solo corre la función)',
+  refDos.ok && /^\d+$/.test(gpusEnJit) && (GPU_REAL ? Number(gpusEnJit) >= 1 : gpusEnJit === '0'), corto(refDos));
 // con las GPU de verdad, esta parte necesita dos
 let cuantas = 2;
 if (envGpu && GPU_REAL) {

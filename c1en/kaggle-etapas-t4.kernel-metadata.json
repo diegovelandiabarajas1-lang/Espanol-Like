@@ -1,0 +1,17 @@
+{
+  "id": "diegovelandiabarajas/etapas-n4-en-las-t4",
+  "title": "Ñ · etapas N4 en las T4",
+  "code_file": "kaggle-etapas-t4.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "dataset_sources": [
+    "diegovelandiabarajas/n-motor-exp"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

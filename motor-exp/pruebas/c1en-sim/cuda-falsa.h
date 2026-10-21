@@ -19,7 +19,13 @@
  * __syncthreads le cede el turno al siguiente; cuando todos llegaron a la
  * barrera, siguen todos. Es la semántica de CUDA, y determinista.
  */
+#if defined(_WIN32)
+/* mingw no trae ucontext: en Windows cada hilo del bloque es una fibra */
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
 #include <ucontext.h>
+#endif
 #include <stdlib.h>
 /* Sin <math.h> ni <string.h>: en C++ arrastran <cmath> y compilar cada núcleo
  * costaba un cuarto de segundo, que con cientos de núcleos en el fuzz se nota.
@@ -44,14 +50,24 @@ static c1en_dim3 blockIdx, threadIdx, blockDim, gridDim;
 #define __shared__ static            /* los bloques corren de uno en uno: una copia basta */
 
 /* ── modo cooperativo (motor-exp N3) ─────────────────────────────────────── */
+#if defined(_WIN32)
+struct c1en_hilo { void* fibra; unsigned t; int vivo; };
+static void* c1en_coop_principal = 0;
+#else
 struct c1en_hilo { ucontext_t ctx; unsigned t; int vivo; char* pila; };
 static ucontext_t c1en_coop_principal;
+#endif
 static c1en_hilo* c1en_coop_h = 0;
 static unsigned c1en_coop_actual = 0;
 static int c1en_coop_activo = 0;
 static void (*c1en_coop_f)(void**) = 0;
 static void** c1en_coop_p = 0;
+#if defined(_WIN32)
+/* una fibra no puede retornar: al acabar vuelve al planificador y se queda ahí */
+static void WINAPI c1en_coop_entrada(void*) { c1en_coop_f(c1en_coop_p); c1en_coop_h[c1en_coop_actual].vivo = 0; for (;;) SwitchToFiber(c1en_coop_principal); }
+#else
 static void c1en_coop_entrada() { c1en_coop_f(c1en_coop_p); c1en_coop_h[c1en_coop_actual].vivo = 0; }
+#endif
 static void c1en_coop_correr(unsigned gx, unsigned bx, void (*f)(void**), void** p);
 
 static inline int atomicAdd(int* p, int v) { int o = *p; *p = (int)((unsigned int)o + (unsigned int)v); return o; }
@@ -74,22 +90,36 @@ static inline double __longlong_as_double(long long x) { double d; __builtin_mem
    (un núcleo sin barreras corre igual hilo a hilo). */
 static inline void __syncthreads() {
   if (!c1en_coop_activo) return;
+#if defined(_WIN32)
+  SwitchToFiber(c1en_coop_principal);
+#else
   unsigned yo = c1en_coop_actual;
   swapcontext(&c1en_coop_h[yo].ctx, &c1en_coop_principal);
+#endif
 }
 static void c1en_coop_correr(unsigned gx, unsigned bx, void (*f)(void**), void** p) {
   const size_t PILA = 128 * 1024;
   gridDim.x = gx; blockDim.x = bx; c1en_coop_f = f; c1en_coop_p = p;
   c1en_hilo* h = (c1en_hilo*)calloc(bx, sizeof(c1en_hilo));
+#if defined(_WIN32)
+  /* el hilo que llama puede ser ya una fibra (el nativo de paraleloBloques convierte el suyo):
+     convertirlo dos veces devuelve NULL y SwitchToFiber(NULL) tumba el proceso sin mensaje */
+  c1en_coop_principal = IsThreadAFiber() ? GetCurrentFiber() : ConvertThreadToFiber(0);
+#else
   for (unsigned t = 0; t < bx; t++) h[t].pila = (char*)malloc(PILA);
+#endif
   c1en_coop_h = h; c1en_coop_activo = 1;
   for (unsigned b = 0; b < gx; b++) {
     blockIdx.x = b;
     for (unsigned t = 0; t < bx; t++) {
+#if defined(_WIN32)
+      h[t].fibra = CreateFiberEx(PILA, PILA, 0, c1en_coop_entrada, 0);
+#else
       getcontext(&h[t].ctx);
       h[t].ctx.uc_stack.ss_sp = h[t].pila; h[t].ctx.uc_stack.ss_size = PILA;
       h[t].ctx.uc_link = &c1en_coop_principal;
       makecontext(&h[t].ctx, (void (*)())c1en_coop_entrada, 0);
+#endif
       h[t].vivo = 1; h[t].t = t;
     }
     unsigned quedan = bx;
@@ -98,11 +128,20 @@ static void c1en_coop_correr(unsigned gx, unsigned bx, void (*f)(void**), void**
       for (unsigned t = 0; t < bx; t++) {
         if (!h[t].vivo) continue;
         c1en_coop_actual = t; threadIdx.x = t;
+#if defined(_WIN32)
+        SwitchToFiber(h[t].fibra);
+#else
         swapcontext(&c1en_coop_principal, &h[t].ctx);
+#endif
         if (h[t].vivo) quedan++;
       }
     }
+#if defined(_WIN32)
+    for (unsigned t = 0; t < bx; t++) DeleteFiber(h[t].fibra);
+#endif
   }
+#if !defined(_WIN32)
   for (unsigned t = 0; t < bx; t++) free(h[t].pila);
+#endif
   free(h); c1en_coop_h = 0; c1en_coop_activo = 0;
 }

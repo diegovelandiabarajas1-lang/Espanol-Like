@@ -630,9 +630,27 @@ NV n_mod(NV a, NV b) {
   if (b.u.n == 0) return n_error("módulo entre cero", NULL);
   return n_num(fmod(fmod(a.u.n, b.u.n) + b.u.n, b.u.n));
 }
-static double pow_js(double a, double b) {   /* Math.pow: (±1)^±∞ y x^NaN dan NaN; lo demás, el pow de V8 */
+/* Math.pow: (±1)^±∞ y x^NaN dan NaN; lo demás depende de la plataforma, porque V8 también:
+   - Linux (y la nube): V8 usa su fdlibm -> fd_pow da los mismos bits (307 programas iguales).
+   - Windows: V8 usa el pow de UCRT, el CRT de Node. Medido con 16.934 pares: Math.pow coincide con
+     el pow de ucrtbase.dll en todos menos 1, y con fd_pow difiere en 1.544 (1 ulp). El ejecutable
+     de mingw enlaza msvcrt, cuyo pow difiere en 5.143: por eso se toma el de ucrtbase.dll (está en
+     todo Windows 10+); si no estuviera, fd_pow. */
+#if defined(_WIN32)
+static double (*n_pow_crt)(double, double) = NULL;
+static int n_pow_buscado = 0;
+#endif
+static double pow_js(double a, double b) {
   if (isnan(b)) return NAN;
   if (isinf(b) && fabs(a) == 1) return NAN;
+#if defined(_WIN32)
+  if (!n_pow_buscado) {
+    HMODULE m = LoadLibraryA("ucrtbase.dll");
+    if (m) n_pow_crt = (double (*)(double, double))(void*)GetProcAddress(m, "pow");
+    n_pow_buscado = 1;
+  }
+  if (n_pow_crt) return n_pow_crt(a, b);
+#endif
   return fd_pow(a, b);
 }
 NV n_pot(NV a, NV b) { if (a.t == N_NUM && b.t == N_NUM) return n_num(pow_js(a.u.n, b.u.n)); return otro_op(a, b, "**"); }
@@ -1368,6 +1386,10 @@ void n_iniciar(int argc, char** argv) {
   n_faltante = n_nativa_nueva(" faltante", 0, nat_faltante, NULL);
 #if defined(_WIN32)
   SetConsoleOutputCP(CP_UTF8);
+  /* en modo texto, Windows escribe CR LF por cada LF: en binario el ejecutable
+     escribe lo mismo que la VM, letra por letra (es lo que compara exp-aot) */
+  _setmode(_fileno(stdout), _O_BINARY);
+  _setmode(_fileno(stderr), _O_BINARY);
 #endif
   static char bufsal[1 << 16];
   setvbuf(stdout, bufsal, _IOFBF, sizeof bufsal);
