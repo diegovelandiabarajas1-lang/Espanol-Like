@@ -385,6 +385,9 @@ if (esBytecode) {
     if (p) r = m.correr(p.fn, [], p.modulos);
   } else r = m.ejecutarBytecode(bytecode);
 } else r = m.ejecutar(fuente, claveRaiz);
+// (motor-exp N4.11) el aviso de «sinComprobar» sale siempre (por la salida de errores):
+// es la ley 7, la puerta de atrás se ve
+for (const w of (r.avisos || [])) if (w.fase === 'seguridad') process.stderr.write('aviso: ' + (w.formato ? w.formato() : w.message) + '\n');
 if (!r.ok) {
   for (const e of r.errores) console.log(e.formato ? e.formato() : e.message);
   process.exit(1);

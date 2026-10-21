@@ -96,6 +96,8 @@ if (!a.ok) {
   for (const e of a.errores) console.log(e.formato ? e.formato() : e.message);
   process.exit(1);
 }
+// (motor-exp N4.11) los avisos de «sinComprobar»: aquí es donde de verdad se quitan
+for (const w of (a.avisos || [])) if (w.fase === 'seguridad') console.log('[aviso] ' + (w.formato ? w.formato() : w.message));
 let res;
 try {
   // (motor-exp N4.10) las cabeceras de cabeceraNativa se leen al compilar: junto al programa, o desde aquí

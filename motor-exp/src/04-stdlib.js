@@ -1736,6 +1736,10 @@ function instalarBiblioteca(vm, host) {
   // Aquí solo se ejecuta: encontrar y compilar el módulo ya pasó al analizar.
   // Y aquí es donde se cumplen las dos reglas de ejecución: una sola vez, y los
   // ciclos no desbordan la pila.
+  // (motor-exp N4.11) las marcas de «sinComprobar { … }»: en la VM no hacen nada,
+  // porque la VM comprueba siempre (es donde se depura). Las miran el ejecutable
+  // de n-compilar y C1EÑ en nativo y en la GPU, que ahí quitan las comprobaciones.
+  vm.definirNativa(' sinComprobar', 'entero -> nulo', () => null);
   vm.definirNativa(' usar', 'cualquiera -> nulo', a => {
     const clave = a[0];
     // Un eDSL nativo se instala al crear el motor, así que cuando el programa

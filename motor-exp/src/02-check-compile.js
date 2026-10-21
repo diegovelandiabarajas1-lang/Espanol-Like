@@ -259,7 +259,12 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
             'añade un «devolver» al final de la función');
         return;
       }
-      case 'Bloque': return bloqueTipos(n, new Ambito(amb));
+      case 'Bloque':
+        // (motor-exp N4.11) la ley 7: la puerta de atrás es explícita, visible y avisada
+        if (n.sinComprobar) avisos.push(new ErrorFuente('seguridad',
+          '«sinComprobar»: aquí, en el ejecutable (n-compilar) y en los núcleos de C1EÑ en nativo y en la GPU, un índice fuera de rango o una división entre cero NO se dicen: el resultado es indefinido',
+          n.linea, n.col, 'la VM y C1EÑ en jit siguen comprobando: pruébalo ahí antes; quita el bloque si algo no cuadra'));
+        return bloqueTipos(n, new Ambito(amb));
       case 'DeclTipo': return;   // ya registrado al empezar
       case 'Producir': expr(n.valor, amb); return;
       case 'Si': {

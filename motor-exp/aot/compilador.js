@@ -201,7 +201,7 @@ function compilarAOT(fnPrincipal, opciones) {
   const faltan = [];
   for (const g of globales.keys()) {
     if (definidos.has(g)) continue;
-    if (g === G_NATIVA || g === G_CABECERA) continue;
+    if (g === G_NATIVA || g === G_CABECERA || g === G_SIN) continue;
     if (NATIVAS_C.has(nombreC(g)) || VALORES_C[g]) continue;
     if (globalesMotor.has(g)) faltan.push(g.includes(SEP) ? `«${g.split(SEP)[1]}» de "${g.split(SEP)[0].slice(2)}"` : `«${g}»`);
   }
@@ -298,9 +298,25 @@ function compilarAOT(fnPrincipal, opciones) {
     const arr = (desde, n) => (n ? `(NV[${n}]){ ${Array.from({ length: n }, (_, q) => r(desde + q)).join(', ')} }` : 'NULL');
     const soltar = (desde, hasta) => { let s = ''; for (let q = desde; q < hasta; q++) if (!prestada(q)) s += `n_dec(${r(q)}); `; return s; };
     let lineaPrevia = -1;
+    // (motor-exp N4.11) dentro de «sinComprobar { … }»: el bytecode trae una marca
+    // al entrar y otra al salir (GET_GLOBAL « sinComprobar», CONST 1|0, CALL 1, POP);
+    // lo que queda entre las dos, en el orden del código, va sin comprobar
+    let sinCom = 0;
+    const marca = k => {
+      const a = ins[k], b = ins[k + 1], c = ins[k + 2], e = ins[k + 3];
+      return a && b && c && e && a.op === OP.GET_GLOBAL && consts[a.arg] === G_SIN && b.op === OP.CONST &&
+        typeof consts[b.arg] === 'number' && c.op === OP.CALL && c.arg === 1 && e.op === OP.POP ? consts[b.arg] : null;
+    };
     for (let k = 0; k < ins.length; k++) {
       const it = ins[k], st = est[k];
       if (!st) continue;   // código al que no se llega (detrás de un «devolver»)
+      const mk = marca(k);
+      if (mk !== null) {
+        for (let q = k; q < k + 4; q++) if (destinos.has(ins[q].pos)) { cuerpo.push(`P${ins[q].pos}:;`); lineaPrevia = -1; }
+        sinCom = Math.max(0, sinCom + (mk === 1 ? 1 : -1));
+        k += 3;
+        continue;
+      }
       const d = st.d;
       if (destinos.has(it.pos)) { cuerpo.push(`P${it.pos}:;`); lineaPrevia = -1; }
       if (it.linea !== lineaPrevia) { C(`M_->linea = ${it.linea};`); lineaPrevia = it.linea; }
@@ -346,9 +362,15 @@ function compilarAOT(fnPrincipal, opciones) {
         case OP.GET_UP: C(`${r(d)} = n_inc(*yo->up[${it.arg}]->p);`); break;
         case OP.SET_UP: C(`n_asignar(yo->up[${it.arg}]->p, ${r(d - 1)});`); break;
         case OP.ADD: case OP.SUB: case OP.MUL: case OP.DIV: case OP.IDIV: case OP.MOD: case OP.POW: {
-          const [fnc, rap] = BINARIOS[it.op];
+          const [fnc, rap0] = BINARIOS[it.op];
           const a = r(d - 2), b = r(d - 1);
-          if (rap) C(`if (${a}.t == N_NUM && ${b}.t == N_NUM) ${a}.u.n = ${a}.u.n ${rap} ${b}.u.n; else {`);
+          // (motor-exp N4.11) sin comprobar: dividir entre cero ya no es un error
+          // (da lo que dé la cuenta: infinito o NaN, como en C)
+          const rap = rap0 || (sinCom && it.op === OP.DIV ? '/' : null);
+          if (sinCom && (it.op === OP.IDIV || it.op === OP.MOD)) {
+            const cuenta = it.op === OP.IDIV ? `floor(${a}.u.n / ${b}.u.n)` : `fmod(fmod(${a}.u.n, ${b}.u.n) + ${b}.u.n, ${b}.u.n)`;
+            C(`if (${a}.t == N_NUM && ${b}.t == N_NUM) ${a}.u.n = ${cuenta}; else {`);
+          } else if (rap) C(`if (${a}.t == N_NUM && ${b}.t == N_NUM) ${a}.u.n = ${a}.u.n ${rap} ${b}.u.n; else {`);
           else C('{');
           C(`  NV t_ = ${fnc}(${a}, ${b}); if (N_FALLO(t_)) ${falla()}`);
           C(`  n_dec(${a}); n_dec(${b}); ${a} = t_; }`);
@@ -408,11 +430,14 @@ function compilarAOT(fnPrincipal, opciones) {
         }
         case OP.IDX_GET: {
           const o = r(d - 2), i = r(d - 1);
+          // (motor-exp N4.11) sin comprobar: una lista con un número va directa a su casilla
+          if (sinCom) C(`if (${o}.t == N_OBJ && ${o}.u.o->clase == NC_LISTA && ${i}.t == N_NUM) { NLista* l_ = (NLista*)${o}.u.o; NV t_ = n_inc(l_->v[(int64_t)(${i}.u.n < 0 ? (double)l_->n + ${i}.u.n : ${i}.u.n)]); n_dec(${o}); ${o} = t_; } else`);
           C(`{ NV t_ = n_idx_get(${o}, ${i}); if (N_FALLO(t_)) ${falla()} n_dec(${o}); n_dec(${i}); ${o} = t_; }`);
           break;
         }
         case OP.IDX_SET: {
           const o = r(d - 3), i = r(d - 2), v = r(d - 1);
+          if (sinCom) C(`if (${o}.t == N_OBJ && ${o}.u.o->clase == NC_LISTA && ${i}.t == N_NUM) { NLista* l_ = (NLista*)${o}.u.o; double k_ = ${i}.u.n < 0 ? (double)l_->n + ${i}.u.n : ${i}.u.n; if (k_ == trunc(k_)) n_asignar(&l_->v[(int64_t)k_], ${v}); n_dec(${o}); ${o} = ${v}; } else`);
           C(`{ NV t_ = n_idx_set(${o}, ${i}, ${v}); if (N_FALLO(t_)) ${falla()} n_dec(${o}); n_dec(${i}); ${o} = ${v}; }`);
           break;
         }
@@ -863,6 +888,7 @@ def iniciar():
 // choca con lo que ya declaran <math.h> y compañía), y n-compilar le pasa la
 // biblioteca al enlazador. Ver aot/nrt_enlace.inc.
 const G_NATIVA = 'nativa', G_CABECERA = 'ñ:nativo' + SEP + 'cabeceraNativa';
+const G_SIN = ' sinComprobar';    // (motor-exp N4.11) las marcas de «sinComprobar { … }»
 // Los tipos de C que el ejecutable sabe pasar: [clase, tipo de C para declarar]
 const TIPOS_ENLACE = {
   double: ['real', 'double'], float: ['real', 'float'], 'long double': null,

@@ -1843,6 +1843,83 @@ errno (`mates_error()`) salen igual en la VM y en el ejecutable.
   estructuras y las retrollamadas; C++ con nombres decorados (hoy, `extern "C"`); seguir los
   `#include`.
 
+## Fase N4.11 · Quitar la seguridad donde uno quiere: `sinComprobar { … }` (21-oct-2026)
+
+Ñ comprueba todo: cada índice, cada división y cada raíz dicen su fallo con su línea. Eso
+cuesta poco, pero no cero, y en un núcleo que lee millones de veces se nota. La ley 7 pide que
+la puerta de atrás tenga **nombre propio**: explícita, visible y nunca por defecto. Es esta:
+
+```
+fn vecinos(i, a, b, n) {
+  sinComprobar {
+    var s = 0
+    para k en rango(-2, 3) { s = s + a[(i + k + n) % n] }
+    b[i] = s / 5
+  }
+}
+```
+
+- **Explícita.** Es un bloque que se escribe a propósito. `sinComprobar` **no es palabra
+  reservada**: solo cuenta un nombre suelto seguido de `{`, y `var sinComprobar = 2` sigue
+  valiendo. Si el programa declara algo con ese nombre, el bloque no existe (como `producir`).
+- **Visible.** El verificador da un aviso con la línea:
+  `[seguridad] línea 6:1 — «sinComprobar»: aquí … un índice fuera de rango o una división entre
+  cero NO se dicen`. `n-node` lo escribe siempre por la salida de errores y `n-compilar` lo
+  escribe al compilar.
+- **Nunca por defecto,** y no en todas partes. Dentro del bloque:
+
+| dónde | qué pasa |
+|---|---|
+| la VM | **sigue comprobando**: es donde se depura |
+| C1EÑ en jit | **sigue comprobando**, por lo mismo |
+| C1EÑ en nativo y en la GPU | no comprueba índices, divisiones y módulos entre cero, `raiz`/`log` de negativos, `piso` fuera de 2^53, los bits ni el paso de `rango`: el compilador de C (o NVRTC) recibe `__builtin_unreachable()` y **borra la comprobación entera**. Se quedan las barreras, las esperas y el tope de vueltas, porque sin ellas un fallo es un cuelgue |
+| el ejecutable de `n-compilar` | una lista con un número va **directa a su casilla** (sin mirar el rango), y `/`, `//` y `%` no miran el cero (`1 / 0` da infinito, como en C) |
+
+**Un programa correcto da lo mismo con el bloque y sin él, en todos los sitios, al bit.** Uno que
+se sale de un arreglo, dentro del bloque, hace lo que haga C: basura, o un fallo de segmentación
+(se vio al probar, en nativo). Para eso está la VM: se prueba ahí primero.
+
+### Cómo va por dentro
+
+El parser escribe el bloque como un bloque normal con **dos marcas**, llamadas a la nativa
+interna `« sinComprobar»` (con 1 al entrar y con 0 al salir). Así nada de lo que recorre el
+árbol o el bytecode necesita saber nada nuevo: ni un opcode nuevo, ni un nodo nuevo, y el `.elb`
+lo lleva tal cual. En la VM la nativa no hace nada. Quien quita las comprobaciones mira las marcas:
+
+- **C1EÑ**: el análisis lleva la cuenta de en cuántos bloques está, y cada sitio de fallo que
+  cae dentro se marca. Al emitir C o CUDA, ese sitio es `__builtin_unreachable()`.
+- **El ejecutable**: lo que está entre las dos marcas, en el orden del bytecode, se emite sin
+  comprobar.
+
+Medido en la nube (nativo, 200.000 hilos que leen 64 enteros seguidos cada uno, 5 veces): unos
+**37 ms comprobando y 26 ms con `sinComprobar`**.
+
+### Qué se probó (`pruebas/exp-sin-comprobar.js`, 14 pruebas, en `todas.js`)
+
+- El aviso con su línea; `var sinComprobar = 2` sigue valiendo, sin aviso; y dentro del bloque
+  la VM sigue diciendo el índice fuera y la división entre cero.
+- Un núcleo con vecinos, `raiz`, `//` y `%` dentro del bloque y el mismo fuera. Jit, nativo y GPU
+  (simulada) dan **lo mismo al bit**, y el núcleo con el bloque da lo mismo que el núcleo sin él.
+- `codigoC` y `codigoCuda`: dentro, `__builtin_unreachable`; fuera, `c1en_falla`.
+- Jit sigue diciendo el índice fuera. En nativo, un interbloqueo dentro del bloque se sigue
+  cazando.
+- El ejecutable: avisa al compilar, da lo mismo que la VM letra por letra con mil índices de una
+  lista (también negativos) y divisiones, y el C va directo a la casilla. Dentro del bloque
+  `1 / 0` da infinito; fuera, sigue siendo «división entre cero».
+
+### Qué cambió
+
+- `src/01-front.js`: el bloque `sinComprobar { … }`, con sus dos marcas.
+- `src/02-check-compile.js`: el aviso (fase `seguridad`).
+- `src/04-stdlib.js`: la nativa `« sinComprobar»`, que en la VM no hace nada.
+- `src/14-c1en.js`: los sitios de dentro del bloque (`C1EN_QUITABLES`) se emiten como
+  `__builtin_unreachable()` en C y CUDA.
+- `aot/compilador.js`: índices de lista y divisiones sin comprobar entre las marcas.
+- `util/n-node.js` y `util/n-compilar.js`: escriben el aviso.
+- Pendiente: en el ejecutable, los tipos (hoy un `+` mira si los dos son números, porque con
+  textos concatena, y quitarlo cambiaría lo que hace un programa correcto); y quitar
+  comprobaciones también en los núcleos de biblioteca de NEÑ.
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -1872,6 +1949,6 @@ errno (`mates_error()`) salen igual en la VM y en el ejecutable.
 | N4.8 | **varias GPU desde un solo programa**: `paraleloRepartido` (igual a `paralelo` al bit, con bajada por tramos o mezcla de cambios), `colaGpu(k)`, `enGpu(k, f)`, `numeroGpus()`, copias de GPU a GPU con `cuMemcpyPeer`; simulador con memoria por GPU y estricto | C1EÑ, puente CUDA, simulador | **hecha** (por medir en las dos T4) |
 | N4.9 | **plantillas en los núcleos**: `fn f<T>(i, a: arreglo<T>, k: T)` y `arreglo<real32>` comprobados al lanzar; `tipoArreglo`, `epsilonTipo`, `minimoTipo`, `maximoTipo` como constantes del núcleo; un `si` constante solo compila la rama que toca | C1EÑ, parser, verificador, numerico | **hecha** |
 | N4.10 | **interoperabilidad directa**: `cabeceraNativa` lee un `.h` entero (funciones, `#define`, enum, estructuras, opacos, retrollamadas); el ejecutable llama a C sin capa (envoltorios al compilar, la biblioteca al enlazador), igual que la VM; Ñ → C → Ñ | AOT, FFI, anfitrión | **hecha** (en el ejecutable faltan punteros, estructuras y retrollamadas) |
-| N4.11 | quitar la seguridad donde uno quiere (zonas sin comprobaciones) | AOT, verificador | pendiente |
+| N4.11 | **quitar la seguridad donde uno quiere**: `sinComprobar { … }`, avisado; la VM y jit siguen comprobando; C1EÑ en nativo y GPU (`__builtin_unreachable`) y el ejecutable no; las esperas y barreras se quedan | parser, verificador, C1EÑ, AOT | **hecha** |
 
 Cada fase deja su sección en este archivo: qué se tocó, qué se probó, qué se rompió.
