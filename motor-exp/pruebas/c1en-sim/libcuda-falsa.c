@@ -28,7 +28,14 @@
 #include <windows.h>
 #include <stdio.h>
 /* mingw no trae dlfcn.h: en Windows el nucleo simulado es una DLL */
-#define dlopen(ruta, modo) ((void*)LoadLibraryA(ruta))
+/* Una DLL recién escrita puede no cargar al primer intento (el antivirus la está mirando):
+   se reintenta medio segundo antes de darla por mala. */
+static void* sim_dlopen(const char* ruta) {
+  void* h = NULL;
+  for (int k = 0; k < 10 && !(h = (void*)LoadLibraryA(ruta)); k++) Sleep(50);
+  return h;
+}
+#define dlopen(ruta, modo) sim_dlopen(ruta)
 #define dlsym(so, nombre) ((void*)GetProcAddress((HMODULE)(so), (nombre)))
 #define dlclose(so) FreeLibrary((HMODULE)(so))
 #define RTLD_NOW 0
