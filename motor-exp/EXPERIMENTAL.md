@@ -2002,6 +2002,50 @@ En un **Chromium de verdad** (Playwright), con las páginas servidas por HTTP:
   `MutationObserver`), y el número de línea del HTML en los errores de una etiqueta con el
   código dentro.
 
+## Fase W2 · Windows: las etapas de Cowork confirmadas en el PC y en las dos T4 (21-oct-2026)
+
+N4.6 → N4.11 y P6 se hicieron en la nube (Linux) y llegaron como parches. Diego pidió comprobar en su
+PC (Windows, sin GPU, gcc 16.2 de w64devkit) y en Kaggle (2× T4) todo lo que el diagrama de etapas
+tenía «por confirmar»: W1, N2, N3, N4.2, N4.3, N4.4, N4.6, N4.7, N4.8 y N4.10. Esta fase es lo que
+hizo falta tocar para que la batería corriera entera en Windows, y lo que se midió.
+
+### Lo que no funcionaba en Windows, y por qué
+
+| qué | causa | arreglo |
+|---|---|---|
+| `exp-aot`: 11 de 11 «distintos desde la línea 1» | el `.exe` escribía CR LF (modo texto de la consola); la VM solo LF | `aot/nrt.c`: `_setmode(stdout/stderr, _O_BINARY)` en `n_iniciar` (solo el ejecutable; la biblioteca no toca el stdout del anfitrión) |
+| `exp-aot`: `08-numerico` difería un ulp en `tasaEfectiva` (`pow`) | **V8 no calcula `Math.pow` igual en todas partes**: en Linux usa su fdlibm (lo que trae `nrt_fdlibm.inc`), en Windows el `pow` de UCRT. Medido con 16.934 pares: Math.pow = UCRT en todos menos 1; fd_pow difiere en 1.544; el `pow` de msvcrt (el CRT del `.exe` de mingw) en 5.143 | `pow_js`: en Windows el `pow` de `ucrtbase.dll` (cargado al vuelo); fuera, `fd_pow` como antes |
+| **la GPU simulada no existía en Windows**: `libcuda-falsa.c` no compilaba (`dlfcn.h`) y cada suite saltaba su parte GPU sin decirlo | mingw no trae `dlfcn.h` ni `ucontext.h`, y `system()` de msvcrt **dentro de node.exe devuelve 1 sin ejecutar nada** (ni un `echo`); además msvcrt lee su copia del entorno hecha al arrancar, y lo que `c1en.js` pone después en `process.env` no lo ve | `libcuda-falsa.c`: `LoadLibrary`/`GetProcAddress`; `cuda-falsa.h`: el modo cooperativo con **fibras** (`CreateFiberEx`/`SwitchToFiber`, con `IsThreadAFiber` por si el hilo ya es fibra); `libnvrtc-falsa.c`: g++ por `CreateProcess` con el stderr al archivo, rutas con `\`, carpeta `TEMP`, `GetEnvironmentVariableA`, y `-mfma` (la libm de mingw no garantiza `fma`/`fmaf` exactos: el SGEMM de real32 y el `por` de NEÑ daban otros bits) |
+| los núcleos cacheados no se recompilaban al cambiar la cabecera o las banderas | la huella era solo del fuente | la huella incluye el contenido de `cuda-falsa.h` y las banderas |
+| `-ldl` al compilar el simulador | no existe en mingw | solo fuera de Windows (10 suites) |
+| `exp-lengua-franca`: 3 fallos | `objdump -p` en w64devkit lista `[ 0] +base[ 1] 0000 nombre` (la prueba leía `+base[`); y la DLL (msvcrt) y Python (UCRT) tienen cada uno su stdout: el orden de sus líneas al salir no está definido | el nombre es la última palabra de la fila; las líneas de Python se buscan por contenido |
+| `exp-interop`: «`cos` importado de `msvcrt.dll`» | con mingw `cos` lo mete la libm propia dentro del `.exe` | se exige lo que promete N4.10 (importar de `geo.dll` sin capa) y `cos` dentro o importado |
+| `exp-varias-gpu` en las T4: «jit: numeroGpus() = 0» | con GPU de verdad, en jit también las cuenta (es lo que dice la tabla de N4.8) | la prueba acepta las que haya |
+
+`Device Guard` **no** bloquea los `.exe` ni las DLL de gcc en el PC de Diego (se temía; comprobado).
+
+### Qué se probó
+
+**Windows (el PC, 21-oct):** `pruebas/todas.js` entera, **35 de 36 suites en verde**, 3 saltadas por falta de
+herramientas (Chromium, QuickJS), ~950 s. Falla solo `apps/ecosim5` («la de siempre»). En la primera pasada el fuzz
+de `c1en.js` dio 299 de 300: una DLL recién compilada no cargaba al primer intento (`cuModuleLoadData` →
+`CUDA_ERROR_UNKNOWN`); el simulador reintenta `LoadLibrary` medio segundo y el fuzz de 300 sin caché da 300/300.
+Por primera vez en Windows corren con GPU simulada: C1EÑ 86/0, N2 18/0, N4.2 28/0, N4.3 15/0, N4.4 32/0,
+N4.5 26/0, N4.7 15/0, N4.8 24/0, N4.9 15/0, N4.11 14/0; y N4.1 11/11, N4.6 15/0, N4.10 15/0.
+
+**Kaggle (2× T4, Linux, `c1en/kaggle-etapas-t4.ipynb`, dataset `n-motor-exp`):** **13 de 13**: N2 18/0 (GPU de
+verdad), N3 103 casos 0 fallan, C1EÑ 81/0, N4.2 30/0, N4.3 15/0, N4.4 32/0, N4.5 27/0, N4.7 14/0, **N4.8 16/0 con las
+dos T4**, N4.9 15/0, N4.11 14/0, N4.1 11/11, N4.6 14/0. Tarda 5–8 min de GPU.
+
+### Qué cambió
+
+- `aot/nrt.c`: stdout/stderr en binario en Windows; `pow_js` con el `pow` de UCRT en Windows.
+- `pruebas/c1en-sim/`: `libcuda-falsa.c`, `libnvrtc-falsa.c` y `cuda-falsa.h` portados a Windows (ver la tabla).
+- `pruebas/exp-lengua-franca.js`, `exp-interop.js`, `exp-varias-gpu.js`: las comprobaciones de arriba; 10 suites sin `-ldl`.
+- `c1en/kaggle-etapas-t4.ipynb` (+ `kaggle-etapas-t4.kernel-metadata.json`): el cuaderno que corre las suites de GPU
+  en las T4 desde el dataset; se lanza con `kaggle kernels push`.
+- No se tocó `src/`: los bundles no cambian.
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -2033,5 +2077,6 @@ En un **Chromium de verdad** (Playwright), con las páginas servidas por HTTP:
 | N4.9 | **plantillas en los núcleos**: `fn f<T>(i, a: arreglo<T>, k: T)` y `arreglo<real32>` comprobados al lanzar; `tipoArreglo`, `epsilonTipo`, `minimoTipo`, `maximoTipo` como constantes del núcleo; un `si` constante solo compila la rama que toca | C1EÑ, parser, verificador, numerico | **hecha** |
 | N4.10 | **interoperabilidad directa**: `cabeceraNativa` lee un `.h` entero (funciones, `#define`, enum, estructuras, opacos, retrollamadas); el ejecutable llama a C sin capa (envoltorios al compilar, la biblioteca al enlazador), igual que la VM; Ñ → C → Ñ | AOT, FFI, anfitrión | **hecha** (en el ejecutable faltan punteros, estructuras y retrollamadas) |
 | N4.11 | **quitar la seguridad donde uno quiere**: `sinComprobar { … }`, avisado; la VM y jit siguen comprobando; C1EÑ en nativo y GPU (`__builtin_unreachable`) y el ejecutable no; las esperas y barreras se quedan | parser, verificador, C1EÑ, AOT | **hecha** |
+| W2 | Windows: la GPU simulada corre en el PC (fibras, `LoadLibrary`, g++ por `CreateProcess`, `-mfma`), el `.exe` escribe como la VM (binario, `pow` de UCRT), y las suites de N4.6/N4.10 valen con mingw; todo N4 confirmado en el PC (35/36) y en las dos T4 (13/13) | aot, simulador, pruebas | **hecha** |
 
 Cada fase deja su sección en este archivo: qué se tocó, qué se probó, qué se rompió.
