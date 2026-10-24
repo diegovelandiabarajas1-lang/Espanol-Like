@@ -3,7 +3,7 @@
 Un lenguaje de programación en español. No una capa de traducción encima de
 otro lenguaje: tiene su propio verificador de tipos, su máquina virtual de
 bytecode y un JIT que traduce a JavaScript cuando una función se calienta.
-
+Y en otras Medidas, en su Variante AOT tiene un Gran Rendimiento 
 ```n
 usar media, desviacion, cuartiles de "numerico"
 usar moneda, tablaTexto, enNegrita de "formato"
