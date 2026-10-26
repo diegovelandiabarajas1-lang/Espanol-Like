@@ -1,3 +1,0 @@
-usar doble, SALUDO de "mod/util.esl"
-usar "mod/util.esl" como u
-imprimir(doble(21), SALUDO, u.doble(5))

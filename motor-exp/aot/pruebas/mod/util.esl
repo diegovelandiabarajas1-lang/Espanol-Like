@@ -1,3 +1,0 @@
-publico fn doble(x) { devolver x * 2 }
-publico fijo SALUDO = "hola desde el módulo"
-imprimir("cargando util")
