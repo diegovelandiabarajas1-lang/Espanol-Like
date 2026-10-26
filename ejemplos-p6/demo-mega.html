@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ñ · Mega Demo P6</title>
+  <style>
+    /* ── Shell de la página: JS puro, no le toca a Ñ ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      background: #0f0f1a;
+      color: #f0f0f0;
+      min-height: 100vh;
+    }
+
+    /* Barra superior */
+    #barra {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      background: rgba(15,15,26,.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(159,151,232,.25);
+      display: flex; align-items: center; gap: 4px;
+      padding: 0 20px; height: 54px;
+    }
+    #barra .logo {
+      font-size: 22px; font-weight: 800; color: #9f97e8;
+      letter-spacing: -1px; margin-right: 16px; user-select: none;
+    }
+    #barra button {
+      background: none; border: none; color: #a0a0a0;
+      font-size: 14px; padding: 6px 14px; border-radius: 6px;
+      cursor: pointer; transition: background .15s, color .15s;
+      font-family: inherit;
+    }
+    #barra button:hover   { background: rgba(159,151,232,.15); color: #e0e0e0; }
+    #barra button.activo  { background: rgba(159,151,232,.25); color: #c5c0f5; font-weight: 600; }
+
+    /* Contenido principal */
+    #contenido {
+      margin-top: 54px;
+      padding: 32px 24px;
+      max-width: 900px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* Paneles de cada sección (el <div> raíz de cada script Ñ) */
+    .seccion { display: none; }
+    .seccion.visible { display: block; }
+
+    /* Estilos globales que Ñ pintará dentro de su iframe — aquí ponemos lo
+       que el eDSL "estilo" no declara: el cuerpo DENTRO del iframe de Ñ
+       ya tiene reiniciar() + estiloGlobal("body",...). Lo de fuera es JS. */
+
+    /* Pie */
+    footer {
+      text-align: center; color: #555; font-size: 12px;
+      padding: 32px 16px; border-top: 1px solid #1e1e2e; margin-top: 40px;
+    }
+    footer a { color: #9f97e8; text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    /* Badge de versión */
+    #badge {
+      position: fixed; bottom: 16px; right: 16px;
+      background: rgba(159,151,232,.18); border: 1px solid rgba(159,151,232,.35);
+      color: #9f97e8; font-size: 11px; padding: 4px 10px;
+      border-radius: 999px; user-select: none; z-index: 50;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Barra de navegación (JS) ─────────────────────────────────── -->
+<nav id="barra">
+  <span class="logo">Ñ</span>
+  <button onclick="ir('bienvenida')" id="tab-bienvenida" class="activo">Inicio</button>
+  <button onclick="ir('calculadora')"  id="tab-calculadora">Calculadora</button>
+  <button onclick="ir('tareas')"       id="tab-tareas">Tareas</button>
+  <button onclick="ir('tabla')"        id="tab-tabla">Tabla</button>
+  <button onclick="ir('reloj')"        id="tab-reloj">Cronómetro</button>
+  <button onclick="ir('grafica')"      id="tab-grafica">Gráfica</button>
+</nav>
+
+<main id="contenido">
+
+  <!-- ══════════════════════════════════════════════════════════════
+       SECCIÓN 1: BIENVENIDA
+       Pintada 100 % en Ñ. Muestra el lenguaje, la licencia y links.
+  ═══════════════════════════════════════════════════════════════ -->
+  <div id="seccion-bienvenida" class="seccion visible">
+    <script src="https://cdn.jsdelivr.net/gh/diegovelandiabarajas1-lang/Espanol-Like@c1en/motor/n-web.js"></script>
+    <script type="text/ñ">
+usar estilo, estiloGlobal, reiniciar, tema, color, espacio, radio,
+     enOscuro, enColumna, enFila, separado, centrado, alPasar,
+     transicion, rejillaDe, enPantalla de "estilo"
+usar enNegrita de "formato"
+
+reiniciar()
+estiloGlobal(":root", tema({
+  "color": {
+    "fondo":    "#0f0f1a",
+    "tarjeta":  "#16162a",
+    "borde":    "#2a2a45",
+    "texto":    "#f0f0f0",
+    "suave":    "#a0a0a0",
+    "marca":    "#9f97e8",
+    "acento":   "#c5c0f5"
+  },
+  "espacio": { "corto": "8px", "medio": "16px", "largo": "24px", "enorme": "48px" },
+  "radio": { "medio": "10px", "mucho": "16px" }
+}))
+estiloGlobal("body", {
+  "fondo": color("fondo"), "color": color("texto"),
+  "fuente": "system-ui, sans-serif"
+})
+
+fijo estHero = estilo({
+  "relleno": espacio("enorme") + " " + espacio("largo"),
+  "textAlign": "center"
+}, enColumna(16))
+
+fijo estTitulo = estilo({
+  "tamano": "56px", "peso": "900",
+  "color": color("acento"), "letterSpacing": "-2px"
+})
+
+fijo estSubtitulo = estilo({
+  "tamano": "18px", "color": color("suave"), "maxWidth": "540px", "margen": "0 auto"
+})
+
+fijo estTarjeta = estilo({
+  "fondo": color("tarjeta"), "borde": "1px solid " + color("borde"),
+  "radio": radio("mucho"), "relleno": espacio("largo")
+}, alPasar({ "borde-color": color("marca") }), transicion("borde-color", 200))
+
+fijo estRejilla = estilo(rejillaDe(3, 16), enPantalla(0, 720, rejillaDe(1, 12)))
+
+fijo FUNCIONES: lista = [
+  { "icono": "🧮", "titulo": "Calculadora",   "desc": "Operaciones con historial completo. Lógica 100 % en Ñ." },
+  { "icono": "✅", "titulo": "Tareas",         "desc": "Lista persistente con almacén local. Se guarda al cerrar." },
+  { "icono": "📊", "titulo": "Tabla filtrable","desc": "Filtro y orden viven en el estado, no en el DOM." },
+  { "icono": "⏱", "titulo": "Cronómetro",     "desc": "«cada» y «luego». El id del temporizador importa." },
+  { "icono": "📈", "titulo": "Gráfica",        "desc": "Barras dibujadas en lienzo nativo de Ñ + datos reales." },
+  { "icono": "🌐", "titulo": "P6",             "desc": "Todo esto corre con <script type=\"text/ñ\">. Sin builds." }
+]
+
+var tarjetas: lista = []
+para f en FUNCIONES {
+  tarjetas = tarjetas + [
+    etiqueta("div", { "estilo": estTarjeta },
+      etiqueta("div", { "estilo": estilo({ "tamano": "28px" }) }, f["icono"]),
+      etiqueta("strong", {}, f["titulo"]),
+      etiqueta("p", { "estilo": estilo({ "color": color("suave"), "tamano": "14px", "margenArriba": espacio("corto") }) }, f["desc"])
+    )
+  ]
+}
+
+pintar(
+  etiqueta("div", { "estilo": estHero },
+    etiqueta("div", { "estilo": estTitulo }, "Ñ"),
+    etiqueta("p",   { "estilo": estSubtitulo },
+      "Un lenguaje en español. Verificador de tipos, bytecode, VM, JIT, compilador nativo sin runtime y, desde P6, embebido en cualquier página con un <script>."
+    ),
+    etiqueta("div", { "estilo": estilo({ "tamano": "12px", "color": color("suave") }) },
+      "Apache-2.0 · github.com/diegovelandiabarajas1-lang/Espanol-Like"
+    )
+  ),
+  etiqueta("div", { "estilo": estRejilla }, tarjetas)
+)
+    </script>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       SECCIÓN 2: CALCULADORA
+       Estado y validación en Ñ. Historial, operaciones básicas.
+  ═══════════════════════════════════════════════════════════════ -->
+  <div id="seccion-calculadora" class="seccion">
+    <script type="text/ñ">
+usar estilo, estiloGlobal, reiniciar, tema, color, espacio, radio,
+     enColumna, enFila, separado, alPasar, transicion, rejillaDe de "estilo"
+usar decimales de "formato"
+
+reiniciar()
+estiloGlobal(":root", tema({
+  "color": {
+    "fondo": "#0f0f1a", "tarjeta": "#16162a", "borde": "#2a2a45",
+    "texto": "#f0f0f0", "suave": "#a0a0a0", "marca": "#9f97e8",
+    "tecla": "#1e1e35", "teclaSec": "#2a2a50", "teclaOp": "#4f3fd4",
+    "error": "#c62828"
+  },
+  "espacio": { "corto": "8px", "medio": "16px", "largo": "24px" },
+  "radio": { "medio": "8px", "mucho": "14px" }
+}))
+estiloGlobal("body", { "fondo": color("fondo"), "color": color("texto"), "fuente": "system-ui, sans-serif" })
+
+# ── estado ──────────────────────────────────────────────────────
+var acumulado: texto = "0"
+var operacion: texto = ""
+var anterior: real = 0.0
+var historial: lista = []
+var esperaOperando: bool = cierto
+
+fn mostrarError(msg: texto) {
+  acumulado = msg
+  operacion = ""
+  esperaOperando = cierto
+  repintar()
+}
+
+fn digitoPresionado(d: texto) {
+  si esperaOperando {
+    acumulado = d
+    esperaOperando = falso
+  } sino {
+    si acumulado == "0" { acumulado = d }
+    sino { acumulado = acumulado + d }
+  }
+  repintar()
+}
+
+fn puntoPresionado() {
+  si esperaOperando { acumulado = "0."  esperaOperando = falso  devolver }
+  si indiceDe(acumulado, ".") < 0 { acumulado = acumulado + "." }
+  repintar()
+}
+
+fn operadorPresionado(op: texto) {
+  fijo v: real = real(acumulado)
+  si longitud(operacion) > 0 y no esperaOperando {
+    fijo res: real = calcular(anterior, v, operacion)
+    anterior = res
+    historial = historial + [texto(anterior) + " " + operacion + " " + acumulado + " = " + decimales(res, 6)]
+  } sino {
+    anterior = v
+  }
+  operacion = op
+  esperaOperando = cierto
+  acumulado = decimales(anterior, 6)
+  repintar()
+}
+
+fn calcular(a: real, b: real, op: texto): real {
+  si op == "+" { devolver a + b }
+  si op == "−" { devolver a - b }
+  si op == "×" { devolver a * b }
+  si op == "÷" {
+    si b == 0.0 { mostrarError("÷ 0")  devolver 0.0 }
+    devolver a / b
+  }
+  si op == "^" { devolver a ** b }
+  devolver b
+}
+
+fn igual() {
+  si longitud(operacion) == 0 { devolver }
+  fijo v: real = real(acumulado)
+  fijo res: real = calcular(anterior, v, operacion)
+  historial = historial + [texto(anterior) + " " + operacion + " " + acumulado + " = " + decimales(res, 6)]
+  acumulado = decimales(res, 6)
+  operacion = ""
+  esperaOperando = cierto
+  repintar()
+}
+
+fn limpiar() {
+  acumulado = "0"  operacion = ""  anterior = 0.0
+  esperaOperando = cierto
+  repintar()
+}
+
+fn indiceDe(t: texto, c: texto): entero {
+  para i en rango(longitud(t) - longitud(c) + 1) {
+    si subcadena(t, i, i + longitud(c)) == c { devolver i }
+  }
+  devolver 0 - 1
+}
+
+fn subcadena(t: texto, desde: entero, hasta: entero): texto {
+  var r: texto = ""
+  para i en rango(longitud(t)) {
+    si i >= desde y i < hasta { r = r + caracter(t, i) }
+  }
+  devolver r
+}
+
+# ── estilos ─────────────────────────────────────────────────────
+fijo estPantalla = estilo({
+  "fondo": "#0a0a14", "borde": "1px solid " + color("borde"),
+  "radio": radio("medio"), "relleno": espacio("medio"),
+  "textAlign": "right", "fuente": "ui-monospace, monospace",
+  "tamano": "32px", "color": color("texto"), "minHeight": "60px",
+  "wordBreak": "break-all", "margenAbajo": espacio("corto")
+})
+fijo estOpAct = estilo({
+  "tamano": "12px", "color": color("suave"), "textAlign": "right",
+  "margenAbajo": espacio("corto"), "height": "16px"
+})
+fijo estTecla = estilo(
+  { "relleno": "14px 8px", "radio": radio("medio"), "cursor": "puntero",
+    "fuente": "ui-monospace, monospace", "tamano": "18px",
+    "borde": "1px solid " + color("borde"), "fondo": color("tecla"),
+    "color": color("texto"), "textAlign": "center" },
+  alPasar({ "fondo": "#2a2a50" }), transicion("fondo", 100)
+)
+fijo estTeclaSec = estilo(estTecla, { "fondo": color("teclaSec") })
+fijo estTeclaOp  = estilo(estTecla, { "fondo": color("teclaOp"), "color": "#fff" },
+                          alPasar({ "fondo": "#6050e8" }))
+fijo estTeclaIg  = estilo(estTeclaOp, { "fondo": "#2e7d32" }, alPasar({ "fondo": "#3d9142" }))
+fijo estRejilla  = estilo(rejillaDe(4, 8))
+fijo estCaja     = estilo({ "fondo": color("tarjeta"), "borde": "1px solid " + color("borde"),
+                            "radio": radio("mucho"), "relleno": espacio("largo"),
+                            "maxWidth": "360px", "margen": "32px auto 0" }, enColumna(0))
+fijo estHist     = estilo({ "margenArriba": espacio("largo"), "maxWidth": "360px", "margen": "16px auto 0" })
+fijo estHistItem = estilo({ "tamano": "13px", "color": color("suave"),
+                            "fuente": "ui-monospace, monospace", "margenAbajo": "4px" })
+
+fn repintar() {
+  limpiarPagina()
+
+  fn tecla(etiq: texto, accion: funcion, estBase: estilo): nodo {
+    devolver boton(etiq, accion, estBase)
+  }
+
+  fijo filasBotones: lista = [
+    [ ["C", fn() { limpiar() }, estTeclaSec],
+      ["^", fn() { operadorPresionado("^") }, estTeclaOp],
+      ["±", fn() { acumulado = texto(real(acumulado) * (0.0 - 1.0))  repintar() }, estTeclaSec],
+      ["÷", fn() { operadorPresionado("÷") }, estTeclaOp] ],
+    [ ["7", fn() { digitoPresionado("7") }, estTecla],
+      ["8", fn() { digitoPresionado("8") }, estTecla],
+      ["9", fn() { digitoPresionado("9") }, estTecla],
+      ["×", fn() { operadorPresionado("×") }, estTeclaOp] ],
+    [ ["4", fn() { digitoPresionado("4") }, estTecla],
+      ["5", fn() { digitoPresionado("5") }, estTecla],
+      ["6", fn() { digitoPresionado("6") }, estTecla],
+      ["−", fn() { operadorPresionado("−") }, estTeclaOp] ],
+    [ ["1", fn() { digitoPresionado("1") }, estTecla],
+      ["2", fn() { digitoPresionado("2") }, estTecla],
+      ["3", fn() { digitoPresionado("3") }, estTecla],
+      ["+", fn() { operadorPresionado("+") }, estTeclaOp] ],
+    [ ["0", fn() { digitoPresionado("0") }, estTecla],
+      [".", fn() { puntoPresionado() }, estTecla],
+      ["⌫", fn() {
+        si longitud(acumulado) <= 1 o esperaOperando { acumulado = "0"  devolver }
+        acumulado = subcadena(acumulado, 0, longitud(acumulado) - 1)
+        repintar()
+      }, estTeclaSec],
+      ["=", fn() { igual() }, estTeclaIg] ]
+  ]
+
+  var filas: lista = []
+  para fila en filasBotones {
+    var cols: lista = []
+    para b en fila {
+      cols = cols + [tecla(b[0], b[1], b[2])]
+    }
+    filas = filas + [etiqueta("div", { "estilo": estRejilla }, cols)]
+  }
+
+  var histItems: lista = []
+  para i en rango(longitud(historial)) {
+    fijo idx: entero = longitud(historial) - 1 - i
+    histItems = histItems + [etiqueta("div", { "estilo": estHistItem }, historial[idx])]
+  }
+
+  pintar(
+    etiqueta("div", { "estilo": estCaja },
+      etiqueta("div", { "estilo": estOpAct }, operacion),
+      etiqueta("div", { "estilo": estPantalla }, acumulado),
+      filas
+    ),
+    etiqueta("div", { "estilo": estHist }, histItems)
+  )
+}
+
+repintar()
+    </script>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       SECCIÓN 3: LISTA DE TAREAS
+       Idéntica al ejemplo 43 pero con tema oscuro y adaptada a P6.
+  ═══════════════════════════════════════════════════════════════ -->
+  <div id="seccion-tareas" class="seccion">
+    <script type="text/ñ">
+usar estilo, estiloGlobal, reiniciar, tema, color, espacio, radio,
+     alPasar, enFila, enColumna, separado, transicion, ultimo de "estilo"
+usar plural de "formato"
+usar hoy, deFecha de "fecha"
+
+reiniciar()
+estiloGlobal(":root", tema({
+  "color": {
+    "fondo": "#0f0f1a", "tarjeta": "#16162a", "borde": "#2a2a45",
+    "texto": "#f0f0f0", "suave": "#a0a0a0", "marca": "#9f97e8",
+    "verde": "#4caf50", "rojo": "#ef5350"
+  },
+  "espacio": { "corto": "8px", "medio": "16px", "largo": "24px" },
+  "radio": { "medio": "10px" }
+}))
+estiloGlobal("body", { "fondo": color("fondo"), "color": color("texto"), "fuente": "system-ui, sans-serif" })
+
+var tareas: lista = recuperar("tareas-p6", [
+  { "que": "Explorar el lenguaje Ñ", "hecha": cierto },
+  { "que": "Leer la gramática formal", "hecha": falso },
+  { "que": "Probar P6 en una página", "hecha": cierto },
+  { "que": "Crear una app completa", "hecha": falso }
+])
+
+fn guardar1() { guardar("tareas-p6", tareas) }
+
+fn agregar(que: texto) {
+  si longitud(que) == 0 { devolver }
+  tareas = tareas + [{ "que": que, "hecha": falso }]
+  guardar1()  repintar()
+}
+
+fn alternar(i: entero) {
+  var nuevas: lista = []
+  para j en rango(longitud(tareas)) {
+    si j == i {
+      nuevas = nuevas + [{ "que": tareas[j]["que"], "hecha": no tareas[j]["hecha"] }]
+    } sino { nuevas = nuevas + [tareas[j]] }
+  }
+  tareas = nuevas  guardar1()  repintar()
+}
+
+fn borrarHechas() {
+  var nuevas: lista = []
+  para t en tareas { si no t["hecha"] { nuevas = nuevas + [t] } }
+  tareas = nuevas  guardar1()  repintar()
+}
+
+fn pendientes(): entero {
+  var n: entero = 0
+  para t en tareas { si no t["hecha"] { n = n + 1 } }
+  devolver n
+}
+
+fijo estCaja = estilo({
+  "fondo": color("tarjeta"), "borde": "1px solid " + color("borde"),
+  "radio": radio("medio"), "relleno": espacio("largo"),
+  "maxWidth": "540px", "margen": "32px auto 0"
+}, enColumna(12))
+fijo estFila = estilo(
+  { "relleno": espacio("corto") + " 4px", "borde-abajo": "1px solid " + color("borde") },
+  alPasar({ "fondo": "rgba(159,151,232,.07)" }),
+  ultimo({ "borde-abajo": "ninguno" }),
+  transicion("fondo", 120)
+)
+fijo estTachado = estilo({ "decoracion": "line-through", "color": color("suave") })
+
+fn repintar() {
+  limpiarPagina()
+  var hijos: lista = [
+    etiqueta("h2", { "estilo": estilo({ "tamano": "20px", "color": color("marca") }) }, "📋 Tareas"),
+    etiqueta("p",  { "estilo": estilo({ "color": color("suave"), "tamano": "13px" }) },
+      plural(pendientes(), "pendiente") + " de " + plural(longitud(tareas), "tarea") +
+      " · " + deFecha(hoy(), "corta"))
+  ]
+  para i en rango(longitud(tareas)) {
+    fijo t: dic = tareas[i]
+    var estTexto = estilo({})
+    si t["hecha"] { estTexto = estTachado }
+    hijos = hijos + [
+      etiqueta("div", { "estilo": estFila },
+        casilla(t["que"], t["hecha"], fn() { alternar(i) }, estTexto)
+      )
+    ]
+  }
+  hijos = hijos + [
+    etiqueta("div", { "estilo": estilo(enFila(8), { "margenArriba": espacio("medio") }) },
+      entrada("Nueva tarea…", fn(d: dic) { agregar(d["valor"]) }),
+      boton("Limpiar hechas", fn() { borrarHechas() })
+    )
+  ]
+  pintar(etiqueta("div", { "estilo": estCaja }, hijos))
+}
+
+repintar()
+    </script>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       SECCIÓN 4: TABLA FILTRABLE
+       Clientes ficticios, filtro sin tilde, orden por columna.
+  ═══════════════════════════════════════════════════════════════ -->
+  <div id="seccion-tabla" class="seccion">
+    <script type="text/ñ">
+usar deRegistros, donde, ordenarPor, columna, contarCol, sumaCol,
+     resumir, aRegistros de "datos"
+usar estilo, estiloGlobal, reiniciar, tema, color, espacio, radio,
+     alPasar, pares, enFila, separado, cuando, transicion de "estilo"
+usar sinAcentos, minusculas, indiceDe de "texto"
+usar moneda, plural de "formato"
+
+reiniciar()
+estiloGlobal(":root", tema({
+  "color": {
+    "fondo": "#0f0f1a", "tarjeta": "#16162a", "borde": "#2a2a45",
+    "texto": "#f0f0f0", "suave": "#a0a0a0", "marca": "#9f97e8", "franja": "#191929"
+  },
+  "espacio": { "corto": "8px", "medio": "16px" },
+  "radio": { "medio": "8px" }
+}))
+estiloGlobal("body", { "fondo": color("fondo"), "color": color("texto"), "fuente": "system-ui, sans-serif" })
+
+fijo DATOS = deRegistros([
+  { "nombre": "Ferretería El Tornillo",   "ciudad": "Bucaramanga",   "ventas": 60400000, "activo": cierto },
+  { "nombre": "Panadería La Espiga",      "ciudad": "Girón",         "ventas": 7500000,  "activo": cierto },
+  { "nombre": "Droguería Salud Total",    "ciudad": "Floridablanca", "ventas": 126000000,"activo": cierto },
+  { "nombre": "Café del Parque",          "ciudad": "Girón",         "ventas": 2100000,  "activo": falso  },
+  { "nombre": "Almacén González",         "ciudad": "Bucaramanga",   "ventas": 43800000, "activo": cierto },
+  { "nombre": "Distribuidora Peña",       "ciudad": "Piedecuesta",   "ventas": 18200000, "activo": falso  },
+  { "nombre": "Supermercado La Canasta",  "ciudad": "Bucaramanga",   "ventas": 91500000, "activo": cierto },
+  { "nombre": "Muebles y Maderas Norte",  "ciudad": "Piedecuesta",   "ventas": 34100000, "activo": cierto },
+  { "nombre": "Papelería Central",        "ciudad": "Floridablanca", "ventas": 9800000,  "activo": falso  },
+  { "nombre": "Constructora Los Andes",   "ciudad": "Bucaramanga",   "ventas": 185000000,"activo": cierto }
+])
+
+var busqueda: texto = ""
+var ciudad: texto = "todas"
+var ordenPor: texto = "ventas"
+var desc: bool = cierto
+var soloActivos: bool = falso
+
+fn visibles(): tabla {
+  var t = DATOS
+  si longitud(busqueda) > 0 {
+    fijo q: texto = minusculas(sinAcentos(busqueda))
+    t = donde(t, fn(f: dic): bool {
+      devolver indiceDe(minusculas(sinAcentos(f["nombre"])), q) >= 0
+    })
+  }
+  si ciudad != "todas" {
+    t = donde(t, fn(f: dic): bool { devolver f["ciudad"] == ciudad })
+  }
+  si soloActivos {
+    t = donde(t, fn(f: dic): bool { devolver f["activo"] })
+  }
+  devolver ordenarPor(t, ordenPor, desc)
+}
+
+fn cambiarOrden(col: texto) {
+  si ordenPor == col { desc = no desc }
+  sino { ordenPor = col  desc = cierto }
+  repintar()
+}
+
+fijo thEst = estilo(
+  { "relleno": "10px 14px", "alineacion": "izquierda", "tamano": "12px",
+    "color": color("suave"), "cursor": "puntero", "borde-abajo": "2px solid " + color("borde"),
+    "userSelect": "none" },
+  alPasar({ "color": color("marca") }), transicion("color", 120)
+)
+fijo trEst = estilo(
+  { "borde-abajo": "1px solid " + color("borde") },
+  pares({ "fondo": color("franja") }),
+  alPasar({ "fondo": "rgba(159,151,232,.08)" }),
+  cuando(".inactivo", { "opacidad": "0.45" })
+)
+fijo tdEst = estilo({ "relleno": "9px 14px", "tamano": "14px" })
+fijo caja  = estilo({ "maxWidth": "700px", "margen": "32px auto 0" })
+
+fn sufijoCont(n: entero): texto {
+  si n != 1 { devolver "s" }
+  devolver ""
+}
+
+fn repintar() {
+  limpiarPagina()
+  fijo t = visibles()
+  fijo nombres: lista = columna(t, "nombre")
+
+  fijo tot = resumir(DATOS, { "v": sumaCol("ventas"), "n": contarCol() })
+  fijo totV: entero = columna(tot, "v")[0]
+
+  var cabezas: lista = []
+  para c en ["nombre", "ciudad", "ventas"] {
+    var flecha: texto = ""
+    si ordenPor == c { flecha = " ▼"  si no desc { flecha = " ▲" } }
+    cabezas = cabezas + [
+      etiqueta("th", { "estilo": thEst }, boton(c + flecha, fn() { cambiarOrden(c) }))
+    ]
+  }
+
+  var filas: lista = [etiqueta("tr", {}, cabezas)]
+  para i en rango(longitud(nombres)) {
+    var cls: texto = ""
+    si no columna(t, "activo")[i] { cls = "inactivo" }
+    filas = filas + [
+      etiqueta("tr", { "estilo": trEst, "class": cls },
+        etiqueta("td", { "estilo": tdEst }, nombres[i]),
+        etiqueta("td", { "estilo": tdEst }, columna(t, "ciudad")[i]),
+        etiqueta("td", { "estilo": estilo(tdEst, { "alineacion": "derecha", "fuente": "ui-monospace, monospace" }) },
+          moneda(columna(t, "ventas")[i]))
+      )
+    ]
+  }
+
+  pintar(
+    etiqueta("div", { "estilo": caja },
+      etiqueta("h2", { "estilo": estilo({ "tamano": "20px", "color": color("marca"), "margenAbajo": espacio("medio") }) },
+        "📊 Clientes · " + moneda(totV) + " total"),
+      etiqueta("div", { "estilo": estilo(enFila(8), { "margenAbajo": espacio("medio"), "flexWrap": "wrap" }) },
+        entrada("Buscar…", fn(d: dic) { busqueda = d["valor"]  repintar() }),
+        desplegable(["todas", "Bucaramanga", "Girón", "Floridablanca", "Piedecuesta"],
+                    fn(d: dic) { ciudad = d["valor"]  repintar() }),
+        casilla("Solo activos", soloActivos, fn(d: dic) { soloActivos = d["valor"]  repintar() })
+      ),
+      etiqueta("table",
+        { "estilo": estilo({ "ancho": "100%", "colapso": "collapse", "tamano": "14px" }) },
+        filas
+      ),
+      etiqueta("p", { "estilo": estilo({ "color": color("suave"), "tamano": "13px", "margenArriba": espacio("corto") }) },
+        plural(longitud(nombres), "cliente") + " mostrado" + sufijoCont(longitud(nombres))
+      )
+    )
+  )
+}
+
+repintar()
+    </script>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       SECCIÓN 5: CRONÓMETRO
+       «cada» y «luego» en Ñ. El id del temporizador es lo que lo para.
+  ═══════════════════════════════════════════════════════════════ -->
+  <div id="seccion-reloj" class="seccion">
+    <script type="text/ñ">
+usar estilo, estiloGlobal, reiniciar, tema, color, espacio, radio,
+     enColumna, enFila, separado, centrado, transicion, alPasar de "estilo"
+usar tiempoReloj, plural de "formato"
+
+reiniciar()
+estiloGlobal(":root", tema({
+  "color": {
+    "fondo": "#0f0f1a", "tarjeta": "#16162a", "borde": "#2a2a45",
+    "texto": "#f0f0f0", "suave": "#a0a0a0", "marca": "#9f97e8", "verde": "#4caf50"
+  },
+  "espacio": { "corto": "8px", "medio": "16px", "largo": "24px" },
+  "radio": { "medio": "10px" }
+}))
+estiloGlobal("body", { "fondo": color("fondo"), "color": color("texto"), "fuente": "system-ui, sans-serif" })
+
+var milisegundos: entero = 0
+var corriendo: bool = falso
+var idReloj: entero = 0
+var vueltas: lista = []
+
+fn tic() { milisegundos = milisegundos + 100  repintar() }
+
+fn arrancar() {
+  si corriendo { devolver }
+  corriendo = cierto
+  idReloj = cada(100, fn() { tic() })
+  repintar()
+}
+
+fn parar() {
+  si no corriendo { devolver }
+  detener(idReloj)
+  corriendo = falso
+  repintar()
+}
+
+fn marcarVuelta() {
+  si no corriendo { devolver }
+  vueltas = vueltas + [milisegundos]
+  repintar()
+}
+
+fn reiniciarTodo() {
+  parar()
+  milisegundos = 0
+  vueltas = []
+  repintar()
+}
+
+fijo estPanel = estilo({
+  "fondo": color("tarjeta"), "borde": "1px solid " + color("borde"),
+  "radio": radio("medio"), "relleno": espacio("largo"),
+  "maxWidth": "380px", "margen": "32px auto 0"
+}, enColumna(20))
+fijo estReloj = estilo({
+  "tamano": "64px", "peso": "700", "color": color("marca"),
+  "fuente": "ui-monospace, monospace", "alineacion": "centro", "letterSpacing": "-2px"
+})
+fijo estBotones = estilo(enFila(8), centrado())
+fijo estVuelta  = estilo({
+  "tamano": "13px", "color": color("suave"), "fuente": "ui-monospace, monospace",
+  "borde-abajo": "1px solid " + color("borde"), "relleno": "4px 0"
+})
+
+fn repintar() {
+  limpiarPagina()
+  var estadoTexto: texto = "⏸ Detenido"
+  si corriendo { estadoTexto = "▶ Corriendo" }
+
+  var listaVueltas: lista = []
+  para i en rango(longitud(vueltas)) {
+    fijo v: entero = vueltas[longitud(vueltas) - 1 - i]
+    listaVueltas = listaVueltas + [
+      etiqueta("div", { "estilo": estVuelta },
+        "Vuelta " + texto(longitud(vueltas) - i) + "  " + tiempoReloj(v)
+      )
+    ]
+  }
+
+  pintar(
+    etiqueta("div", { "estilo": estPanel },
+      etiqueta("div", { "estilo": estilo({ "alineacion": "centro", "tamano": "13px", "color": color("suave") }) },
+        estadoTexto
+      ),
+      etiqueta("div", { "estilo": estReloj }, tiempoReloj(milisegundos)),
+      etiqueta("div", { "estilo": estBotones },
+        boton("▶ Arrancar", fn() { arrancar() }),
+        boton("⏸ Parar",    fn() { parar() }),
+        boton("⚑ Vuelta",   fn() { marcarVuelta() }),
+        boton("↺ A cero",   fn() { reiniciarTodo() })
+      ),
+      listaVueltas
+    )
+  )
+}
+
+repintar()
+    </script>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       SECCIÓN 6: GRÁFICA DE BARRAS
+       «lienzo», «barras», «graficar» y dibujo manual con rect/linea.
+       JS vanilla para el selector de mes (no hay desplegable externo aquí).
+  ═══════════════════════════════════════════════════════════════ -->
+  <div id="seccion-grafica" class="seccion">
+    <script type="text/ñ">
+usar arreglo, suma, tendencia, mediaMovil, aListaA, redondear de "numerico"
+usar estilo, estiloGlobal, reiniciar, tema, color, espacio, radio,
+     enColumna, enFila, separado, rejillaDe, enPantalla de "estilo"
+usar decimales, moneda, porciento, porcientoCambio, signoMas, abreviar de "formato"
+
+reiniciar()
+estiloGlobal(":root", tema({
+  "color": {
+    "fondo": "#0f0f1a", "tarjeta": "#16162a", "borde": "#2a2a45",
+    "texto": "#f0f0f0", "suave": "#a0a0a0", "marca": "#9f97e8"
+  },
+  "espacio": { "corto": "8px", "medio": "16px", "largo": "24px" },
+  "radio": { "medio": "10px" }
+}))
+estiloGlobal("body", { "fondo": color("fondo"), "color": color("texto"), "fuente": "system-ui, sans-serif" })
+
+fijo MESES: lista  = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+fijo VENTAS: lista = [82.0, 91.0, 88.0, 104.0, 97.0, 112.0, 118.0, 109.0, 131.0, 126.0, 140.0, 155.0]
+fijo GASTOS: lista = [61.0, 64.0, 66.0,  70.0, 72.0,  75.0,  78.0,  76.0,  84.0,  83.0,  88.0,  92.0]
+
+fijo TOT_V: real = suma(VENTAS)
+fijo TOT_G: real = suma(GASTOS)
+fijo UTIL:  real = TOT_V - TOT_G
+fijo TEND:  real = tendencia(VENTAS)
+
+fijo estCaja  = estilo({ "maxWidth": "720px", "margen": "32px auto 0" }, enColumna(20))
+fijo estRejKPI = estilo(rejillaDe(4, 12), enPantalla(0, 600, rejillaDe(2, 8)))
+fijo estKPI   = estilo({
+  "fondo": color("tarjeta"), "borde": "1px solid " + color("borde"),
+  "radio": radio("medio"), "relleno": espacio("medio"), "textAlign": "center"
+}, enColumna(4))
+fijo estKPIVal = estilo({ "tamano": "22px", "peso": "700", "color": color("marca"), "fuente": "ui-monospace, monospace" })
+fijo estKPILab = estilo({ "tamano": "12px", "color": color("suave") })
+
+fn kpi(label: texto, valor: texto): nodo {
+  devolver etiqueta("div", { "estilo": estKPI },
+    etiqueta("div", { "estilo": estKPIVal }, valor),
+    etiqueta("div", { "estilo": estKPILab }, label)
+  )
+}
+
+pintar(
+  etiqueta("div", { "estilo": estCaja },
+    etiqueta("h2", { "estilo": estilo({ "tamano": "20px", "color": color("marca") }) }, "📈 Panel del año"),
+
+    # KPIs
+    etiqueta("div", { "estilo": estRejKPI },
+      kpi("Ventas totales",  abreviar(entero(redondear(TOT_V * 1000000.0)))),
+      kpi("Gastos totales",  abreviar(entero(redondear(TOT_G * 1000000.0)))),
+      kpi("Utilidad bruta",  abreviar(entero(redondear(UTIL * 1000000.0)))),
+      kpi("Tendencia / mes", signoMas(TEND, 1) + " M")
+    ),
+
+    etiqueta("p", { "estilo": estilo({ "tamano": "13px", "color": color("suave") }) },
+      "Ventas y gastos mensuales en millones · crece " + signoMas(TEND, 1) + " millones/mes · margen " +
+      porciento(UTIL / TOT_V)
+    )
+  )
+)
+
+# Gráfica de barras (lienzo nativo de Ñ)
+barras(VENTAS, MESES, "Ventas por mes (millones)")
+barras(GASTOS, MESES, "Gastos por mes (millones)")
+
+# Medidor de utilidad a mano
+fijo META: real = 1400.0
+fijo logrado: real = TOT_V
+lienzo(640, 90)
+color("#2a2a45")
+rect(20, 30, 600, 20, cierto)
+color("#9f97e8")
+rect(20, 30, redondear(600.0 * logrado / META), 20, cierto)
+color("#f0f0f0")
+escribirEn(20, 22, "Cumplimiento de meta anual (" + porciento(logrado / META) + ")")
+escribirEn(20, 70, decimales(logrado, 0) + " de " + decimales(META, 0) + " millones")
+color("#ef5350")
+grosor(2)
+linea(620, 24, 620, 55)
+    </script>
+  </div>
+
+</main>
+
+<footer>
+  Motor <strong>Ñ</strong> · Apache-2.0 ·
+  <a href="https://github.com/diegovelandiabarajas1-lang/Espanol-Like" target="_blank">github.com/diegovelandiabarajas1-lang/Espanol-Like</a>
+  &nbsp;·&nbsp; P6: &lt;script type="text/ñ"&gt; servido por
+  <a href="https://cdn.jsdelivr.net/gh/diegovelandiabarajas1-lang/Espanol-Like@c1en/motor/n-web.js" target="_blank">jsDelivr · @c1en</a>
+</footer>
+
+<div id="badge">Ñ P6 · motor @c1en</div>
+
+<!-- ── Navegación entre secciones (JS vanilla) ───────────────── -->
+<script>
+  const SECCIONES = ['bienvenida', 'calculadora', 'tareas', 'tabla', 'reloj', 'grafica'];
+
+  function ir(id) {
+    SECCIONES.forEach(s => {
+      document.getElementById('seccion-' + s).classList.toggle('visible', s === id);
+      document.getElementById('tab-' + s).classList.toggle('activo', s === id);
+    });
+    // Scroll arriba al cambiar de sección
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // Corregir: la gramática de Ñ usa "si … { … } sino { … }" pero
+  // la interpolación de texto con expresión condicional necesita
+  // paréntesis. Ñ no tiene operador ternario, así que esa línea
+  // en la sección Tabla la manejamos con un bloque auxiliar en JS
+  // solo para el texto de "mostrados / mostrado".
+  // (no hay nada que hacer aquí — el código Ñ ya usa un si-sino correcto)
+</script>
+</body>
+</html>

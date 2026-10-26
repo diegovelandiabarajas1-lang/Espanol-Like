@@ -1,0 +1,13 @@
+const fs = require('fs');
+const html = fs.readFileSync('app/mega-app.html', 'utf8');
+const inicio = html.indexOf('<script type="text/ñ">');
+const fin = html.indexOf('</script>', inicio);
+const codigoN = html.substring(inicio + '<script type="text/ñ">'.length, fin);
+console.log('Líneas de código Ñ en HTML:', codigoN.split('\n').length);
+console.log('Contiene usar estilo:', codigoN.includes('usar estilo de "estilo"'));
+console.log('Contiene usar cssCrudo:', codigoN.includes('usar cssCrudo de "estilo"'));
+console.log('Contiene para ... in (ERROR):', /para \w+ in/.test(codigoN));
+console.log('Contiene para ... en (OK):', /para \w+ en/.test(codigoN));
+console.log('Contiene limpiarPagina:', codigoN.includes('limpiarPagina()'));
+console.log('Contiene render():', codigoN.includes('render()'));
+console.log('Contiene cargarDatos():', codigoN.includes('cargarDatos()'));

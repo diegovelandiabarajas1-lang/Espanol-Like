@@ -90,3 +90,9 @@ bateria-*.txt
 # El caché de Python (c1en/c1en.py) y el paso intermedio del IDE del clon experimental
 __pycache__/
 motor-exp/publicar-*.html
+# Configuración de Antigravity
+/.antigravity
+config.json
+
+# La Pagina de Prueba
+/motor-exp/app/

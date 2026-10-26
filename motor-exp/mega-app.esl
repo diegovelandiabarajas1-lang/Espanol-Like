@@ -1,0 +1,257 @@
+# BLOQUE 1 - Estado y persistencia
+var tareas: lista = []
+var filtro: texto = "todas"
+var temaOscuro: bool = falso
+
+fn cargar(): nulo {
+    intentar {
+        fijo datos = recuperar("tareas-v1", [])
+        si datos != nulo {
+            tareas = datos
+        }
+    } capturar (e) {
+        imprimir("no se pudieron cargar las tareas: " + e.mensaje)
+    }
+}
+
+fn guardar(): nulo {
+    intentar {
+        guardar("tareas-v1", tareas)
+    } capturar (e) {
+        imprimir("no se pudieron guardar las tareas: " + e.mensaje)
+    }
+}
+
+# BLOQUE 2 - Modelo de datos
+fn nuevaTarea(textoT: texto): dic {
+    devolver {
+        "id": texto(ahora()),
+        "texto": textoT,
+        "hecha": falso,
+        "creada": ahora()
+    }
+}
+
+fn agregarTarea(textoT: texto): nulo {
+    si textoT == "" { devolver }
+    agregar(tareas, nuevaTarea(textoT))
+    guardar()
+}
+
+fn alternarTarea(id: texto): nulo {
+    para t en tareas {
+        si obtener(t, "id", "") == id {
+            t["hecha"] = no obtener(t, "hecha", falso)
+            guardar()
+            devolver
+        }
+    }
+}
+
+fn borrarTarea(id: texto): nulo {
+    var viva: lista = []
+    para t en tareas {
+        si obtener(t, "id", "") != id {
+            agregar(viva, t)
+        }
+    }
+    tareas = viva
+    guardar()
+}
+
+fn borrarCompletadas(): nulo {
+    var viva: lista = []
+    para t en tareas {
+        si no obtener(t, "hecha", falso) {
+            agregar(viva, t)
+        }
+    }
+    tareas = viva
+    guardar()
+}
+
+fn tareasFiltradas(): lista {
+    var resultado: lista = []
+    para t en tareas {
+        si filtro == "activas" {
+            si no obtener(t, "hecha", falso) {
+                agregar(resultado, t)
+            }
+        } sino si filtro == "completadas" {
+            si obtener(t, "hecha", falso) {
+                agregar(resultado, t)
+            }
+        } sino {
+            agregar(resultado, t)
+        }
+    }
+    devolver resultado
+}
+
+fn contadorActivas(): entero {
+    var c: entero = 0
+    para t en tareas {
+        si no obtener(t, "hecha", falso) {
+            c = c + 1
+        }
+    }
+    devolver c
+}
+
+fn hayCompletadas(): bool {
+    var h: bool = falso
+    para t en tareas {
+        si obtener(t, "hecha", falso) {
+            h = cierto
+        }
+    }
+    devolver h
+}
+
+# BLOQUE 3 - Vista: item de tarea
+fn itemTarea(t: dic): nodo {
+    fijo hecha: bool = obtener(t, "hecha", falso)
+    fijo id: texto = obtener(t, "id", "")
+    fijo textoT: texto = obtener(t, "texto", "")
+
+    devolver etiqueta("div", estilo({
+        "mostrar": "flex",
+        "alinearItems": "centro",
+        "relleno": [10, 14],
+        "bordeAbajo": "1px solid #e5e7eb",
+        "fondo": si hecha entonces "#f3f4f6" sino "#ffffff"
+    }),
+        boton(si hecha entonces "ok" sino "pendiente", fn() { alternarTarea(id) render() }, estilo({
+            "fondo": si hecha entonces "#10b981" sino "#e5e7eb",
+            "color": si hecha entonces "#ffffff" sino "#9ca3af",
+            "borde": "ninguno",
+            "redondeo": "20px",
+            "relleno": [2, 10],
+            "margenDerecha": 12,
+            "tamano": 14
+        })),
+        etiqueta("span", estilo({
+            "crecer": 1,
+            "decoracion": si hecha entonces "line-through" sino "ninguno",
+            "color": si hecha entonces "#9ca3af" sino "#111827",
+            "tamano": 16
+        }), textoT),
+        boton("borrar", fn() { borrarTarea(id) render() }, estilo({
+            "fondo": "#ef4444",
+            "color": "#ffffff",
+            "borde": "ninguno",
+            "redondeo": 6,
+            "relleno": [4, 10],
+            "tamano": 14
+        }))
+    )
+}
+
+# BLOQUE 4 - Vista: render completo
+fn render(): nulo {
+    limpiarPagina()
+
+    pintar(etiqueta("h1", estilo({
+        "tamano": 32,
+        "grosor": 800,
+        "margenAbajo": 8,
+        "color": si temaOscuro entonces "#f9fafb" sino "#111827"
+    }), "Tareas"))
+    pintar(etiqueta("p", estilo({
+        "tamano": 16,
+        "color": si temaOscuro entonces "#9ca3af" sino "#6b7280",
+        "margenAbajo": 24
+    }), "Administra tus pendientes. Se guardan solas."))
+
+    pintar(etiqueta("div", estilo({
+        "mostrar": "flex",
+        "hueco": 8,
+        "margenAbajo": 20
+    }),
+        entrada("Que necesitas hacer?", fn(v: texto) {
+            agregarTarea(v)
+            render()
+        }),
+        etiqueta("span", estilo({
+            "tamano": 13,
+            "color": si temaOscuro entonces "#9ca3af" sino "#6b7280",
+            "margenArriba": 10
+        }), "{contadorActivas()} pendiente(s)")
+    ))
+
+    pintar(etiqueta("div", estilo({
+        "mostrar": "flex",
+        "hueco": 6,
+        "margenAbajo": 20
+    }),
+        boton("Todas", fn() { filtro = "todas" render() }, estiloFiltro("todas")),
+        boton("Activas", fn() { filtro = "activas" render() }, estiloFiltro("activas")),
+        boton("Completadas", fn() { filtro = "completadas" render() }, estiloFiltro("completadas"))
+    ))
+
+    var lista: lista = tareasFiltradas()
+    si longitud(lista) == 0 {
+        pintar(etiqueta("div", estilo({
+            "alinear": "centro",
+            "relleno": [40, 20],
+            "color": si temaOscuro entonces "#9ca3af" sino "#9ca3af",
+            "tamano": 16
+        }),
+            si filtro == "activas" entonces "No hay tareas activas."
+            sino si filtro == "completadas" entonces "No hay tareas completadas."
+            sino "Aun no tienes tareas. Agrega una arriba!")
+        )
+    } sino {
+        para t en lista {
+            pintar(itemTarea(t))
+        }
+    }
+
+    si hayCompletadas() {
+        pintar(etiqueta("div", estilo({"margenArriba": 20}),
+            boton("Borrar completadas", fn() { borrarCompletadas() render() }, estilo({
+                "fondo": "#ef4444",
+                "color": "#ffffff",
+                "borde": "ninguno",
+                "redondeo": 8,
+                "relleno": [10, 18],
+                "tamano": 15,
+                "margenDerecha": 12
+            }))
+        ))
+    }
+
+    pintar(etiqueta("div", estilo({
+        "margenArriba": 32,
+        "bordeArriba": "1px solid #e5e7eb",
+        "rellenoArriba": 20
+    }),
+        boton(si temaOscuro entonces "Modo claro" sino "Modo oscuro",
+            fn() { temaOscuro = no temaOscuro render() },
+            estilo({
+                "fondo": si temaOscuro entonces "#fbbf24" sino "#4f3fd4",
+                "color": si temaOscuro entonces "#92400e" sino "#ffffff",
+                "borde": "ninguno",
+                "redondeo": 10,
+                "relleno": [12, 22],
+                "tamano": 16,
+                "grosor": 600
+            })
+        )
+    ))
+}
+
+fn estiloFiltro(nombre: texto): estilo {
+    devolver estilo({
+        "fondo": si filtro == nombre entonces si temaOscuro entonces "#4f46e5" sino "#4f3fd4" sino si temaOscuro entonces "#1f2937" sino "#ffffff",
+        "color": si filtro == nombre entonces "#ffffff" sino si temaOscuro entonces "#f9fafb" sino "#111827",
+        "borde": si filtro == nombre entonces "ninguno" sino "1px solid #d1d5db",
+        "redondeo": 8,
+        "relleno": [8, 16],
+        "tamano": 14
+    })
+}
+
+# BLOQUE 5 - Arranque
+cargar()
+render()
