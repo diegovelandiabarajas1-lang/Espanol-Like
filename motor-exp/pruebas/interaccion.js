@@ -302,5 +302,38 @@ console.log('\n── 9. tapar un nombre de la biblioteca se avisa ──');
   comprobar('dentro de una función no molesta', d.avisos.length === 0, d.avisos.map(w => w.message));
 }
 
+console.log('\n── 10. arrastrar y soltar (motor-exp) ──');
+{
+  const c = corre(`
+var visto = ""
+funcion soltado(ev) { visto = obtener(ev, "tipo", "?") + ":" + obtener(ev, "dato", "?") }
+pintar(
+  etiqueta("div", {"arrastrable": cierto, "datoArrastre": "b7", "clase": "pieza"}, "avanzar"),
+  etiqueta("img", {"arrastrable": falso, "fuente": "x.png"}),
+  etiqueta("div", {"arrastrable": nulo}),
+  etiqueta("div", {"alSoltar": soltado, "alEntrarArrastre": soltado, "alSalirArrastre": soltado,
+                   "alArrastrar": soltado, "alTerminarArrastre": soltado}, "zona"))
+funcion leer(): texto { devolver visto }`);
+  if (!c.r.ok) comprobar('el programa de arrastre compila', false, c.r.errores.map(e => e.formato()).join(' | '));
+  else {
+    const [pieza, img, vacio, zona] = c.h.raiz.hijos;
+    comprobar('{arrastrable: cierto} es draggable="true", no un booleano de presencia', pieza.at.draggable === 'true', pieza.at);
+    comprobar('{arrastrable: falso} es draggable="false" (para que una imagen deje de arrastrarse)', img.at.draggable === 'false', img.at);
+    comprobar('{arrastrable: nulo} no pone el atributo', vacio.at.draggable === undefined, vacio.at);
+    comprobar('datoArrastre viaja como data-arrastre', pieza.at['data-arrastre'] === 'b7', pieza.at);
+    const ev = zona.meta.eventos || {};
+    comprobar('los cinco eventos llegan traducidos al DOM',
+      !!ev.drop && !!ev.dragenter && !!ev.dragleave && !!ev.dragstart && !!ev.dragend, Object.keys(ev));
+    const vm = c.m.vm;
+    vm.nuevoTurno();
+    const d = vm.nuevoDic(); d.mapa.set('tipo', 'drop'); d.mapa.set('dato', 'b7');
+    vm.invocar(ev.drop, [d]);
+    comprobar('el manejador de alSoltar recibe «dato»', vm.invocar(vm.globals.get('leer'), []) === 'drop:b7');
+  }
+}
+falla('dragover no está en la lista blanca (dispararía un turno a 60 Hz)',
+  'pintar(etiqueta("div", {"alArrastrarSobre": imprimir}))', 'no es un evento conocido');
+falla('alSoltar necesita una función', 'pintar(etiqueta("div", {"alSoltar": "x"}))', 'necesita una función');
+
 console.log(`\n${ok} pasan, ${mal} fallan\n`);
 process.exit(mal ? 1 : 0);

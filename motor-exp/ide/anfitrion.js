@@ -260,12 +260,70 @@ function crearAnfitrion(op) {
   }
 
   const DATOS_TECLA = ev => ({ tecla: ev.key || '', codigo: ev.code || '' });
+  // (motor-exp) Arrastrar y soltar. Lo que viaja de un nodo a otro es UN TEXTO:
+  // el atributo «data-arrastre» del nodo que se arrastra (o su clave, si no lo
+  // tiene). Se guarda aquí además de en dataTransfer porque el navegador solo
+  // deja leer dataTransfer dentro de «drop»: en dragenter/dragleave/dragend
+  // está protegido y getData devuelve vacío. Con la copia, el programa recibe
+  // «dato» en los cinco momentos, no solo al soltar.
+  let arrastrando = '';
+  const datoDe = e => {
+    if (!e || !e.getAttribute) return '';
+    const d = e.getAttribute('data-arrastre');
+    if (d !== null) return d;
+    return e.__nK !== undefined && e.__nK !== null ? String(e.__nK) : '';
+  };
   function datosEvento(ev, e) {
     const d = { tipo: ev.type };
     if (e) { d.valor = e.type === 'checkbox' ? '' : (e.value !== undefined ? e.value : ''); d.marcada = !!e.checked; }
     if (ev.key !== undefined) Object.assign(d, DATOS_TECLA(ev));
     if (ev.clientX !== undefined) { d.x = ev.clientX | 0; d.y = ev.clientY | 0; }
+    if (ev.dataTransfer !== undefined) {
+      // En «drop» manda lo que trae el navegador (puede venir de otra ventana);
+      // en los demás, la copia de aquí.
+      let dato = arrastrando;
+      if (ev.type === 'drop') { try { dato = ev.dataTransfer.getData('text/plain') || arrastrando; } catch (_) {} }
+      d.dato = dato;
+    }
     return d;
+  }
+  // Para que «drop» llegue a dispararse, el navegador exige preventDefault en
+  // dragover y dragenter. Lo hace el anfitrión, sin turno y sin avisar al
+  // programa: dragover dispara decenas de veces por segundo y por eso no está
+  // en la lista blanca del motor. Solo vale mientras el nodo declare «alSoltar»
+  // (se mira el descriptor del último pintado, como todo lo demás).
+  function conectarZonaDeSoltar(e) {
+    if (e.__nZona) return;
+    e.__nZona = true;
+    const acepta = () => { const d = e.__nD; return !!(d && d.eventos && d.eventos.drop); };
+    e.addEventListener('dragover', ev => {
+      if (!acepta()) return;
+      ev.preventDefault();
+      try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+    });
+    e.addEventListener('dragenter', ev => { if (acepta()) ev.preventDefault(); });
+    prepararArrastre();
+  }
+  // El dato lo pone el ANFITRIÓN al empezar el arrastre, con un oyente en la
+  // raíz de la página y en fase de captura. Hace falta porque lo normal es que
+  // la pieza que se mueve NO declare «alArrastrar»: quien escucha es la zona que
+  // recibe. Sin esto, con una pieza sin manejador nadie llenaba el DataTransfer
+  // y «alSoltar» recibía «dato» vacío (lo cazó pruebas/aislado.js, parte 13).
+  // «alArrastrar», si está, sigue llamándose después, con el mismo dato.
+  let raizArrastre = null;
+  function prepararArrastre() {
+    const r = raiz();
+    if (!r || raizArrastre === r) return;
+    raizArrastre = r;
+    r.addEventListener('dragstart', ev => {
+      let origen = ev.target;
+      while (origen && origen !== r && origen.getAttribute && origen.getAttribute('draggable') !== 'true') origen = origen.parentNode;
+      if (!origen || origen === r || !origen.getAttribute) return;
+      arrastrando = datoDe(origen);
+      try { ev.dataTransfer.setData('text/plain', arrastrando); ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+    }, true);
+    // Se limpia DESPUÉS de que el programa haya recibido su «dragend».
+    r.addEventListener('dragend', () => { setTimeout(() => { arrastrando = ''; }, 0); }, true);
   }
 
   // Los oyentes no se quedan con la función: se quedan con el elemento y leen
@@ -273,6 +331,7 @@ function crearAnfitrion(op) {
   // entre repintados llama siempre a la función de ahora, no a la de antes.
   function conectarEventos(e, eventos, vm) {
     if (!eventos) return;
+    if (eventos.drop) conectarZonaDeSoltar(e);
     const puestos = e.__nEv || (e.__nEv = new Set());
     for (const nombre in eventos) {
       if (puestos.has(nombre)) continue;
@@ -282,7 +341,24 @@ function crearAnfitrion(op) {
         const d = e.__nD;
         const fn = d && d.eventos && d.eventos[nombre];
         if (nombre === 'submit') ev.preventDefault();
+        if (nombre === 'dragstart' && !arrastrando) {
+          // Si el oyente de la raíz (prepararArrastre) no llegó a ponerlo —la
+          // página no declara ninguna zona de soltar—, el dato sale del elemento
+          // que se arrastra, no del que escucha: con un oyente en el contenedor,
+          // ev.target es la pieza de dentro.
+          let origen = ev.target;
+          while (origen && origen !== e && origen.getAttribute && origen.getAttribute('draggable') !== 'true') origen = origen.parentNode;
+          arrastrando = datoDe(origen && origen.getAttribute ? origen : e);
+          try { ev.dataTransfer.setData('text/plain', arrastrando); ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+        }
+        // Sin esto el navegador «abre» el texto soltado como si fuera un enlace.
+        if (nombre === 'drop') ev.preventDefault();
+        // dragenter y dragleave se disparan también al cruzar cada HIJO de la
+        // zona. Lo que el programa quiere saber es si entró o salió de la ZONA:
+        // se ignoran los cruces internos.
+        if ((nombre === 'dragenter' || nombre === 'dragleave') && ev.relatedTarget && e.contains(ev.relatedTarget)) return;
         if (fn) turno(e.__nVm || vm, fn, [dicDe(e.__nVm || vm, datosEvento(ev, e))]);
+        if (nombre === 'dragend') arrastrando = '';
       });
     }
   }

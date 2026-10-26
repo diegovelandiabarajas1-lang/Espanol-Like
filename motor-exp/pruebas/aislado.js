@@ -761,6 +761,56 @@ pedir("${base}/eco", {"metodo": "POST", "cuerpo": aJson({"n": 7})}, fn(r) {
     srv.close();
   }
 
+  console.log('\n── 13. arrastrar y soltar (motor-exp): dragstart → dragover → drop con un DataTransfer de verdad ──');
+  const r13 = await correr(
+    'var programa = []\n' +
+    'fn pieza(nombre: texto): nodo {\n' +
+    '  devolver etiqueta("div", {"arrastrable": cierto, "datoArrastre": nombre, "clase": "pieza"}, nombre)\n' +
+    '}\n' +
+    'fn alSoltarEn(e) {\n' +
+    '  imprimir("soltado: " + e["dato"])\n' +
+    '  agregar(programa, e["dato"])\n' +
+    '  pintarTodo()\n' +
+    '}\n' +
+    'fn pintarTodo() {\n' +
+    '  limpiarPagina()\n' +
+    '  var dentro = mapear(programa, pieza)\n' +
+    '  si longitud(programa) == 0 { dentro = ["suelta aquí"] }\n' +
+    '  pintar(etiqueta("div", {"clase": "paleta"}, mapear(["avanzar", "girar"], pieza)),\n' +
+    '         etiqueta("div", {"clase": "zona", "alSoltar": alSoltarEn}, dentro))\n' +
+    '}\n' +
+    'pintarTodo()');
+  comprobar('las piezas se pintan con draggable="true" y data-arrastre',
+    /<div[^>]*draggable="true"[^>]*data-arrastre="girar"[^>]*>girar<\/div>/.test(r13.pagina), r13.pagina.slice(0, 300));
+  comprobar('la zona empieza vacía', r13.pagina.includes('suelta aquí'), r13.pagina.slice(0, 300));
+  const arrastre = await zona().evaluate(() => {
+    const pieza = document.querySelector('#pagina .paleta [data-arrastre="girar"]');
+    const zonaS = document.querySelector('#pagina .zona');
+    if (!pieza || !zonaS) return { error: 'no están la pieza o la zona' };
+    const dt = new DataTransfer();
+    const ev = (tipo, el) => { const e = new DragEvent(tipo, { bubbles: true, cancelable: true, dataTransfer: dt }); el.dispatchEvent(e); return e.defaultPrevented; };
+    const r = {};
+    ev('dragstart', pieza);
+    r.datoEnTransfer = dt.getData('text/plain');
+    r.dragoverCancelado = ev('dragover', zonaS);     // sin preventDefault aquí, el navegador no deja soltar
+    r.dropCancelado = ev('drop', zonaS);
+    ev('dragend', pieza);
+    return r;
+  });
+  comprobar('dragstart puso el dato en el DataTransfer', arrastre.datoEnTransfer === 'girar', arrastre);
+  comprobar('el anfitrión canceló dragover (es lo que permite soltar) sin avisar al programa', arrastre.dragoverCancelado === true, arrastre);
+  comprobar('y canceló drop (si no, el navegador «abre» el texto)', arrastre.dropCancelado === true, arrastre);
+  await zona().waitForFunction(() => /soltado: girar/.test(document.querySelector('#consola').innerText), null, { timeout: 5000 }).catch(() => {});
+  const tras13 = {
+    salida: await zona().$eval('#consola', n => n.innerText).catch(() => ''),
+    pagina: await zona().$eval('#pagina', n => n.innerHTML).catch(() => ''),
+  };
+  comprobar('el manejador de alSoltar recibió «dato» == "girar"', tras13.salida.includes('soltado: girar'), tras13.salida.slice(-120));
+  comprobar('la página se repintó con la pieza dentro de la zona',
+    /<div[^>]*class="zona"[^>]*>[\s\S]*data-arrastre="girar"[\s\S]*<\/div>/.test(tras13.pagina) && !tras13.pagina.includes('suelta aquí'),
+    tras13.pagina.slice(0, 400));
+  comprobar('la paleta sigue entera', (tras13.pagina.match(/data-arrastre="girar"/g) || []).length === 2, tras13.pagina.slice(0, 400));
+
   console.log('\n── 12. sin errores sueltos ──');
   const frontera = errosConsola.filter(e => /cross-origin|Blocked a frame|SecurityError/i.test(e));
   const otros = errosConsola.filter(e => !frontera.includes(e));

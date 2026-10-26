@@ -2263,6 +2263,38 @@ que tiene un `var htmlTexto: texto` sin valor en la línea 304: ahora es error, 
   tocaría a casi todo programa que use diccionarios; se queda para cuando haya `conjunto`/`patron` (D1).
 - Lo que llega a `capturar (e)` y lo que devuelve una nativa variádica siguen siendo `cualquiera`.
 
+## Arrastrar y soltar en la página (26-oct-2026; lo hizo Cowork, lo probó Code)
+
+Cinco eventos nuevos en `EVENTOS` de `src/04-stdlib.js`: `alArrastrar` (dragstart), `alTerminarArrastre` (dragend),
+`alEntrarArrastre` (dragenter), `alSalirArrastre` (dragleave) y `alSoltar` (drop). `dragover` y `drag` no se exponen
+a propósito: disparan a 20–60 Hz y cada uno sería un turno; el anfitrión los atiende solo (hace el `preventDefault`
+que el navegador exige para que `drop` llegue) cuando el nodo declara `alSoltar`. Dos atributos: `arrastrable`
+(→ `draggable`, escrito como texto `"true"`/`"false"` porque vacío significa «auto») y `datoArrastre` (→
+`data-arrastre`): lo que viaja de un nodo a otro es ese TEXTO, y llega al manejador como `dato` (el diccionario del
+evento queda `tipo, valor, marcada, tecla, x, y, dato`). Nada más cambia en el motor: ni opcodes, ni verificador,
+ni `.elb`. En `ide/anfitrion.js`: `datosEvento` añade `dato` (en `drop` lo lee de `dataTransfer`, que puede venir
+de otra ventana; en los demás momentos de una copia local, porque el navegador protege `dataTransfer` fuera de
+`drop`), `conectarZonaDeSoltar` cancela `dragover`/`dragenter` sin turno, `dragenter`/`dragleave` ignoran los cruces
+entre hijos de la misma zona, y `drop` se cancela para que el navegador no «abra» el texto soltado.
+
+**Lo que cazó la prueba en Chromium** (`pruebas/aislado.js`, parte 13, hecha en Code): con el ejemplo tal cual —la
+pieza no declara `alArrastrar`, solo la zona declara `alSoltar`— nadie escuchaba `dragstart` en la pieza, el
+`DataTransfer` quedaba vacío y `alSoltar` recibía `dato == ""`. Arreglo: `prepararArrastre()` pone UN oyente de
+`dragstart` en la raíz de la página, en fase de captura, que sube desde `ev.target` hasta el primer ancestro con
+`draggable="true"` y llena `dataTransfer` y la copia; `alArrastrar`, si está, se llama después con el mismo dato.
+El oyente por elemento se queda como respaldo para una página sin zona de soltar.
+
+Límites: el nodo que se arrastra no puede moverse ni destruirse durante el arrastre (el navegador manda `dragend` y
+cancela); pintar «zona activa» en `dragenter` es seguro porque la reconciliación no mueve nodos si la forma no
+cambia. HTML5 drag-and-drop no funciona en táctil: para CodeBlocks en tablet hará falta una capa con *pointer
+events*, fuera de esta fase.
+
+Pruebas: `pruebas/interaccion.js` parte 10 (9, sin navegador: atributos, los cinco eventos traducidos, `dato`,
+`alArrastrarSobre` rechazado) y `pruebas/aislado.js` parte 13 (8, en Chromium: dragstart → dragover → drop con un
+`DataTransfer` de verdad, `dato == "girar"`, la página repintada con la pieza dentro de la zona). `aislado.js`
+corre en el PC con el Edge instalado: `N_CHROMIUM="C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"`
+(116 pasan, 0 fallan).
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |

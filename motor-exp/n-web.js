@@ -6053,6 +6053,21 @@ function instalarBiblioteca(vm, host) {
     alEnfocar: 'focus', alDesenfocar: 'blur',
     alPulsarTecla: 'keydown', alSoltarTecla: 'keyup',
     alEntrar: 'mouseenter', alSalir: 'mouseleave',
+    // (motor-exp) Arrastrar y soltar. Cinco nombres y no siete, a propósito:
+    // «dragover» y «drag» disparan decenas de veces por segundo mientras el
+    // ratón se mueve, y cada uno sería un turno completo del programa. No se
+    // exponen: el anfitrión los atiende solo (hace el preventDefault que el
+    // navegador exige para que «drop» llegue a dispararse) cuando el nodo tiene
+    // «alSoltar». Lo que el programa ve son los cinco momentos que de verdad
+    // deciden algo: empezó, entró a una zona, salió de ella, soltó, terminó.
+    //
+    // Lo que viaja con el arrastre es el atributo «datoArrastre» del nodo que
+    // se arrastra (un texto: un id, una clave, lo que el programa quiera), y
+    // llega al manejador de «alSoltar» como «dato». Nada más cruza: ni nodos,
+    // ni funciones, ni HTML. Es lo mismo que ya pasaba con «clave».
+    alArrastrar: 'dragstart', alTerminarArrastre: 'dragend',
+    alEntrarArrastre: 'dragenter', alSalirArrastre: 'dragleave',
+    alSoltar: 'drop',
   };
   // Nombres de atributo en español. Es el mismo trato que en el sistema de
   // estilo: lo que tiene nombre se traduce, y lo que no, pasa con su nombre de
@@ -6067,6 +6082,10 @@ function instalarBiblioteca(vm, host) {
     maximo: 'max', minimo: 'min', paso: 'step', largoMax: 'maxlength',
     objetivo: 'target', relacion: 'rel', accion: 'action', metodo: 'method',
     autocompletar: 'autocomplete', autofoco: 'autofocus', rotulo: 'aria-label',
+    // (motor-exp) arrastrar y soltar: «arrastrable» es el draggable de HTML y
+    // «datoArrastre» es el texto que viaja con el arrastre (va en un data-*,
+    // que el navegador no interpreta y el anfitrión lee en «dragstart»).
+    arrastrable: 'draggable', datoArrastre: 'data-arrastre',
   };
   // Atributos que son presencia, no valor: o están o no están.
   const BOOLEANOS = new Set(['checked', 'selected', 'disabled', 'required', 'readonly',
@@ -6131,7 +6150,14 @@ function instalarBiblioteca(vm, host) {
       const at = n.atrib || (n.atrib = new Map());
       // nulo quita el atributo; los booleanos lo ponen o lo quitan. Sin esto un
       // valor ausente se pinta como el texto «nulo», que es peor que nada.
-      if (v === null || v === false) { at.delete(css); continue; }
+      if (v === null) { at.delete(css); continue; }
+      // «draggable» NO es booleano de presencia: el navegador quiere el texto
+      // «true» o «false», y un «draggable=""» vacío significa «auto», que en
+      // un div es «no» y en una imagen o un enlace es «sí». Así que
+      // {arrastrable: cierto} se escribe «true» y {arrastrable: falso}, «false»
+      // —que es la única forma de que una imagen deje de arrastrarse.
+      if (css === 'draggable') { at.set(css, v === true ? 'true' : 'false'); continue; }
+      if (v === false) { at.delete(css); continue; }
       if (v === true) { at.set(css, ''); continue; }
       if (BOOLEANOS.has(css)) { at.set(css, ''); continue; }
       const valor = repr(v, 0);
@@ -27355,6 +27381,28 @@ function crearAnfitrion(op) {
       try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
     });
     e.addEventListener('dragenter', ev => { if (acepta()) ev.preventDefault(); });
+    prepararArrastre();
+  }
+  // El dato lo pone el ANFITRIÓN al empezar el arrastre, con un oyente en la
+  // raíz de la página y en fase de captura. Hace falta porque lo normal es que
+  // la pieza que se mueve NO declare «alArrastrar»: quien escucha es la zona que
+  // recibe. Sin esto, con una pieza sin manejador nadie llenaba el DataTransfer
+  // y «alSoltar» recibía «dato» vacío (lo cazó pruebas/aislado.js, parte 13).
+  // «alArrastrar», si está, sigue llamándose después, con el mismo dato.
+  let raizArrastre = null;
+  function prepararArrastre() {
+    const r = raiz();
+    if (!r || raizArrastre === r) return;
+    raizArrastre = r;
+    r.addEventListener('dragstart', ev => {
+      let origen = ev.target;
+      while (origen && origen !== r && origen.getAttribute && origen.getAttribute('draggable') !== 'true') origen = origen.parentNode;
+      if (!origen || origen === r || !origen.getAttribute) return;
+      arrastrando = datoDe(origen);
+      try { ev.dataTransfer.setData('text/plain', arrastrando); ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+    }, true);
+    // Se limpia DESPUÉS de que el programa haya recibido su «dragend».
+    r.addEventListener('dragend', () => { setTimeout(() => { arrastrando = ''; }, 0); }, true);
   }
 
   // Los oyentes no se quedan con la función: se quedan con el elemento y leen
@@ -27372,9 +27420,11 @@ function crearAnfitrion(op) {
         const d = e.__nD;
         const fn = d && d.eventos && d.eventos[nombre];
         if (nombre === 'submit') ev.preventDefault();
-        if (nombre === 'dragstart') {
-          // El dato sale del elemento que se arrastra, no del que escucha: con
-          // un oyente en el contenedor, ev.target es la pieza de dentro.
+        if (nombre === 'dragstart' && !arrastrando) {
+          // Si el oyente de la raíz (prepararArrastre) no llegó a ponerlo —la
+          // página no declara ninguna zona de soltar—, el dato sale del elemento
+          // que se arrastra, no del que escucha: con un oyente en el contenedor,
+          // ev.target es la pieza de dentro.
           let origen = ev.target;
           while (origen && origen !== e && origen.getAttribute && origen.getAttribute('draggable') !== 'true') origen = origen.parentNode;
           arrastrando = datoDe(origen && origen.getAttribute ? origen : e);
@@ -27943,7 +27993,8 @@ function crearAnfitrion(op) {
   return { web, grafico, tiempo, red, limpiarTodo, pararTodos, vaciarLienzo, turno, lienzo, volcar };
 }
 
-if (typeof module !== 'undefined') module.exports = { crearAnfitrion };;
+if (typeof module !== 'undefined') module.exports = { crearAnfitrion };
+;
 // ============================================================================
 //  Ñ en cualquier página web: <script type="text/ñ">  (motor-exp P6)
 //
