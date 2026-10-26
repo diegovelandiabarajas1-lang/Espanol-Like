@@ -37,6 +37,8 @@ function uso() {
 }
 const args = process.argv.slice(2);
 let entrada = null, salida = null, archC = null, cc = process.env.C1EN_CC || null, ejecutar = false, argsProg = [], banderas = [];
+// (motor-exp A1) N_AOT_COMPROBAR=1: el ejecutable comprueba en caliente los tipos que el compilador dio por sabidos (para la bateria)
+if (process.env.N_AOT_COMPROBAR) banderas.push('-DN_AOT_COMPROBAR');
 let biblioteca = false, prefijo = null;
 const enlazarExtra = [];      // (motor-exp N4.10) --enlazar archivo.o / libalgo.a / -lalgo
 while (args.length) {

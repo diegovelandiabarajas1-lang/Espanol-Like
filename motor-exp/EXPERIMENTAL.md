@@ -2046,6 +2046,176 @@ dos T4**, N4.9 15/0, N4.11 14/0, N4.1 11/11, N4.6 14/0. Tarda 5–8 min de GPU.
   en las T4 desde el dataset; se lanza con `kaggle kernels push`.
 - No se tocó `src/`: los bundles no cambian.
 
+## Fase A1 · El ejecutable con tipos: `n-compilar` deja de ir por detrás de la VM (25-oct-2026)
+
+Diego pidió velocidad en «el AOT de C1EÑ». Medido en su PC (i3 de 11.ª gen, gcc 16.2.0 de w64devkit) con
+`velocidad/bench.esl`, el ejecutable de N4.1 iba **por detrás de la VM con JIT** (1,5–2,8×) y 4–90× por detrás de C:
+cada valor era una caja `NV` con etiqueta, cada lectura de variable sumaba y restaba una referencia aunque fuera un
+número, y cada `+` o `<` preguntaba primero si los dos lados eran números. Era el «IR con tipos» que N4.1 dejó previsto
+y sin hacer. Ahora está hecho, sobre el mismo esqueleto (bytecode → C + `nrt`): **no se tocó `src/`** y la VM sigue
+siendo la referencia.
+
+### Medido (el mismo PC, mejor de 3)
+
+| | C `-O2` | VM motor-exp (JIT) | ejecutable **antes** | ejecutable **ahora** |
+|---|---|---|---|---|
+| fib(30) | 1 ms | 15 ms | 23 ms | **11 ms** |
+| criba(2·10⁶) | 3 ms | 107 ms | 261 ms | **75 ms** |
+| mandelbrot 400×300×200 | 19 ms | 27 ms | 75 ms | **18 ms** |
+
+Mandelbrot va ya a la velocidad del C escrito a mano (el bucle interior es aritmética de `double` sin cajas ni
+etiquetas); fib y criba pasan a la VM. Los resultados son los mismos al bit: la aritmética que se emite es la misma
+de antes, solo que sin preguntar.
+
+### Cómo funciona (`aot/compilador.js`)
+
+1. **Tipos por casilla.** `analizar` (la etapa 2, «IR-Ñ») ya sabía la altura de la pila en cada instrucción; ahora
+   sabe también **qué hay en cada casilla**: `num`, `bool`, `nulo` (escalares, sin conteo de referencias), `lista`,
+   `texto`, `dic`, `cierre` (objetos), `fn:K` (el cierre de la función global K), `nat:N` (la nativa N), `rango:Q`
+   (un rango que no se construye) y `obj`/`any` cuando no se sabe. Salen de las constantes, de lo que devuelve cada
+   operación con operandos conocidos, de lo que devuelven las funciones conocidas, y donde dos caminos se juntan los
+   tipos se juntan (y si no coinciden, se baja a `obj` o `any`). Con eso, una suma de dos `num` es `a.u.n + b.u.n` a
+   secas, una comparación da un `bool` que el salto lee sin `N_VERDAD`, y copiar o tirar un escalar no toca el conteo.
+2. **La versión numérica de cada función.** Los parámetros no llevan tipo en tiempo de ejecución (`fn fib(n)`), y
+   el verificador no anota lo que infiere (devuelve solo errores y avisos). Así que cada función cuyos parámetros
+   entran en una operación numérica tiene **dos versiones**: la general (`F3`, parámetros `any`, el código de siempre)
+   y la numérica (`F3n`), que los supone números y los recibe como `double` de C; la general mira las etiquetas al
+   entrar y, si son números, salta a la numérica. Si además se sabe que devuelve un número, la numérica devuelve
+   `double` (un error se señala con `N_HAY_ERROR`): ni caja al entrar ni al salir. Es especialización por tipo con
+   guarda, **sin especular**: la guarda es exacta, y si falla se corre la versión general, que es la de antes.
+3. **Lo que devuelve cada función: punto fijo optimista.** Empieza en «todavía nada» y solo sube; `fib` devuelve `n`
+   (número bajo la guarda) o `fib(…) + fib(…)` (número si `fib` devuelve número): converge en `num`. Si una función
+   devuelve cosas distintas, baja a `any` y todo sigue siendo correcto.
+4. **Funciones conocidas, llamadas derechas.** Un global definido **una** vez con `fn` y nunca reasignado se llama
+   directo a su función de C (`F1n(cierre, n - 1)`), sin `n_llamar_r`, sin el arreglo de argumentos y sin sumar ni
+   restar la referencia del cierre (G lo mantiene vivo; donde una referencia se roba —una lista nueva, un global, un
+   `devolver`— se toma una de verdad, y antes de bajar por la escalera de errores también). Se conserva la
+   comprobación de «no está definida» (puede llamarse antes de la línea que la define) y la del tope de 900 marcos.
+5. **`para … en rango(…)` sin lista.** Como hizo el JIT en R1: los argumentos se validan con `n_rango_preparar`
+   (la misma función que ahora usa la nativa: los mismos errores y el mismo tope de 5 millones) y el rango queda en
+   tres variables de C; el valor avanza **sumando el paso**, exactamente como la nativa llenaba la lista, y la cuenta
+   de elementos se calcula con enteros o, con decimales, contando como contaría el bucle (la suma acumulada puede dar
+   uno más o uno menos que `ceil`).
+6. **Listas por dentro.** `a[i]`, `a[i] = v` y la longitud de una lista con índice número van a la casilla sin pasar
+   por `n_idx_get` (el camino lento sigue ahí para el error de índice, con el mismo mensaje); `agregar(a, x)` como
+   sentencia va derecho a `n_lista_agregar`; y un local que se lee solo para indexarlo no suma ni resta su referencia
+   (el local la tiene y nadie la suelta entre medias).
+7. **La línea solo donde hace falta.** `M_->linea` se escribe solo antes de lo que puede fallar o llamar (es lo único
+   que la lee: la traza), no en cada línea.
+
+### Comprobar que los tipos son verdad: `N_AOT_COMPROBAR=1`
+
+Cada suposición del compilador se emite como `N_CK_NUM(s)`, `N_CK_BOOL(s)`, `N_CK_LISTA(s)`: sin la bandera no
+cuestan nada; con `N_AOT_COMPROBAR=1 node motor-exp/util/n-compilar.js …` el ejecutable mira cada una en caliente y,
+si una falla, se para diciéndolo («el compilador supuso un número y no lo era»). La batería entera se corrió así.
+
+### Qué se probó
+
+- `pruebas/exp-aot.js` **completa con `N_AOT_COMPROBAR=1`** (cada tipo supuesto, comprobado en caliente):
+  - **Linux** (Kaggle, CPU, gcc 13.3, Node 20; `c1en/kaggle-a1-linux.ipynb`): **307 iguales · 1 distinto · 0 no
+    compilan · 311 sin soporte** (de 619). El distinto es `ref:nativa`, el de siempre desde N4.10 (en el ejecutable
+    `nativa` exige la firma de C). **Cero** «el compilador supuso».
+  - **Windows** (el PC): **303 iguales · 5 distintos**: `ref:nativa` (pide `libm.so.6`) y 4 con «código null» que
+    son el `.exe` recién escrito sin arrancar (por separado los 4 dan lo mismo que la VM); de ahí el reintento.
+- `exp-aot.js --rapida` (los 11 de `aot/pruebas`): 11 iguales, en Windows y en Linux.
+- `exp-lengua-franca` 14/0 (Linux) y 15/0 (Windows) · `exp-sin-comprobar` 14/0 en los dos · `exp-interop` 23/0 (Linux)
+  y 15/0 + 2 saltadas (Windows). Las bibliotecas de C (`--biblioteca`) salen del mismo compilador: siguen iguales.
+- `velocidad/bench.esl` en Linux (Kaggle, mejor de 3): VM 36 / 227 / 48 ms · ejecutable **17 / 135 / 28** ·
+  C `-O2` 3 / 8 / 29. La misma proporción que en Windows: mandelbrot a la par de C, fib y criba por delante de la VM.
+- **Ojo con el PC de Diego**: a las 16:08 del 25-oct el Control de aplicaciones de su organización (WDAC, «Enterprise
+  signing level») empezó a **bloquear todo `.exe` recién compilado con gcc** (registro `CodeIntegrity/Operational`,
+  evento 3077; `spawn` lo ve como `status null · UNKNOWN`, errno −4094). Los que ya habían corrido antes siguen
+  corriendo. Desde ese momento `exp-aot` y la parte en C de `exp-lengua-franca` no se pueden dar por buenas ni malas
+  en este PC: A2 se verificó **en Linux (Kaggle)**. Ya había pasado antes (ver `03-como-trabajar.md`): va y viene.
+  **26-oct**: ya no bloquea (un `hola.c` recién compilado corre), y con eso se reprodujo y arregló en el PC el fallo
+  de los 8 hilos (punto 5c de A2); `exp-lengua-franca` en Windows: 15/0.
+- `pruebas/todas.js` entera en el PC (Windows): **35 de 36 suites en verde** (falla solo `apps/ecosim5`, «la de siempre»; 3 saltadas por falta de herramientas), 20 min. Nada se rompió.
+
+### Qué cambió
+
+- `aot/compilador.js`: `analizar` con tipos y procedencia; el plan (funciones conocidas, guardas, punto fijo);
+  `emitirFuncion` con dos versiones, firmas de C con `double`, llamadas derechas, rangos virtuales, listas por
+  dentro, alias de locales y la línea perezosa. `efecto` y la escalera de limpieza son los de antes.
+- `aot/nrt.h`, `aot/nrt.c`: `NRango` y `n_rango_preparar` (la nativa `rango` la usa), `n_aot_tipo_mal` y las macros
+  `N_CK_*`.
+- `util/n-compilar.js`: `N_AOT_COMPROBAR` → `-DN_AOT_COMPROBAR`.
+- `pruebas/exp-aot.js`: en Windows, un `.exe` recién escrito puede no arrancar al primer intento (el antivirus lo
+  está leyendo; `spawn` da `status null` sin salida). Se reintenta hasta 10 veces, como `libcuda-falsa` con
+  `LoadLibrary`. Antes de esto, la batería completa daba aquí «23 distintos» que no eran distintos.
+
+### A2 (la misma tarde) · la traza al deshacer, la profundidad como parámetro y las listas compactas
+
+Diego pidió que el ejecutable quedara **a la par de C** (a unos 3 ms). Medido a mano sobre el C generado de `fib`,
+lo que separaba 11 ms de los 4–5 ms de una recursión honesta en C (`gcc -O2 -fno-inline`; los 1–2 ms de `bench.c`
+son gcc desenrollando la recursión) era la **contabilidad por llamada**: apuntar el marco al entrar y salir
+(`n_marco_entrar`, tres escrituras en memoria local al hilo), la línea en cada sentencia, y mirar la profundidad y
+«no está definida» en cada llamada. Y lo que separaba `criba` de C era la memoria: una lista de dos millones de
+bools eran 32 MB de `NV`; en C son 2 MB.
+
+1. **La traza se construye al deshacer.** Una función ya no apunta nada al entrar ni al salir. Cuando un error sube,
+   cada función por la que pasa añade su nombre y la línea en la que estaba (`n_traza`, en el camino de error que
+   ya existía: `falla`), de dentro hacia fuera: la misma traza, letra por letra, que daba la pila de marcos. La
+   línea de `e.linea` y la de `error(...)` (un valor, no un fallo) salen de ahí y de lo que se publica antes de
+   una llamada general (`n_hilo.linea`).
+2. **La profundidad viaja como parámetro.** Las llamadas directas pasan `prof_ + 1` en un registro; la versión
+   general la lee de `n_hilo.profundidad`, que quien llama publica antes de una llamada general o de una nativa.
+   El tope de 900 se comprueba al entrar en la función (antes lo hacía `n_llamar`): mismo error, misma línea.
+3. **«No está definida» solo cuando puede pasar**: no si es la propia función (recursión) ni si su `fn` está en el
+   tramo recto del principio de `principal` y quien llama se definió después (los `fn` del nivel superior van
+   izados al principio, así que es el caso normal).
+4. **Listas con clase de elementos** (`aot/nrt.h`, como los *elements kinds* de V8): una lista vacía decide con su
+   primer elemento si guarda `double` (8 bytes), bools (1 byte) o `NV` (16); en cuanto entra algo distinto pasa a
+   `NV` una vez y para siempre. Todo el runtime llega a los elementos por `n_lv()` (convierte si hace falta) o por
+   `n_lista_leer`/`n_lista_poner`/`n_lista_agregar`, que respetan la clase; el compilador emite estas últimas en
+   sus caminos rápidos. Una lista de `rango(…)` queda como `double`; la `marca` de la criba, como bytes.
+5. **Tres arreglos que salieron de verificar A2 en Linux (Kaggle) y, el 26-oct, en el PC**: (a) un `lanzar` no
+   construye traza (la VM tampoco: la lengua franca y el interop comparan el texto del error); (b) la versión general
+   de una función pone `n_hilo.profundidad = prof_` al entrar y `prof_ - 1` en cada salida, para que quien entre desde
+   C vea la profundidad de verdad; (c) **cada entrada desde C empieza a profundidad 0** (`n_api_limpiar_error`, en
+   `nrt_biblioteca.inc`): el clon numérico no restaura la profundidad al salir —dentro de Ñ no hace falta, quien llama
+   la publica antes de cada llamada—, así que `mates_hipotenusa(3, 4)` desde C la dejaba una más alta cada vez y a la
+   llamada 900 (`N_MAX_MARCOS`) todo era «desbordamiento»: el `mal 7200` (8 hilos × 900) de la prueba de 8 hilos.
+
+| | C `-O2` | VM (JIT) | antes de A1 | A1 | **A2** |
+|---|---|---|---|---|---|
+| fib(30) | 1–2 ms | 15 ms | 23 ms | 11 ms | **6–7 ms** |
+| criba(2·10⁶) | 3 ms | 107 ms | 261 ms | 75 ms | **≈40 ms** |
+| mandelbrot 400×300×200 | 19 ms | 27 ms | 75 ms | 18 ms | **18 ms** |
+
+(Los de A2 se midieron con el PC cargado por Chrome y varían ±30 %; `fib` dio 6 ms con la máquina libre.) `fib` queda
+a 1–2 ms de la recursión honesta de C; lo que aún cuesta es lo que la semántica exige (mirar `N_HAY_ERROR` tras cada
+llamada y la profundidad al entrar). En `criba` lo que falta es el índice: cada `marca[j]` comprueba el rango y que el
+índice sea entero; con un tipo «entero» en el IR (pendiente, abajo) sobrarían la mitad de esas comprobaciones.
+
+### Lo que no entra todavía
+
+- Los números siguen siendo `NV` dentro de la función (gcc los deja en registros igual, por eso mandelbrot ya va como
+  C); el paso siguiente sería declararlos `double` cuando la casilla es número en todos sus puntos, y es lo que piden
+  los tipos de máquina (`i32`, `f32`) para el ejecutable.
+- Un tipo **entero** en el IR (`ent` ⊂ `num`: constantes enteras, `longitud`, `rango` con enteros, `+ − ×` entre
+  enteros, `//`): con él `a[i]` no tendría que comprobar que `i` es entero, y la guarda de un parámetro que se usa
+  como índice sería «número entero». Es lo siguiente para `criba`.
+- Solo tres nativas tienen el tipo de lo que devuelven (`rango`, `agregar`, `reloj`), verificado en `nrt.c`; las de
+  `numerico`, `texto` y compañía siguen devolviendo `any` (la firma de la VM no se usa: una firma equivocada sería un
+  acceso a memoria equivocado, no un error).
+- **Arreglos y `paralelo` en el ejecutable**: siguen sin estar (la tanda que N4.1 dejó pendiente). Hoy un programa
+  de C1EÑ no compila a ejecutable: los núcleos corren en el dispositivo `nativo` desde la VM, que ya va a velocidad
+  de C (medido: Mandelbrot 1600×1200 por hilo, 319 ms en `jit`, 83 ms en `nativo` con 4 hilos; `-O3` no cambia nada).
+
+## Herramienta · `util/n-analizar.py`: comprobar un `.esl` sin ejecutarlo y sin Node (26-oct-2026)
+
+Un solo archivo de Python 3 sin dependencias. Hace lo que el motor hace antes de correr —léxico, sintaxis, enlace de
+`usar` (archivos y los 12 eDSL) y el verificador gradual, portados de `01-front.js`, `06-modulos.js` y
+`02-check-compile.js` con los **mismos mensajes y pistas**— y añade lo que el motor solo ve al ejecutar: división
+entre un 0 escrito, índice o clave fuera de un literal que nadie cambia, recursión sin ninguna condición (también
+`f → g → f`), código inalcanzable, caminos sin `devolver`, y los bucles: `mientras` siempre cierto sin salida, condición
+que no cambia en el cuerpo, variable que solo se mueve al revés. `--c1en` abre `numerico` y `nen` como el perfil C1EÑ;
+`--solo-motor` dice exactamente lo que diría el motor; `--json` para la IDE. Validado contra el corpus de
+`pruebas/motor.js` + `exp-expresividad*.js` (224 programas buenos: 0 falsos positivos; 86 malos: 78 detectados, los 8
+restantes son dinámicos de verdad) y contra `analizar()` en los 79 `.esl` del proyecto (78 veredictos idénticos). La
+tabla de firmas va embebida (`FIRMAS_JSON`) y se vuelca del motor con el script de su cabecera; si cambia la
+gramática o un mensaje, hay que traerlo a mano. Detalle en `ContextoD/trabajo-en-curso/2026-10-26-…/LEEME.md`.
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -2078,5 +2248,6 @@ dos T4**, N4.9 15/0, N4.11 14/0, N4.1 11/11, N4.6 14/0. Tarda 5–8 min de GPU.
 | N4.10 | **interoperabilidad directa**: `cabeceraNativa` lee un `.h` entero (funciones, `#define`, enum, estructuras, opacos, retrollamadas); el ejecutable llama a C sin capa (envoltorios al compilar, la biblioteca al enlazador), igual que la VM; Ñ → C → Ñ | AOT, FFI, anfitrión | **hecha** (en el ejecutable faltan punteros, estructuras y retrollamadas) |
 | N4.11 | **quitar la seguridad donde uno quiere**: `sinComprobar { … }`, avisado; la VM y jit siguen comprobando; C1EÑ en nativo y GPU (`__builtin_unreachable`) y el ejecutable no; las esperas y barreras se quedan | parser, verificador, C1EÑ, AOT | **hecha** |
 | W2 | Windows: la GPU simulada corre en el PC (fibras, `LoadLibrary`, g++ por `CreateProcess`, `-mfma`), el `.exe` escribe como la VM (binario, `pow` de UCRT), y las suites de N4.6/N4.10 valen con mingw; todo N4 confirmado en el PC (35/36) y en las dos T4 (13/13) | aot, simulador, pruebas | **hecha** |
+| A1 | **El ejecutable con tipos**: tipos por casilla en el IR-Ñ, versión numérica de cada función (guardas exactas, `double` de C), llamadas derechas a funciones conocidas, `rango` sin lista, listas por dentro; después (A2) la traza al deshacer, la profundidad como parámetro y listas con clase de elementos; fib 23→6, criba 261→≈40, mandelbrot 75→18 ms (la VM: 15 / 107 / 27; C: 1–2 / 3 / 19); `N_AOT_COMPROBAR=1` lo verifica en caliente | aot, pruebas | **hecha** (A1 y A2 confirmados en Linux, Kaggle 26-oct: exp-aot 307 iguales · 1 (`ref:nativa`), lengua franca 14/0, sinComprobar 14/0, interop 23/0; en Windows lengua franca 15/0, sinComprobar 14/0, interop 15/0) |
 
 Cada fase deja su sección en este archivo: qué se tocó, qué se probó, qué se rompió.

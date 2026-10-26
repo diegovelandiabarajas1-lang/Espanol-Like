@@ -47,7 +47,11 @@ static char* error_utf8_y_limpiar(void) {
   err_limpiar();
   return s;
 }
-void n_api_limpiar_error(void) { free(api_error); api_error = NULL; }
+/* Cada entrada desde C empieza a profundidad 0. Dentro de Ñ cada llamada publica
+ * su profundidad antes de llamar y la restaura al volver; quien entra desde C no
+ * publica nada, y sin esto cada llamada dejaba la profundidad una más alta
+ * (el clon numérico no la restaura): a las 900 llamadas, «desbordamiento». */
+void n_api_limpiar_error(void) { free(api_error); api_error = NULL; n_hilo.profundidad = 0; }
 /* lo pendiente pasa a ser «el último error» */
 void n_api_guardar_error(void) { free(api_error); api_error = error_utf8_y_limpiar(); }
 void n_api_poner_error(const char* msg) { free(api_error); api_error = strdup(msg); }
@@ -113,7 +117,7 @@ int64_t n_api_largo(const void* a) {
 void* n_api_en(const void* a, int64_t i) {
   NV v = n_api_valor(a);
   if (!n_es(v, NC_LISTA) || i < 0 || i >= LS(v)->n) return NULL;
-  return n_api_asa(n_inc(LS(v)->v[i]));
+  return n_api_asa(n_inc(n_lv(LS(v))[i]));
 }
 /* la i-ésima entrada de un diccionario, en orden de inserción */
 static NEntrada* api_entrada(NV v, int64_t i) {
@@ -141,8 +145,8 @@ int64_t n_api_copiar_reales(const void* a, double* out, int64_t n) {
   NV v = n_api_valor(a);
   if (!n_es(v, NC_LISTA)) return -1;
   NLista* l = LS(v);
-  for (int64_t i = 0; i < l->n; i++) if (l->v[i].t != N_NUM) return -1;
-  for (int64_t i = 0; i < l->n && i < n; i++) out[i] = l->v[i].u.n;
+  for (int64_t i = 0; i < l->n; i++) if (n_lv(l)[i].t != N_NUM) return -1;
+  for (int64_t i = 0; i < l->n && i < n; i++) out[i] = n_lv(l)[i].u.n;
   return l->n;
 }
 void* n_api_dic(void) { return n_api_asa(n_dic_nuevo()); }

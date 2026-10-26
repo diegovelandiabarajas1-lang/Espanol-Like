@@ -348,7 +348,7 @@ NAT(fo_listaLegible) {
   if (!n_es(FA(0), NC_LISTA)) return n_error("«listaLegible»: el argumento 1 debe ser una lista", NULL);
   NLista* l = LS(a[0]);
   NV* xs = (NV*)n_mem(sizeof(NV) * (size_t)(l->n + 1)); int64_t k = 0;
-  for (int64_t i = 0; i < l->n; i++) { NV t = fo_como_texto(l->v[i]); if (TX(t)->n) xs[k++] = t; else n_dec(t); }
+  for (int64_t i = 0; i < l->n; i++) { NV t = fo_como_texto(n_lv(l)[i]); if (TX(t)->n) xs[k++] = t; else n_dec(t); }
   NV r;
   if (!k) r = T("");
   else if (k == 1) r = n_inc(xs[0]);
@@ -513,14 +513,14 @@ NAT(fo_minigrafico) {
   (void)n; (void)extra;
   if (!n_es(a[0], NC_LISTA)) return n_error("«minigrafico»: el argumento 1 debe ser una lista", NULL);
   NLista* l = LS(a[0]);
-  for (int64_t i = 0; i < l->n; i++) NUM(l->v[i], (int)(i + 1), "minigrafico");
+  for (int64_t i = 0; i < l->n; i++) NUM(n_lv(l)[i], (int)(i + 1), "minigrafico");
   if (!l->n) return T("");
   double lo = INFINITY, hi = -INFINITY;
-  for (int64_t i = 0; i < l->n; i++) { lo = js_min2(lo, l->v[i].u.n); hi = js_max2(hi, l->v[i].u.n); }
+  for (int64_t i = 0; i < l->n; i++) { lo = js_min2(lo, n_lv(l)[i].u.n); hi = js_max2(hi, n_lv(l)[i].u.n); }
   NBuf b = {0};
   if (hi == lo) { b_rep(&b, 0x2584, (double)l->n); return b_texto(&b); }
   for (int64_t i = 0; i < l->n; i++) {
-    double k = round_js((l->v[i].u.n - lo) / (hi - lo) * 7);
+    double k = round_js((n_lv(l)[i].u.n - lo) / (hi - lo) * 7);
     if (k >= 0 && k <= 7) b_c(&b, (uint16_t)(0x2581 + (int)k));
   }
   return b_texto(&b);
@@ -531,11 +531,11 @@ NAT(fo_marco) {
   NV nl = T("\n"); NV ls = split_js(a[0], nl); n_dec(nl);
   NLista* L = LS(ls);
   double an = (double)ancho_vis(tit) + 2;
-  for (int64_t i = 0; i < L->n; i++) an = js_max2(an, (double)ancho_vis(L->v[i]));
+  for (int64_t i = 0; i < L->n; i++) an = js_max2(an, (double)ancho_vis(n_lv(L)[i]));
   NBuf b = {0};
   if (TX(tit)->n) { b_utf8(&b, "┌─ "); b_txt(&b, tit); b_c(&b, ' '); b_rep(&b, 0x2500, js_max2(0, an - (double)ancho_vis(tit) - 1)); b_utf8(&b, "┐"); }
   else { b_utf8(&b, "┌"); b_rep(&b, 0x2500, an + 2); b_utf8(&b, "┐"); }
-  for (int64_t i = 0; i < L->n; i++) { b_c(&b, '\n'); b_utf8(&b, "│ "); b_txt(&b, L->v[i]); b_rellenar(&b, L->v[i], an); b_utf8(&b, " │"); }
+  for (int64_t i = 0; i < L->n; i++) { b_c(&b, '\n'); b_utf8(&b, "│ "); b_txt(&b, n_lv(L)[i]); b_rellenar(&b, n_lv(L)[i], an); b_utf8(&b, " │"); }
   b_c(&b, '\n'); b_utf8(&b, "└"); b_rep(&b, 0x2500, an + 2); b_utf8(&b, "┘");
   n_dec(ls); n_dec(tit);
   return b_texto(&b);
@@ -552,37 +552,37 @@ NAT(fo_tablaTexto) {
   NLista* filas = LS(a[0]);
   if (!filas->n) return T("");
   NV cols = n_lista_nueva(8);
-  if (n > 1 && n_es(a[1], NC_LISTA)) { NLista* q = LS(a[1]); for (int64_t i = 0; i < q->n; i++) n_lista_agregar(LS(cols), fo_string(q->v[i])); }
+  if (n > 1 && n_es(a[1], NC_LISTA)) { NLista* q = LS(a[1]); for (int64_t i = 0; i < q->n; i++) n_lista_agregar(LS(cols), fo_string(n_lv(q)[i])); }
   else {
-    for (int64_t i = 0; i < filas->n; i++) if (n_es(filas->v[i], NC_DIC)) {
-      NDic* d = DC(filas->v[i]);
+    for (int64_t i = 0; i < filas->n; i++) if (n_es(n_lv(filas)[i], NC_DIC)) {
+      NDic* d = DC(n_lv(filas)[i]);
       for (int64_t j = 0; j < d->usados; j++) if (d->e[j].vivo) {
         NV s = fo_string(d->e[j].k); int ya = 0;
-        for (int64_t q = 0; q < LS(cols)->n; q++) if (texto_igual(LS(cols)->v[q], s)) { ya = 1; break; }
+        for (int64_t q = 0; q < LS(cols)->n; q++) if (texto_igual(n_lv(LS(cols))[q], s)) { ya = 1; break; }
         if (ya) n_dec(s); else n_lista_agregar(LS(cols), s);
       }
     }
   }
-  for (int64_t i = 0; i < filas->n; i++) if (!n_es(filas->v[i], NC_DIC)) {
+  for (int64_t i = 0; i < filas->n; i++) if (!n_es(n_lv(filas)[i], NC_DIC)) {
     n_dec(cols);
     return ERRP(T("las claves son los títulos de las columnas: [{\"ciudad\": \"Girón\", \"ventas\": 1200}] · de una tabla salen con aRegistros(t)"),
-      "«tablaTexto»: la fila %d es %s y tiene que ser un diccionario", (long long)(i + 1), n_tipo_de(filas->v[i]));
+      "«tablaTexto»: la fila %d es %s y tiene que ser un diccionario", (long long)(i + 1), n_tipo_de(n_lv(filas)[i]));
   }
   NLista* C = LS(cols); int64_t nc = C->n, nf = filas->n;
   NV* cel = (NV*)n_mem(sizeof(NV) * (size_t)(nc * nf + 1));
   int* numerica = (int*)n_mem(sizeof(int) * (size_t)(nc + 1));
   double* an = (double*)n_mem(sizeof(double) * (size_t)(nc + 1));
   for (int64_t j = 0; j < nc; j++) {
-    numerica[j] = 1; an[j] = (double)ancho_vis(C->v[j]);
+    numerica[j] = 1; an[j] = (double)ancho_vis(n_lv(C)[j]);
     for (int64_t i = 0; i < nf; i++) {
-      NV v; if (n_dic_buscar(DC(filas->v[i]), C->v[j], &v) && v.t != N_NULO && v.t != N_NUM) numerica[j] = 0;
-      cel[i * nc + j] = fo_celda(filas->v[i], C->v[j]);
+      NV v; if (n_dic_buscar(DC(n_lv(filas)[i]), n_lv(C)[j], &v) && v.t != N_NULO && v.t != N_NUM) numerica[j] = 0;
+      cel[i * nc + j] = fo_celda(n_lv(filas)[i], n_lv(C)[j]);
       an[j] = js_max2(an[j], (double)ancho_vis(cel[i * nc + j]));
     }
   }
   NBuf b = {0};
 #define FO_CELDA(s, j) do { if (j) b_utf8(&b, "  "); if (numerica[j]) { b_rellenar(&b, s, an[j]); b_txt(&b, s); } else { b_txt(&b, s); b_rellenar(&b, s, an[j]); } } while (0)
-  for (int64_t j = 0; j < nc; j++) FO_CELDA(C->v[j], j);
+  for (int64_t j = 0; j < nc; j++) FO_CELDA(n_lv(C)[j], j);
   b_c(&b, '\n');
   for (int64_t j = 0; j < nc; j++) { if (j) b_utf8(&b, "  "); b_rep(&b, 0x2500, an[j]); }
   for (int64_t i = 0; i < nf; i++) { b_c(&b, '\n'); for (int64_t j = 0; j < nc; j++) FO_CELDA(cel[i * nc + j], j); }
@@ -600,7 +600,7 @@ NAT(fo_columnas) {
   if (!l->n) return T("");
   NV* xs = (NV*)n_mem(sizeof(NV) * (size_t)l->n);
   double an = -INFINITY;
-  for (int64_t i = 0; i < l->n; i++) { xs[i] = fo_como_texto(l->v[i]); an = js_max2(an, (double)ancho_vis(xs[i])); }
+  for (int64_t i = 0; i < l->n; i++) { xs[i] = fo_como_texto(n_lv(l)[i]); an = js_max2(an, (double)ancho_vis(xs[i])); }
   an += 2;
   double alto = ceil((double)l->n / k);
   NBuf b = {0};

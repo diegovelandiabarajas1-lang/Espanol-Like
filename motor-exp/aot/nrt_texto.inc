@@ -105,7 +105,7 @@ static NV split_js(NV s, NV sep) {                    /* String.prototype.split(
 }
 static NV unir_lista(NV l, NV sep) {
   NBuf b = {0}; NLista* xs = LS(l);
-  for (int64_t i = 0; i < xs->n; i++) { if (i) b_txt(&b, sep); if (n_es(xs->v[i], NC_TEXTO)) b_txt(&b, xs->v[i]); else repr_en(&b, xs->v[i], 1); }
+  for (int64_t i = 0; i < xs->n; i++) { if (i) b_txt(&b, sep); if (n_es(n_lv(xs)[i], NC_TEXTO)) b_txt(&b, n_lv(xs)[i]); else repr_en(&b, n_lv(xs)[i], 1); }
   return b_texto(&b);
 }
 static NV reemplazar_todo(NV s, NV d, NV c) { NV p = split_js(s, d); NV r = unir_lista(p, c); n_dec(p); return r; }
@@ -306,9 +306,9 @@ NAT(tx_envolver) {
   if (w < 1) return n_error("«envolver»: el ancho tiene que ser 1 o más", NULL);
   NV out = n_lista_nueva(4), ps = lineas_de(a[0]);
   for (int64_t q = 0; q < LS(ps)->n; q++) {
-    NV pal = palabras_de(LS(ps)->v[q]); NBuf linea = {0}; int hay = 0;
+    NV pal = palabras_de(n_lv(LS(ps))[q]); NBuf linea = {0}; int hay = 0;
     for (int64_t k = 0; k < LS(pal)->n; k++) {
-      NV p = LS(pal)->v[k];
+      NV p = n_lv(LS(pal))[k];
       if (!hay) { b_txt(&linea, p); hay = 1; continue; }
       if ((double)(linea.n + 1 + TX(p)->n) <= w) { b_c(&linea, ' '); b_txt(&linea, p); continue; }
       n_lista_agregar(LS(out), b_texto(&linea)); b_txt(&linea, p);
@@ -326,7 +326,7 @@ NAT(tx_sangrar) {
   n_dec(c);
   NV p = b_texto(&pb), nl = n_texto_utf8("\n"), ls = split_js(a[0], nl);
   NBuf b = {0};
-  for (int64_t q = 0; q < LS(ls)->n; q++) { if (q) b_c(&b, '\n'); if (TX(LS(ls)->v[q])->n) b_txt(&b, p); b_txt(&b, LS(ls)->v[q]); }
+  for (int64_t q = 0; q < LS(ls)->n; q++) { if (q) b_c(&b, '\n'); if (TX(n_lv(LS(ls))[q])->n) b_txt(&b, p); b_txt(&b, n_lv(LS(ls))[q]); }
   n_dec(p); n_dec(nl); n_dec(ls);
   return b_texto(&b);
 }
@@ -335,14 +335,14 @@ NAT(tx_desangrar) {
   NV nl = n_texto_utf8("\n"), ls = split_js(a[0], nl); n_dec(nl);
   int64_t min = -1;
   for (int64_t q = 0; q < LS(ls)->n; q++) {
-    NTexto* l = TX(LS(ls)->v[q]); int64_t i = 0; while (i < l->n && es_esp_js(l->s[i])) i++;
+    NTexto* l = TX(n_lv(LS(ls))[q]); int64_t i = 0; while (i < l->n && es_esp_js(l->s[i])) i++;
     if (i == l->n) continue;
     if (min < 0 || i < min) min = i;
   }
   NBuf b = {0};
   for (int64_t q = 0; q < LS(ls)->n; q++) {
     if (q) b_c(&b, '\n');
-    NTexto* l = TX(LS(ls)->v[q]); int64_t i = 0; while (i < l->n && es_esp_js(l->s[i])) i++;
+    NTexto* l = TX(n_lv(LS(ls))[q]); int64_t i = 0; while (i < l->n && es_esp_js(l->s[i])) i++;
     if (min > 0 && i < l->n) b_u16(&b, l->s + min, l->n - min); else b_u16(&b, l->s, l->n);
   }
   n_dec(ls);
@@ -364,7 +364,7 @@ NAT(tx_ordenAlfabetico) {
   (void)n; (void)extra; LST(a[0], 1, "ordenAlfabetico"); NLista* l = LS(a[0]);
   NV* xs = (NV*)n_mem(sizeof(NV) * (size_t)(l->n + 1)); NV* ks = (NV*)n_mem(sizeof(NV) * (size_t)(l->n + 1));
   int64_t* ix = (int64_t*)n_mem(sizeof(int64_t) * (size_t)(l->n + 1));
-  for (int64_t i = 0; i < l->n; i++) { xs[i] = n_texto_de(l->v[i]); ks[i] = clave_es(xs[i]); ix[i] = i; }
+  for (int64_t i = 0; i < l->n; i++) { xs[i] = n_texto_de(n_lv(l)[i]); ks[i] = clave_es(xs[i]); ix[i] = i; }
   ord_claves = ks; qsort(ix, (size_t)l->n, sizeof(int64_t), cmp_es_idx);
   NV r = n_lista_nueva(l->n);
   for (int64_t i = 0; i < l->n; i++) n_lista_agregar(LS(r), n_inc(xs[ix[i]]));

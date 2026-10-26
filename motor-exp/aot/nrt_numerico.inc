@@ -8,18 +8,18 @@
 static int exige_nums(NV v, int k, const char* f, NV* err) {
   if (!exige_lista(v, k, f, err)) return 0;
   NLista* l = LS(v);
-  for (int64_t i = 0; i < l->n; i++) if (l->v[i].t != N_NUM) { *err = ERR("«%s»: la lista debe contener solo números", f); return 0; }
+  for (int64_t i = 0; i < l->n; i++) if (n_lv(l)[i].t != N_NUM) { *err = ERR("«%s»: la lista debe contener solo números", f); return 0; }
   return 1;
 }
 #define NUMS(k, f) do { NV e_; if (!exige_nums(a[k], (k) + 1, (f), &e_)) return e_; } while (0)
 static double* nums_de(NV v) {   /* copia de los números, para ordenar */
   NLista* l = LS(v); double* x = (double*)n_mem(sizeof(double) * (size_t)(l->n + 1));
-  for (int64_t i = 0; i < l->n; i++) x[i] = l->v[i].u.n;
+  for (int64_t i = 0; i < l->n; i++) x[i] = n_lv(l)[i].u.n;
   return x;
 }
 static int cmp_dbl(const void* p, const void* q) { double a = *(const double*)p, b = *(const double*)q; return a < b ? -1 : a > b ? 1 : 0; }
-static double suma_de(NLista* l) { double s = 0; for (int64_t i = 0; i < l->n; i++) s += l->v[i].u.n; return s; }
-static double suma_cuad(NLista* l, double m) { double s = 0; for (int64_t i = 0; i < l->n; i++) { double d = l->v[i].u.n - m; s += d * d; } return s; }
+static double suma_de(NLista* l) { double s = 0; for (int64_t i = 0; i < l->n; i++) s += n_lv(l)[i].u.n; return s; }
+static double suma_cuad(NLista* l, double m) { double s = 0; for (int64_t i = 0; i < l->n; i++) { double d = n_lv(l)[i].u.n - m; s += d * d; } return s; }
 static double round_js(double x) {   /* Math.round: el medio va hacia +∞ */
   if (!isfinite(x)) return x;
   double r = floor(x);
@@ -108,11 +108,11 @@ NAT(nu_mediana) {
 NAT(nu_moda) {
   (void)n; (void)extra; NUMS(0, "moda"); NLista* l = LS(a[0]);
   if (!l->n) return n_error("«moda» de una lista vacía", NULL);
-  NV c = n_dic_nuevo(); double mejor = l->v[0].u.n; double mc = 0;
+  NV c = n_dic_nuevo(); double mejor = n_lv(l)[0].u.n; double mc = 0;
   for (int64_t i = 0; i < l->n; i++) {
-    NV v; double k = 1; if (n_dic_buscar(DC(c), l->v[i], &v)) k = v.u.n + 1;
-    n_dic_poner(DC(c), l->v[i], n_num(k));
-    if (k > mc) { mc = k; mejor = l->v[i].u.n; }
+    NV v; double k = 1; if (n_dic_buscar(DC(c), n_lv(l)[i], &v)) k = v.u.n + 1;
+    n_dic_poner(DC(c), n_lv(l)[i], n_num(k));
+    if (k > mc) { mc = k; mejor = n_lv(l)[i].u.n; }
   }
   n_dec(c);
   return n_num(mejor);
@@ -142,7 +142,7 @@ NAT(nu_correlacion) {
   if (x->n != y->n) return n_error("«correlacion»: las dos listas deben tener el mismo tamaño", NULL);
   if (x->n < 2) return n_error("«correlacion» necesita al menos 2 puntos", NULL);
   double mx = media_l(x), my = media_l(y), sxy = 0, sxx = 0, syy = 0;
-  for (int64_t i = 0; i < x->n; i++) { double dx = x->v[i].u.n - mx, dy = y->v[i].u.n - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
+  for (int64_t i = 0; i < x->n; i++) { double dx = n_lv(x)[i].u.n - mx, dy = n_lv(y)[i].u.n - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
   if (sxx == 0 || syy == 0) return n_error("«correlacion»: una de las listas no varía", NULL);
   return n_num(sxy / sqrt(sxx * syy));
 }
@@ -151,22 +151,22 @@ NAT(nu_regresion) {
   if (x->n != y->n) return n_error("«regresion»: las dos listas deben tener el mismo tamaño", NULL);
   if (x->n < 2) return n_error("«regresion» necesita al menos 2 puntos", NULL);
   double mx = media_l(x), my = media_l(y), sxy = 0, sxx = 0;
-  for (int64_t i = 0; i < x->n; i++) { sxy += (x->v[i].u.n - mx) * (y->v[i].u.n - my); sxx += pow_js(x->v[i].u.n - mx, 2); }
+  for (int64_t i = 0; i < x->n; i++) { sxy += (n_lv(x)[i].u.n - mx) * (n_lv(y)[i].u.n - my); sxx += pow_js(n_lv(x)[i].u.n - mx, 2); }
   if (sxx == 0) return n_error("«regresion»: todos los x son iguales", NULL);
   double m = sxy / sxx, b = my - m * mx, sr = 0, st = 0;
-  for (int64_t i = 0; i < x->n; i++) { sr += pow_js(y->v[i].u.n - (m * x->v[i].u.n + b), 2); st += pow_js(y->v[i].u.n - my, 2); }
+  for (int64_t i = 0; i < x->n; i++) { sr += pow_js(n_lv(y)[i].u.n - (m * n_lv(x)[i].u.n + b), 2); st += pow_js(n_lv(y)[i].u.n - my, 2); }
   NV d = n_dic_nuevo(); NV k;
   k = n_texto_utf8("pendiente"); n_dic_poner(DC(d), k, n_num(m)); n_dec(k);
   k = n_texto_utf8("intercepto"); n_dic_poner(DC(d), k, n_num(b)); n_dec(k);
   k = n_texto_utf8("r2"); n_dic_poner(DC(d), k, n_num(st == 0 ? 1 : 1 - sr / st)); n_dec(k);
   return d;
 }
-static double min_js(NLista* l) { double m = INFINITY; for (int64_t i = 0; i < l->n; i++) { double v = l->v[i].u.n; if (isnan(v)) return NAN; if (v < m || (v == 0 && m == 0 && signbit(v))) m = v; } return m; }
-static double max_js(NLista* l) { double m = -INFINITY; for (int64_t i = 0; i < l->n; i++) { double v = l->v[i].u.n; if (isnan(v)) return NAN; if (v > m || (v == 0 && m == 0 && !signbit(v))) m = v; } return m; }
+static double min_js(NLista* l) { double m = INFINITY; for (int64_t i = 0; i < l->n; i++) { double v = n_lv(l)[i].u.n; if (isnan(v)) return NAN; if (v < m || (v == 0 && m == 0 && signbit(v))) m = v; } return m; }
+static double max_js(NLista* l) { double m = -INFINITY; for (int64_t i = 0; i < l->n; i++) { double v = n_lv(l)[i].u.n; if (isnan(v)) return NAN; if (v > m || (v == 0 && m == 0 && !signbit(v))) m = v; } return m; }
 NAT(nu_normalizar) {
   (void)n; (void)extra; NUMS(0, "normalizar"); NLista* l = LS(a[0]);
   double lo = min_js(l), hi = max_js(l); NV r = n_lista_nueva(l->n);
-  for (int64_t i = 0; i < l->n; i++) n_lista_agregar(LS(r), n_num(hi == lo ? 0 : (l->v[i].u.n - lo) / (hi - lo)));
+  for (int64_t i = 0; i < l->n; i++) n_lista_agregar(LS(r), n_num(hi == lo ? 0 : (n_lv(l)[i].u.n - lo) / (hi - lo)));
   return r;
 }
 NAT(nu_histograma) {
@@ -174,11 +174,11 @@ NAT(nu_histograma) {
   if (k < 1) return n_error("«histograma»: el número de cajas debe ser ≥ 1", NULL);
   double lo = min_js(l), hi = max_js(l), w = (hi - lo) / k; if (w == 0 || isnan(w)) w = 1;
   int64_t K = (int64_t)k; double* c = (double*)calloc((size_t)K, sizeof(double));
-  for (int64_t q = 0; q < l->n; q++) { double i = floor((l->v[q].u.n - lo) / w); if (i >= k) i = k - 1; if (i < 0) i = 0; c[(int64_t)i]++; }
+  for (int64_t q = 0; q < l->n; q++) { double i = floor((n_lv(l)[q].u.n - lo) / w); if (i >= k) i = k - 1; if (i < 0) i = 0; c[(int64_t)i]++; }
   NV r = n_lista_nueva(K); for (int64_t q = 0; q < K; q++) n_lista_agregar(LS(r), n_num(c[q])); free(c);
   return r;
 }
-NAT(nu_producto) { (void)n; (void)extra; NUMS(0, "producto"); NLista* l = LS(a[0]); double p = 1; for (int64_t i = 0; i < l->n; i++) p *= l->v[i].u.n; return n_num(p); }
+NAT(nu_producto) { (void)n; (void)extra; NUMS(0, "producto"); NLista* l = LS(a[0]); double p = 1; for (int64_t i = 0; i < l->n; i++) p *= n_lv(l)[i].u.n; return n_num(p); }
 NAT(nu_amplitud) { (void)n; (void)extra; NUMS(0, "amplitud"); NLista* l = LS(a[0]); if (!l->n) return n_error("«amplitud» de una lista vacía", NULL); return n_num(max_js(l) - min_js(l)); }
 NAT(nu_cuartiles) {
   (void)n; (void)extra; NUMS(0, "cuartiles"); NLista* l = LS(a[0]);
@@ -194,29 +194,29 @@ NAT(nu_cuartiles) {
   #undef Q
   free(x); return d;
 }
-NAT(nu_acumulado) { (void)n; (void)extra; NUMS(0, "acumulado"); NLista* l = LS(a[0]); NV r = n_lista_nueva(l->n); double t = 0; for (int64_t i = 0; i < l->n; i++) { t += l->v[i].u.n; n_lista_agregar(LS(r), n_num(t)); } return r; }
+NAT(nu_acumulado) { (void)n; (void)extra; NUMS(0, "acumulado"); NLista* l = LS(a[0]); NV r = n_lista_nueva(l->n); double t = 0; for (int64_t i = 0; i < l->n; i++) { t += n_lv(l)[i].u.n; n_lista_agregar(LS(r), n_num(t)); } return r; }
 NAT(nu_covarianza) {
   (void)n; (void)extra; NUMS(0, "covarianza"); NUMS(1, "covarianza"); NLista *x = LS(a[0]), *y = LS(a[1]);
   if (x->n != y->n) return n_error("«covarianza»: las dos listas tienen que medir lo mismo", NULL);
   if (x->n < 2) return n_error("«covarianza» necesita al menos 2 pares", NULL);
   double mx = media_l(x), my = media_l(y), s = 0;
-  for (int64_t i = 0; i < x->n; i++) s += (x->v[i].u.n - mx) * (y->v[i].u.n - my);
+  for (int64_t i = 0; i < x->n; i++) s += (n_lv(x)[i].u.n - mx) * (n_lv(y)[i].u.n - my);
   return n_num(s / (double)(x->n - 1));
 }
 NAT(nu_tendencia) {
   (void)n; (void)extra; NUMS(0, "tendencia"); NLista* y = LS(a[0]);
   if (y->n < 2) return n_error("«tendencia» necesita al menos 2 datos", NULL);
   double N = (double)y->n, mx = (N - 1) / 2, my = media_l(y), sxy = 0, sxx = 0;
-  for (int64_t i = 0; i < y->n; i++) { sxy += ((double)i - mx) * (y->v[i].u.n - my); sxx += ((double)i - mx) * ((double)i - mx); }
+  for (int64_t i = 0; i < y->n; i++) { sxy += ((double)i - mx) * (n_lv(y)[i].u.n - my); sxx += ((double)i - mx) * ((double)i - mx); }
   return n_num(sxy / sxx);
 }
 NAT(nu_tipificar) {
   (void)n; (void)extra; NUMS(0, "tipificar"); NLista* x = LS(a[0]);
   if (x->n < 2) return n_error("«tipificar» necesita al menos 2 datos", NULL);
-  double m = media_l(x), q = 0; for (int64_t i = 0; i < x->n; i++) q = q + (x->v[i].u.n - m) * (x->v[i].u.n - m);
+  double m = media_l(x), q = 0; for (int64_t i = 0; i < x->n; i++) q = q + (n_lv(x)[i].u.n - m) * (n_lv(x)[i].u.n - m);
   double s = sqrt(q / (double)(x->n - 1));
   if (s == 0) return n_error("«tipificar»: todos los datos son iguales, no hay desviación", NULL);
-  NV r = n_lista_nueva(x->n); for (int64_t i = 0; i < x->n; i++) n_lista_agregar(LS(r), n_num((x->v[i].u.n - m) / s));
+  NV r = n_lista_nueva(x->n); for (int64_t i = 0; i < x->n; i++) n_lista_agregar(LS(r), n_num((n_lv(x)[i].u.n - m) / s));
   return r;
 }
 
@@ -250,19 +250,19 @@ NAT(nu_azarNormal) {
   if (s < 0) return n_error("«azarNormal»: la desviación no puede ser negativa", NULL);
   return n_num(m + s * az_normal());
 }
-NAT(nu_elegir) { (void)n; (void)extra; LST(a[0], 1, "elegir"); NLista* l = LS(a[0]); if (!l->n) return n_error("«elegir» de una lista vacía", NULL); return n_inc(l->v[(int64_t)floor(az_sig() * (double)l->n)]); }
+NAT(nu_elegir) { (void)n; (void)extra; LST(a[0], 1, "elegir"); NLista* l = LS(a[0]); if (!l->n) return n_error("«elegir» de una lista vacía", NULL); return n_inc(n_lv(l)[(int64_t)floor(az_sig() * (double)l->n)]); }
 NAT(nu_elegirVarios) {
   (void)n; (void)extra; LST(a[0], 1, "elegirVarios"); ENT(k, 1, "elegirVarios"); NLista* l = LS(a[0]);
   if (k < 0) return n_error("«elegirVarios»: no se pueden elegir menos de 0", NULL);
   if (k > (double)l->n) return ERRP(n_texto_utf8("son SIN repetir; para permitir repetidos, llama a «elegir» varias veces"), "«elegirVarios»: se piden %j de una lista de %d", k, (long long)l->n);
-  NV* c = (NV*)n_mem(sizeof(NV) * (size_t)(l->n + 1)); memcpy(c, l->v, sizeof(NV) * (size_t)l->n);
+  NV* c = (NV*)n_mem(sizeof(NV) * (size_t)(l->n + 1)); memcpy(c, n_lv(l), sizeof(NV) * (size_t)l->n);
   for (int64_t i = 0; i < (int64_t)k; i++) { int64_t j = i + (int64_t)floor(az_sig() * (double)(l->n - i)); NV t = c[i]; c[i] = c[j]; c[j] = t; }
   NV r = n_lista_de(c, (int)k); free(c); return r;
 }
 NAT(nu_barajar) {
   (void)n; (void)extra; LST(a[0], 1, "barajar"); NLista* l = LS(a[0]);
-  NV r = n_lista_de(l->v, (int)l->n); NLista* c = LS(r);
-  for (int64_t i = c->n - 1; i > 0; i--) { int64_t j = (int64_t)floor(az_sig() * (double)(i + 1)); NV t = c->v[i]; c->v[i] = c->v[j]; c->v[j] = t; }
+  NV r = n_lista_de(n_lv(l), (int)l->n); NLista* c = LS(r);
+  for (int64_t i = c->n - 1; i > 0; i--) { int64_t j = (int64_t)floor(az_sig() * (double)(i + 1)); NV t = n_lv(c)[i]; n_lv(c)[i] = n_lv(c)[j]; n_lv(c)[j] = t; }
   return r;
 }
 NAT(nu_semilla) { (void)n; (void)extra; ENT(s, 0, "semilla"); az_sem = (uint32_t)(uint64_t)(int64_t)s; az_hay_guardada = 0; return n_nulo(); }
@@ -334,7 +334,7 @@ NAT(nu_divisores) {
   if (k == 0) return n_error("«divisores» de 0: todos lo dividen", NULL);
   NV ch = n_lista_nueva(8), gr = n_lista_nueva(8);
   for (double d = 1; d * d <= k; d++) { if (fmod(k, d)) continue; n_lista_agregar(LS(ch), n_num(d)); if (d != k / d) n_lista_agregar(LS(gr), n_num(k / d)); }
-  for (int64_t i = LS(gr)->n - 1; i >= 0; i--) n_lista_agregar(LS(ch), LS(gr)->v[i]);
+  for (int64_t i = LS(gr)->n - 1; i >= 0; i--) n_lista_agregar(LS(ch), n_lv(LS(gr))[i]);
   LS(gr)->n = 0; n_dec(gr);
   return ch;
 }
@@ -386,11 +386,11 @@ NAT(nu_amortizacion) {
 static int filas_de(NV m, const char* f, NV* err) {
   if (!exige_lista(m, 1, f, err)) return 0;
   NLista* l = LS(m);
-  for (int64_t i = 0; i < l->n; i++) if (!n_es(l->v[i], NC_LISTA)) { *err = ERR("«%s»: se esperaba una matriz (lista de listas)", f); return 0; }
+  for (int64_t i = 0; i < l->n; i++) if (!n_es(n_lv(l)[i], NC_LISTA)) { *err = ERR("«%s»: se esperaba una matriz (lista de listas)", f); return 0; }
   return 1;
 }
 #define FILAS(k, f) do { NV e_; if (!filas_de(a[k], f, &e_)) return e_; } while (0)
-#define F_(m, i) LS(LS(m)->v[i])
+#define F_(m, i) LS(n_lv(LS(m))[i])
 static double num0(NV v) { return v.t == N_NUM ? v.u.n : (v.t == N_BOOL ? v.u.b : (v.t == N_NULO ? 0 : NAN)); }
 NAT(nu_matriz) {
   (void)n; (void)extra; NUM(a[0], 1, "matriz"); NUM(a[1], 2, "matriz");
@@ -404,7 +404,7 @@ NAT(nu_transponer) {
   (void)n; (void)extra; FILAS(0, "transponer"); NLista* m = LS(a[0]);
   if (!m->n) return n_lista_nueva(0);
   int64_t nc = F_(a[0], 0)->n; NV r = n_lista_nueva(nc);
-  for (int64_t j = 0; j < nc; j++) { NV fl = n_lista_nueva(m->n); for (int64_t i = 0; i < m->n; i++) { NLista* fi = F_(a[0], i); n_lista_agregar(LS(fl), j < fi->n ? n_inc(fi->v[j]) : n_nulo()); } n_lista_agregar(LS(r), fl); }
+  for (int64_t j = 0; j < nc; j++) { NV fl = n_lista_nueva(m->n); for (int64_t i = 0; i < m->n; i++) { NLista* fi = F_(a[0], i); n_lista_agregar(LS(fl), j < fi->n ? n_inc(n_lv(fi)[j]) : n_nulo()); } n_lista_agregar(LS(r), fl); }
   return r;
 }
 NAT(nu_multMatriz) {
@@ -420,8 +420,8 @@ NAT(nu_multMatriz) {
     for (int64_t j = 0; j < nc; j++) fila[j] = 0.0;
     NLista* Ai = F_(a[0], i);
     for (int64_t k = 0; k < nm; k++) {
-      double x = k < Ai->n ? num0(Ai->v[k]) : NAN; NLista* Bk = F_(a[1], k);
-      for (int64_t j = 0; j < nc; j++) fila[j] = fma(x, j < Bk->n ? num0(Bk->v[j]) : NAN, fila[j]);
+      double x = k < Ai->n ? num0(n_lv(Ai)[k]) : NAN; NLista* Bk = F_(a[1], k);
+      for (int64_t j = 0; j < nc; j++) fila[j] = fma(x, j < Bk->n ? num0(n_lv(Bk)[j]) : NAN, fila[j]);
     }
     NV fl = n_lista_nueva(nc); for (int64_t j = 0; j < nc; j++) n_lista_agregar(LS(fl), n_num(fila[j]));
     n_lista_agregar(LS(r), fl);
@@ -432,7 +432,7 @@ NAT(nu_multMatriz) {
 static double* matriz_plana(NV m, int64_t* n, int64_t* c) {
   NLista* l = LS(m); *n = l->n; *c = l->n ? F_(m, 0)->n : 0;
   double* x = (double*)n_mem(sizeof(double) * (size_t)((*n) * (*c) + 1));
-  for (int64_t i = 0; i < *n; i++) { NLista* f = F_(m, i); for (int64_t j = 0; j < *c; j++) x[i * *c + j] = j < f->n ? num0(f->v[j]) : NAN; }
+  for (int64_t i = 0; i < *n; i++) { NLista* f = F_(m, i); for (int64_t j = 0; j < *c; j++) x[i * *c + j] = j < f->n ? num0(n_lv(f)[j]) : NAN; }
   return x;
 }
 NAT(nu_determinante) {
@@ -486,14 +486,14 @@ NAT(nu_identidad) {
 NAT(nu_traza) {
   (void)n; (void)extra; FILAS(0, "traza"); NLista* m = LS(a[0]);
   if (!m->n || m->n != F_(a[0], 0)->n) return n_error("«traza»: la matriz tiene que ser cuadrada", NULL);
-  double t = 0; for (int64_t i = 0; i < m->n; i++) { NLista* f = F_(a[0], i); t += i < f->n ? num0(f->v[i]) : NAN; }
+  double t = 0; for (int64_t i = 0; i < m->n; i++) { NLista* f = F_(a[0], i); t += i < f->n ? num0(n_lv(f)[i]) : NAN; }
   return n_num(t);
 }
 NAT(nu_inversa) {
   (void)n; (void)extra; FILAS(0, "inversa"); NLista* l = LS(a[0]); int64_t N = l->n;
   if (!N || N != F_(a[0], 0)->n) return n_error("«inversa»: la matriz tiene que ser cuadrada", NULL);
   int64_t W = 2 * N; double* A = (double*)n_mem(sizeof(double) * (size_t)(N * W));
-  for (int64_t i = 0; i < N; i++) { NLista* f = F_(a[0], i); for (int64_t j = 0; j < N; j++) A[i * W + j] = j < f->n ? num0(f->v[j]) : NAN; for (int64_t j = 0; j < N; j++) A[i * W + N + j] = i == j ? 1 : 0; }
+  for (int64_t i = 0; i < N; i++) { NLista* f = F_(a[0], i); for (int64_t j = 0; j < N; j++) A[i * W + j] = j < f->n ? num0(n_lv(f)[j]) : NAN; for (int64_t j = 0; j < N; j++) A[i * W + N + j] = i == j ? 1 : 0; }
   int64_t* fi = (int64_t*)n_mem(sizeof(int64_t) * (size_t)N); for (int64_t i = 0; i < N; i++) fi[i] = i;
   #define M(i, j) A[fi[i] * W + (j)]
   for (int64_t c = 0; c < N; c++) {

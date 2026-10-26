@@ -30,10 +30,8 @@ static int exige_fn(NV v, int k, const char* f, NV* err) {
 /* Corre f sin argumentos. Si falló, devuelve 1 y deja en *m el mensaje (y en
    *p la pista, o nulo); el error ya no queda pendiente. */
 static int pr_aislado(NV f, NV* m, NV* p) {
-  int nm = n_hilo.nmarcos;
   NV r = n_llamar(f, NULL, 0);
   if (!N_FALLO(r)) { n_dec(r); return 0; }
-  n_hilo.nmarcos = nm;
   *m = n_inc(n_hilo.mensaje);
   *p = n_inc(n_hilo.pista);
   err_limpiar();
@@ -47,7 +45,7 @@ static NV pr_mensajeDe(NV m, NV p) {   /* el mensaje y, si hay, «↳ pista» de
 /* ── estructura ──────────────────────────────────────────────────────────── */
 static NV pr_grupo_actual(void) {
   NBuf b = {0}; NLista* l = LS(pr_pila);
-  for (int64_t i = 0; i < l->n; i++) { if (i) b_utf8(&b, " › "); b_txt(&b, l->v[i]); }
+  for (int64_t i = 0; i < l->n; i++) { if (i) b_utf8(&b, " › "); b_txt(&b, n_lv(l)[i]); }
   return b_texto(&b);
 }
 static NV pr_registra(NV* a, const char* f, int saltada, int solo) {
@@ -66,7 +64,7 @@ NAT(pr_grupo) {
   NV r, e_;
   if (!exige_fn(a[1], 2, "grupo", &e_)) r = e_;
   else r = n_llamar(a[1], NULL, 0);
-  NLista* l = LS(pr_pila); n_dec(l->v[--l->n]);
+  NLista* l = LS(pr_pila); n_dec(n_lv(l)[--l->n]);
   if (N_FALLO(r)) return r;
   n_dec(r);
   return n_nulo();
@@ -191,8 +189,8 @@ NAT(pr_debeFallarCon) {
 /* ── dobles: el espía ────────────────────────────────────────────────────── */
 static NV pr_espia_nat(NV* a, int n, void* extra) {   /* extraV = [original, llamadas] */
   NNativa* yo = (NNativa*)extra; NLista* par = LS(yo->extraV);
-  n_lista_agregar(LS(par->v[1]), n_lista_de(a, n));
-  return n_llamar(par->v[0], a, n);
+  n_lista_agregar(LS(n_lv(par)[1]), n_lista_de(a, n));
+  return n_llamar(n_lv(par)[0], a, n);
 }
 NAT(pr_espia) {
   (void)n; (void)extra; FNC(a[0], 1, "espia");
@@ -204,12 +202,12 @@ NAT(pr_espia) {
 }
 static NLista* pr_llamadas(NV f) {
   if (!n_es(f, NC_NATIVA) || ((NNativa*)f.u.o)->f != pr_espia_nat) return NULL;
-  return LS(LS(((NNativa*)f.u.o)->extraV)->v[1]);
+  return LS(n_lv(LS(((NNativa*)f.u.o)->extraV))[1]);
 }
 NAT(pr_llamadasDe) {
   (void)n; (void)extra; NLista* l = pr_llamadas(a[0]);
   if (!l) return n_error("«llamadasDe»: eso no es un espía", "envuélvelo antes con espia(f)");
-  return n_lista_de(l->v, (int)l->n);
+  return n_lista_de(n_lv(l), (int)l->n);
 }
 NAT(pr_vecesLlamada) {
   (void)n; (void)extra; NLista* l = pr_llamadas(a[0]);
@@ -241,7 +239,7 @@ static void pr_correr_ganchos(NV lista, const char* donde) {
   NLista* l = LS(lista);
   for (int64_t i = 0; i < l->n; i++) {
     NV m, p;
-    if (pr_aislado(l->v[i], &m, &p)) { pr_fallan++; NV d = T(donde); pr_fallo(d, m, p); n_dec(d); n_dec(m); n_dec(p); }
+    if (pr_aislado(n_lv(l)[i], &m, &p)) { pr_fallan++; NV d = T(donde); pr_fallo(d, m, p); n_dec(d); n_dec(m); n_dec(p); }
   }
 }
 NAT(pr_correrPruebas) {
@@ -313,7 +311,7 @@ NAT(pr_resumenPruebas) {
   if (pr_saltadas) { b_utf8(&b, ", "); num_js(pr_saltadas, s); b_utf8(&b, s); b_utf8(&b, " saltadas"); }
   b_utf8(&b, " · "); num_js(pr_afirmaciones, s); b_utf8(&b, s); b_utf8(&b, " afirmaciones");
   NLista* f = LS(pr_fallos);
-  if (f->n) { b_c(&b, '\n'); for (int64_t i = 0; i < f->n; i++) { b_utf8(&b, "\n  ✗ "); b_txt(&b, f->v[i]); } }
+  if (f->n) { b_c(&b, '\n'); for (int64_t i = 0; i < f->n; i++) { b_utf8(&b, "\n  ✗ "); b_txt(&b, n_lv(f)[i]); } }
   return b_texto(&b);
 }
 

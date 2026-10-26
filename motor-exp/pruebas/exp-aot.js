@@ -53,13 +53,20 @@ programas.forEach(([nombre, src, original], i) => {
     fallanC++; fallos.push(`✗ ${nombre}: no compiló\n    ${m.split('\n').slice(0, 6).join('\n    ')}`);
     return;
   }
-  const n = spawnSync(exe, [], { encoding: 'utf8', timeout: 60000, cwd });
+  // (motor-exp A1) En Windows un .exe recien escrito puede no arrancar al
+  // primer intento (el antivirus lo esta leyendo): spawn devuelve un error y
+  // status null. Se reintenta un poco, como hace libcuda-falsa con LoadLibrary.
+  let n = spawnSync(exe, [], { encoding: 'utf8', timeout: 60000, cwd });
+  for (let k = 0; k < 10 && n.status === null && !(n.error && n.error.code === 'ETIMEDOUT'); k++) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * (k + 1));
+    n = spawnSync(exe, [], { encoding: 'utf8', timeout: 60000, cwd });
+  }
   const a = (vm.stdout || ''), b = (n.stdout || '');
   if (a === b && vm.status === n.status) { iguales++; return; }
   distintos++;
   const la = a.split('\n'), lb = b.split('\n');
   let j = 0; while (j < la.length && la[j] === lb[j]) j++;
-  fallos.push(`✗ ${nombre}: distinto (código ${vm.status} en la VM, ${n.status} nativo), desde la línea ${j + 1}\n    VM:     ${JSON.stringify(la.slice(j, j + 3).join('⏎'))}\n    nativo: ${JSON.stringify(lb.slice(j, j + 3).join('⏎'))}`);
+  fallos.push(`✗ ${nombre}: distinto (código ${vm.status} en la VM, ${n.status} nativo${n.status === null ? ` · ${n.signal || ''} ${n.error ? n.error.code || n.error.message : ''}` : ''}), desde la línea ${j + 1}\n    VM:     ${JSON.stringify(la.slice(j, j + 3).join('⏎'))}\n    nativo: ${JSON.stringify(lb.slice(j, j + 3).join('⏎'))}`);
 });
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) { /* nada */ }
 

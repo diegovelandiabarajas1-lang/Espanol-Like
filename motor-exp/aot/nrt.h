@@ -80,7 +80,16 @@ static inline void n_asignar(NV* d, NV v) { NV viejo = *d; *d = n_inc(v); n_dec(
 /* Texto en UTF-16, como el texto de JavaScript: longitud, índices y comparar
    dan lo mismo que en la VM. Se escribe en UTF-8 al salir. */
 typedef struct { NObj h; int64_t n; uint32_t hash; uint16_t s[]; } NTexto;
-typedef struct { NObj h; int64_t n, cap; NV* v; } NLista;
+/* (motor-exp A2) Una lista guarda sus elementos según lo que lleva: «el» dice
+   cómo. 3 = vacía (nada reservado todavía: el primer elemento decide); 1 = solo
+   números (double, 8 bytes); 2 = solo bools (1 byte); 0 = valores NV de 16 bytes
+   (lo de siempre, y lo que queda en cuanto entra algo distinto). Es lo que hace
+   V8 con sus «elements kinds»: una lista de dos millones de bools ocupa 2 MB y
+   no 32. Todo el runtime llega a los elementos por n_lv() (que convierte a NV
+   si hace falta, una vez) o por n_lista_leer/n_lista_poner/n_lista_agregar,
+   que respetan la clase. Nadie toca nv_ ni d a mano. */
+typedef struct { NObj h; int64_t n, cap; NV* nv_; uint8_t el; void* d; } NLista;
+enum { NL_NV = 0, NL_NUM = 1, NL_BOOL = 2, NL_VACIA = 3 };
 typedef struct NRegDesc NRegDesc;
 /* Diccionario con orden de inserción (como el Map de JavaScript). */
 typedef struct { NV k, v; int vivo; } NEntrada;
@@ -109,8 +118,8 @@ typedef struct {
   NV mensaje, pista, tipo;
   int linea;
   int ntraza; NMarco traza[N_MAX_TRAZA];
-  NMarco marcos[N_MAX_MARCOS]; int nmarcos;
-  int profundidad;
+  int profundidad;      /* (A2) la de la última llamada general; las directas la llevan en un registro */
+  int linea_puesta;     /* (A2) ya se apuntó la línea del error (la primera función que lo vio) */
 } NHilo;
 extern N_HILO_LOCAL NHilo n_hilo;
 #define N_ERR (n_err_valor())
@@ -124,13 +133,14 @@ NV n_errorf(const char* fmt, ...);
 NV n_lanzar(NV v);
 NV n_error_capturado(void);                                      /* convierte lo pendiente en valor y lo limpia */
 void n_fallo_final(void);                                        /* imprime como la VM y sale con 1 */
-static inline int n_marco_entrar(const char* nombre, int linea) {
-  if (n_hilo.nmarcos >= N_MAX_MARCOS) return 0;
-  n_hilo.marcos[n_hilo.nmarcos].nombre = nombre; n_hilo.marcos[n_hilo.nmarcos].linea = linea; n_hilo.nmarcos++;
-  return 1;
-}
-static inline void n_marco_salir(void) { n_hilo.nmarcos--; }
-#define N_LINEA(l) (n_hilo.marcos[n_hilo.nmarcos - 1].linea = (l))
+/* (motor-exp A2) La traza se construye AL DESHACER, no al entrar: una función no
+   apunta nada al entrar ni al salir (eso costaba tanto como la llamada misma).
+   Cuando un error sube, cada función por la que pasa añade su nombre y la línea
+   en la que estaba (n_traza), de dentro hacia fuera: la misma traza que daba la
+   pila de marcos. La profundidad viaja como parámetro (prof) entre las
+   llamadas directas, y por n_hilo.profundidad cuando pasa por n_llamar. */
+void n_traza(const char* nombre, int linea);
+#define N_ERROR_PROFUNDIDAD() n_error("desbordamiento de pila: demasiadas llamadas anidadas", "suele indicar una recursi\303\263n sin caso base")
 /* El camino corto de una llamada: un cierre con los argumentos justos va
    directo a su función de C; todo lo demás (defectos, nativas, errores) pasa
    por n_llamar, que dice lo mismo que la VM. */
@@ -138,7 +148,7 @@ NV n_llamar(NV f, NV* args, int n);
 static inline NV n_llamar_r(NV f, NV* a, int n) {
   if (f.t == N_OBJ && f.u.o->clase == NC_CIERRE) {
     NCierre* c = (NCierre*)f.u.o; const NFn* fn = c->fn;
-    if (fn->aridad == n && !fn->corrutina && n_hilo.nmarcos < N_MAX_MARCOS) return fn->f(c, a, n);
+    if (fn->aridad == n && !fn->corrutina) return fn->f(c, a, n);
   }
   return n_llamar(f, a, n);
 }
@@ -181,7 +191,15 @@ const char* n_tipo_de(NV v);
 
 /* ── diccionarios y listas, para la biblioteca ──────────────────────────── */
 NV n_lista_nueva(int64_t cap);
-void n_lista_agregar(NLista* l, NV v);   /* toma la referencia */
+void n_lista_agregar(NLista* l, NV v);   /* toma la referencia; respeta la clase de la lista */
+NV* n_lista_materializar(NLista* l);     /* pasa la lista a NV (una vez) y devuelve los elementos */
+static inline NV* n_lv(NLista* l) { return l->el ? n_lista_materializar(l) : l->nv_; }
+void n_lista_poner(NLista* l, int64_t k, NV v);   /* l[k] = v (0 <= k < n), como n_asignar */
+static inline NV n_lista_leer(NLista* l, int64_t k) {   /* l[k] (0 <= k < n), referencia nueva */
+  if (l->el == NL_NUM) return n_num(((double*)l->d)[k]);
+  if (l->el == NL_BOOL) return n_bool(((uint8_t*)l->d)[k]);
+  return n_inc(l->nv_[k]);
+}
 NV n_dic_nuevo(void);
 int n_dic_poner(NDic* d, NV k, NV v);    /* inc a los dos */
 int n_dic_buscar(NDic* d, NV k, NV* v);  /* sin inc */
@@ -196,6 +214,27 @@ void n_registrar_modulos(const char* const* claves, const NFn* const* fns, int n
 void n_salida(NV texto);                          /* una línea */
 extern NV n_faltante;
 extern NV n_nativa_registro;
+
+/* ── (motor-exp A1) lo que usa el C con tipos que emite el compilador ─────── */
+/* «para … en rango(…)» sin construir la lista: los argumentos se validan como
+   en la nativa (los mismos errores, el mismo tope) y «largo» es exactamente
+   cuántos elementos tendría la lista. */
+typedef struct { double ini, fin, paso; int64_t largo; } NRango;
+NV n_rango_preparar(NV* a, int n, NRango* r);    /* nulo, o N_ERR */
+/* Comprobación de los tipos que el compilador da por sabidos. Con
+   -DN_AOT_COMPROBAR (N_AOT_COMPROBAR=1 al compilar) cada suposición se mira
+   en tiempo de ejecución y, si falla, el programa se para diciéndolo: es
+   para la batería, no para el uso normal (sin la bandera no cuesta nada). */
+void n_aot_tipo_mal(const char* que, int linea);
+#ifdef N_AOT_COMPROBAR
+#define N_CK_NUM(v) do { if ((v).t != N_NUM) n_aot_tipo_mal("un número", n_hilo.linea); } while (0)
+#define N_CK_BOOL(v) do { if ((v).t != N_BOOL) n_aot_tipo_mal("un bool", n_hilo.linea); } while (0)
+#define N_CK_LISTA(v) do { if ((v).t != N_OBJ || (v).u.o->clase != NC_LISTA) n_aot_tipo_mal("una lista", n_hilo.linea); } while (0)
+#else
+#define N_CK_NUM(v) ((void)0)
+#define N_CK_BOOL(v) ((void)0)
+#define N_CK_LISTA(v) ((void)0)
+#endif
 
 /* ── (motor-exp N4.10) C llamado directamente: ver nrt_enlace.inc ───────── */
 /* «sim» es la dirección del símbolo de C: con enlace débil (Linux, macOS) es

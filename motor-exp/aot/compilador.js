@@ -82,42 +82,162 @@ function efecto(it) {
     default: throw new ErrorAOT('instrucción sin efecto conocido ' + it.nombre);
   }
 }
-function analizar(fn, ins) {
+// (motor-exp A1) El IR con tipos que N4.1 dejó previsto. Además de la altura
+// de la pila, en cada instrucción se sabe QUÉ hay en cada casilla:
+//   num · bool · nulo      escalares: sin conteo de referencias, sin mirar la etiqueta
+//   lista · texto · dic    un objeto de esa clase (con conteo)
+//   cierre · fn:K · nat:N  un cierre; el de la función global K; la nativa N (con conteo)
+//   rango:Q                un «rango» que no se construye: vive en C, en la casilla Q
+//   obj · any · bot        un objeto cualquiera · no se sabe · todavía nada (inalcanzable)
+// De dónde salen: las constantes, lo que devuelve cada operación cuando sus
+// operandos se conocen, lo que devuelve una función conocida (punto fijo
+// optimista entre todas) y, en la «versión numérica» de una función, sus
+// parámetros guardados (ver compilarAOT). Donde dos caminos se juntan, los
+// tipos se juntan: si no coinciden, se baja a «obj» o a «any».
+const esObjT = t => t === 'obj' || t === 'lista' || t === 'texto' || t === 'dic' || t === 'cierre' || t.startsWith('fn:') || t.startsWith('nat:');
+const esEscalar = t => t === 'num' || t === 'bool' || t === 'nulo';
+const esRango = t => t.startsWith('rango:');
+// ¿se puede copiar y tirar sin tocar el conteo? (bot: código inalcanzable)
+const sinConteo = t => esEscalar(t) || esRango(t) || t === 'bot';
+// la función global K o la nativa N, tal como están en G: G las mantiene vivas
+// (nunca se reasignan), así que una casilla con ellas no necesita su propia referencia
+const prestadoG = t => t.startsWith('fn:') || t.startsWith('nat:');
+function juntar(a, b, prestar) {
+  if (a === b) return a;
+  if (a === 'bot') return b;
+  if (b === 'bot') return a;
+  if (prestar && prestadoG(a) !== prestadoG(b)) throw new ErrorAOT('prestado');   // se captura: la función va con conteo en G
+  if (esRango(a) || esRango(b)) throw new ErrorAOT('rango');   // se captura: la función va sin rangos virtuales
+  if (esObjT(a) && esObjT(b)) return 'obj';
+  return 'any';
+}
+const NUMERICOS = new Set([OP.ADD, OP.SUB, OP.MUL, OP.DIV, OP.IDIV, OP.MOD, OP.POW, OP.NEG, OP.LT, OP.LE, OP.GT, OP.GE]);
+
+// ¿«para … en rango(…)»? La CALL a rango seguida de lo que el compilador de
+// bytecode emite para «para»: CONST 0 (el índice), GET_LOCAL del iterable, LEN.
+// ¿«agregar(lista, x)» como sentencia (su resultado se tira)? Va derecho a la lista.
+function esAgregar(ins, k, tc, n, tLista) {
+  return tc === 'nat:agregar' && n === 2 && tLista === 'lista' && !!ins[k + 1] && ins[k + 1].op === OP.POP;
+}
+const PRODUCEN = new Set([OP.CONST, OP.NULO, OP.CIERTO, OP.FALSO, OP.DUP, OP.GET_LOCAL, OP.GET_GLOBAL, OP.GET_UP,
+  OP.ADD, OP.SUB, OP.MUL, OP.DIV, OP.IDIV, OP.MOD, OP.POW, OP.NEG, OP.NOT, OP.EQ, OP.NEQ, OP.LT, OP.LE, OP.GT, OP.GE,
+  OP.CALL, OP.CLOSURE, OP.LISTA, OP.DIC, OP.IDX_GET, OP.IDX_SET, OP.PROP_GET, OP.CONCAT, OP.LEN]);
+function esParaRango(ins, k, consts, base) {
+  const b = ins[k + 1], c = ins[k + 2], e = ins[k + 3];
+  return b && c && e && b.op === OP.CONST && consts[b.arg] === 0 && c.op === OP.GET_LOCAL && c.arg === base && e.op === OP.LEN;
+}
+
+function analizar(fn, ins, ctx) {
+  const consts = fn.chunk.consts;
   const porPos = new Map(ins.map((it, k) => [it.pos, k]));
-  const est = new Array(ins.length).fill(null);   // { d, h: [{pos, d, destino}] }
+  const est = new Array(ins.length).fill(null);   // { d, h: [{pos, d, destino}], t: [tipos], p: [procedencia] }
   const pendientes = [];
-  const llegar = (k, d, h, desde) => {
+  const usados = new Set();                       // parámetros que entran en una operación numérica
+  let ret = 'bot';
+  const llegar = (k, d, h, t, p, desde) => {
     if (k === undefined) throw new ErrorAOT(`«${fn.nombre}»: un salto no cae en una instrucción (desde ${desde})`);
     const e = est[k];
-    if (!e) { est[k] = { d, h }; pendientes.push(k); return; }
+    if (!e) { est[k] = { d, h, t: t.slice(0, d), p: p.slice(0, d) }; pendientes.push(k); return; }
     if (e.d !== d) throw new ErrorAOT(`«${fn.nombre}»: la pila no tiene la misma altura en la posición ${ins[k].pos} (${e.d} y ${d})`);
     const a = e.h.map(x => x.pos).join(','), b = h.map(x => x.pos).join(',');
     if (a !== b) throw new ErrorAOT(`«${fn.nombre}»: un «intentar» queda abierto de dos maneras en la posición ${ins[k].pos}`);
+    let cambio = false;
+    for (let q = 0; q < d; q++) {
+      const j = juntar(e.t[q], t[q], ctx.prestar);
+      if (j !== e.t[q]) { e.t[q] = j; cambio = true; }
+      if (e.p[q] !== p[q] && e.p[q] !== -1) { e.p[q] = -1; cambio = true; }
+    }
+    if (cambio && !pendientes.includes(k)) pendientes.push(k);
   };
-  llegar(0, 1 + fn.aridad, [], 'inicio');
+  const t0 = ['cierre'], p0 = [-1];
+  for (let q = 0; q < fn.aridad; q++) { t0.push(ctx.tipoParam(q)); p0.push(-1); }
+  llegar(0, 1 + fn.aridad, [], t0, p0, 'inicio');
   let maxD = 1 + fn.aridad;
+  const cap = q => ctx.capturados.has(q);
+  const prestada = q => q >= 1 && q <= fn.aridad && !ctx.escritos.has(q) && !cap(q);
   while (pendientes.length) {
     const k = pendientes.pop(), it = ins[k], { d, h } = est[k];
+    const t = est[k].t.slice(), p = est[k].p.slice();
     if (d > maxD) maxD = d;
     const d2 = d + efecto(it);
     if (d2 < 0) throw new ErrorAOT(`«${fn.nombre}»: la pila se queda vacía en ${it.pos}`);
     if (d2 + 1 > maxD) maxD = d2 + 1;
     const sig = porPos.get(it.fin);
+    const usa = q => { if (p[q] >= 0) usados.add(p[q]); };
+    const num2 = (a, b) => (t[a] === 'bot' || t[b] === 'bot') ? 'bot' : (t[a] === 'num' && t[b] === 'num') ? 'num' : 'any';
+    const pon = (q, tipo) => { t[q] = tipo; p[q] = -1; };
     switch (it.op) {
-      case OP.RET: case OP.LANZAR: break;
-      case OP.JMP: case OP.LOOP: llegar(porPos.get(it.destino), d2, h, it.pos); break;
-      case OP.JMP_FALSE: case OP.JMP_TRUE: llegar(porPos.get(it.destino), d2, h, it.pos); llegar(sig, d2, h, it.pos); break;
-      case OP.TRY: {
-        const man = { pos: it.pos, d, destino: it.destino };
-        llegar(porPos.get(it.destino), d + 1, h, it.pos);
-        llegar(sig, d, h.concat([man]), it.pos);
+      case OP.CONST: {
+        const v = consts[it.arg];
+        pon(d, typeof v === 'number' ? 'num' : typeof v === 'string' ? 'texto' : v === null ? 'nulo' : typeof v === 'boolean' ? 'bool' : 'any');
         break;
       }
-      case OP.FIN_TRY: llegar(sig, d2, h.slice(0, -1), it.pos); break;
-      default: llegar(sig, d2, h, it.pos);
+      case OP.NULO: pon(d, 'nulo'); break;
+      case OP.CIERTO: case OP.FALSO: pon(d, 'bool'); break;
+      case OP.POP: break;
+      case OP.DUP: t[d] = t[d - 1]; p[d] = p[d - 1]; break;
+      case OP.GET_LOCAL:
+        t[d] = cap(it.arg) ? 'any' : t[it.arg];
+        p[d] = prestada(it.arg) ? it.arg - 1 : -1;
+        break;
+      case OP.SET_LOCAL: if (it.arg !== d - 1) pon(it.arg, cap(it.arg) ? 'any' : t[d - 1]); break;
+      case OP.GET_GLOBAL: pon(d, ctx.tipoGlobal(consts[it.arg])); break;
+      case OP.SET_GLOBAL: case OP.DEF_GLOBAL: break;
+      case OP.GET_UP: pon(d, 'any'); break;
+      case OP.SET_UP: break;
+      case OP.ADD: {
+        usa(d - 2); usa(d - 1);
+        const a = t[d - 2], b = t[d - 1];
+        pon(d - 2, (a === 'bot' || b === 'bot') ? 'bot' : (a === 'num' && b === 'num') ? 'num'
+          : (a === 'texto' && b === 'texto') ? 'texto' : (a === 'lista' && b === 'lista') ? 'lista' : 'any');
+        break;
+      }
+      case OP.SUB: case OP.MUL: case OP.DIV: case OP.IDIV: case OP.MOD: case OP.POW:
+        usa(d - 2); usa(d - 1); pon(d - 2, num2(d - 2, d - 1)); break;
+      case OP.NEG: usa(d - 1); pon(d - 1, t[d - 1] === 'bot' ? 'bot' : t[d - 1] === 'num' ? 'num' : 'any'); break;
+      case OP.NOT: pon(d - 1, 'bool'); break;
+      case OP.EQ: case OP.NEQ: pon(d - 2, 'bool'); break;
+      case OP.LT: case OP.LE: case OP.GT: case OP.GE: usa(d - 2); usa(d - 1); pon(d - 2, 'bool'); break;
+      case OP.JMP: case OP.LOOP: case OP.JMP_FALSE: case OP.JMP_TRUE: break;
+      case OP.CALL: {
+        const n = it.arg, base = d - n - 1, tc = t[base];
+        let tr = 'any';
+        if (tc.startsWith('fn:')) tr = ctx.retDe(Number(tc.slice(3)), n, t.slice(base + 1, d));
+        else if (tc === 'nat:rango' && n >= 1 && n <= 3) tr = ctx.rango && esParaRango(ins, k, consts, base) ? `rango:${base}` : 'lista';
+        else if (esAgregar(ins, k, tc, n, t[base + 1])) tr = 'nulo';
+        else if (tc.startsWith('nat:')) tr = ctx.retNativa(tc.slice(4));
+        pon(base, tr);
+        break;
+      }
+      case OP.CLOSURE: pon(d, 'cierre'); break;
+      case OP.CLOSE_UP: break;
+      case OP.RET: ret = juntar(ret, prestadoG(t[d - 1]) ? 'obj' : t[d - 1], false); break;   // lo devuelto sale con su referencia
+      case OP.LISTA: pon(d - it.arg, 'lista'); break;
+      case OP.DIC: pon(d - 2 * it.arg, 'dic'); break;
+      case OP.IDX_GET: usa(d - 1); pon(d - 2, esRango(t[d - 2]) ? 'num' : 'any'); break;
+      case OP.IDX_SET: usa(d - 2); t[d - 3] = t[d - 1]; p[d - 3] = -1; break;
+      case OP.PROP_GET: pon(d - 1, 'any'); break;
+      case OP.CONCAT: pon(d - it.arg, 'texto'); break;
+      case OP.LEN: pon(d - 1, 'num'); break;
+      case OP.TRY: case OP.FIN_TRY: case OP.LANZAR: break;
+      default: throw new ErrorAOT('instrucción sin tipo conocido ' + it.nombre);
+    }
+    switch (it.op) {
+      case OP.RET: case OP.LANZAR: break;
+      case OP.JMP: case OP.LOOP: llegar(porPos.get(it.destino), d2, h, t, p, it.pos); break;
+      case OP.JMP_FALSE: case OP.JMP_TRUE: llegar(porPos.get(it.destino), d2, h, t, p, it.pos); llegar(sig, d2, h, t, p, it.pos); break;
+      case OP.TRY: {
+        const man = { pos: it.pos, d, destino: it.destino };
+        const te = t.slice(0, d).concat(['obj']), pe = p.slice(0, d).concat([-1]);
+        llegar(porPos.get(it.destino), d + 1, h, te, pe, it.pos);
+        llegar(sig, d, h.concat([man]), t, p, it.pos);
+        break;
+      }
+      case OP.FIN_TRY: llegar(sig, d2, h.slice(0, -1), t, p, it.pos); break;
+      default: llegar(sig, d2, h, t, p, it.pos);
     }
   }
-  return { est, maxD, porPos };
+  return { est, maxD, porPos, ret, usados };
 }
 
 // ── 3. emitir C ─────────────────────────────────────────────────────────────
@@ -224,10 +344,115 @@ function compilarAOT(fnPrincipal, opciones) {
   const nombresG = [...globales.keys()].map(noDefinida);
   E(`static const char* const GM[${Math.max(1, nombresG.length)}] = { ${nombresG.length ? nombresG.map(x => cTexto(x.msg)).join(', ') : '""'} };`);
   E(`static const char* const GP[${Math.max(1, nombresG.length)}] = { ${nombresG.length ? nombresG.map(x => (x.pista ? cTexto(x.pista) : 'NULL')).join(', ') : 'NULL'} };`);
+  // ── (motor-exp A1) el plan: tipos de cada función, y su «versión numérica» ──
+  // Un global que se define UNA vez, con «fn», y nunca se reasigna es una
+  // función conocida: la llamada va derecha a su función de C, y lo que
+  // devuelve se sabe. Las nativas de la biblioteca que el programa no tapa
+  // también se conocen; de unas pocas se sabe lo que devuelven (verificado en
+  // nrt.c, no por la firma de la VM).
+  const RET_NATIVAS = { rango: 'lista', agregar: 'lista', reloj: 'num' };
+  const conocidas = new Map();   // nombre del global → índice de la función
+  {
+    const defs = new Map(), sets = new Set();
+    decod.forEach((ins, j) => {
+      const consts = fns[j].chunk.consts;
+      ins.forEach((it, k) => {
+        if (it.op === OP.SET_GLOBAL) sets.add(consts[it.arg]);
+        if (it.op === OP.DEF_GLOBAL) {
+          const g = consts[it.arg], ant = ins[k - 1];
+          if (defs.has(g)) defs.set(g, null);
+          else defs.set(g, ant && ant.op === OP.CLOSURE && esFuncion(consts[ant.arg]) ? idFn.get(consts[ant.arg]) : null);
+        }
+      });
+    });
+    for (const [g, j] of defs) if (j !== null && !sets.has(g) && !fns[j].corrutina) conocidas.set(g, j);
+  }
+  const nativaConocida = g => !definidos.has(g) && NATIVAS_C.has(nombreC(g)) ? nombreC(g) : null;
+  // (motor-exp A2) ¿Seguro que el global «g» (una función conocida) ya está definido
+  // cuando la función j llega a la posición pos? Sí si es ella misma (está corriendo,
+  // luego se definió), o si su «fn» está en el tramo recto del principio de
+  // principal (antes del primer salto) y quien pregunta es o bien principal más
+  // adelante, o bien otra función de ese tramo definida después.
+  const tramoRecto = (() => {
+    const m = new Map(), ins = decod[0], consts = fns[0].chunk.consts;
+    for (let k = 0; k < ins.length; k++) {
+      const it = ins[k];
+      if (it.destino !== undefined || it.op === OP.CALL || it.op === OP.RET || it.op === OP.LANZAR) break;
+      if (it.op === OP.DEF_GLOBAL && conocidas.has(consts[it.arg])) m.set(consts[it.arg], it.pos);
+    }
+    return m;
+  })();
+  const posDefDe = new Map();   // índice de función → posición de su «fn» en el tramo recto
+  for (const [g, pos] of tramoRecto) posDefDe.set(conocidas.get(g), pos);
+  function definidaSeguro(g, j, pos) {
+    if (!conocidas.has(g)) return false;
+    if (conocidas.get(g) === j) return true;
+    if (!tramoRecto.has(g)) return false;
+    if (j === 0) return pos > tramoRecto.get(g);
+    return posDefDe.has(j) && posDefDe.get(j) > tramoRecto.get(g);
+  }
+  const tipoGlobal = g => {
+    if (conocidas.has(g)) return `fn:${conocidas.get(g)}`;
+    const nat = nativaConocida(g);
+    if (nat) return `nat:${nat}`;
+    if (g === '|PI' || g === '|E' || g === '|INFINITO') return 'num';
+    return 'any';
+  };
+  // El punto fijo. Cada función tiene su versión general (parámetros «any») y,
+  // si algún parámetro entra en una operación numérica, una versión numérica
+  // que los supone números: la general comprueba las etiquetas al entrar y
+  // salta a ella. Lo que devuelve cada versión empieza en «bot» y solo sube.
+  const plan = fns.map((f, j) => {
+    const ins = decod[j], escritos = new Set(), capturados = new Set();
+    for (const it of ins) {
+      if (it.op === OP.SET_LOCAL) escritos.add(it.arg);
+      if (it.op === OP.CLOSURE) for (const [esLocal, idx] of it.ups) if (esLocal) capturados.add(idx);
+    }
+    return { f, ins, escritos, capturados, guardas: [], ret: ['bot', 'bot'], res: [null, null], rango: true, prestar: true };
+  });
+  const retDe = (k, n, tiposArgs) => {
+    const q = plan[k];
+    if (n !== q.f.aridad) return 'any';
+    if (q.guardas.length && q.guardas.every(i => tiposArgs[i] === 'num')) return q.ret[1];
+    return q.ret[0];
+  };
+  const retNativa = nombre => RET_NATIVAS[nombre] || 'any';
+  const analizarVersion = (q, v) => {
+    const ctx = {
+      tipoParam: i => (v === 1 && q.guardas.includes(i) ? 'num' : 'any'),
+      retDe, retNativa, tipoGlobal, capturados: q.capturados, escritos: q.escritos, rango: q.rango, prestar: q.prestar,
+    };
+    try { return analizar(q.f, q.ins, ctx); }
+    catch (e) {
+      if (e instanceof ErrorAOT && e.message === 'rango' && q.rango) { q.rango = false; return analizarVersion(q, v); }
+      if (e instanceof ErrorAOT && e.message === 'prestado' && q.prestar) { q.prestar = false; return analizarVersion(q, v); }
+      throw e;
+    }
+  };
+  // primero, qué parámetros guarda cada una (no depende de nadie más)
+  for (const q of plan) { const r = analizarVersion(q, 0); q.guardas = [...r.usados].sort((a, b) => a - b); }
+  for (let vuelta = 0; ; vuelta++) {
+    let cambio = false;
+    for (const q of plan) {
+      for (const v of (q.guardas.length ? [1, 0] : [0])) {
+        const r = analizarVersion(q, v);
+        q.res[v] = r;
+        const nr = v === 0 ? juntar(r.ret, q.ret[1], false) : r.ret;   // la general puede acabar en la numérica
+        if (nr !== q.ret[v]) { q.ret[v] = nr; cambio = true; }
+      }
+    }
+    if (!cambio) break;
+    if (vuelta > 40) throw new ErrorAOT('los tipos de las funciones no convergen');
+  }
+
   fns.forEach((f, j) => E(`static NV F${j}(NCierre* yo, NV* args, int nargs);`));
+  plan.forEach((q, j) => { if (q.guardas.length) E(`static ${firmaClon(q, j)};`); });
   fns.forEach((f, j) => E(`static const NFn FN${j} = { ${cTexto(f.nombre)}, ${f.aridad}, ${f.minimos !== undefined ? f.minimos : -1}, ${f.nUpvalues}, ${f.corrutina ? 1 : 0}, F${j} };`));
 
-  fns.forEach((f, j) => emitirFuncion(f, j, decod[j]));
+  plan.forEach((q, j) => {
+    if (q.guardas.length) emitirFuncion(q, j, 1);
+    emitirFuncion(q, j, 0);
+  });
   emitirEnlaces(enl, E, cTexto, globales.has(G_NATIVA) || globales.has(G_CABECERA));
 
   // los textos constantes, en UTF-16
@@ -266,9 +491,19 @@ function compilarAOT(fnPrincipal, opciones) {
   E('}');
   return { c: out.join('\n') + '\n', funciones: fns.length, textos: textos.size, globales: globales.size, enlazar: enl.bibliotecas };
 
-  function emitirFuncion(f, j, ins) {
-    const consts = f.chunk.consts;
-    const { est, maxD } = analizar(f, ins);
+  // La versión numérica recibe sus parámetros guardados como double de C y,
+  // si lo que devuelve se sabe número, devuelve double: ni caja al entrar ni
+  // caja al salir. Un error se señala con N_HAY_ERROR (el valor es 0).
+  function firmaClon(q, j) {
+    const ps = Array.from({ length: q.f.aridad }, (_, i) => `${q.guardas.includes(i) ? 'double' : 'NV'} p${i}`);
+    return `${q.ret[1] === 'num' ? 'double' : 'NV'} F${j}n(NCierre* yo, int prof_${ps.length ? ', ' + ps.join(', ') : ''})`;
+  }
+  // v = 0: la versión general (F<j>); v = 1: la numérica (F<j>n), con los
+  // parámetros de «guardas» supuestos números.
+  function emitirFuncion(q, j, v) {
+    const retD = v === 1 && q.ret[1] === 'num';   // esta versión devuelve double
+    const f = q.f, ins = q.ins, consts = f.chunk.consts;
+    const { est, maxD } = q.res[v];
     const destinos = new Set(ins.filter(it => it.destino !== undefined).map(it => it.destino));
     // Cada casilla de la pila es una variable de C propia (s0, s1…), no un
     // arreglo: así gcc puede tener los números en registros. Solo las que se
@@ -277,12 +512,8 @@ function compilarAOT(fnPrincipal, opciones) {
     // PRESTADAS: s0 (el cierre) y los parámetros que la función nunca
     // reasigna ni captura son de quien llamó, que los mantiene vivos durante la
     // llamada: no se incrementan al entrar ni se sueltan al salir.
-    const escritos = new Set(), capturados = new Set();
-    for (const it of ins) {
-      if (it.op === OP.SET_LOCAL) escritos.add(it.arg);
-      if (it.op === OP.CLOSURE) for (const [esLocal, idx] of it.ups) if (esLocal) capturados.add(idx);
-    }
-    const prestada = q => q <= f.aridad && !escritos.has(q) && !capturados.has(q);
+    const { escritos, capturados } = q;
+    const prestada = k => k <= f.aridad && !escritos.has(k) && !capturados.has(k);
     const escaleras = new Map();   // clave del manejador ('' = salir) → { max, hd, destino }
     const usarEscalera = (h, d) => {
       const m = h.length ? h[h.length - 1] : null;
@@ -295,9 +526,49 @@ function compilarAOT(fnPrincipal, opciones) {
     const cuerpo = [];
     const C = s => cuerpo.push('  ' + s);
     const r = i => `s${i}`;
-    const arr = (desde, n) => (n ? `(NV[${n}]){ ${Array.from({ length: n }, (_, q) => r(desde + q)).join(', ')} }` : 'NULL');
-    const soltar = (desde, hasta) => { let s = ''; for (let q = desde; q < hasta; q++) if (!prestada(q)) s += `n_dec(${r(q)}); `; return s; };
-    let lineaPrevia = -1;
+    const arr = (desde, n) => (n ? `(NV[${n}]){ ${Array.from({ length: n }, (_, k) => r(desde + k)).join(', ')} }` : 'NULL');
+    const rangos = new Set();      // casillas con un rango virtual: sus variables de C
+    let T = null;                  // los tipos en la instrucción que se emite
+    const tipo = k => (T && k < T.length ? T[k] : 'any');
+    const prestado = k => q.prestar && prestadoG(tipo(k));   // una función global o una nativa: G la mantiene viva
+    const libre = k => sinConteo(tipo(k)) || prestado(k);    // ¿se copia y se tira sin conteo?
+    // lo que se queda con la referencia (una lista nueva, un global, un «devolver») toma una de verdad
+    const propia = k => (prestado(k) ? `n_inc(${r(k)})` : r(k));
+    const arrP = (desde, n) => (n ? `(NV[${n}]){ ${Array.from({ length: n }, (_, k) => propia(desde + k)).join(', ')} }` : 'NULL');
+    // (motor-exp A1) Un local que se lee solo para indexarlo (a[i], a[i] = v,
+    // longitud, agregar(a, x)) no necesita su propia referencia: el local la
+    // tiene y nadie la suelta entre medias. Se marca el GET_LOCAL (sinInc) y su
+    // consumidor (sinDec); entre los dos no hay saltos ni etiquetas.
+    const sinInc = new Set(), sinDec = new Set();
+    {
+      let prod = new Map();   // altura de la pila → el GET_LOCAL que la llenó
+      for (let k = 0; k < ins.length; k++) {
+        const it = ins[k], st2 = est[k];
+        if (!st2) { prod = new Map(); continue; }
+        if (destinos.has(it.pos)) prod = new Map();
+        const d = st2.d, d2 = d + efecto(it);
+        let objD = -1;
+        if (it.op === OP.IDX_GET) objD = d - 2; else if (it.op === OP.IDX_SET) objD = d - 3; else if (it.op === OP.LEN) objD = d - 1;
+        else if (it.op === OP.CALL && esAgregar(ins, k, st2.t[d - it.arg - 1], it.arg, st2.t[d - 2])) objD = d - 2;
+        if (objD >= 0 && prod.has(objD)) {
+          const k0 = prod.get(objD), q0 = ins[k0].arg;
+          let limpio = true;
+          for (let k2 = k0 + 1; k2 < k; k2++) if (ins[k2].op === OP.SET_LOCAL && ins[k2].arg === q0) limpio = false;
+          if (limpio) { sinInc.add(k0); sinDec.add(k); }
+        }
+        const desde = d2 - (PRODUCEN.has(it.op) ? 1 : 0);
+        for (const dd of [...prod.keys()]) if (dd >= desde) prod.delete(dd);
+        if (it.op === OP.GET_LOCAL && !capturados.has(it.arg) && !sinConteo(st2.t[it.arg]) && !(q.prestar && prestadoG(st2.t[it.arg]))) prod.set(d, k);
+        if (it.op === OP.JMP || it.op === OP.LOOP || it.op === OP.RET || it.op === OP.LANZAR || it.op === OP.JMP_FALSE || it.op === OP.JMP_TRUE) prod = new Map();
+      }
+    }
+    let aliasEnPila = new Set(), borrarAlias = [];   // alturas que ahora mismo son un alias (sin referencia propia)
+    const soltar = (desde, hasta) => { let s = ''; for (let k = desde; k < hasta; k++) if (!prestada(k) && !libre(k)) s += `n_dec(${r(k)}); `; return s; };
+    // La línea se apunta solo antes de lo que puede fallar o llamar: es lo
+    // único que la lee (la traza). Una suma de dos números no la necesita.
+    let lineaActual = 0;
+    const linea = () => {};   // (A2) la línea ya no se apunta: va en la traza al deshacer (falla) y se publica antes de una llamada general
+    const publicar = () => C(`n_hilo.profundidad = prof_; n_hilo.linea = ${lineaActual};`);
     // (motor-exp N4.11) dentro de «sinComprobar { … }»: el bytecode trae una marca
     // al entrar y otra al salir (GET_GLOBAL « sinComprobar», CONST 1|0, CALL 1, POP);
     // lo que queda entre las dos, en el orden del código, va sin comprobar
@@ -307,24 +578,38 @@ function compilarAOT(fnPrincipal, opciones) {
       return a && b && c && e && a.op === OP.GET_GLOBAL && consts[a.arg] === G_SIN && b.op === OP.CONST &&
         typeof consts[b.arg] === 'number' && c.op === OP.CALL && c.arg === 1 && e.op === OP.POP ? consts[b.arg] : null;
     };
+    // el camino rápido de un índice de lista, con el lento (que da el error) al lado
+    const indiceLista = (o, i, dentro, fuera) =>
+      `{ NLista* l_ = (NLista*)${o}.u.o; double k_ = ${i}.u.n < 0 ? (double)l_->n + ${i}.u.n : ${i}.u.n; ` +
+      `if (k_ >= 0 && k_ < (double)l_->n) { ${dentro} } else { ${fuera} } }`;
     for (let k = 0; k < ins.length; k++) {
       const it = ins[k], st = est[k];
       if (!st) continue;   // código al que no se llega (detrás de un «devolver»)
       const mk = marca(k);
       if (mk !== null) {
-        for (let q = k; q < k + 4; q++) if (destinos.has(ins[q].pos)) { cuerpo.push(`P${ins[q].pos}:;`); lineaPrevia = -1; }
+        for (let q2 = k; q2 < k + 4; q2++) if (destinos.has(ins[q2].pos)) cuerpo.push(`P${ins[q2].pos}:;`);
         sinCom = Math.max(0, sinCom + (mk === 1 ? 1 : -1));
         k += 3;
         continue;
       }
       const d = st.d;
-      if (destinos.has(it.pos)) { cuerpo.push(`P${it.pos}:;`); lineaPrevia = -1; }
-      if (it.linea !== lineaPrevia) { C(`M_->linea = ${it.linea};`); lineaPrevia = it.linea; }
+      T = st.t;
+      if (destinos.has(it.pos)) cuerpo.push(`P${it.pos}:;`);
+      lineaActual = it.linea;
       // al fallar: cerrar las capturas de lo que se va a soltar y bajar por la escalera
+      // Lo que no tiene referencia propia (prestado de G, alias de un local) la
+      // toma antes de bajar, porque la escalera suelta por posición.
       const falla = () => {
-        const m = st.h.length ? st.h[st.h.length - 1] : null;
-        return `{ if (ab) n_up_cerrar(&ab, ${m ? m.d : 0}); goto ${usarEscalera(st.h, d)}; }`;
+        const m = st.h.length ? st.h[st.h.length - 1] : null, hd = m ? m.d : 0;
+        let inc = '';
+        for (let k2 = hd; k2 < d; k2++) if (!prestada(k2) && (prestado(k2) || aliasEnPila.has(k2))) inc += `n_inc(${r(k2)}); `;
+        return `{ n_traza(${cTexto(f.nombre)}, ${lineaActual}); ${inc}if (ab) n_up_cerrar(&ab, ${hd}); goto ${usarEscalera(st.h, d)}; }`;
       };
+      for (const x of borrarAlias) aliasEnPila.delete(x);
+      borrarAlias = [];
+      if (destinos.has(it.pos) || it.op === OP.JMP || it.op === OP.LOOP || it.op === OP.JMP_FALSE || it.op === OP.JMP_TRUE) aliasEnPila = new Set();
+      const decObj = (k2, s2) => (sinDec.has(k) && k2 === s2 ? '' : `n_dec(${r(k2)}); `);   // el objeto indexado: solo si no es alias
+      const num = (...ks) => ks.every(x => tipo(x) === 'num');
       switch (it.op) {
         case OP.CONST: {
           const v = consts[it.arg];
@@ -338,25 +623,44 @@ function compilarAOT(fnPrincipal, opciones) {
         case OP.NULO: C(`${r(d)} = n_nulo();`); break;
         case OP.CIERTO: C(`${r(d)} = n_bool(1);`); break;
         case OP.FALSO: C(`${r(d)} = n_bool(0);`); break;
-        case OP.POP: C(`n_dec(${r(d - 1)});`); break;
-        case OP.DUP: C(`${r(d)} = n_inc(${r(d - 1)});`); break;
-        case OP.GET_LOCAL: C(`${r(d)} = n_inc(${r(it.arg)});`); break;
-        case OP.SET_LOCAL: if (it.arg !== d - 1) C(`n_asignar(&${r(it.arg)}, ${r(d - 1)});`); break;
+        case OP.POP: if (!libre(d - 1)) C(`n_dec(${r(d - 1)});`); break;
+        case OP.DUP:
+          if (esRango(tipo(d - 1))) break;
+          C(libre(d - 1) ? `${r(d)} = ${r(d - 1)};` : `${r(d)} = n_inc(${r(d - 1)});`);
+          break;
+        case OP.GET_LOCAL:
+          if (esRango(tipo(it.arg))) break;   // el rango vive en C: no hay nada que copiar
+          if (sinInc.has(k)) { aliasEnPila.add(d); C(`${r(d)} = ${r(it.arg)};`); break; }
+          C(libre(it.arg) && !capturados.has(it.arg) ? `${r(d)} = ${r(it.arg)};` : `${r(d)} = n_inc(${r(it.arg)});`);
+          break;
+        case OP.SET_LOCAL: {
+          if (it.arg === d - 1) break;
+          // la casilla vieja se suelta solo si tenía referencia propia; la nueva se toma solo si la necesita
+          const vie = libre(it.arg) && !capturados.has(it.arg), nue = libre(d - 1);
+          if (vie && nue) C(`${r(it.arg)} = ${r(d - 1)};`);
+          else if (vie) C(`${r(it.arg)} = n_inc(${r(d - 1)});`);
+          else if (nue) C(`n_dec(${r(it.arg)}); ${r(it.arg)} = ${r(d - 1)};`);
+          else C(`n_asignar(&${r(it.arg)}, ${r(d - 1)});`);
+          // el índice de un «para … en rango(…)»: el valor del rango avanza con él
+          if (it.arg >= 1 && tipo(it.arg - 1) === `rango:${it.arg - 1}`) C(`rV_${it.arg - 1} += rP_${it.arg - 1};`);
+          break;
+        }
         case OP.GET_GLOBAL: {
           const g = idGlobal(consts[it.arg]);
-          C(`if (!GD[${g}]) { n_error(GM[${g}], GP[${g}]); ${falla()} }`);
-          C(`${r(d)} = n_inc(G[${g}]);`);
+          if (!nativaConocida(consts[it.arg]) && !VALORES_C[consts[it.arg]] && !definidaSeguro(consts[it.arg], j, it.pos)) { linea(); C(`if (!GD[${g}]) { n_error(GM[${g}], GP[${g}]); ${falla()} }`); }
+          C(q.prestar && prestadoG(tipoGlobal(consts[it.arg])) ? `${r(d)} = G[${g}];` : `${r(d)} = n_inc(G[${g}]);`);
           break;
         }
         case OP.SET_GLOBAL: {
           const g = idGlobal(consts[it.arg]);
+          linea();
           C(`if (!GD[${g}]) { n_error(GM[${g}], GP[${g}]); ${falla()} }`);
           C(`n_asignar(&G[${g}], ${r(d - 1)});`);
           break;
         }
         case OP.DEF_GLOBAL: {
           const g = idGlobal(consts[it.arg]);
-          C(`{ NV v_ = G[${g}]; G[${g}] = ${r(d - 1)}; if (GD[${g}]) n_dec(v_); GD[${g}] = 1; }`);
+          C(`{ NV v_ = G[${g}]; G[${g}] = ${propia(d - 1)}; if (GD[${g}]) n_dec(v_); GD[${g}] = 1; }`);
           break;
         }
         case OP.GET_UP: C(`${r(d)} = n_inc(*yo->up[${it.arg}]->p);`); break;
@@ -367,10 +671,21 @@ function compilarAOT(fnPrincipal, opciones) {
           // (motor-exp N4.11) sin comprobar: dividir entre cero ya no es un error
           // (da lo que dé la cuenta: infinito o NaN, como en C)
           const rap = rap0 || (sinCom && it.op === OP.DIV ? '/' : null);
-          if (sinCom && (it.op === OP.IDIV || it.op === OP.MOD)) {
-            const cuenta = it.op === OP.IDIV ? `floor(${a}.u.n / ${b}.u.n)` : `fmod(fmod(${a}.u.n, ${b}.u.n) + ${b}.u.n, ${b}.u.n)`;
-            C(`if (${a}.t == N_NUM && ${b}.t == N_NUM) ${a}.u.n = ${cuenta}; else {`);
-          } else if (rap) C(`if (${a}.t == N_NUM && ${b}.t == N_NUM) ${a}.u.n = ${a}.u.n ${rap} ${b}.u.n; else {`);
+          const cuentaSin = it.op === OP.IDIV ? `floor(${a}.u.n / ${b}.u.n)` : `fmod(fmod(${a}.u.n, ${b}.u.n) + ${b}.u.n, ${b}.u.n)`;
+          if (num(d - 2, d - 1)) {
+            // (motor-exp A1) los dos son números: ni etiquetas ni conteo
+            C(`N_CK_NUM(${a}); N_CK_NUM(${b});`);
+            if (rap) C(`${a}.u.n = ${a}.u.n ${rap} ${b}.u.n;`);
+            else if (sinCom && (it.op === OP.IDIV || it.op === OP.MOD)) C(`${a}.u.n = ${cuentaSin};`);
+            else if (it.op === OP.DIV) { linea(); C(`if (${b}.u.n == 0) { n_div(${a}, ${b}); ${falla()} }`); C(`${a}.u.n = ${a}.u.n / ${b}.u.n;`); }
+            else if (it.op === OP.IDIV) { linea(); C(`if (${b}.u.n == 0) { n_idiv(${a}, ${b}); ${falla()} }`); C(`${a}.u.n = floor(${a}.u.n / ${b}.u.n);`); }
+            else if (it.op === OP.MOD) { linea(); C(`if (${b}.u.n == 0) { n_mod(${a}, ${b}); ${falla()} }`); C(`${a}.u.n = fmod(fmod(${a}.u.n, ${b}.u.n) + ${b}.u.n, ${b}.u.n);`); }
+            else { linea(); C(`{ NV t_ = n_pot(${a}, ${b}); if (N_FALLO(t_)) ${falla()} ${a} = t_; }`); }
+            break;
+          }
+          linea();
+          if (sinCom && (it.op === OP.IDIV || it.op === OP.MOD)) C(`if (${a}.t == N_NUM && ${b}.t == N_NUM) ${a}.u.n = ${cuentaSin}; else {`);
+          else if (rap) C(`if (${a}.t == N_NUM && ${b}.t == N_NUM) ${a}.u.n = ${a}.u.n ${rap} ${b}.u.n; else {`);
           else C('{');
           C(`  NV t_ = ${fnc}(${a}, ${b}); if (N_FALLO(t_)) ${falla()}`);
           C(`  n_dec(${a}); n_dec(${b}); ${a} = t_; }`);
@@ -378,6 +693,10 @@ function compilarAOT(fnPrincipal, opciones) {
         }
         case OP.EQ: case OP.NEQ: {
           const a = r(d - 2), b = r(d - 1), neg = it.op === OP.NEQ ? '!' : '';
+          const ta = tipo(d - 2), tb = tipo(d - 1);
+          if (ta === 'num' && tb === 'num') { C(`N_CK_NUM(${a}); N_CK_NUM(${b}); ${a} = n_bool(${neg}(${a}.u.n == ${b}.u.n));`); break; }
+          if (ta === 'bool' && tb === 'bool') { C(`N_CK_BOOL(${a}); N_CK_BOOL(${b}); ${a} = n_bool(${neg}(${a}.u.b == ${b}.u.b));`); break; }
+          linea();
           C(`if (${a}.t == N_NUM && ${b}.t == N_NUM) ${a} = n_bool(${neg}(${a}.u.n == ${b}.u.n));`);
           C(`else { int q_ = ${neg}n_iguales(${a}, ${b}); n_dec(${a}); n_dec(${b}); ${a} = n_bool(q_); }`);
           break;
@@ -385,6 +704,8 @@ function compilarAOT(fnPrincipal, opciones) {
         case OP.LT: case OP.LE: case OP.GT: case OP.GE: {
           const [cod, rap] = COMPARA[it.op];
           const a = r(d - 2), b = r(d - 1);
+          if (num(d - 2, d - 1)) { C(`N_CK_NUM(${a}); N_CK_NUM(${b}); ${a} = n_bool(${a}.u.n ${rap} ${b}.u.n);`); break; }
+          linea();
           C(`if (${a}.t == N_NUM && ${b}.t == N_NUM) ${a} = n_bool(${a}.u.n ${rap} ${b}.u.n); else {`);
           C(`  NV t_ = n_cmp(${a}, ${b}, ${cod}); if (N_FALLO(t_)) ${falla()}`);
           C(`  n_dec(${a}); n_dec(${b}); ${a} = t_; }`);
@@ -392,15 +713,64 @@ function compilarAOT(fnPrincipal, opciones) {
         }
         case OP.NEG: {
           const a = r(d - 1);
+          if (num(d - 1)) { C(`N_CK_NUM(${a}); ${a}.u.n = -${a}.u.n;`); break; }
+          linea();
           C(`if (${a}.t == N_NUM) ${a}.u.n = -${a}.u.n; else { NV t_ = n_neg(${a}); if (N_FALLO(t_)) ${falla()} n_dec(${a}); ${a} = t_; }`);
           break;
         }
-        case OP.NOT: { const a = r(d - 1); C(`{ int q_ = !n_verdad(${a}); n_dec(${a}); ${a} = n_bool(q_); }`); break; }
+        case OP.NOT: {
+          const a = r(d - 1);
+          if (tipo(d - 1) === 'bool') { C(`N_CK_BOOL(${a}); ${a}.u.b = !${a}.u.b;`); break; }
+          linea();
+          C(`{ int q_ = !n_verdad(${a}); n_dec(${a}); ${a} = n_bool(q_); }`);
+          break;
+        }
         case OP.JMP: case OP.LOOP: C(`goto P${it.destino};`); break;
-        case OP.JMP_FALSE: C(`if (!N_VERDAD(${r(d - 1)})) goto P${it.destino};`); break;
-        case OP.JMP_TRUE: C(`if (N_VERDAD(${r(d - 1)})) goto P${it.destino};`); break;
+        case OP.JMP_FALSE:
+          if (tipo(d - 1) === 'bool') C(`N_CK_BOOL(${r(d - 1)}); if (!${r(d - 1)}.u.b) goto P${it.destino};`);
+          else C(`if (!N_VERDAD(${r(d - 1)})) goto P${it.destino};`);
+          break;
+        case OP.JMP_TRUE:
+          if (tipo(d - 1) === 'bool') C(`N_CK_BOOL(${r(d - 1)}); if (${r(d - 1)}.u.b) goto P${it.destino};`);
+          else C(`if (N_VERDAD(${r(d - 1)})) goto P${it.destino};`);
+          break;
         case OP.CALL: {
-          const n = it.arg, base = d - n - 1;
+          const n = it.arg, base = d - n - 1, tc = tipo(base);
+          linea();
+          if (tc === 'nat:rango' && n >= 1 && n <= 3 && esParaRango(ins, k, consts, base) && q.rango) {
+            // (motor-exp A1) «para … en rango(…)» sin construir la lista: los
+            // argumentos se validan con la misma función que la nativa (los mismos
+            // errores, el mismo tope), y el rango queda en tres variables de C.
+            rangos.add(base);
+            C(`{ NRango g_; NV e_ = n_rango_preparar(${arr(base + 1, n)}, ${n}, &g_); if (N_FALLO(e_)) ${falla()}`);
+            C(`  ${soltar(base, d)}${r(base)} = n_nulo(); rV_${base} = g_.ini; rP_${base} = g_.paso; rN_${base} = g_.largo; }`);
+            break;
+          }
+          if (esAgregar(ins, k, tc, n, tipo(base + 1))) {
+            // (motor-exp A1) «agregar(lista, x)» como sentencia: derecho a la lista
+            const a0 = r(base + 1), a1 = r(base + 2);
+            C(`N_CK_LISTA(${a0}); n_lista_agregar((NLista*)${a0}.u.o, n_inc(${a1}));`);
+            C(`${libre(base + 1) ? '' : decObj(base + 1, base + 1)}${libre(base + 2) ? '' : `n_dec(${a1}); `}${libre(base) ? '' : `n_dec(${r(base)}); `}${r(base)} = n_nulo();`);
+            borrarAlias.push(base + 1);
+            break;
+          }
+          if (tc.startsWith('fn:')) {
+            const kf = Number(tc.slice(3)), qf = plan[kf];
+            if (n === qf.f.aridad && !qf.f.corrutina) {
+              // (motor-exp A1) una función conocida: derecho a su C (la numérica si
+              // los argumentos guardados ya se saben números). Si la pila de marcos
+              // está llena, n_llamar da el error de siempre.
+              const num1 = qf.guardas.length && qf.guardas.every(i => tipo(base + 1 + i) === 'num');
+              if (num1) {
+                const ps = Array.from({ length: n }, (_, i) => (qf.guardas.includes(i) ? `${r(base + 1 + i)}.u.n` : r(base + 1 + i)));
+                const llamada = `F${kf}n((NCierre*)${r(base)}.u.o, prof_ + 1${ps.length ? ', ' + ps.join(', ') : ''})`;
+                C(`{ NV t_; ${qf.ret[1] === 'num' ? `double d_ = ${llamada}; if (N_HAY_ERROR) ${falla()} t_ = n_num(d_);` : `t_ = ${llamada}; if (N_FALLO(t_)) ${falla()}`}`);
+              } else { publicar(); C(`{ NV t_ = F${kf}((NCierre*)${r(base)}.u.o, ${arr(base + 1, n)}, ${n}); if (N_FALLO(t_)) ${falla()}`); }
+              C(`  ${soltar(base, d)}${r(base)} = t_; }`);
+              break;
+            }
+          }
+          publicar();
           C(`{ NV t_ = n_llamar_r(${r(base)}, ${arr(base + 1, n)}, ${n}); if (N_FALLO(t_)) ${falla()}`);
           C(`  ${soltar(base, d)}${r(base)} = t_; }`);
           break;
@@ -408,75 +778,114 @@ function compilarAOT(fnPrincipal, opciones) {
         case OP.CLOSURE: {
           const sub = consts[it.arg], js = idFn.get(sub);
           C(`{ NV c_ = n_cierre_nuevo(&FN${js}); NCierre* q_ = (NCierre*)c_.u.o;`);
-          it.ups.forEach(([esLocal, idx], q) => {
-            if (esLocal) C(`  q_->up[${q}] = n_up_capturar(&ab, &${r(idx)}, ${idx});`);
-            else C(`  q_->up[${q}] = yo->up[${idx}]; N_RC_MAS(&yo->up[${idx}]->h);`);
+          it.ups.forEach(([esLocal, idx], k2) => {
+            if (esLocal) C(`  q_->up[${k2}] = n_up_capturar(&ab, &${r(idx)}, ${idx});`);
+            else C(`  q_->up[${k2}] = yo->up[${idx}]; N_RC_MAS(&yo->up[${idx}]->h);`);
           });
           C(`  ${r(d)} = c_; }`);
           break;
         }
-        case OP.CLOSE_UP: C(`if (ab) n_up_cerrar(&ab, ${d - 1});`); C(`n_dec(${r(d - 1)});`); break;
+        case OP.CLOSE_UP: C(`if (ab) n_up_cerrar(&ab, ${d - 1});`); if (!libre(d - 1)) C(`n_dec(${r(d - 1)});`); break;
         case OP.RET: {
           C(`if (ab) n_up_cerrar(&ab, 0);`);
-          const t0 = prestada(d - 1) ? `n_inc(${r(d - 1)})` : r(d - 1);
-          C(`{ NV t_ = ${t0}; ${soltar(0, d - 1)}n_marco_salir(); return t_; }`);
+          const t0 = (prestada(d - 1) && !libre(d - 1)) || prestado(d - 1) ? `n_inc(${r(d - 1)})` : r(d - 1);
+          if (retD) C(`{ double t_ = ${r(d - 1)}.u.n; ${soltar(0, d - 1)}return t_; }`);
+          else C(`{ NV t_ = ${t0}; ${soltar(0, d - 1)}${v === 0 ? 'n_hilo.profundidad = prof_ - 1; ' : ''}return t_; }`);
           break;
         }
-        case OP.LISTA: { const n = it.arg; C(`${r(d - n)} = n_lista_tomar(${arr(d - n, n)}, ${n});`); break; }
+        case OP.LISTA: { const n = it.arg; C(`${r(d - n)} = n_lista_tomar(${arrP(d - n, n)}, ${n});`); break; }
         case OP.DIC: {
           const n = it.arg;
+          linea();
           C(`{ NV t_ = n_dic_de(${arr(d - 2 * n, 2 * n)}, ${n}); ${soltar(d - 2 * n, d)}${r(d - 2 * n)} = t_; }`);
           break;
         }
         case OP.IDX_GET: {
           const o = r(d - 2), i = r(d - 1);
+          if (esRango(tipo(d - 2))) { const b = tipo(d - 2).slice(6); C(`N_CK_NUM(${i}); ${o} = n_num(rV_${b});`); break; }
+          linea();
+          const dO = decObj(d - 2, d - 2); borrarAlias.push(d - 2);
           // (motor-exp N4.11) sin comprobar: una lista con un número va directa a su casilla
-          if (sinCom) C(`if (${o}.t == N_OBJ && ${o}.u.o->clase == NC_LISTA && ${i}.t == N_NUM) { NLista* l_ = (NLista*)${o}.u.o; NV t_ = n_inc(l_->v[(int64_t)(${i}.u.n < 0 ? (double)l_->n + ${i}.u.n : ${i}.u.n)]); n_dec(${o}); ${o} = t_; } else`);
-          C(`{ NV t_ = n_idx_get(${o}, ${i}); if (N_FALLO(t_)) ${falla()} n_dec(${o}); n_dec(${i}); ${o} = t_; }`);
+          if (sinCom) C(`if (${o}.t == N_OBJ && ${o}.u.o->clase == NC_LISTA && ${i}.t == N_NUM) { NLista* l_ = (NLista*)${o}.u.o; NV t_ = n_lista_leer(l_, (int64_t)(${i}.u.n < 0 ? (double)l_->n + ${i}.u.n : ${i}.u.n)); ${dO}${o} = t_; } else`);
+          else if (tipo(d - 2) === 'lista' && tipo(d - 1) === 'num') {
+            // (motor-exp A1) una lista y un número: la casilla, sin pasar por n_idx_get
+            C(`N_CK_LISTA(${o}); N_CK_NUM(${i});`);
+            C(indiceLista(o, i, `if (k_ == trunc(k_)) { NV t_ = n_lista_leer(l_, (int64_t)k_); ${dO}${o} = t_; } else { NV t_ = n_idx_get(${o}, ${i}); if (N_FALLO(t_)) ${falla()} ${dO}${o} = t_; }`,
+              `NV t_ = n_idx_get(${o}, ${i}); if (N_FALLO(t_)) ${falla()} ${dO}${o} = t_;`));
+            break;
+          }
+          C(`{ NV t_ = n_idx_get(${o}, ${i}); if (N_FALLO(t_)) ${falla()} ${dO}${libre(d - 1) ? '' : `n_dec(${i}); `}${o} = t_; }`);
           break;
         }
         case OP.IDX_SET: {
           const o = r(d - 3), i = r(d - 2), v = r(d - 1);
-          if (sinCom) C(`if (${o}.t == N_OBJ && ${o}.u.o->clase == NC_LISTA && ${i}.t == N_NUM) { NLista* l_ = (NLista*)${o}.u.o; double k_ = ${i}.u.n < 0 ? (double)l_->n + ${i}.u.n : ${i}.u.n; if (k_ == trunc(k_)) n_asignar(&l_->v[(int64_t)k_], ${v}); n_dec(${o}); ${o} = ${v}; } else`);
-          C(`{ NV t_ = n_idx_set(${o}, ${i}, ${v}); if (N_FALLO(t_)) ${falla()} n_dec(${o}); n_dec(${i}); ${o} = ${v}; }`);
+          linea();
+          const dO = decObj(d - 3, d - 3); borrarAlias.push(d - 3);
+          if (sinCom) C(`if (${o}.t == N_OBJ && ${o}.u.o->clase == NC_LISTA && ${i}.t == N_NUM) { NLista* l_ = (NLista*)${o}.u.o; double k_ = ${i}.u.n < 0 ? (double)l_->n + ${i}.u.n : ${i}.u.n; if (k_ == trunc(k_)) n_lista_poner(l_, (int64_t)k_, ${v}); ${dO}${o} = ${v}; } else`);
+          else if (tipo(d - 3) === 'lista' && tipo(d - 2) === 'num') {
+            C(`N_CK_LISTA(${o}); N_CK_NUM(${i});`);
+            C(indiceLista(o, i, `if (k_ == trunc(k_)) n_lista_poner(l_, (int64_t)k_, ${v}); ${dO}${o} = ${v};`,
+              `NV t_ = n_idx_set(${o}, ${i}, ${v}); if (N_FALLO(t_)) ${falla()} ${dO}${o} = ${v};`));
+            break;
+          }
+          C(`{ NV t_ = n_idx_set(${o}, ${i}, ${v}); if (N_FALLO(t_)) ${falla()} ${dO}${libre(d - 2) ? '' : `n_dec(${i}); `}${o} = ${v}; }`);
           break;
         }
         case OP.PROP_GET: {
           const o = r(d - 1);
+          linea();
           C(`{ NV t_ = n_prop_get(${o}, K[${idTexto(consts[it.arg])}]); if (N_FALLO(t_)) ${falla()} n_dec(${o}); ${o} = t_; }`);
           break;
         }
         case OP.CONCAT: {
           const n = it.arg;
+          linea();
           C(`{ NV t_ = n_concat(${arr(d - n, n)}, ${n}); ${soltar(d - n, d)}${r(d - n)} = t_; }`);
           break;
         }
         case OP.LEN: {
           const o = r(d - 1);
-          C(`{ NV t_ = n_len(${o}); if (N_FALLO(t_)) ${falla()} n_dec(${o}); ${o} = t_; }`);
+          if (esRango(tipo(d - 1))) { C(`${o} = n_num((double)rN_${tipo(d - 1).slice(6)});`); break; }
+          const dO = decObj(d - 1, d - 1); borrarAlias.push(d - 1);
+          if (tipo(d - 1) === 'lista') { C(`N_CK_LISTA(${o}); { NV t_ = n_num((double)((NLista*)${o}.u.o)->n); ${dO}${o} = t_; }`); break; }
+          linea();
+          C(`{ NV t_ = n_len(${o}); if (N_FALLO(t_)) ${falla()} ${dO}${o} = t_; }`);
           break;
         }
         case OP.TRY: case OP.FIN_TRY: break;   // los manejadores son estáticos: ver la escalera
-        case OP.LANZAR: C(`n_lanzar(${r(d - 1)}); ${falla()}`); break;
+        case OP.LANZAR: linea(); C(`n_lanzar(${r(d - 1)}); ${falla()}`); break;
         default: throw new ErrorAOT('instrucción sin traducir ' + it.nombre);
       }
     }
     // las escaleras de limpieza: soltar de la casilla más alta hacia abajo
     const pie = [];
     for (const [clave, e] of escaleras) {
-      for (let q = e.max; q > e.hd; q--) pie.push(`L${clave || 'x'}_${q}:; ${prestada(q - 1) ? '' : `n_dec(${r(q - 1)});`}`);
+      for (let k = e.max; k > e.hd; k--) pie.push(`L${clave || 'x'}_${k}:; ${prestada(k - 1) ? '' : `n_dec(${r(k - 1)});`}`);
       pie.push(`L${clave || 'x'}_${e.hd}:;`);
       if (clave) pie.push(`  ${r(e.hd)} = n_error_capturado(); goto P${e.destino};`);
-      else pie.push('  n_marco_salir(); return N_ERR;');
+      else pie.push(`  ${v === 0 ? 'n_hilo.profundidad = prof_ - 1; ' : ''}return ${retD ? '0' : 'N_ERR'};`);
     }
     E('');
-    E(`/* ${f.nombre}/${f.aridad} */`);
-    E(`static NV F${j}(NCierre* yo, NV* args, int nargs) {`);
-    E(`  NV ${Array.from({ length: maxD + 1 }, (_, q) => r(q)).join(', ')}; NUp* ab = NULL; (void)nargs; (void)ab; (void)args;`);
-    E(`  n_marco_entrar(${cTexto(f.nombre)}, ${ins.length ? ins[0].linea : 0});`);
-    E('  NMarco* M_ = &n_hilo.marcos[n_hilo.nmarcos - 1];');
+    E(`/* ${f.nombre}/${f.aridad}${v === 1 ? ' (numérica: ' + q.guardas.map(i => (f.nombresParams || [])[i] || '#' + i).join(', ') + ')' : ''} */`);
+    if (v === 1) E(`static ${firmaClon(q, j)} {`);
+    else E(`static NV F${j}(NCierre* yo, NV* args, int nargs) {`);
+    if (v === 0 && q.guardas.length) {
+      const ps = Array.from({ length: f.aridad }, (_, i) => (q.guardas.includes(i) ? `args[${i}].u.n` : `args[${i}]`));
+      const llamada = `F${j}n(yo, n_hilo.profundidad + 1${ps.length ? ', ' + ps.join(', ') : ''})`;
+      E(`  if (${q.guardas.map(i => `args[${i}].t == N_NUM`).join(' && ')}) ${q.ret[1] === 'num' ? `{ double d_ = ${llamada}; return N_HAY_ERROR ? N_ERR : n_num(d_); }` : `return ${llamada};`}`);
+    }
+    // (motor-exp A2) la profundidad: la general la lee de n_hilo (quien la llamó la
+    // publicó antes); la numérica la recibe. Se comprueba aquí, al entrar.
+    if (v === 0) E('  int prof_ = n_hilo.profundidad + 1;');
+    E(`  if (prof_ > N_MAX_MARCOS) { N_ERROR_PROFUNDIDAD(); return ${retD ? '0' : 'N_ERR'}; }`);
+    if (v === 0) E('  n_hilo.profundidad = prof_;   /* y al salir, prof_ - 1: quien entre desde C ve la profundidad de verdad */');
+    E(`  NV ${Array.from({ length: maxD + 1 }, (_, k) => r(k)).join(', ')}; NUp* ab = NULL; (void)ab;${v === 0 ? ' (void)nargs; (void)args;' : ''}`);
+    for (const b of rangos) E(`  double rV_${b} = 0, rP_${b} = 0; int64_t rN_${b} = 0; (void)rV_${b}; (void)rP_${b}; (void)rN_${b};`);
     E(`  ${r(0)} = ${prestada(0) ? 'n_obj(yo)' : 'n_inc(n_obj(yo))'};`);
-    for (let q = 0; q < f.aridad; q++) E(`  ${r(q + 1)} = ${prestada(q + 1) ? `args[${q}]` : `n_inc(args[${q}])`};`);
+    for (let k = 0; k < f.aridad; k++) {
+      if (v === 1) E(`  ${r(k + 1)} = ${q.guardas.includes(k) ? `n_num(p${k})` : prestada(k + 1) ? `p${k}` : `n_inc(p${k})`};`);
+      else E(`  ${r(k + 1)} = ${prestada(k + 1) ? `args[${k}]` : `n_inc(args[${k}])`};`);
+    }
     for (const l of cuerpo) E(l);
     for (const l of pie) E(l);
     E('}');

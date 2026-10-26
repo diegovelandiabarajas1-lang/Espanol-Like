@@ -44,7 +44,7 @@ void n_liberar(NObj* o) {
   if (o->inmortal) { o->rc = N_INMORTAL_RC; return; }
   switch (o->clase) {
     case NC_TEXTO: break;
-    case NC_LISTA: { NLista* l = (NLista*)o; for (int64_t i = 0; i < l->n; i++) n_dec(l->v[i]); free(l->v); break; }
+    case NC_LISTA: { NLista* l = (NLista*)o; if (l->el == NL_NV) { for (int64_t i = 0; i < l->n; i++) n_dec(l->nv_[i]); free(l->nv_); } else free(l->d); break; }
     case NC_DIC: {
       NDic* d = (NDic*)o;
       for (int64_t i = 0; i < d->usados; i++) if (d->e[i].vivo) { n_dec(d->e[i].k); n_dec(d->e[i].v); }
@@ -215,16 +215,21 @@ static void err_limpiar(void) {
   if (!n_hilo.hay) return;
   n_dec(n_hilo.valor); n_dec(n_hilo.mensaje); n_dec(n_hilo.pista); n_dec(n_hilo.tipo);
   n_hilo.valor = n_hilo.mensaje = n_hilo.pista = n_hilo.tipo = n_nulo();
-  n_hilo.hay = 0; n_hilo.lanzado = 0; n_hilo.fatal = 0; n_hilo.ntraza = 0;
+  n_hilo.hay = 0; n_hilo.lanzado = 0; n_hilo.fatal = 0; n_hilo.ntraza = 0; n_hilo.linea_puesta = 0;
 }
 NV n_errorT(NV msg, NV pista) {
   err_limpiar();
   n_hilo.hay = 1; n_hilo.lanzado = 0;
   n_hilo.mensaje = msg; n_hilo.pista = pista; n_hilo.tipo = n_nulo(); n_hilo.valor = n_nulo();
-  n_hilo.linea = n_hilo.nmarcos ? n_hilo.marcos[n_hilo.nmarcos - 1].linea : 0;
-  n_hilo.ntraza = 0;
-  for (int i = n_hilo.nmarcos - 1; i >= 0 && n_hilo.ntraza < N_MAX_TRAZA; i--) n_hilo.traza[n_hilo.ntraza++] = n_hilo.marcos[i];
+  n_hilo.ntraza = 0; n_hilo.linea_puesta = 0;   /* la traza la van poniendo las funciones al deshacer (n_traza) */
   return N_ERR;
+}
+/* (motor-exp A2) una función por la que sube el error: de dentro hacia fuera */
+void n_traza(const char* nombre, int linea) {
+  if (!n_hilo.linea_puesta) { n_hilo.linea = linea; n_hilo.linea_puesta = 1; }
+  /* lo que viene de «lanzar» no lleva traza (así lo hacía la pila de marcos: solo los errores del motor la tenían) */
+  if (n_hilo.lanzado) return;
+  if (n_hilo.ntraza < N_MAX_TRAZA) { n_hilo.traza[n_hilo.ntraza].nombre = nombre; n_hilo.traza[n_hilo.ntraza].linea = linea; n_hilo.ntraza++; }
 }
 NV n_error(const char* msg, const char* pista) { return n_errorT(T(msg), pista ? T(pista) : n_nulo()); }
 NV n_errorf(const char* fmt, ...) {
@@ -243,8 +248,7 @@ NV n_lanzar(NV v) {
   err_limpiar();
   n_hilo.hay = 1; n_hilo.lanzado = 1; n_hilo.valor = n_inc(v);
   n_hilo.mensaje = msg; n_hilo.pista = n_nulo(); n_hilo.tipo = n_nulo();
-  n_hilo.linea = n_hilo.nmarcos ? n_hilo.marcos[n_hilo.nmarcos - 1].linea : 0;
-  n_hilo.ntraza = 0;
+  n_hilo.ntraza = 0; n_hilo.linea_puesta = 0;
   return N_ERR;
 }
 /* Lo que recibe «capturar (e)»: lo lanzado tal cual, o un error del motor. */
@@ -311,17 +315,43 @@ int n_verdad(NV v) {
 NV n_lista_nueva(int64_t cap) {
   NLista* l = (NLista*)n_objeto(sizeof(NLista), NC_LISTA);
   l->n = 0; l->cap = cap > 4 ? cap : 4;
-  l->v = (NV*)n_mem(sizeof(NV) * (size_t)l->cap);
+  l->nv_ = NULL; l->d = NULL; l->el = NL_VACIA;
   return n_obj(l);
 }
+static size_t el_tam(int el) { return el == NL_NUM ? sizeof(double) : el == NL_BOOL ? 1 : sizeof(NV); }
+NV* n_lista_materializar(NLista* l) {
+  if (l->el == NL_NV) return l->nv_;
+  NV* nv = (NV*)n_mem(sizeof(NV) * (size_t)l->cap);
+  if (l->el == NL_NUM) for (int64_t i = 0; i < l->n; i++) nv[i] = n_num(((double*)l->d)[i]);
+  else if (l->el == NL_BOOL) for (int64_t i = 0; i < l->n; i++) nv[i] = n_bool(((uint8_t*)l->d)[i]);
+  free(l->d); l->d = NULL; l->nv_ = nv; l->el = NL_NV;
+  return nv;
+}
+static void lista_crecer(NLista* l) {
+  if (l->n < l->cap) return;
+  l->cap *= 2;
+  if (l->el == NL_NV) l->nv_ = (NV*)n_remem(l->nv_, sizeof(NV) * (size_t)l->cap);
+  else l->d = n_remem(l->d, el_tam(l->el) * (size_t)l->cap);
+}
 void n_lista_agregar(NLista* l, NV v) {
-  if (l->n == l->cap) { l->cap *= 2; l->v = (NV*)n_remem(l->v, sizeof(NV) * (size_t)l->cap); }
-  l->v[l->n++] = v;
+  if (l->el == NL_VACIA) {
+    l->el = v.t == N_NUM ? NL_NUM : v.t == N_BOOL ? NL_BOOL : NL_NV;
+    if (l->el == NL_NV) l->nv_ = (NV*)n_mem(sizeof(NV) * (size_t)l->cap); else l->d = n_mem(el_tam(l->el) * (size_t)l->cap);
+  }
+  if (l->el == NL_NUM && v.t == N_NUM) { lista_crecer(l); ((double*)l->d)[l->n++] = v.u.n; return; }
+  if (l->el == NL_BOOL && v.t == N_BOOL) { lista_crecer(l); ((uint8_t*)l->d)[l->n++] = (uint8_t)v.u.b; return; }
+  n_lv(l); lista_crecer(l);
+  l->nv_[l->n++] = v;
+}
+void n_lista_poner(NLista* l, int64_t k, NV v) {
+  if (l->el == NL_NUM && v.t == N_NUM) { ((double*)l->d)[k] = v.u.n; return; }
+  if (l->el == NL_BOOL && v.t == N_BOOL) { ((uint8_t*)l->d)[k] = (uint8_t)v.u.b; return; }
+  n_asignar(&n_lv(l)[k], v);
 }
 NV n_lista_de(NV* v, int n) {
   NV r = n_lista_nueva(n);
   NLista* l = (NLista*)r.u.o;
-  for (int i = 0; i < n; i++) l->v[i] = n_inc(v[i]);
+  for (int i = 0; i < n; i++) n_lv(l)[i] = n_inc(v[i]);
   l->n = n;
   return r;
 }
@@ -329,7 +359,7 @@ NV n_lista_de(NV* v, int n) {
 NV n_lista_tomar(NV* v, int n) {      /* se queda con las referencias de v */
   NV r = n_lista_nueva(n);
   NLista* l = LS(r);
-  for (int i = 0; i < n; i++) l->v[i] = v[i];
+  for (int i = 0; i < n; i++) n_lv(l)[i] = v[i];
   l->n = n;
   return r;
 }
@@ -477,7 +507,7 @@ static void repr_en(NBuf* b, NV v, int prof) {
       if (prof > 4) { b_utf8(b, "[\xE2\x80\xA6]"); return; }
       b_c(b, '[');
       NLista* l = LS(v);
-      for (int64_t i = 0; i < l->n; i++) { if (i) { b_c(b, ','); b_c(b, ' '); } repr_en(b, l->v[i], prof + 1); }
+      for (int64_t i = 0; i < l->n; i++) { if (i) { b_c(b, ','); b_c(b, ' '); } repr_en(b, n_lv(l)[i], prof + 1); }
       b_c(b, ']'); return;
     }
     case NC_DIC: {
@@ -573,7 +603,7 @@ static int iguales_rec(NV a, NV b, NPar* vistos, int nv) {
   if (dosListas) {
     NLista *x = LS(a), *y = LS(b);
     if (x->n != y->n) return 0;
-    for (int64_t i = 0; i < x->n; i++) if (!iguales_rec(x->v[i], y->v[i], v2, nv2)) return 0;
+    for (int64_t i = 0; i < x->n; i++) if (!iguales_rec(n_lv(x)[i], n_lv(y)[i], v2, nv2)) return 0;
     return 1;
   }
   NDic *x = DC(a), *y = DC(b);
@@ -598,8 +628,8 @@ NV n_sumar(NV a, NV b) {
   }
   if (n_es(a, NC_LISTA) && n_es(b, NC_LISTA)) {
     NV r = n_lista_nueva(LS(a)->n + LS(b)->n);
-    for (int64_t i = 0; i < LS(a)->n; i++) n_lista_agregar(LS(r), n_inc(LS(a)->v[i]));
-    for (int64_t i = 0; i < LS(b)->n; i++) n_lista_agregar(LS(r), n_inc(LS(b)->v[i]));
+    for (int64_t i = 0; i < LS(a)->n; i++) n_lista_agregar(LS(r), n_inc(n_lv(LS(a))[i]));
+    for (int64_t i = 0; i < LS(b)->n; i++) n_lista_agregar(LS(r), n_inc(n_lv(LS(b))[i]));
     return r;
   }
   if (n_es(a, NC_TEXTO) || n_es(b, NC_TEXTO)) {
@@ -701,7 +731,7 @@ NV n_idx_get(NV o, NV i) {
         NV pista = l->n ? msg("los índices válidos van de 0 a %d, o de -1 a -%d", (long long)(l->n - 1), (long long)l->n) : n_texto_utf8("la lista está vacía");
         return ERRP(pista, "índice %j fuera de rango (la lista tiene %d elemento(s))", i.u.n, (long long)l->n);
       }
-      return n_inc(l->v[(int64_t)k]);
+      return n_inc(n_lv(l)[(int64_t)k]);
     }
     case NC_TEXTO: {
       NTexto* s = TX(o);
@@ -727,7 +757,7 @@ NV n_idx_get(NV o, NV i) {
           return f;
         }
         NBuf b = {0}; NLista* c = LS(d->reg->campos); int pr = 1;
-        for (int64_t k = 0; k < c->n; k++) { if (!pr) b_utf8(&b, ", "); pr = 0; b_txt(&b, c->v[k]); }
+        for (int64_t k = 0; k < c->n; k++) { if (!pr) b_utf8(&b, ", "); pr = 0; b_txt(&b, n_lv(c)[k]); }
         NDic* md = DC(d->reg->metodos);
         for (int64_t k = 0; k < md->usados; k++) if (md->e[k].vivo) { if (!pr) b_utf8(&b, ", "); pr = 0; b_txt(&b, md->e[k].k); }
         NV tiene = b_texto(&b); NV pista = msg("tiene: %v", tiene); n_dec(tiene);
@@ -752,14 +782,14 @@ NV n_idx_set(NV o, NV i, NV v) {
     double k = i.u.n < 0 ? (double)l->n + i.u.n : i.u.n;
     if (k < 0 || k >= (double)l->n) return ERR("índice %j fuera de rango (longitud %d)", i.u.n, (long long)l->n);
     if (k != trunc(k)) return n_nulo();
-    n_asignar(&l->v[(int64_t)k], v);
+    n_asignar(&n_lv(l)[(int64_t)k], v);
     return n_nulo();
   }
   if (n_es(o, NC_DIC)) {
     NDic* d = DC(o);
     if (d->reg && !n_dic_buscar(d, i, NULL)) {
       NBuf b = {0}; NLista* c = LS(d->reg->campos);
-      for (int64_t k = 0; k < c->n; k++) { if (k) b_utf8(&b, ", "); b_txt(&b, c->v[k]); }
+      for (int64_t k = 0; k < c->n; k++) { if (k) b_utf8(&b, ", "); b_txt(&b, n_lv(c)[k]); }
       NV cs = b_texto(&b); NV pista = msg("sus campos son: %v", cs); n_dec(cs);
       NV s = n_repr(i, 0); NV r = ERRP(pista, "«%v» no tiene el campo «%v»", d->reg->nombre, s); n_dec(s); return r;
     }
@@ -844,9 +874,7 @@ NV n_llamar(NV f, NV* args, int n) {
         args = tmp; n = fn->aridad;
       } else { NV a = aridad_txt(fn); NV r = ERR("«%s» espera %v argumento(s) y recibió %d", fn->nombre, a, (long long)n); n_dec(a); return r; }
     }
-    if (n_hilo.nmarcos >= N_MAX_MARCOS)
-      return n_error("desbordamiento de pila: demasiadas llamadas anidadas", "suele indicar una recursión sin caso base");
-    return fn->f(c, args, n);
+    return fn->f(c, args, n);   /* la profundidad la comprueba la función al entrar (A2) */
   }
   if (n_es(f, NC_NATIVA)) {
     NNativa* x = (NNativa*)f.u.o;
@@ -860,9 +888,9 @@ static NV nat_metodo_atado(NV* a, int n, void* extra) {
   NNativa* yo = (NNativa*)extra; NLista* par = LS(yo->extraV);
   NV args[65];
   if (n > 64) return n_error("demasiados argumentos", NULL);
-  args[0] = par->v[0];
+  args[0] = n_lv(par)[0];
   for (int i = 0; i < n; i++) args[i + 1] = a[i];
-  return n_llamar(par->v[1], args, n + 1);
+  return n_llamar(n_lv(par)[1], args, n + 1);
 }
 
 /* ════════════════════════════════════════════════════════════ registros */
@@ -871,14 +899,14 @@ static NV nat_hacer_registro(NV* a, int n, void* extra) {
   NV d = n_dic_nuevo();
   DC(d)->reg = r; N_RC_MAS(&r->h);
   NLista* c = LS(r->campos);
-  for (int i = 0; i < n && i < c->n; i++) n_dic_poner(DC(d), c->v[i], a[i]);
+  for (int i = 0; i < n && i < c->n; i++) n_dic_poner(DC(d), n_lv(c)[i], a[i]);
   return d;
 }
 static NV nat_registro(NV* a, int n, void* extra) {
   (void)n; (void)extra;
   NRegDesc* r = (NRegDesc*)n_objeto(sizeof(NRegDesc), NC_REGDESC);
   r->nombre = n_inc(a[0]);
-  r->campos = n_lista_de(LS(a[1])->v, (int)LS(a[1])->n);
+  r->campos = n_lista_de(n_lv(LS(a[1])), (int)LS(a[1])->n);
   r->metodos = n_dic_nuevo();
   NDic* m = DC(a[2]);
   for (int64_t i = 0; i < m->usados; i++) if (m->e[i].vivo) n_dic_poner(DC(r->metodos), m->e[i].k, m->e[i].v);
@@ -981,8 +1009,12 @@ NAT(nat_tipo) {
   return n_texto_utf8(n_tipo_de(a[0]));
 }
 NAT(nat_longitud) { (void)n; (void)extra; return n_len(a[0]); }
-NAT(nat_rango) {
-  (void)extra;
+/* (motor-exp A1) la validación de «rango», compartida con el C que emite el
+   compilador para «para … en rango(…)» sin lista. «largo» es cuántos
+   elementos tendría la lista: con enteros se calcula; con decimales se cuenta
+   igual que los produciría el bucle de abajo (sumando el paso), porque la
+   suma acumulada puede dar uno más o uno menos que la cuenta. */
+NV n_rango_preparar(NV* a, int n, NRango* r) {
   double ini = 0, fin = 0, paso = 1;
   if (n == 1) { NUM(a[0], 1, "rango"); fin = a[0].u.n; }
   else if (n == 2) { NUM(a[0], 1, "rango"); NUM(a[1], 2, "rango"); ini = a[0].u.n; fin = a[1].u.n; }
@@ -998,7 +1030,28 @@ NAT(nat_rango) {
     return ERRP(n_texto_utf8("si solo quieres contar, usa «repetir n { … }», que no construye la lista"),
       "«rango» generaría %s elementos y el tope son 5 millones", s);
   }
-  NV r = n_lista_nueva((int64_t)c);
+  r->ini = ini; r->fin = fin; r->paso = paso;
+  if (ini == trunc(ini) && fin == trunc(fin) && paso == trunc(paso) && fabs(ini) < 4503599627370496.0 && fabs(fin) < 4503599627370496.0)
+    r->largo = (int64_t)c;
+  else {
+    int64_t k = 0;
+    if (paso > 0) for (double i = ini; i < fin; i += paso) k++;
+    else for (double i = ini; i > fin; i += paso) k++;
+    r->largo = k;
+  }
+  return n_nulo();
+}
+void n_aot_tipo_mal(const char* que, int linea) {
+  fprintf(stderr, "[ejecutable] el compilador supuso %s y no lo era (linea %d): es un fallo del compilador, no del programa\n", que, linea);
+  fflush(stderr);
+  abort();
+}
+NAT(nat_rango) {
+  (void)extra;
+  NRango g; NV e = n_rango_preparar(a, n, &g);
+  if (N_FALLO(e)) return e;
+  double ini = g.ini, fin = g.fin, paso = g.paso;
+  NV r = n_lista_nueva(g.largo > 0 ? g.largo : 1);
   if (paso > 0) for (double i = ini; i < fin; i += paso) n_lista_agregar(LS(r), n_num(i));
   else for (double i = ini; i > fin; i += paso) n_lista_agregar(LS(r), n_num(i));
   return r;
@@ -1033,7 +1086,7 @@ static int clase_ord(NV x) { return x.t == N_NUM ? 1 : n_es(x, NC_TEXTO) ? 2 : n
 static NV max_min(NV* a, int n, const char* quien, int esMax) {
   NV* xs = a; int64_t m = n;
   if (n == 1 && n_es(a[0], NC_LISTA)) {
-    NLista* l = LS(a[0]); xs = l->v; m = l->n;
+    NLista* l = LS(a[0]); xs = n_lv(l); m = l->n;
     int c0 = m ? clase_ord(xs[0]) : 1;
     for (int64_t i = 0; i < m; i++) if (clase_ord(xs[i]) != c0 || !clase_ord(xs[i]))
       return ERR("«%s»: la lista tiene que ser toda de números, toda de texto o toda de fechas", quien);
@@ -1056,7 +1109,7 @@ static NV contiene(NV o, NV x, const char* quien) {
     if (!n_es(x, NC_TEXTO)) return ERR("«%s»: dentro de un texto se busca texto y llegó %s", quien, n_tipo_de(x));
     return n_bool(texto_buscar(o, x, 0) >= 0);
   }
-  if (n_es(o, NC_LISTA)) { NLista* l = LS(o); for (int64_t i = 0; i < l->n; i++) if (n_iguales(l->v[i], x)) return n_bool(1); return n_bool(0); }
+  if (n_es(o, NC_LISTA)) { NLista* l = LS(o); for (int64_t i = 0; i < l->n; i++) if (n_iguales(n_lv(l)[i], x)) return n_bool(1); return n_bool(0); }
   if (n_es(o, NC_DIC)) return n_bool(n_dic_buscar(DC(o), x, NULL));
   return ERR("«%s»: no se puede buscar dentro de %s", quien, n_tipo_de(o));
 }
@@ -1070,8 +1123,8 @@ NAT(nat_agregar) {
 }
 NAT(nat_quitar) {
   (void)n; (void)extra; LST(a[0], 1, "quitar"); NLista* l = LS(a[0]);
-  for (int64_t i = 0; i < l->n; i++) if (n_iguales(l->v[i], a[1])) {
-    n_dec(l->v[i]); memmove(l->v + i, l->v + i + 1, sizeof(NV) * (size_t)(l->n - i - 1)); l->n--;
+  for (int64_t i = 0; i < l->n; i++) if (n_iguales(n_lv(l)[i], a[1])) {
+    n_dec(n_lv(l)[i]); memmove(n_lv(l) + i, n_lv(l) + i + 1, sizeof(NV) * (size_t)(l->n - i - 1)); l->n--;
     return n_inc(a[0]);
   }
   return ERR("«quitar»: %r no está en la lista", a[1]);
@@ -1080,8 +1133,8 @@ NAT(nat_quitarEn) {
   (void)n; (void)extra; LST(a[0], 1, "quitarEn"); NUM(a[1], 2, "quitarEn");
   NLista* l = LS(a[0]); double i = a[1].u.n;
   if (i < 0 || i >= (double)l->n) return ERR("«quitarEn»: índice %j fuera de rango", i);
-  int64_t k = (int64_t)i; NV r = l->v[k];
-  memmove(l->v + k, l->v + k + 1, sizeof(NV) * (size_t)(l->n - k - 1)); l->n--;
+  int64_t k = (int64_t)i; NV r = n_lv(l)[k];
+  memmove(n_lv(l) + k, n_lv(l) + k + 1, sizeof(NV) * (size_t)(l->n - k - 1)); l->n--;
   return r;
 }
 NAT(nat_insertar) {
@@ -1092,29 +1145,29 @@ NAT(nat_insertar) {
   if (k < 0) k = 0;
   if (k > l->n) k = l->n;
   n_lista_agregar(l, n_nulo());
-  memmove(l->v + k + 1, l->v + k, sizeof(NV) * (size_t)(l->n - 1 - k));
-  l->v[k] = n_inc(a[2]);
+  memmove(n_lv(l) + k + 1, n_lv(l) + k, sizeof(NV) * (size_t)(l->n - 1 - k));
+  n_lv(l)[k] = n_inc(a[2]);
   return n_inc(a[0]);
 }
 NAT(nat_indice) {
   (void)n; (void)extra; LST(a[0], 1, "indice"); NLista* l = LS(a[0]);
-  for (int64_t i = 0; i < l->n; i++) if (n_iguales(l->v[i], a[1])) return n_num((double)i);
+  for (int64_t i = 0; i < l->n; i++) if (n_iguales(n_lv(l)[i], a[1])) return n_num((double)i);
   return n_num(-1);
 }
 NAT(nat_contar) {
   (void)n; (void)extra; LST(a[0], 1, "contar"); NLista* l = LS(a[0]); int64_t c = 0;
-  for (int64_t i = 0; i < l->n; i++) if (n_iguales(l->v[i], a[1])) c++;
+  for (int64_t i = 0; i < l->n; i++) if (n_iguales(n_lv(l)[i], a[1])) c++;
   return n_num((double)c);
 }
 NAT(nat_invertir) {
   (void)n; (void)extra; LST(a[0], 1, "invertir"); NLista* l = LS(a[0]);
   NV r = n_lista_nueva(l->n);
-  for (int64_t i = l->n - 1; i >= 0; i--) n_lista_agregar(LS(r), n_inc(l->v[i]));
+  for (int64_t i = l->n - 1; i >= 0; i--) n_lista_agregar(LS(r), n_inc(n_lv(l)[i]));
   return r;
 }
 NAT(nat_copiar) {
   (void)n; (void)extra; NV v = a[0];
-  if (n_es(v, NC_LISTA)) return n_lista_de(LS(v)->v, (int)LS(v)->n);
+  if (n_es(v, NC_LISTA)) return n_lista_de(n_lv(LS(v)), (int)LS(v)->n);
   if (n_es(v, NC_DIC)) {
     NV d = n_dic_nuevo(); NDic* s = DC(v);
     for (int64_t i = 0; i < s->usados; i++) if (s->e[i].vivo) n_dic_poner(DC(d), s->e[i].k, s->e[i].v);
@@ -1136,14 +1189,14 @@ static void orden_mezcla(NV* v, NV* k, NV* tv, NV* tk, int64_t n) {   /* estable
 }
 NAT(nat_ordenar) {
   (void)extra; LST(a[0], 1, "ordenar"); NLista* l = LS(a[0]);
-  NV r = n_lista_de(l->v, (int)l->n); NLista* c = LS(r);
+  NV r = n_lista_de(n_lv(l), (int)l->n); NLista* c = LS(r);
   NV* claves = (NV*)n_mem(sizeof(NV) * (size_t)(c->n + 1));
   for (int64_t i = 0; i < c->n; i++) {
-    if (n > 1) { NV kx = n_llamar(a[1], &c->v[i], 1); if (N_FALLO(kx)) { for (int64_t j = 0; j < i; j++) n_dec(claves[j]); free(claves); n_dec(r); return N_ERR; } claves[i] = kx; }
-    else claves[i] = n_inc(c->v[i]);
+    if (n > 1) { NV kx = n_llamar(a[1], &n_lv(c)[i], 1); if (N_FALLO(kx)) { for (int64_t j = 0; j < i; j++) n_dec(claves[j]); free(claves); n_dec(r); return N_ERR; } claves[i] = kx; }
+    else claves[i] = n_inc(n_lv(c)[i]);
   }
   NV* tv = (NV*)n_mem(sizeof(NV) * (size_t)(c->n + 1)); NV* tk = (NV*)n_mem(sizeof(NV) * (size_t)(c->n + 1));
-  orden_mezcla(c->v, claves, tv, tk, c->n);
+  orden_mezcla(n_lv(c), claves, tv, tk, c->n);
   for (int64_t i = 0; i < c->n; i++) n_dec(claves[i]);
   free(claves); free(tv); free(tk);
   return r;
@@ -1151,16 +1204,16 @@ NAT(nat_ordenar) {
 NAT(nat_mapear) {
   (void)n; (void)extra; LST(a[0], 1, "mapear"); NLista* l = LS(a[0]);
   NV r = n_lista_nueva(l->n);
-  for (int64_t i = 0; i < l->n; i++) { NV x = n_llamar(a[1], &l->v[i], 1); if (N_FALLO(x)) { n_dec(r); return N_ERR; } n_lista_agregar(LS(r), x); }
+  for (int64_t i = 0; i < l->n; i++) { NV x = n_llamar(a[1], &n_lv(l)[i], 1); if (N_FALLO(x)) { n_dec(r); return N_ERR; } n_lista_agregar(LS(r), x); }
   return r;
 }
 NAT(nat_filtrar) {
   (void)n; (void)extra; LST(a[0], 1, "filtrar"); NLista* l = LS(a[0]);
   NV r = n_lista_nueva(4);
   for (int64_t i = 0; i < l->n; i++) {
-    NV x = n_llamar(a[1], &l->v[i], 1); if (N_FALLO(x)) { n_dec(r); return N_ERR; }
+    NV x = n_llamar(a[1], &n_lv(l)[i], 1); if (N_FALLO(x)) { n_dec(r); return N_ERR; }
     int ok = n_verdad(x); n_dec(x);
-    if (ok) n_lista_agregar(LS(r), n_inc(l->v[i]));
+    if (ok) n_lista_agregar(LS(r), n_inc(n_lv(l)[i]));
   }
   return r;
 }
@@ -1168,7 +1221,7 @@ NAT(nat_reducir) {
   (void)n; (void)extra; LST(a[0], 1, "reducir"); NLista* l = LS(a[0]);
   NV acc = n_inc(a[2]);
   for (int64_t i = 0; i < l->n; i++) {
-    NV par[2] = { acc, l->v[i] };
+    NV par[2] = { acc, n_lv(l)[i] };
     NV x = n_llamar(a[1], par, 2); n_dec(acc);
     if (N_FALLO(x)) return N_ERR;
     acc = x;
@@ -1187,11 +1240,11 @@ NAT(nat_rebanar) {
   if (n > 1) { NUM(a[1], 2, "rebanar"); i = corte_js(a[1].u.n, l->n); }
   if (n > 2) { NUM(a[2], 3, "rebanar"); j = corte_js(a[2].u.n, l->n); }
   NV r = n_lista_nueva(j > i ? j - i : 0);
-  for (int64_t k = i; k < j; k++) n_lista_agregar(LS(r), n_inc(l->v[k]));
+  for (int64_t k = i; k < j; k++) n_lista_agregar(LS(r), n_inc(n_lv(l)[k]));
   return r;
 }
 static void aplanar_en(NLista* d, NLista* s) {
-  for (int64_t i = 0; i < s->n; i++) { if (n_es(s->v[i], NC_LISTA)) aplanar_en(d, LS(s->v[i])); else n_lista_agregar(d, n_inc(s->v[i])); }
+  for (int64_t i = 0; i < s->n; i++) { if (n_es(n_lv(s)[i], NC_LISTA)) aplanar_en(d, LS(n_lv(s)[i])); else n_lista_agregar(d, n_inc(n_lv(s)[i])); }
 }
 NAT(nat_aplanar) { (void)n; (void)extra; LST(a[0], 1, "aplanar"); NV r = n_lista_nueva(4); aplanar_en(LS(r), LS(a[0])); return r; }
 #define DIC_O_ERR(v, quien) do { if (!n_es((v), NC_DIC)) return n_error("«" quien "» necesita un diccionario", NULL); } while (0)
@@ -1212,7 +1265,7 @@ NAT(nat_error) {
   NV t;
   if (n > 1) { if (!n_es(a[1], NC_TEXTO)) { n_dec(m); return ERR("«error»: el argumento 2 debe ser texto y es %s", n_tipo_de(a[1])); } t = n_inc(a[1]); }
   else t = n_texto_utf8("programa");
-  return error_obj(t, m, n_hilo.nmarcos ? n_hilo.marcos[n_hilo.nmarcos - 1].linea : 0);
+  return error_obj(t, m, n_hilo.linea);
 }
 static double ms_epoca(void) {
 #if defined(_WIN32)
