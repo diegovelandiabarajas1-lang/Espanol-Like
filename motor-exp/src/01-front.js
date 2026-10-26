@@ -211,6 +211,10 @@ function lexer(fuente) {
     if (dos === '?.') { avanzar(); avanzar(); push('?.', '?.', L, C); continue; }
     if (OP3.includes(tres)) { avanzar(); avanzar(); avanzar(); push('OP', tres, L, C); continue; }
     if (OP2.includes(dos)) { avanzar(); avanzar(); push('OP', dos, L, C); continue; }
+    // (motor-exp X5) «texto?»: el tipo que admite nulo, como en Kotlin. Solo
+    // cuenta PEGADO a un nombre; «cierto ? 1 : 2» (el ternario de C, con su
+    // espacio) sigue siendo un carácter inesperado, que es lo que se enseña.
+    if (c === '?' && i > 0 && (esAlnum(fuente[i - 1]) || fuente[i - 1] === '>' || fuente[i - 1] === ')')) { avanzar(); push('?', '?', L, C); continue; }
     if (dos === '&&') { avanzar(); avanzar(); push('Y', 'y', L, C); continue; }
     if (dos === '||') { avanzar(); avanzar(); push('O', 'o', L, C); continue; }
     if ('+-*/%<>=!'.includes(c)) { avanzar(); push('OP', c, L, C); continue; }
@@ -263,6 +267,11 @@ const T = {
   // (motor-exp) Un registro declarado con «tipo Nombre { … }». Lo que lleva
   // —campos y métodos— lo sabe el verificador; aquí solo viaja el nombre.
   registro: (nombre) => ({ k: 'registro', nombre }),
+  // (motor-exp X5) «texto?»: texto o nulo, como el «String?» de Kotlin. Un
+  // «texto» a secas NO admite nulo; un «texto?» no se puede usar como texto
+  // hasta que el verificador sepa que no es nulo (si x != nulo, x ?? v, x?.c).
+  // «cualquiera?» es cualquiera y «nulo?» es nulo: no hay nada que añadir.
+  opcional: (t) => (!t || t.k === 'opcional' || t.k === 'cualquiera' || t.k === 'nulo' || t.k === 'var') ? (t || T.cualquiera) : { k: 'opcional', de: t },
   lista: (e) => ({ k: 'lista', elem: e || T.cualquiera }),
   dic: (c, v) => ({ k: 'dic', clave: c || T.cualquiera, valor: v || T.cualquiera }),
   fn: (params, ret) => ({ k: 'funcion', params: params || null, ret: ret || T.cualquiera }),
@@ -291,6 +300,9 @@ function tipoATexto(t) {
     case 'var': return t.nombre;
     case 'elem': return t.nombre;
     case 'arreglo': return t.elem ? `arreglo<${tipoATexto(t.elem)}>` : 'arreglo';
+    case 'opcional': return t.de.k === 'funcion' && t.de.params ? `(${tipoATexto(t.de)})?` : tipoATexto(t.de) + '?';
+    // «var x» sin valor: el tipo se fija con la primera asignación.
+    case 'pendiente': return 'sin tipo todavía';
     default: return t.k;
   }
 }
@@ -338,6 +350,11 @@ function partirPorBarra(s) {
 function textoATipo(s) {
   s = String(s).trim();
   if (BASICOS.includes(s)) return T[s];
+  // «texto?» y «(funcion(real): real)?»: lo que admite nulo.
+  if (s.endsWith('?')) {
+    const d = s.slice(0, -1).trim();
+    return T.opcional(textoATipo(d.startsWith('(') && d.endsWith(')') ? d.slice(1, -1) : d));
+  }
   // «real|arreglo» antes que nada: la barra tiene menos fuerza que todo lo
   // demás, y así «lista<real>|arreglo» también se lee.
   if (s.includes('|')) {
@@ -398,6 +415,11 @@ function compatible(destino, origen) {
   // de la función vale lo que valga: se comprueba en cada LLAMADA, donde se
   // sabe qué es T.
   if (destino.k === 'var' || origen.k === 'var') return true;
+  // (motor-exp X5) Donde se espera «texto?» vale un texto, un nulo o un
+  // «texto?». Donde se espera «texto» NO vale un «texto?»: puede ser nulo, y
+  // ese es justo el error que este tipo existe para parar.
+  if (destino.k === 'opcional') return origen.k === 'nulo' || compatible(destino.de, origen.k === 'opcional' ? origen.de : origen);
+  if (origen.k === 'opcional') return false;
   // Una unión acepta cualquiera de sus miembros. Existe por «seno»: tiene que
   // recibir un número o un arreglo, y la alternativa era poner «cualquiera» y
   // perder la comprobación del todo, o inventar «senoA» al lado de «seno», que
@@ -526,7 +548,14 @@ function parser(toks, fuenteNombre, opciones) {
   const saltarPuntoYComa = () => { while (igualar(';')) { } };
 
   // --- tipos ---
+  // (motor-exp X5) «texto?», «lista<real>?», «Punto?»: el «?» pegado al tipo
+  // dice que admite nulo. Va fuera de parseTipoBase para que valga con todos.
   function parseTipo() {
+    const t = parseTipoBase();
+    if (comprobar('?')) { p++; return T.opcional(t); }
+    return t;
+  }
+  function parseTipoBase() {
     const t = ver();
     if (t.tipo !== 'IDENT' && t.tipo !== 'NULO' && t.tipo !== 'FUNCION')
       throw new ErrorFuente('sintaxis', `se esperaba un tipo y llegó «${t.valor}»`, t.linea, t.col);

@@ -1,4 +1,4 @@
-/* n-web.js — Ñ en cualquier página web (motor-exp 2026-10-21).
+/* n-web.js — Ñ en cualquier página web (motor-exp 2026-10-26).
  * Generado por motor-exp/util/construir-web.js: el motor (bundle.js), el anfitrión de la página
  * (ide/anfitrion.js) y el cargador de <script type="text/ñ"> (web/cargador.js). No editar a mano. */
 ;(function(global){
@@ -215,6 +215,10 @@ function lexer(fuente) {
     if (dos === '?.') { avanzar(); avanzar(); push('?.', '?.', L, C); continue; }
     if (OP3.includes(tres)) { avanzar(); avanzar(); avanzar(); push('OP', tres, L, C); continue; }
     if (OP2.includes(dos)) { avanzar(); avanzar(); push('OP', dos, L, C); continue; }
+    // (motor-exp X5) «texto?»: el tipo que admite nulo, como en Kotlin. Solo
+    // cuenta PEGADO a un nombre; «cierto ? 1 : 2» (el ternario de C, con su
+    // espacio) sigue siendo un carácter inesperado, que es lo que se enseña.
+    if (c === '?' && i > 0 && (esAlnum(fuente[i - 1]) || fuente[i - 1] === '>' || fuente[i - 1] === ')')) { avanzar(); push('?', '?', L, C); continue; }
     if (dos === '&&') { avanzar(); avanzar(); push('Y', 'y', L, C); continue; }
     if (dos === '||') { avanzar(); avanzar(); push('O', 'o', L, C); continue; }
     if ('+-*/%<>=!'.includes(c)) { avanzar(); push('OP', c, L, C); continue; }
@@ -267,6 +271,11 @@ const T = {
   // (motor-exp) Un registro declarado con «tipo Nombre { … }». Lo que lleva
   // —campos y métodos— lo sabe el verificador; aquí solo viaja el nombre.
   registro: (nombre) => ({ k: 'registro', nombre }),
+  // (motor-exp X5) «texto?»: texto o nulo, como el «String?» de Kotlin. Un
+  // «texto» a secas NO admite nulo; un «texto?» no se puede usar como texto
+  // hasta que el verificador sepa que no es nulo (si x != nulo, x ?? v, x?.c).
+  // «cualquiera?» es cualquiera y «nulo?» es nulo: no hay nada que añadir.
+  opcional: (t) => (!t || t.k === 'opcional' || t.k === 'cualquiera' || t.k === 'nulo' || t.k === 'var') ? (t || T.cualquiera) : { k: 'opcional', de: t },
   lista: (e) => ({ k: 'lista', elem: e || T.cualquiera }),
   dic: (c, v) => ({ k: 'dic', clave: c || T.cualquiera, valor: v || T.cualquiera }),
   fn: (params, ret) => ({ k: 'funcion', params: params || null, ret: ret || T.cualquiera }),
@@ -295,6 +304,9 @@ function tipoATexto(t) {
     case 'var': return t.nombre;
     case 'elem': return t.nombre;
     case 'arreglo': return t.elem ? `arreglo<${tipoATexto(t.elem)}>` : 'arreglo';
+    case 'opcional': return t.de.k === 'funcion' && t.de.params ? `(${tipoATexto(t.de)})?` : tipoATexto(t.de) + '?';
+    // «var x» sin valor: el tipo se fija con la primera asignación.
+    case 'pendiente': return 'sin tipo todavía';
     default: return t.k;
   }
 }
@@ -342,6 +354,11 @@ function partirPorBarra(s) {
 function textoATipo(s) {
   s = String(s).trim();
   if (BASICOS.includes(s)) return T[s];
+  // «texto?» y «(funcion(real): real)?»: lo que admite nulo.
+  if (s.endsWith('?')) {
+    const d = s.slice(0, -1).trim();
+    return T.opcional(textoATipo(d.startsWith('(') && d.endsWith(')') ? d.slice(1, -1) : d));
+  }
   // «real|arreglo» antes que nada: la barra tiene menos fuerza que todo lo
   // demás, y así «lista<real>|arreglo» también se lee.
   if (s.includes('|')) {
@@ -402,6 +419,11 @@ function compatible(destino, origen) {
   // de la función vale lo que valga: se comprueba en cada LLAMADA, donde se
   // sabe qué es T.
   if (destino.k === 'var' || origen.k === 'var') return true;
+  // (motor-exp X5) Donde se espera «texto?» vale un texto, un nulo o un
+  // «texto?». Donde se espera «texto» NO vale un «texto?»: puede ser nulo, y
+  // ese es justo el error que este tipo existe para parar.
+  if (destino.k === 'opcional') return origen.k === 'nulo' || compatible(destino.de, origen.k === 'opcional' ? origen.de : origen);
+  if (origen.k === 'opcional') return false;
   // Una unión acepta cualquiera de sus miembros. Existe por «seno»: tiene que
   // recibir un número o un arreglo, y la alternativa era poner «cualquiera» y
   // perder la comprobación del todo, o inventar «senoA» al lado de «seno», que
@@ -530,7 +552,14 @@ function parser(toks, fuenteNombre, opciones) {
   const saltarPuntoYComa = () => { while (igualar(';')) { } };
 
   // --- tipos ---
+  // (motor-exp X5) «texto?», «lista<real>?», «Punto?»: el «?» pegado al tipo
+  // dice que admite nulo. Va fuera de parseTipoBase para que valga con todos.
   function parseTipo() {
+    const t = parseTipoBase();
+    if (comprobar('?')) { p++; return T.opcional(t); }
+    return t;
+  }
+  function parseTipoBase() {
     const t = ver();
     if (t.tipo !== 'IDENT' && t.tipo !== 'NULO' && t.tipo !== 'FUNCION')
       throw new ErrorFuente('sintaxis', `se esperaba un tipo y llegó «${t.valor}»`, t.linea, t.col);
@@ -1381,9 +1410,24 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       this.vars = new Map(); this.padre = padre;
       this.retornoEsperado = retornoEsperado !== undefined ? retornoEsperado : (padre ? padre.retornoEsperado : null);
       this.hayRetorno = false;
+      // (motor-exp X5) Lo que se sabe de más en ESTE bloque: que «x», declarada
+      // «texto?», aquí no es nulo porque un «si x != nulo» lo garantiza. Es el
+      // «smart cast» de Kotlin: no cambia la variable, cambia lo que se sabe de
+      // ella hasta que se cierra el bloque o se le asigna otra cosa.
+      this.estrechos = new Map();
     }
     declarar(n, t, esFijo) { this.vars.set(n, { tipo: t, esFijo }); }
-    buscar(n) { let a = this; while (a) { if (a.vars.has(n)) return a.vars.get(n); a = a.padre; } return null; }
+    buscar(n) {
+      let a = this;
+      while (a) {
+        if (a.estrechos.has(n)) return a.estrechos.get(n);
+        if (a.vars.has(n)) return a.vars.get(n);
+        a = a.padre;
+      }
+      return null;
+    }
+    estrechar(n, t) { const v = this.buscar(n); if (v) this.estrechos.set(n, Object.assign({}, v, { tipo: t })); }
+    desestrechar(n) { for (let a = this; a; a = a.padre) a.estrechos.delete(n); }
   }
 
   const raiz = new Ambito(null, null);
@@ -1459,6 +1503,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
       if (compatible(arg, ya)) { vinc.set(param.nombre, arg); return null; }   // entero → real
       return `«${param.nombre}» ya era ${tipoATexto(ya)} y aquí llega ${tipoATexto(arg)}`;
     }
+    if (param.k === 'opcional') return unificar(param.de, arg.k === 'opcional' ? arg.de : arg, vinc);
     if (param.k === 'lista' && arg.k === 'lista') return unificar(param.elem, arg.elem, vinc);
     if (param.k === 'dic' && arg.k === 'dic') return unificar(param.clave, arg.clave, vinc) || unificar(param.valor, arg.valor, vinc);
     if (param.k === 'funcion' && arg.k === 'funcion' && param.params && arg.params && param.params.length === arg.params.length) {
@@ -1470,11 +1515,86 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
   function sustituir(t, vinc) {
     if (!t) return t;
     if (t.k === 'var') return vinc.get(t.nombre) || T.cualquiera;
+    if (t.k === 'opcional') return T.opcional(sustituir(t.de, vinc));
     if (t.k === 'lista') return T.lista(sustituir(t.elem, vinc));
     if (t.k === 'dic') return T.dic(sustituir(t.clave, vinc), sustituir(t.valor, vinc));
     if (t.k === 'funcion') return T.fn(t.params ? t.params.map(x => sustituir(x, vinc)) : null, sustituir(t.ret, vinc));
     return t;
   }
+
+  // ── (motor-exp X5) nulos al estilo Kotlin ──────────────────────────────
+  // Qué nombres se sabe que NO son nulos si la condición es cierta («si») y
+  // cuáles si es falsa («no»). «x != nulo» da si:{x}; «x == nulo» da no:{x};
+  // «y» suma los «si»; «o» suma los «no»; «no …» los cambia de sitio.
+  function nulosEn(c) {
+    const vacio = () => ({ si: new Set(), no: new Set() });
+    if (!c) return vacio();
+    if (c.tipo === 'Binario' && (c.op === '==' || c.op === '!=')) {
+      const esNulo = x => x.tipo === 'Literal' && x.valor === null;
+      const v = c.izq.tipo === 'Variable' && esNulo(c.der) ? c.izq.nombre : (c.der.tipo === 'Variable' && esNulo(c.izq) ? c.der.nombre : null);
+      const r = vacio();
+      if (v) (c.op === '!=' ? r.si : r.no).add(v);
+      return r;
+    }
+    if (c.tipo === 'Binario' && (c.op === 'y' || c.op === 'o')) {
+      const a = nulosEn(c.izq), b = nulosEn(c.der), r = vacio();
+      if (c.op === 'y') for (const x of [...a.si, ...b.si]) r.si.add(x);
+      else for (const x of [...a.no, ...b.no]) r.no.add(x);
+      return r;
+    }
+    if (c.tipo === 'Unario' && c.op === 'no') { const a = nulosEn(c.expr); return { si: a.no, no: a.si }; }
+    return vacio();
+  }
+  // En «amb», «x» deja de poder ser nulo (si lo era): lo que hay dentro de un
+  // «si x != nulo { … }» ve a «x» como «texto», no como «texto?».
+  function estrecharNoNulo(amb, nombres) {
+    for (const x of nombres) {
+      const v = amb.buscar(x);
+      if (v && v.tipo && v.tipo.k === 'opcional') amb.estrechar(x, v.tipo.de);
+    }
+  }
+  // ¿Este bloque (o sentencia) sale SIEMPRE de la función o del bucle, por
+  // todos sus caminos? Es lo que hace que lo que vale en el «sino» valga
+  // después del «si», y lo que decide si una función con tipo de retorno
+  // tiene un camino que acaba sin «devolver».
+  function terminaSiempre(n) {
+    if (!n) return false;
+    switch (n.tipo) {
+      case 'Devolver': case 'Lanzar': case 'Romper': case 'Continuar': return true;
+      case 'Bloque': return n.cuerpo.some(terminaSiempre);
+      case 'Si': return !!n.sino && terminaSiempre(n.entonces) && terminaSiempre(n.sino);
+      case 'Intentar':
+        if (n.finalmente && terminaSiempre(n.finalmente)) return true;
+        return terminaSiempre(n.cuerpo) && (!n.captura || terminaSiempre(n.captura));
+      case 'Mientras': {
+        // «mientras cierto { … }» sin «romper» a su nivel no se acaba nunca: lo
+        // que viene después no se ejecuta, y la función solo sale por «devolver».
+        const c = n.cond;
+        const siempre = (c.tipo === 'Literal' && c.valor === true) || (c.tipo === 'Unario' && c.op === 'no' && c.expr.tipo === 'Literal' && c.expr.valor === false);
+        if (!siempre) return false;
+        const hayRomper = (x, anidado) => {
+          if (!x || typeof x !== 'object') return false;
+          if (x.tipo === 'Romper' && !anidado) return true;
+          if (x.tipo === 'FuncionAnon') return false;
+          const dentro = anidado || x.tipo === 'Mientras' || x.tipo === 'Para' || x.tipo === 'Repetir';
+          return Object.keys(x).some(k => k !== 'anotacion' && k !== 'retorno' && k !== 'tipoLit' &&
+            (Array.isArray(x[k]) ? x[k].some(y => hayRomper(y, dentro)) : (x[k] && typeof x[k] === 'object' && hayRomper(x[k], dentro))));
+        };
+        return !hayRomper(n.cuerpo, false);
+      }
+      default: return false;
+    }
+  }
+  // Cómo llamar a un trozo de expresión en un mensaje: «x», «p.nombre», «el valor».
+  function describir(e) {
+    if (e.tipo === 'Variable') return `«${e.nombre}»`;
+    if (e.tipo === 'Propiedad' && e.obj.tipo === 'Variable') return `«${e.obj.nombre}.${e.nombre}»`;
+    if (e.tipo === 'Llamada' && e.callee.tipo === 'Variable') return `lo que devuelve «${e.callee.nombre}»`;
+    return 'el valor';
+  }
+  const PISTA_NULO = (e) => e.tipo === 'Variable'
+    ? `comprueba antes con «si ${e.nombre} != nulo { … }», o dale un valor con «${e.nombre} ?? …»`
+    : 'comprueba antes con «si … != nulo { … }», o dale un valor con «… ?? …»';
 
   // El parecido más cercano entre unos nombres dados (distancia de edición).
   function sugerirEntre(nombre, lista) {
@@ -1522,14 +1642,35 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
 
   function bloqueTipos(nodo, amb) { for (const s of nodo.cuerpo) sent(s, amb); }
 
+  // Una función que promete un tipo tiene que devolverlo por TODOS sus caminos.
+  // Antes bastaba con que hubiera algún «devolver»; el camino que se escapaba
+  // devolvía nulo en silencio y el programa reventaba más tarde, lejos de aquí.
+  function comprobarCaminos(n, sub, nombre) {
+    if (n.corrutina || !n.retorno || n.retorno.k === 'nulo' || n.retorno.k === 'cualquiera') return;
+    if (terminaSiempre(n.cuerpo)) return;
+    err(n, sub.hayRetorno
+      ? `«${nombre}» promete devolver ${tipoATexto(n.retorno)} pero hay un camino que acaba sin «devolver»`
+      : `«${nombre}» promete devolver ${tipoATexto(n.retorno)} pero hay caminos sin «devolver»`,
+      'por ese camino devolvería nulo; añade un «devolver» al final de la función');
+  }
+
   function sent(n, amb) {
     switch (n.tipo) {
       case 'DeclVar': {
-        const tv = n.valor ? expr(n.valor, amb) : T.nulo;
+        // (motor-exp X5) «var x» sin valor ni tipo: el tipo queda pendiente y lo
+        // fija la primera asignación. Antes quedaba como «nulo» y «x = 5» era un
+        // error de tipos, que convertía «var x» en algo que no servía para nada.
+        const tv = n.valor ? expr(n.valor, amb) : (n.anotacion ? T.nulo : { k: 'pendiente' });
         let t = n.anotacion || tv;
+        // «var x: texto» sin valor: en memoria es nulo, y «texto» no admite nulo.
+        if (n.anotacion && !n.valor && !compatible(n.anotacion, T.nulo))
+          err(n, `«${n.nombre}» es ${tipoATexto(n.anotacion)} y no tiene valor`,
+            `dale un valor al declararla, o escribe «var ${n.nombre}: ${tipoATexto(n.anotacion)}?» si puede estar vacía`);
         if (n.anotacion && n.valor && !compatible(n.anotacion, tv))
           err(n, `«${n.nombre}» se declaró como ${tipoATexto(n.anotacion)} pero recibe ${tipoATexto(tv)}`,
-            `cambia la anotación o convierte el valor (por ejemplo con entero(x) o real(x))`);
+            (tv.k === 'nulo' || tv.k === 'opcional')
+              ? `si «${n.nombre}» puede estar vacía, decláralo «${tipoATexto(n.anotacion)}?»; si no, ${tv.k === 'opcional' ? PISTA_NULO(n.valor) : 'dale un valor de verdad'}`
+              : `cambia la anotación o convierte el valor (por ejemplo con entero(x) o real(x))`);
         if (amb.vars.has(n.nombre)) {
           // Decir «ya estaba declarada» de algo que el programa no declaró
           // nunca no ayuda a nadie: lo que pasa es que ese nombre es de la
@@ -1549,9 +1690,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         // registro de quien llama y casi siempre es un error.
         for (const p of n.params) sub.declarar(p.nombre, p.anotacion || T.cualquiera, !!p.esYo);
         bloqueTipos(n.cuerpo, sub);
-        if (!n.corrutina && n.retorno && n.retorno.k !== 'nulo' && n.retorno.k !== 'cualquiera' && !sub.hayRetorno)
-          err(n, `«${n.nombre}» promete devolver ${tipoATexto(n.retorno)} pero hay caminos sin «devolver»`,
-            'añade un «devolver» al final de la función');
+        comprobarCaminos(n, sub, n.nombre);
         return;
       }
       case 'Bloque':
@@ -1566,8 +1705,17 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         const c = expr(n.cond, amb);
         if (c.k !== 'bool' && c.k !== 'cualquiera')
           avisos.push(new ErrorFuente('tipos', `la condición de «si» es ${tipoATexto(c)}, no bool`, n.linea, n.col, 'se usará su valor de verdad'));
-        sent(n.entonces, new Ambito(amb));
-        if (n.sino) sent(n.sino, new Ambito(amb));
+        // (motor-exp X5) dentro de «si x != nulo { … }», x no es nulo; en el
+        // «sino» de «si x == nulo { … }», tampoco. Y si la rama «entonces» sale
+        // siempre («si x == nulo { devolver }»), lo que vale en el «sino» vale
+        // en todo lo que sigue del bloque.
+        const nn = nulosEn(n.cond);
+        const ent = new Ambito(amb);
+        estrecharNoNulo(ent, nn.si);
+        sent(n.entonces, ent);
+        if (n.sino) { const otro = new Ambito(amb); estrecharNoNulo(otro, nn.no); sent(n.sino, otro); }
+        if (terminaSiempre(n.entonces)) estrecharNoNulo(amb, nn.no);
+        if (n.sino && terminaSiempre(n.sino)) estrecharNoNulo(amb, nn.si);
         return;
       }
       case 'Mientras': expr(n.cond, amb); sent(n.cuerpo, new Ambito(amb)); return;
@@ -1642,6 +1790,8 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         // (motor-exp N4.9) dentro de un genérico, un valor de tipo T vale lo que
         // valga (se indexa, se suma…): se sabe qué es en cada llamada
         if (v.tipo && v.tipo.k === 'var') return T.cualquiera;
+        // «var x» sin valor que todavía nadie asignó: no se sabe qué es.
+        if (v.tipo && v.tipo.k === 'pendiente') return T.cualquiera;
         return v.tipo;
       }
       case 'Asignacion': {
@@ -1655,10 +1805,23 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
             'lo que exporta un módulo solo lo cambia ese módulo');
           if (v.tipo && v.tipo.k === 'modulo') return err(n, `«${n.destino.nombre}» es un módulo, no una variable`);
           if (v.esFijo) err(n, `«${n.destino.nombre}» es fijo y no se puede reasignar`, 'decláralo con «var» si debe cambiar');
+          // (motor-exp X5) «var x» sin valor: la primera asignación le pone el tipo.
+          if (v.tipo && v.tipo.k === 'pendiente') {
+            if (tv.k !== 'nulo') v.tipo = tv;
+            return tv;
+          }
           if (n.op === '=' && !compatible(v.tipo, tv))
             err(n, n.esDefecto
               ? `el valor por defecto de «${n.destino.nombre}» es ${tipoATexto(tv)} y el parámetro es ${tipoATexto(v.tipo)}`
-              : `«${n.destino.nombre}» es ${tipoATexto(v.tipo)} y se le asigna ${tipoATexto(tv)}`);
+              : `«${n.destino.nombre}» es ${tipoATexto(v.tipo)} y se le asigna ${tipoATexto(tv)}`,
+              (tv.k === 'nulo' || tv.k === 'opcional') && v.tipo.k !== 'opcional'
+                ? `si «${n.destino.nombre}» puede estar vacía, decláralo «${tipoATexto(v.tipo)}?»` : null);
+          // Asignar a una «texto?» algo que no es nulo deja claro que, de aquí al
+          // final del bloque, no es nulo; asignarle nulo deshace lo que se sabía.
+          if (n.op === '=' && v.tipo && v.tipo.k === 'opcional') {
+            amb.desestrechar(n.destino.nombre);
+            if (tv.k !== 'nulo' && tv.k !== 'opcional' && tv.k !== 'cualquiera') amb.estrechar(n.destino.nombre, v.tipo.de);
+          }
           return v.tipo;
         }
         if (n.destino.tipo === 'Propiedad' && n.destino.obj.tipo === 'Variable') {
@@ -1688,23 +1851,50 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         if (n.op === '-') {
           if (t.k === 'arreglo') return T.arreglo;
           if (t.k === 'grande') return T.grande;
+          if (t.k === 'opcional') return err(n, `${describir(n.expr)} puede ser nulo y aquí se le cambia el signo`, PISTA_NULO(n.expr));
           if (!esNum(t)) err(n, `«-» necesita un número y recibió ${tipoATexto(t)}`);
           return t;
         }
         return T.bool;
       }
       case 'Binario': {
-        const a = expr(n.izq, amb), b = expr(n.der, amb);
         const op = n.op;
+        const a = expr(n.izq, amb);
+        // (motor-exp X5) «si x != nulo y x.largo > 0»: la derecha de «y» ya sabe
+        // lo que la izquierda comprobó; la derecha de «o», lo contrario.
+        let b;
+        if (op === 'y' || op === 'o') {
+          const sub = new Ambito(amb);
+          const nn = nulosEn(n.izq);
+          estrecharNoNulo(sub, op === 'y' ? nn.si : nn.no);
+          b = expr(n.der, sub);
+        } else b = expr(n.der, amb);
         // (motor-exp) «a ?? b»: si a puede ser nulo, sale b; el tipo es el de
-        // los dos si coinciden.
+        // los dos si coinciden. (X5) Con «a» de tipo «texto?», el resultado es
+        // «texto» si «b» es un texto, y sigue siendo «texto?» si «b» también
+        // puede ser nulo.
         if (op === '??') {
           if (a.k === 'nulo') return b;
+          if (a.k === 'opcional') {
+            const d = a.de;
+            if (b.k === 'nulo') return a;
+            if (b.k === 'opcional') return compatible(d, b.de) ? a : T.cualquiera;
+            if (b.k === 'cualquiera') return T.cualquiera;
+            if (compatible(d, b)) return d;
+            if (compatible(b, d)) return b;
+            return T.cualquiera;
+          }
           if (compatible(a, b) && compatible(b, a)) return a;
           return T.cualquiera;
         }
         if (op === 'o' || op === 'y') return T.bool;
         if (['==', '!='].includes(op)) return T.bool;
+        // (motor-exp X5) Un «texto?» no se opera ni se compara hasta saber que
+        // no es nulo. Es el error que el tipo existe para parar ANTES de correr.
+        if (a.k === 'opcional' || b.k === 'opcional') {
+          const e = a.k === 'opcional' ? n.izq : n.der;
+          return err(n, `${describir(e)} puede ser nulo y aquí se usa con «${op}»`, PISTA_NULO(e));
+        }
         if (['<', '<=', '>', '>='].includes(op)) {
           // Dos fechas se ordenan. Una fecha con cualquier otra cosa no, y eso
           // se dice aquí y no al ejecutar: es la mitad del valor de que «fecha»
@@ -1770,7 +1960,15 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         return (a.k === 'entero' && b.k === 'entero') ? T.entero : T.real;
       }
       case 'Llamada': {
-        const ft = expr(n.callee, amb);
+        let ft = expr(n.callee, amb);
+        // (motor-exp X5) «f()» con «f: funcion?»: puede ser nulo. «p?.m()» sí
+        // vale: si «p» es nulo, el resultado es nulo y no se llama a nada.
+        let llamadaOpcional = false;
+        if (ft.k === 'opcional') {
+          if (n.callee.tipo === 'Propiedad' && n.callee.opcional) { llamadaOpcional = true; ft = ft.de; }
+          else return err(n, `${describir(n.callee)} puede ser nulo y aquí se llama`, PISTA_NULO(n.callee));
+        }
+        const conOpcional = t => llamadaOpcional ? T.opcional(t) : t;
         // (motor-exp N1) «arreglo([1.0, 2.0])»: el «.0» se pierde al ejecutar
         // (1.0 y 1 son el mismo número), así que el arreglo salía de enteros. El
         // verificador sí lo ve en el texto: si la lista literal lleva un real
@@ -1829,20 +2027,23 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
               if (fallo) { err(n.args[i], `argumento ${i + 1}: ${fallo}`); continue; }
             }
             if (!compatible(ft.params[i], args[i]))
-              err(n.args[i], `argumento ${i + 1}: se esperaba ${tipoATexto(ft.params[i])} y llegó ${tipoATexto(args[i])}`);
+              err(n.args[i], `argumento ${i + 1}: se esperaba ${tipoATexto(ft.params[i])} y llegó ${tipoATexto(args[i])}`,
+                args[i].k === 'opcional' || args[i].k === 'nulo' ? PISTA_NULO(n.args[i]) : null);
           }
-          return vinc ? sustituir(ft.ret, vinc) : ft.ret;
+          return conOpcional(vinc ? sustituir(ft.ret, vinc) : ft.ret);
         }
         if (ft.k !== 'cualquiera' && ft.k !== 'funcion')
           err(n, `${tipoATexto(ft)} no es una función; no se puede llamar`);
         // Una función de número variable de argumentos no deja comprobar lo que
         // entra, pero sí se sabe lo que sale. Devolver «cualquiera» aquí tiraba
         // esa información y dejaba sin comprobar todo lo que viniera después.
-        if (ft.k === 'funcion' && ft.ret) return ft.ret;
+        if (ft.k === 'funcion' && ft.ret) return conOpcional(ft.ret);
         return T.cualquiera;
       }
       case 'Indice': {
         const o = expr(n.obj, amb), i = expr(n.indice, amb);
+        if (o.k === 'opcional') return err(n, `${describir(n.obj)} puede ser nulo y aquí se indexa`, PISTA_NULO(n.obj));
+        if (i.k === 'opcional') return err(n, `el índice ${describir(n.indice)} puede ser nulo`, PISTA_NULO(n.indice));
         if (o.k === 'lista') { if (!esNum(i)) err(n, `el índice de una lista debe ser entero y es ${tipoATexto(i)}`); return o.elem; }
         if (o.k === 'texto') return T.texto;
         if (o.k === 'dic') return o.valor;
@@ -1866,9 +2067,18 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
                                     : 'no exporta nada: márcalo con «publico»');
           return t;
         }
-        const o = expr(n.obj, amb);
+        let o = expr(n.obj, amb);
+        // (motor-exp X5) «p.x» con «p: Punto?» no vale: puede ser nulo. «p?.x»
+        // sí, y lo que sale puede ser nulo a su vez («real?»).
+        let opcional = false;
+        if (o.k === 'opcional') {
+          if (!n.opcional) return err(n, `${describir(n.obj)} puede ser nulo y aquí se usa «.${n.nombre}»`,
+            n.obj.tipo === 'Variable' ? `escribe «${n.obj.nombre}?.${n.nombre}», o comprueba antes con «si ${n.obj.nombre} != nulo { … }»` : PISTA_NULO(n.obj));
+          opcional = true; o = o.de;
+        }
+        const salida = t => opcional ? T.opcional(t) : t;
         // dic<texto,real> accedido con «.» debe seguir siendo real, no «cualquiera»
-        if (o.k === 'dic') return o.valor;
+        if (o.k === 'dic') return salida(o.valor);
         // (motor-exp) Un registro: el verificador SABE qué campos tiene. Es la
         // razón de que existan: «p.nombre» mal escrito se para aquí, no al
         // ejecutar.
@@ -1876,8 +2086,8 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
           const r = tipoReg(o.nombre);
           if (!r) return T.cualquiera;
           const c = campoDe(r, n.nombre);
-          if (c) return c.tipo;
-          if (r.metodos.has(n.nombre)) return r.metodos.get(n.nombre);
+          if (c) return salida(c.tipo);
+          if (r.metodos.has(n.nombre)) return salida(r.metodos.get(n.nombre));
           return sinCampo(n, r, n.nombre);
         }
         return T.cualquiera;
@@ -1887,7 +2097,11 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         const c = expr(n.cond, amb);
         if (c.k !== 'bool' && c.k !== 'cualquiera')
           avisos.push(new ErrorFuente('tipos', `la condición de «si» es ${tipoATexto(c)}, no bool`, n.linea, n.col, 'se usará su valor de verdad'));
-        const a = expr(n.entonces, amb), b = expr(n.sino, amb);
+        // (motor-exp X5) «si x != nulo entonces x.largo sino 0»: cada rama sabe lo suyo.
+        const nn = nulosEn(n.cond);
+        const ent = new Ambito(amb), otro = new Ambito(amb);
+        estrecharNoNulo(ent, nn.si); estrecharNoNulo(otro, nn.no);
+        const a = expr(n.entonces, ent), b = expr(n.sino, otro);
         if (compatible(a, b) && compatible(b, a)) return a.k === 'cualquiera' ? b : a;
         if ((a.k === 'entero' && b.k === 'real') || (a.k === 'real' && b.k === 'entero')) return T.real;
         return T.cualquiera;
@@ -1907,6 +2121,7 @@ function verificarTipos(ast, globalesTipos, enlace, indiceEdsl) {
         const sub = new Ambito(amb, n.corrutina ? null : (n.retorno || null));
         for (const p of n.params) sub.declarar(p.nombre, p.anotacion || T.cualquiera, false);
         bloqueTipos(n.cuerpo, sub);
+        comprobarCaminos(n, sub, '<anónima>');
         return tipoDeFuncion(n);
       }
       default: return T.cualquiera;
@@ -27098,12 +27313,48 @@ function crearAnfitrion(op) {
   }
 
   const DATOS_TECLA = ev => ({ tecla: ev.key || '', codigo: ev.code || '' });
+  // (motor-exp) Arrastrar y soltar. Lo que viaja de un nodo a otro es UN TEXTO:
+  // el atributo «data-arrastre» del nodo que se arrastra (o su clave, si no lo
+  // tiene). Se guarda aquí además de en dataTransfer porque el navegador solo
+  // deja leer dataTransfer dentro de «drop»: en dragenter/dragleave/dragend
+  // está protegido y getData devuelve vacío. Con la copia, el programa recibe
+  // «dato» en los cinco momentos, no solo al soltar.
+  let arrastrando = '';
+  const datoDe = e => {
+    if (!e || !e.getAttribute) return '';
+    const d = e.getAttribute('data-arrastre');
+    if (d !== null) return d;
+    return e.__nK !== undefined && e.__nK !== null ? String(e.__nK) : '';
+  };
   function datosEvento(ev, e) {
     const d = { tipo: ev.type };
     if (e) { d.valor = e.type === 'checkbox' ? '' : (e.value !== undefined ? e.value : ''); d.marcada = !!e.checked; }
     if (ev.key !== undefined) Object.assign(d, DATOS_TECLA(ev));
     if (ev.clientX !== undefined) { d.x = ev.clientX | 0; d.y = ev.clientY | 0; }
+    if (ev.dataTransfer !== undefined) {
+      // En «drop» manda lo que trae el navegador (puede venir de otra ventana);
+      // en los demás, la copia de aquí.
+      let dato = arrastrando;
+      if (ev.type === 'drop') { try { dato = ev.dataTransfer.getData('text/plain') || arrastrando; } catch (_) {} }
+      d.dato = dato;
+    }
     return d;
+  }
+  // Para que «drop» llegue a dispararse, el navegador exige preventDefault en
+  // dragover y dragenter. Lo hace el anfitrión, sin turno y sin avisar al
+  // programa: dragover dispara decenas de veces por segundo y por eso no está
+  // en la lista blanca del motor. Solo vale mientras el nodo declare «alSoltar»
+  // (se mira el descriptor del último pintado, como todo lo demás).
+  function conectarZonaDeSoltar(e) {
+    if (e.__nZona) return;
+    e.__nZona = true;
+    const acepta = () => { const d = e.__nD; return !!(d && d.eventos && d.eventos.drop); };
+    e.addEventListener('dragover', ev => {
+      if (!acepta()) return;
+      ev.preventDefault();
+      try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+    });
+    e.addEventListener('dragenter', ev => { if (acepta()) ev.preventDefault(); });
   }
 
   // Los oyentes no se quedan con la función: se quedan con el elemento y leen
@@ -27111,6 +27362,7 @@ function crearAnfitrion(op) {
   // entre repintados llama siempre a la función de ahora, no a la de antes.
   function conectarEventos(e, eventos, vm) {
     if (!eventos) return;
+    if (eventos.drop) conectarZonaDeSoltar(e);
     const puestos = e.__nEv || (e.__nEv = new Set());
     for (const nombre in eventos) {
       if (puestos.has(nombre)) continue;
@@ -27120,7 +27372,22 @@ function crearAnfitrion(op) {
         const d = e.__nD;
         const fn = d && d.eventos && d.eventos[nombre];
         if (nombre === 'submit') ev.preventDefault();
+        if (nombre === 'dragstart') {
+          // El dato sale del elemento que se arrastra, no del que escucha: con
+          // un oyente en el contenedor, ev.target es la pieza de dentro.
+          let origen = ev.target;
+          while (origen && origen !== e && origen.getAttribute && origen.getAttribute('draggable') !== 'true') origen = origen.parentNode;
+          arrastrando = datoDe(origen && origen.getAttribute ? origen : e);
+          try { ev.dataTransfer.setData('text/plain', arrastrando); ev.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+        }
+        // Sin esto el navegador «abre» el texto soltado como si fuera un enlace.
+        if (nombre === 'drop') ev.preventDefault();
+        // dragenter y dragleave se disparan también al cruzar cada HIJO de la
+        // zona. Lo que el programa quiere saber es si entró o salió de la ZONA:
+        // se ignoran los cruces internos.
+        if ((nombre === 'dragenter' || nombre === 'dragleave') && ev.relatedTarget && e.contains(ev.relatedTarget)) return;
         if (fn) turno(e.__nVm || vm, fn, [dicDe(e.__nVm || vm, datosEvento(ev, e))]);
+        if (nombre === 'dragend') arrastrando = '';
       });
     }
   }
@@ -27676,8 +27943,7 @@ function crearAnfitrion(op) {
   return { web, grafico, tiempo, red, limpiarTodo, pararTodos, vaciarLienzo, turno, lienzo, volcar };
 }
 
-if (typeof module !== 'undefined') module.exports = { crearAnfitrion };
-;
+if (typeof module !== 'undefined') module.exports = { crearAnfitrion };;
 // ============================================================================
 //  Ñ en cualquier página web: <script type="text/ñ">  (motor-exp P6)
 //

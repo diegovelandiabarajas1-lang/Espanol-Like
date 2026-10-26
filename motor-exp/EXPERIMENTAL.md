@@ -2216,6 +2216,53 @@ restantes son dinámicos de verdad) y contra `analizar()` en los 79 `.esl` del p
 tabla de firmas va embebida (`FIRMAS_JSON`) y se vuelca del motor con el script de su cabecera; si cambia la
 gramática o un mensaje, hay que traerlo a mano. Detalle en `ContextoD/trabajo-en-curso/2026-10-26-…/LEEME.md`.
 
+## Fase X5 · Nulos al estilo Kotlin: «texto?», el estrechamiento y «devolver» por todos los caminos (26-oct-2026)
+
+Diego preguntó qué añadir a Ñ después de A2, y la respuesta salió de portar el verificador a Python: el nulo no
+tenía sitio en el sistema de tipos. Con el motor tal cual: `var x` seguido de `x = 5` era un error de tipos («x es
+nulo y se le asigna entero»), `var nombre: texto = nulo` no se podía escribir, y una función `: entero` con un
+camino sin `devolver` devolvía nulo en silencio y reventaba lejos de ahí («no se puede sumar nulo y entero»). Es
+el «error de los mil millones» de Hoare, y la salida que tomaron Kotlin (1.0, 2016), Swift, TypeScript 2.0, C# 8
+y Dart 2.12 es la misma: el nulo es un tipo aparte, el compilador estrecha por flujo, y se entra de forma gradual.
+Diego eligió la de Kotlin. Solo cambian el parser y el verificador: la VM, el JIT, el AOT y los `.elb` no se tocan.
+
+1. **`texto?`** (`lista<real>?`, `Punto?`, `(funcion(real): real)?`): texto o nulo. El `?` va PEGADO al tipo; el
+   ternario de C (`cierto ? 1 : 2`, con espacio) sigue siendo «carácter inesperado». Un `texto` a secas no admite
+   nulo (ya era así); donde se espera `texto` no vale un `texto?`; donde se espera `texto?` vale texto, nulo o
+   `texto?`. `cualquiera?` es `cualquiera`: la escotilla gradual sigue abierta.
+2. **Un `texto?` no se usa hasta saber que no es nulo**: `n + "!"`, `n < 3`, `-n`, `l[0]`, `f()`, `p.x` y pasarlo a un
+   parámetro `texto` son errores de tipos con pista («comprueba antes con «si n != nulo { … }», o dale un valor con
+   «n ?? …»»; para `p.x`, «escribe «p?.x»»). Compararlo con `==`, pasarlo a `cualquiera` (`imprimir`, `texto(…)`)
+   o recorrerlo con `??`/`?.` no necesita nada.
+3. **El estrechamiento** (el *smart cast* de Kotlin), en `Ambito.estrechos`: dentro de `si x != nulo { … }` y en el
+   `sino` de `si x == nulo`, `x` es `texto`; si la rama `entonces` sale siempre (`si x == nulo { devolver … }`), lo
+   que sigue en el bloque también lo sabe; la derecha de `y` sabe lo que comprobó la izquierda (`si x != nulo y
+   longitud(x) > 0`) y la de `o` lo contrario; `si … entonces … sino …` como expresión estrecha cada rama; asignar
+   un valor que no es nulo deja a la variable sin nulo hasta el final del bloque, y asignarle nulo lo deshace.
+   `x ?? v` da `texto` si `v` es texto; `p?.x` da `real?`; `c?.m()` llama solo si `c` no es nulo y da `real?`.
+4. **`var x` sin valor ni tipo** ya sirve: el tipo queda pendiente y lo fija la primera asignación. `var s: texto`
+   sin valor es error («no tiene valor»; pista: `texto?`), igual que `var s: texto = nulo` y `s = nulo`.
+5. **Una función que promete un tipo lo devuelve por todos sus caminos** (`terminaSiempre`): `fn f(x): entero
+   { si x > 0 { devolver 1 } }` es error de tipos, no un nulo en ejecución. Cuentan `devolver`, `lanzar`, un `si`
+   con `sino` que sale por los dos lados, `intentar` que sale por todos, `mientras cierto` sin `romper` a su nivel y
+   un `segun` con `otro`. Las de `: nulo`, `: cualquiera`, sin tipo y las corrutinas no cambian.
+
+### Qué se probó (`pruebas/exp-nulos.js`, 41 pruebas, en `todas.js`)
+
+Lo bueno corre y da lo de siempre (con y sin JIT); lo malo se para en `[tipos]` y el mensaje enseña la forma
+buena; lo de antes sigue igual (`??` y `?.` sobre `cualquiera`, funciones sin tipo, `fijo n = nulo`). `motor.js`
+232/0, `exp-expresividad` 60/0, `exp-expresividad2` 60/0, `excepciones` 48/0, `modulos` 64/0. De los **79 `.esl`
+del proyecto, 78 dan el mismo veredicto que antes**; el otro es `motor-exp/app/mega-web.esl` (no está en git),
+que tiene un `var htmlTexto: texto` sin valor en la línea 304: ahora es error, y se arregla con `= ""` o `texto?`.
+`util/n-analizar.py` lleva las mismas reglas (0.3): los corpus dan lo mismo que antes más los 41 de nulos.
+
+### Lo que no entra todavía
+
+- `!!` (el «sé que no es nulo» de Kotlin): no hace falta; `x ?? …` o un `si` lo cubren y se leen mejor.
+- `d["k"]` sobre un `dic<texto,real>` sigue dando `real`, no `real?` (en Kotlin `map[k]` es `V?`): cambiarlo
+  tocaría a casi todo programa que use diccionarios; se queda para cuando haya `conjunto`/`patron` (D1).
+- Lo que llega a `capturar (e)` y lo que devuelve una nativa variádica siguen siendo `cualquiera`.
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -2226,6 +2273,7 @@ gramática o un mensaje, hay que traerlo a mano. Detalle en `ContextoD/trabajo-e
 | X2 | parámetros por defecto y con nombre, `publico tipo` entre archivos, valores por defecto en campos, `a?.m()` | parser, verificador, VM (aridad) | **hecha** |
 | X3 | genéricos de usuario (`fn primero<T>(x: T): T`; `lista<T>` aún no) | verificador | **hecha** |
 | X4 | corrutinas al estilo Lua: generadores (`producir`) y asincronía (`esperar`) | VM | **hecha** |
+| X5 | nulos al estilo Kotlin: `texto?`, estrechamiento por flujo, `??`/`?.` tipados, `var x` sin valor, `devolver` por todos los caminos | parser, verificador (la VM, el JIT y el AOT no cambian) | **hecha** |
 | R2 | `a[i]` de arreglo dentro del JIT; JIT para los bucles del nivel superior | JIT | pendiente |
 | D1 | `bytes`, `conjunto`, `patron`, archivos grandes línea a línea, `unir`/`pivotar` | VM, eDSL | pendiente |
 | S1–S2 | FFI con firmas de C, arreglos sin copiar, salidas, retrollamadas, memoria, en fondo; reloj en consola, `servir`, archivos, rutas, procesos, entrada interactiva | VM, biblioteca, anfitrión de Node | **hecha** |

@@ -23,7 +23,12 @@ ejecutar:
               «repetir» negativo y «para» sobre una lista vacía (no entran)
 
 Lo que está dentro de un «intentar … capturar» no se marca como error de
-ejecución: el programa ya lo recoge. Los avisos del motor (condición que no es
+ejecución: el programa ya lo recoge.
+
+Lleva también los nulos al estilo Kotlin de la fase X5 (26-oct-2026):
+«texto?», el estrechamiento por flujo («si x != nulo», «??», «?.»), «var x»
+sin valor, y «devolver» por todos los caminos, con los mismos mensajes que
+el verificador del motor. Los avisos del motor (condición que no es
 bool, «sinComprobar», nombres que tapan a la biblioteca…) salen tal cual.
 
 Opciones
@@ -68,7 +73,7 @@ import re
 import json
 import argparse
 
-VERSION = '0.2 (motor-exp N4.11, 26-oct-2026)'
+VERSION = '0.3 (motor-exp N4.11 + X5 nulos, 26-oct-2026)'
 
 
 # ============================================================================
@@ -300,6 +305,10 @@ def lexer(fuente):
             avanzar(); avanzar()
             push('OP', dos, L, C)
             continue
+        if c == '?' and st['i'] > 0 and (_es_alnum(fuente[st['i'] - 1]) or fuente[st['i'] - 1] in '>)'):
+            avanzar()
+            push('?', '?', L, C)
+            continue
         if dos == '&&':
             avanzar(); avanzar()
             push('Y', 'y', L, C)
@@ -341,6 +350,12 @@ class _T:
     def registro(self, nombre):
         return {'k': 'registro', 'nombre': nombre}
 
+    def opcional(self, t):
+        # (X5) «texto?»: texto o nulo. «cualquiera?», «nulo?» y una variable de tipo no cambian.
+        if not t or t['k'] in ('opcional', 'cualquiera', 'nulo', 'var'):
+            return t or self.cualquiera
+        return {'k': 'opcional', 'de': t}
+
     def lista(self, e=None):
         return {'k': 'lista', 'elem': e or self.cualquiera}
 
@@ -379,6 +394,10 @@ def tipo_a_texto(t):
         return 'módulo «%s»' % (t.get('ruta') or t.get('clave'))
     if k in ('registro', 'var', 'elem'):
         return t['nombre']
+    if k == 'opcional':
+        return ('(%s)?' % tipo_a_texto(t['de'])) if (t['de']['k'] == 'funcion' and t['de'].get('params') is not None) else tipo_a_texto(t['de']) + '?'
+    if k == 'pendiente':
+        return 'sin tipo todavía'
     if k == 'arreglo':
         return 'arreglo<%s>' % tipo_a_texto(t['elem']) if t.get('elem') else 'arreglo'
     return k
@@ -408,6 +427,9 @@ def texto_a_tipo(s):
     s = str(s).strip()
     if s in BASICOS:
         return getattr(T, s)
+    if s.endswith('?'):
+        d = s[:-1].strip()
+        return T.opcional(texto_a_tipo(d[1:-1] if d.startswith('(') and d.endswith(')') else d))
     if '|' in s:
         partes = _partir(s, '|')
         if len(partes) > 1:
@@ -471,6 +493,11 @@ def compatible(destino, origen):
         return True
     if destino['k'] == 'var' or origen['k'] == 'var':
         return True
+    # (X5) donde se espera «texto?» vale texto, nulo o «texto?»; donde se espera «texto» NO vale un «texto?»
+    if destino['k'] == 'opcional':
+        return origen['k'] == 'nulo' or compatible(destino['de'], origen['de'] if origen['k'] == 'opcional' else origen)
+    if origen['k'] == 'opcional':
+        return False
     if destino['k'] == 'union':
         return any(compatible(t, origen) for t in destino['de'])
     if origen['k'] == 'union':
@@ -611,6 +638,13 @@ class Parser:
 
     # --- tipos ---
     def parse_tipo(self):
+        t = self.parse_tipo_base()
+        if self.comprobar('?'):
+            self.p += 1
+            return T.opcional(t)
+        return t
+
+    def parse_tipo_base(self):
         t = self.ver()
         if t['tipo'] not in ('IDENT', 'NULO', 'FUNCION'):
             raise ErrorFuente('sintaxis', 'se esperaba un tipo y llegó «%s»' % t['valor'], t['linea'], t['col'])
@@ -1602,6 +1636,8 @@ class Ambito:
         self.padre = padre
         self.retorno_esperado = retorno_esperado if retorno_esperado != 'heredar' else (padre.retorno_esperado if padre else None)
         self.hay_retorno = False
+        # (X5) lo que se sabe de más en este bloque: «x» (texto?) aquí no es nulo
+        self.estrechos = {}
 
     def declarar(self, n, t, es_fijo):
         self.vars[n] = {'tipo': t, 'esFijo': es_fijo}
@@ -1609,10 +1645,23 @@ class Ambito:
     def buscar(self, n):
         a = self
         while a:
+            if n in a.estrechos:
+                return a.estrechos[n]
             if n in a.vars:
                 return a.vars[n]
             a = a.padre
         return None
+
+    def estrechar(self, n, t):
+        v = self.buscar(n)
+        if v:
+            self.estrechos[n] = dict(v, tipo=t)
+
+    def desestrechar(self, n):
+        a = self
+        while a:
+            a.estrechos.pop(n, None)
+            a = a.padre
 
 
 def _distancia(a, b):
@@ -1711,6 +1760,8 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
                 vinc[param['nombre']] = arg
                 return None
             return '«%s» ya era %s y aquí llega %s' % (param['nombre'], tipo_a_texto(ya), tipo_a_texto(arg))
+        if param['k'] == 'opcional':
+            return unificar(param['de'], arg['de'] if arg['k'] == 'opcional' else arg, vinc)
         if param['k'] == 'lista' and arg['k'] == 'lista':
             return unificar(param['elem'], arg['elem'], vinc)
         if param['k'] == 'dic' and arg['k'] == 'dic':
@@ -1729,6 +1780,8 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
             return t
         if t['k'] == 'var':
             return vinc.get(t['nombre']) or T.cualquiera
+        if t['k'] == 'opcional':
+            return T.opcional(sustituir(t['de'], vinc))
         if t['k'] == 'lista':
             return T.lista(sustituir(t['elem'], vinc))
         if t['k'] == 'dic':
@@ -1736,6 +1789,89 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
         if t['k'] == 'funcion':
             return T.fn([sustituir(x, vinc) for x in t['params']] if t.get('params') is not None else None, sustituir(t['ret'], vinc))
         return t
+
+    # ── (X5) nulos al estilo Kotlin ──
+    def nulos_en(c):
+        vacio = lambda: {'si': set(), 'no': set()}
+        if not c:
+            return vacio()
+        if c['tipo'] == 'Binario' and c['op'] in ('==', '!='):
+            es_nulo = lambda x: x['tipo'] == 'Literal' and x['valor'] is None
+            v = c['izq']['nombre'] if (c['izq']['tipo'] == 'Variable' and es_nulo(c['der'])) else (c['der']['nombre'] if (c['der']['tipo'] == 'Variable' and es_nulo(c['izq'])) else None)
+            r = vacio()
+            if v:
+                (r['si'] if c['op'] == '!=' else r['no']).add(v)
+            return r
+        if c['tipo'] == 'Binario' and c['op'] in ('y', 'o'):
+            a, b, r = nulos_en(c['izq']), nulos_en(c['der']), vacio()
+            if c['op'] == 'y':
+                r['si'] = a['si'] | b['si']
+            else:
+                r['no'] = a['no'] | b['no']
+            return r
+        if c['tipo'] == 'Unario' and c['op'] == 'no':
+            a = nulos_en(c['expr'])
+            return {'si': a['no'], 'no': a['si']}
+        return vacio()
+
+    def estrechar_no_nulo(amb, nombres):
+        for x in nombres:
+            v = amb.buscar(x)
+            if v and v['tipo'] and v['tipo']['k'] == 'opcional':
+                amb.estrechar(x, v['tipo']['de'])
+
+    def termina_siempre(n):
+        if not n:
+            return False
+        k = n['tipo']
+        if k in ('Devolver', 'Lanzar', 'Romper', 'Continuar'):
+            return True
+        if k == 'Bloque':
+            return any(termina_siempre(s) for s in n['cuerpo'])
+        if k == 'Si':
+            return bool(n.get('sino')) and termina_siempre(n['entonces']) and termina_siempre(n['sino'])
+        if k == 'Intentar':
+            if n.get('finalmente') and termina_siempre(n['finalmente']):
+                return True
+            return termina_siempre(n['cuerpo']) and (not n.get('captura') or termina_siempre(n['captura']))
+        if k == 'Mientras':
+            c = n['cond']
+            siempre = (c['tipo'] == 'Literal' and c['valor'] is True) or (c['tipo'] == 'Unario' and c['op'] == 'no' and c['expr']['tipo'] == 'Literal' and c['expr']['valor'] is False)
+            if not siempre:
+                return False
+
+            def hay_romper(x, anidado):
+                if x['tipo'] == 'Romper' and not anidado:
+                    return True
+                if x['tipo'] == 'FuncionAnon':
+                    return False
+                dentro = anidado or x['tipo'] in ('Mientras', 'Para', 'Repetir')
+                return any(hay_romper(h, dentro) for h in _hijos(x))
+            return not hay_romper(n['cuerpo'], False)
+        return False
+
+    def describir(e):
+        if e['tipo'] == 'Variable':
+            return '«%s»' % e['nombre']
+        if e['tipo'] == 'Propiedad' and e['obj']['tipo'] == 'Variable':
+            return '«%s.%s»' % (e['obj']['nombre'], e['nombre'])
+        if e['tipo'] == 'Llamada' and e['callee']['tipo'] == 'Variable':
+            return 'lo que devuelve «%s»' % e['callee']['nombre']
+        return 'el valor'
+
+    def pista_nulo(e):
+        if e['tipo'] == 'Variable':
+            return 'comprueba antes con «si %s != nulo { … }», o dale un valor con «%s ?? …»' % (e['nombre'], e['nombre'])
+        return 'comprueba antes con «si … != nulo { … }», o dale un valor con «… ?? …»'
+
+    def comprobar_caminos(n, sub, nombre):
+        if n.get('corrutina') or not n.get('retorno') or n['retorno']['k'] in ('nulo', 'cualquiera'):
+            return
+        if termina_siempre(n['cuerpo']):
+            return
+        err(n, ('«%s» promete devolver %s pero hay un camino que acaba sin «devolver»' if sub.hay_retorno
+                else '«%s» promete devolver %s pero hay caminos sin «devolver»') % (nombre, tipo_a_texto(n['retorno'])),
+            'por ese camino devolvería nulo; añade un «devolver» al final de la función')
 
     def sugerir_entre(nombre, lista):
         mejor, d0 = None, 3
@@ -1781,11 +1917,18 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
     def sent(n, amb):
         k = n['tipo']
         if k == 'DeclVar':
-            tv = expr(n['valor'], amb) if n['valor'] else T.nulo
+            tv = expr(n['valor'], amb) if n['valor'] else (T.nulo if n['anotacion'] else {'k': 'pendiente'})
             t = n['anotacion'] or tv
+            if n['anotacion'] and not n['valor'] and not compatible(n['anotacion'], T.nulo):
+                err(n, '«%s» es %s y no tiene valor' % (n['nombre'], tipo_a_texto(n['anotacion'])),
+                    'dale un valor al declararla, o escribe «var %s: %s?» si puede estar vacía' % (n['nombre'], tipo_a_texto(n['anotacion'])))
             if n['anotacion'] and n['valor'] and not compatible(n['anotacion'], tv):
-                err(n, '«%s» se declaró como %s pero recibe %s' % (n['nombre'], tipo_a_texto(n['anotacion']), tipo_a_texto(tv)),
-                    'cambia la anotación o convierte el valor (por ejemplo con entero(x) o real(x))')
+                if tv['k'] in ('nulo', 'opcional'):
+                    pista = 'si «%s» puede estar vacía, decláralo «%s?»; si no, %s' % (n['nombre'], tipo_a_texto(n['anotacion']),
+                                                                                     pista_nulo(n['valor']) if tv['k'] == 'opcional' else 'dale un valor de verdad')
+                else:
+                    pista = 'cambia la anotación o convierte el valor (por ejemplo con entero(x) o real(x))'
+                err(n, '«%s» se declaró como %s pero recibe %s' % (n['nombre'], tipo_a_texto(n['anotacion']), tipo_a_texto(tv)), pista)
             if n['nombre'] in amb.vars:
                 if amb is raiz and n['nombre'] in globales_tipos:
                     err(n, '«%s» es una función de la biblioteca y no se puede redeclarar' % n['nombre'], 'ponle otro nombre a la tuya')
@@ -1800,8 +1943,7 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
             for p in n['params']:
                 sub.declarar(p['nombre'], p['anotacion'] or T.cualquiera, bool(p.get('esYo')))
             bloque_tipos(n['cuerpo'], sub)
-            if (not n.get('corrutina') and n.get('retorno') and n['retorno']['k'] not in ('nulo', 'cualquiera') and not sub.hay_retorno):
-                err(n, '«%s» promete devolver %s pero hay caminos sin «devolver»' % (n['nombre'], tipo_a_texto(n['retorno'])), 'añade un «devolver» al final de la función')
+            comprobar_caminos(n, sub, n['nombre'])
             return
         if k == 'Bloque':
             if n.get('sinComprobar'):
@@ -1818,9 +1960,18 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
             c = expr(n['cond'], amb)
             if c['k'] not in ('bool', 'cualquiera'):
                 aviso('tipos', n, 'la condición de «si» es %s, no bool' % tipo_a_texto(c), 'se usará su valor de verdad')
-            sent(n['entonces'], Ambito(amb))
+            nn = nulos_en(n['cond'])
+            ent = Ambito(amb)
+            estrechar_no_nulo(ent, nn['si'])
+            sent(n['entonces'], ent)
             if n.get('sino'):
-                sent(n['sino'], Ambito(amb))
+                otro = Ambito(amb)
+                estrechar_no_nulo(otro, nn['no'])
+                sent(n['sino'], otro)
+            if termina_siempre(n['entonces']):
+                estrechar_no_nulo(amb, nn['no'])
+            if n.get('sino') and termina_siempre(n['sino']):
+                estrechar_no_nulo(amb, nn['si'])
             return
         if k == 'Mientras':
             expr(n['cond'], amb)
@@ -1898,6 +2049,8 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
             marcar_uso(v)
             if v['tipo'] and v['tipo']['k'] == 'var':
                 return T.cualquiera
+            if v['tipo'] and v['tipo']['k'] == 'pendiente':
+                return T.cualquiera
             return v['tipo']
         if k == 'Asignacion':
             tv = expr(n['valor'], amb)
@@ -1912,9 +2065,19 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
                     return err(n, '«%s» es un módulo, no una variable' % d['nombre'])
                 if v['esFijo']:
                     err(n, '«%s» es fijo y no se puede reasignar' % d['nombre'], 'decláralo con «var» si debe cambiar')
+                if v['tipo'] and v['tipo']['k'] == 'pendiente':
+                    if tv['k'] != 'nulo':
+                        v['tipo'] = tv
+                    return tv
                 if n['op'] == '=' and not compatible(v['tipo'], tv):
                     err(n, ('el valor por defecto de «%s» es %s y el parámetro es %s' % (d['nombre'], tipo_a_texto(tv), tipo_a_texto(v['tipo'])))
-                        if n.get('esDefecto') else '«%s» es %s y se le asigna %s' % (d['nombre'], tipo_a_texto(v['tipo']), tipo_a_texto(tv)))
+                        if n.get('esDefecto') else '«%s» es %s y se le asigna %s' % (d['nombre'], tipo_a_texto(v['tipo']), tipo_a_texto(tv)),
+                        ('si «%s» puede estar vacía, decláralo «%s?»' % (d['nombre'], tipo_a_texto(v['tipo'])))
+                        if (tv['k'] in ('nulo', 'opcional') and v['tipo']['k'] != 'opcional') else None)
+                if n['op'] == '=' and v['tipo'] and v['tipo']['k'] == 'opcional':
+                    amb.desestrechar(d['nombre'])
+                    if tv['k'] not in ('nulo', 'opcional', 'cualquiera'):
+                        amb.estrechar(d['nombre'], v['tipo']['de'])
                 return v['tipo']
             if d['tipo'] == 'Propiedad' and d['obj']['tipo'] == 'Variable':
                 mod = amb.buscar(d['obj']['nombre'])
@@ -1943,16 +2106,38 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
                     return T.arreglo
                 if t['k'] == 'grande':
                     return T.grande
+                if t['k'] == 'opcional':
+                    return err(n, '%s puede ser nulo y aquí se le cambia el signo' % describir(n['expr']), pista_nulo(n['expr']))
                 if not es_num(t):
                     err(n, '«-» necesita un número y recibió %s' % tipo_a_texto(t))
                 return t
             return T.bool
         if k == 'Binario':
-            a, b = expr(n['izq'], amb), expr(n['der'], amb)
             op = n['op']
+            a = expr(n['izq'], amb)
+            if op in ('y', 'o'):
+                sub = Ambito(amb)
+                nn = nulos_en(n['izq'])
+                estrechar_no_nulo(sub, nn['si'] if op == 'y' else nn['no'])
+                b = expr(n['der'], sub)
+            else:
+                b = expr(n['der'], amb)
             if op == '??':
                 if a['k'] == 'nulo':
                     return b
+                if a['k'] == 'opcional':
+                    d = a['de']
+                    if b['k'] == 'nulo':
+                        return a
+                    if b['k'] == 'opcional':
+                        return a if compatible(d, b['de']) else T.cualquiera
+                    if b['k'] == 'cualquiera':
+                        return T.cualquiera
+                    if compatible(d, b):
+                        return d
+                    if compatible(b, d):
+                        return b
+                    return T.cualquiera
                 if compatible(a, b) and compatible(b, a):
                     return a
                 return T.cualquiera
@@ -1960,6 +2145,9 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
                 return T.bool
             if op in ('==', '!='):
                 return T.bool
+            if a['k'] == 'opcional' or b['k'] == 'opcional':
+                e = n['izq'] if a['k'] == 'opcional' else n['der']
+                return err(n, '%s puede ser nulo y aquí se usa con «%s»' % (describir(e), op), pista_nulo(e))
             if op in ('<', '<=', '>', '>='):
                 dos_fechas = a['k'] == 'fecha' and b['k'] == 'fecha'
                 con_grande = (a['k'] == 'grande' or b['k'] == 'grande') and (a['k'] == 'grande' or es_num(a)) and (b['k'] == 'grande' or es_num(b))
@@ -2008,6 +2196,13 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
             return T.entero if (a['k'] == 'entero' and b['k'] == 'entero') else T.real
         if k == 'Llamada':
             ft = expr(n['callee'], amb)
+            llamada_opcional = False
+            if ft['k'] == 'opcional':
+                if n['callee']['tipo'] == 'Propiedad' and n['callee'].get('opcional'):
+                    llamada_opcional, ft = True, ft['de']
+                else:
+                    return err(n, '%s puede ser nulo y aquí se llama' % describir(n['callee']), pista_nulo(n['callee']))
+            con_opcional = (lambda t: T.opcional(t)) if llamada_opcional else (lambda t: t)
             if (n['callee']['tipo'] == 'Variable' and n['callee']['nombre'] == 'arreglo' and len(n['args']) == 1
                     and n['args'][0]['tipo'] == 'ListaLit' and es_arreglo_de_numerico(amb) and lleva_literal_real(n['args'][0])):
                 n['args'].append({'tipo': 'Literal', 'valor': 'real', 'tipoLit': T.texto, 'linea': n['linea'], 'col': n['col']})
@@ -2059,15 +2254,20 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
                             err(n['args'][i], 'argumento %d: %s' % (i + 1, fallo))
                             continue
                     if not compatible(ft['params'][i], args[i]):
-                        err(n['args'][i], 'argumento %d: se esperaba %s y llegó %s' % (i + 1, tipo_a_texto(ft['params'][i]), tipo_a_texto(args[i])))
-                return sustituir(ft['ret'], vinc) if vinc is not None else ft['ret']
+                        err(n['args'][i], 'argumento %d: se esperaba %s y llegó %s' % (i + 1, tipo_a_texto(ft['params'][i]), tipo_a_texto(args[i])),
+                            pista_nulo(n['args'][i]) if args[i]['k'] in ('opcional', 'nulo') else None)
+                return con_opcional(sustituir(ft['ret'], vinc) if vinc is not None else ft['ret'])
             if ft['k'] not in ('cualquiera', 'funcion'):
                 err(n, '%s no es una función; no se puede llamar' % tipo_a_texto(ft))
             if ft['k'] == 'funcion' and ft.get('ret'):
-                return ft['ret']
+                return con_opcional(ft['ret'])
             return T.cualquiera
         if k == 'Indice':
             o, i = expr(n['obj'], amb), expr(n['indice'], amb)
+            if o['k'] == 'opcional':
+                return err(n, '%s puede ser nulo y aquí se indexa' % describir(n['obj']), pista_nulo(n['obj']))
+            if i['k'] == 'opcional':
+                return err(n, 'el índice %s puede ser nulo' % describir(n['indice']), pista_nulo(n['indice']))
             if o['k'] == 'lista':
                 if not es_num(i):
                     err(n, 'el índice de una lista debe ser entero y es %s' % tipo_a_texto(i))
@@ -2092,17 +2292,25 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
                                ('exporta: ' + ', '.join(mod['tipo']['exporta'].keys())) if mod['tipo']['exporta'] else 'no exporta nada: márcalo con «publico»')
                 return t
             o = expr(n['obj'], amb)
+            opcional = False
+            if o['k'] == 'opcional':
+                if not n.get('opcional'):
+                    return err(n, '%s puede ser nulo y aquí se usa «.%s»' % (describir(n['obj']), n['nombre']),
+                               ('escribe «%s?.%s», o comprueba antes con «si %s != nulo { … }»' % (n['obj']['nombre'], n['nombre'], n['obj']['nombre']))
+                               if n['obj']['tipo'] == 'Variable' else pista_nulo(n['obj']))
+                opcional, o = True, o['de']
+            salida = (lambda t: T.opcional(t)) if opcional else (lambda t: t)
             if o['k'] == 'dic':
-                return o['valor']
+                return salida(o['valor'])
             if o['k'] == 'registro':
                 r = tipo_reg(o['nombre'])
                 if not r:
                     return T.cualquiera
                 c = campo_de(r, n['nombre'])
                 if c:
-                    return c['tipo']
+                    return salida(c['tipo'])
                 if n['nombre'] in r['metodos']:
-                    return r['metodos'][n['nombre']]
+                    return salida(r['metodos'][n['nombre']])
                 return sin_campo(n, r, n['nombre'])
             return T.cualquiera
         if k == 'Esperar':
@@ -2112,7 +2320,11 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
             c = expr(n['cond'], amb)
             if c['k'] not in ('bool', 'cualquiera'):
                 aviso('tipos', n, 'la condición de «si» es %s, no bool' % tipo_a_texto(c), 'se usará su valor de verdad')
-            a, b = expr(n['entonces'], amb), expr(n['sino'], amb)
+            nn = nulos_en(n['cond'])
+            ent, otro = Ambito(amb), Ambito(amb)
+            estrechar_no_nulo(ent, nn['si'])
+            estrechar_no_nulo(otro, nn['no'])
+            a, b = expr(n['entonces'], ent), expr(n['sino'], otro)
             if compatible(a, b) and compatible(b, a):
                 return b if a['k'] == 'cualquiera' else a
             if (a['k'] == 'entero' and b['k'] == 'real') or (a['k'] == 'real' and b['k'] == 'entero'):
@@ -2141,6 +2353,7 @@ def verificar_tipos(ast, globales_tipos, enlace, indice_edsl):
             for p in n['params']:
                 sub.declarar(p['nombre'], p['anotacion'] or T.cualquiera, False)
             bloque_tipos(n['cuerpo'], sub)
+            comprobar_caminos(n, sub, '<anónima>')
             return tipo_de_funcion(n)
         return T.cualquiera
 
@@ -2724,12 +2937,7 @@ def analizar_ejecucion(ast, nombres_biblioteca):
     def funcion_ejec(f, ctx, protegido=False):
         sub = {'protegido': protegido, 'bucles': [], 'enFuncion': True, 'nivelSuperior': False}
         cuerpo_ejec(f['cuerpo']['cuerpo'], sub)
-        ret = f.get('retorno')
-        if ret and ret['k'] not in ('nulo', 'cualquiera') and not f.get('corrutina') and not f.get('esConstructor'):
-            if any(x['tipo'] == 'Devolver' for x in _recorrer(f['cuerpo'], sin_funciones=True)) and not termina(f['cuerpo']['cuerpo']):
-                nombre = f.get('nombre') or '<anónima>'
-                h('ejecución', f, '«%s» promete devolver %s pero hay un camino que acaba sin «devolver»' % (nombre, tipo_a_texto(ret)),
-                  'por ese camino devolvería nulo; añade un «devolver» al final', nivel='aviso')
+        # (X5) el camino que acaba sin «devolver» lo para el verificador: aquí ya no se avisa
 
     def cuerpo_ejec(stmts, ctx):
         for i, s in enumerate(stmts):

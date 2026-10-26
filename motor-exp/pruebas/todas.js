@@ -43,6 +43,7 @@ const SUITES = [
   ['exp: página', 'exp-pagina.js',   'motor-exp P1: la página se reconcilia y los controles recuerdan lo escrito (Chromium)'],
   ['exp: expres.', 'exp-expresividad.js', 'motor-exp X1: registros con métodos, si-expresión, ??, ?., desestructurar, segun'],
   ['exp: expres.2', 'exp-expresividad2.js', 'motor-exp X2–X4: defectos, con nombre, publico tipo, a?.m(), genéricos, generadores, asíncronas'],
+  ['exp: nulos', 'exp-nulos.js', 'motor-exp X5: «texto?» al estilo Kotlin — estrechamiento, ??, ?., y «devolver» por todos los caminos'],
   ['exp: sistema', 'exp-sistema.js', 'motor-exp S1–S2: FFI con firmas de C, arreglos sin copiar, retrollamadas, servidor, reloj, procesos, entrada'],
   ['exp: NEÑ',    'exp-nen.js',     'motor-exp N1: grande contra mpmath, enteros exactos, amplitud contra SciPy, numerico y datos en nen, volumen'],
   ['exp: NEÑ gpu', 'exp-nen-gpu.js', 'motor-exp N2: NEÑ igual en jit, nativo y GPU (simulada), y residente en la GPU'],
