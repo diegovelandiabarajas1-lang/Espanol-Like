@@ -9,9 +9,12 @@
 //  · data-destino="#app" pone la página de Ñ donde se diga;
 //  · un error sale en rojo con su línea, y el resto de etiquetas sigue;
 //  · Ñ.ejecutar(fuente) desde JavaScript, Ñ.listo, y los eventos load/error;
-//  · los acentos y la ñ de un .esl llegan bien (UTF-8).
+//  · los acentos y la ñ de un .esl llegan bien (UTF-8);
+//  · (P7) irAPagina("b.html") pasa de un HTML a otro; los «usar» de una página
+//    de la carpeta valen en las demás (y lo propio gana); «guardar» en una,
+//    «recuperar» en otra; un «usar» heredado roto se olvida con aviso.
 //
-//   node motor-exp/pruebas/exp-web-script.js
+//   node motor-exp/pruebas/exp-web-script.js        (N_CHROMIUM=/ruta/a/chrome para usar uno propio)
 'use strict';
 const fs = require('fs');
 const os = require('os');
@@ -82,6 +85,34 @@ imprimir(l[5])
 <script type="text/ñ">imprimir("sigue")</script>
 </body></html>
 `);
+// (P7) De una página a otra. a.html importa «estilo», «saludo» y «nada», y
+// guarda; b.html no escribe ningún «usar» y los hereda; c.html declara su
+// propio «saludo» y se queda con él.
+poner('lib/temporal.esl', `publico fn nada(): nulo { }
+`);
+const cabeza = '<!doctype html><html><head><meta charset="utf-8"><script src="../n-web.js"></script></head><body>\n';
+poner('nav/a.html', cabeza + `<script type="text/ñ">
+usar estilo de "estilo"
+usar saludo de "../lib/saludos.esl"
+usar nada de "../lib/temporal.esl"
+guardar("quien", "Diego")
+pintar(etiqueta("p", {"id": "a"}, saludo("a")))
+pintar(boton("ir a b", fn() { irAPagina("b.html") }))
+</script>
+</body></html>
+`);
+poner('nav/b.html', cabeza + `<script type="text/ñ">
+fijo quien = recuperar("quien")
+pintar(etiqueta("p", {"id": "b"}, etiqueta("span", estilo({"color": "#00ff00"}), saludo("{quien}"))))
+</script>
+</body></html>
+`);
+poner('nav/c.html', cabeza + `<script type="text/ñ">
+fn saludo(q: texto): texto { devolver "propio " + q }
+pintar(etiqueta("p", {"id": "c"}, etiqueta("span", estilo({"color": "#0000ff"}), saludo("c"))))
+</script>
+</body></html>
+`);
 
 const tipos = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.esl': 'text/plain; charset=utf-8' };
 const servidor = http.createServer((q, r) => {
@@ -95,8 +126,9 @@ const servidor = http.createServer((q, r) => {
   await new Promise(ok => servidor.listen(0, '127.0.0.1', ok));
   const base = `http://127.0.0.1:${servidor.address().port}/`;
   let nav;
+  const propio = process.env.N_CHROMIUM || (fs.existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : null);
   try {
-    nav = await chromium.launch(fs.existsSync('/opt/pw-browsers/chromium') ? { executablePath: '/opt/pw-browsers/chromium' } : {});
+    nav = await chromium.launch(propio ? { executablePath: propio } : {});
   } catch (e) {
     try { nav = await chromium.launch(); } catch (e2) { console.log(`  – saltada entera: Chromium no arranca (${e2.message.split('\n')[0]})\n\n0 pasan, 0 fallan, 1 saltadas`); servidor.close(); process.exit(0); }
   }
@@ -148,6 +180,46 @@ const servidor = http.createServer((q, r) => {
   comprobar('un src que no existe se dice', errs.some(x => /no-existe\.esl.*HTTP 404/.test(x)), JSON.stringify(errs));
   comprobar('y las demás etiquetas siguen', e.some(x => x.t === 'antes') && e.some(x => x.t === 'sigue'), JSON.stringify(e));
   comprobar('los errores de Ñ no son errores de JavaScript', fallosJS.length === fallosAntes, fallosJS.slice(fallosAntes).join('\n'));
+
+  console.log('· de una página a otra (P7): irAPagina, «usar» heredado, memoria por carpeta');
+  const ctx = await nav.newContext();              // memoria limpia: ni guardado ni «usar» apuntados
+  const p2 = await ctx.newPage();
+  const fallos2 = [];
+  p2.on('pageerror', x => fallos2.push(x.message));
+  const estado = id => p2.evaluate(id => ({
+    texto: (document.getElementById(id) || {}).textContent,
+    color: document.querySelector('#' + id + ' span') ? getComputedStyle(document.querySelector('#' + id + ' span')).color : null,
+    errs: [...document.querySelectorAll('#consola .err')].map(x => x.textContent),
+    url: location.pathname,
+  }), id);
+  await p2.goto(base + 'nav/b.html');
+  await p2.evaluate(() => globalThis.Ñ.listo);
+  const b0 = await estado('b');
+  comprobar('b.html abierta a secas, sin «usar» propios ni heredados: falla y lo dice', b0.errs.some(x => /«(estilo|saludo)».*no está definida/.test(x)) && b0.texto === undefined, JSON.stringify(b0));
+  await p2.goto(base + 'nav/a.html');
+  await p2.evaluate(() => globalThis.Ñ.listo);
+  const a1 = await estado('a');
+  comprobar('a.html, con sus «usar», pinta y guarda', a1.texto === '¡Hola, a! Año 2026, ñandú' && a1.errs.length === 0, JSON.stringify(a1));
+  await Promise.all([p2.waitForURL(/nav\/b\.html$/), p2.click('#pagina button')]);
+  await p2.evaluate(() => globalThis.Ñ.listo);
+  const b1 = await estado('b');
+  comprobar('irAPagina("b.html") va a la otra página', b1.url.endsWith('/nav/b.html'), b1.url);
+  comprobar('b.html hereda «estilo» y «saludo» sin escribir ningún «usar», y recupera lo que guardó a.html', b1.texto === '¡Hola, Diego! Año 2026, ñandú' && b1.color === 'rgb(0, 255, 0)' && b1.errs.length === 0, JSON.stringify(b1));
+  await p2.goto(base + 'nav/c.html');
+  await p2.evaluate(() => globalThis.Ñ.listo);
+  const c1 = await estado('c');
+  comprobar('lo propio gana: c.html declara su «saludo» y se queda con él; «estilo» sigue heredado', c1.texto === 'propio c' && c1.color === 'rgb(0, 0, 255)' && c1.errs.length === 0, JSON.stringify(c1));
+  fs.unlinkSync(path.join(raiz, 'lib', 'temporal.esl'));
+  await p2.goto(base + 'nav/b.html');
+  await p2.evaluate(() => globalThis.Ñ.listo);
+  const b2 = await estado('b');
+  comprobar('un «usar» heredado cuyo archivo ya no está se olvida, con aviso, y la página corre igual', b2.texto === '¡Hola, Diego! Año 2026, ñandú' && b2.errs.length === 1 && /heredado.*se olvida.*temporal\.esl/.test(b2.errs[0]), JSON.stringify(b2));
+  await p2.goto(base + 'nav/b.html');
+  await p2.evaluate(() => globalThis.Ñ.listo);
+  const b3 = await estado('b');
+  comprobar('y a la siguiente vez ya no hay aviso', b3.texto === '¡Hola, Diego! Año 2026, ñandú' && b3.errs.length === 0, JSON.stringify(b3));
+  comprobar('sin errores de JavaScript en las páginas de P7', fallos2.length === 0, fallos2.join('\n'));
+  await ctx.close();
 
   await nav.close();
   servidor.close();

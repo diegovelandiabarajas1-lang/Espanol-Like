@@ -2295,6 +2295,42 @@ Pruebas: `pruebas/interaccion.js` parte 10 (9, sin navegador: atributos, los cin
 corre en el PC con el Edge instalado: `N_CHROMIUM="C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"`
 (116 pasan, 0 fallan).
 
+## Fase P7 · De una página a otra: `irAPagina`, «usar» heredado y memoria por carpeta (26-oct-2026)
+
+ÑGestión (`app/`) son diez HTML, y hasta hoy cada uno era una isla: los botones de «ir a clientes» repintaban la
+misma página, `usar estilo de "estilo"` había que escribirlo en los diez (y el que lo olvidaba fallaba), y lo que
+`guardar` dejaba en una página la otra no lo veía. Diego pidió dos cosas: una función para pasar de un HTML a otro
+y, sobre todo, que un `usar` escrito en una página valiera en las demás.
+
+**`irAPagina(ruta)`** (`src/04-stdlib.js`, junto a `limpiarPagina`): deja la página y abre otra. La ruta es relativa
+a la página (`irAPagina("02-dashboard.html")`) o una dirección completa; solo `http`, `https` o `file`. Existe solo
+cuando el motor va dentro de un HTML con `n-web.js`: en el IDE y en una app exportada no hay otra página a la que ir,
+y lo dice. El anfitrión (`web/cargador.js`) la cuelga de `anf.web.irAPagina` y devuelve el error como texto, que la
+stdlib saca por `vm.error` como todos.
+
+**«usar» heredado** (`web/cargador.js`): antes de correr cada programa (etiqueta, `src` o `Ñ.ejecutar`), el cargador
+lo analiza con el parser del motor (`EL.parser`), apunta sus `usar` del nivel superior en `localStorage` bajo la
+carpeta de la página (`n:usar:<carpeta>`), y le añade AL FINAL del código los `usar` apuntados por las otras páginas
+que le falten. Al final y no al principio: así los números de línea de los errores siguen siendo los del programa
+(`usar` vale en cualquier sitio del nivel superior). Lo propio gana: un nombre que el programa declara o ya importa
+no se hereda, como hace `usar "x"` a secas con lo propio del archivo. Las rutas de archivo se guardan absolutas;
+los eDSL (`estilo`, `numerico`) se quedan desnudos. Si un `usar` heredado deja de funcionar (el archivo ya no
+está), se olvida, se avisa en la consola de la página y el programa se corre otra vez sin él. Límite, a propósito:
+la herencia nace cuando corre la página que lo declara; una página abierta a secas antes de que haya corrido
+ninguna otra de la carpeta solo tiene sus propios `usar` (y el error de siempre: «no está definida»). Para una
+aplicación basta con que la página de entrada los tenga todos.
+
+**Memoria por carpeta**: `guardar`/`recuperar`/`olvidar` y los permisos de red eran por página
+(`n:web:<ruta de la página>`); ahora son por carpeta (`n:web:<carpeta>`). Es lo que hace que el inicio de sesión de
+`01-inicio.html` lo vea `02-dashboard.html`. Dos aplicaciones en la misma carpeta compartirían memoria: que vivan
+en carpetas distintas.
+
+Pruebas: `pruebas/exp-web-script.js` (+8, en Chromium, en un contexto nuevo sin memoria): b.html abierta a secas
+falla y lo dice; a.html con sus `usar` pinta y guarda; `irAPagina` llega a b.html; b.html hereda `estilo` y
+`saludo` y recupera lo guardado; c.html con su propio `saludo` se queda con el suyo; un `usar` heredado roto se
+olvida con aviso y la página corre; a la siguiente vez no hay aviso; sin errores de JavaScript. La suite acepta
+`N_CHROMIUM` como las demás. `util/n-analizar.py` conoce `irAPagina`.
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -2311,6 +2347,7 @@ corre en el PC con el Edge instalado: `N_CHROMIUM="C:/Program Files (x86)/Micros
 | S1–S2 | FFI con firmas de C, arreglos sin copiar, salidas, retrollamadas, memoria, en fondo; reloj en consola, `servir`, archivos, rutas, procesos, entrada interactiva | VM, biblioteca, anfitrión de Node | **hecha** |
 | S3 | puente a npm (`usar x de "npm:paquete"`), FFI en QuickJS, variádicas | anfitrión | pendiente |
 | P6 | **Ñ en cualquier página**: `<script type="text/ñ">` (y `text/n`) con `n-web.js` desde jsDelivr; en orden, `src` con `usar`, eventos, `data-destino`, errores con su línea | anfitrión web | **hecha** |
+| P7 | **de una página a otra**: `irAPagina(ruta)`, «usar» heredado por carpeta (lo que importa una página vale en las demás), `guardar` y permisos por carpeta | anfitrión web, stdlib | **hecha** |
 | P2–P5 | PWA, servidor desplegable, ventana web de escritorio, instalador | anfitrión | pendiente |
 | W1 | Windows: C1EÑ nativo enlaza (sin `-z nodelete`), sonda del compilador, rutas en `fuera`, tolerancia y limpieza de NEÑ, `errorC` con `ucrtbase.dll` | anfitrión de Node, pruebas | **hecha** (`errorC` por confirmar en Windows) |
 | N1 | NEÑ: numerico y datos dentro, tipo `grande` y enteros exactos, 43 funciones de amplitud, volumen (reducciones, `por` por bloques), cuaderno de velocidad en GPU | verificador, VM, JIT, NEÑ, C1EÑ | **hecha** (tiempos de la T4 por medir en Kaggle) |

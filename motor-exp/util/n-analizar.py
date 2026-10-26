@@ -3329,6 +3329,7 @@ FIRMAS_JSON = r'''{
  "pintar": "funcion(...): nulo",
  "eco": "funcion(...): nulo",
  "limpiarPagina": "funcion(): nulo",
+ "irAPagina": "funcion(texto): nulo",
  "guardar": "funcion(texto, cualquiera): nulo",
  "recuperar": "funcion(...): cualquiera",
  "olvidar": "funcion(texto): bool",

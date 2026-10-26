@@ -30,6 +30,11 @@
 //  en la VM, con su línea, en rojo.
 //
 //  Desde JavaScript:  Ñ.ejecutar(fuente) · Ñ.motor · Ñ.listo (una promesa)
+//
+//  (P7) Varias páginas son una aplicación: «irAPagina("panel.html")» pasa de
+//  un HTML a otro; los «usar» que corren en una página de la carpeta valen en
+//  las demás (se apuntan por carpeta y se añaden a quien no los tenga); y
+//  «guardar»/«recuperar» y los permisos son por carpeta, no por página.
 // ============================================================================
 (function () {
   'use strict';
@@ -103,8 +108,14 @@
     if (clase === 'err') console.error('[Ñ] ' + txt); else console.log(txt);
   }
 
-  // ── guardar y permisos: por página, como en las apps exportadas ────────────
-  const SITIO = encodeURIComponent(location.pathname || 'pagina');
+  // ── guardar y permisos: por CARPETA (motor-exp P7) ─────────────────────────
+  // Antes era por página. Una aplicación de varias páginas (inicio.html →
+  // panel.html) es una carpeta: lo que guarda una lo recupera la otra, y el
+  // permiso de red que se dio en una vale en las demás. Dos aplicaciones
+  // distintas en la misma carpeta compartirían memoria: que vivan en carpetas
+  // distintas.
+  const CARPETA = (location.pathname || '/pagina').replace(/[^/]*$/, '') || '/';
+  const SITIO = encodeURIComponent(CARPETA);
   const caja = pre => ({
     leer(k) { try { return localStorage.getItem(pre + k); } catch (_) { return null; } },
     escribir(k, v) { try { localStorage.setItem(pre + k, v); } catch (_) { /* nada */ } },
@@ -167,12 +178,94 @@
     await Promise.all(pend);
   }
 
+  // ── «usar» heredado (motor-exp P7): lo que importa una página de la carpeta
+  //    vale en todas las demás ───────────────────────────────────────────────
+  // Una aplicación de varias páginas escribía «usar estilo de "estilo"» en cada
+  // HTML, y la que lo olvidaba fallaba. Ahora cada «usar» del nivel superior
+  // que corre en una página se apunta (por carpeta, en localStorage) y, en las
+  // demás páginas de la carpeta, los programas que no lo traigan lo reciben
+  // añadido AL FINAL de su código —al final, para que los números de línea de
+  // los errores sigan siendo los suyos; «usar» vale en cualquier sitio del
+  // nivel superior—. Lo propio de cada programa gana: un nombre que ya declara
+  // o ya importa no se hereda. Las rutas de archivo se guardan absolutas; los
+  // eDSL («estilo», «numerico») se quedan desnudos. Si un «usar» heredado deja
+  // de funcionar (el archivo ya no está), se olvida, se avisa en la consola y
+  // el programa se corre otra vez sin él.
+  const USAR_CLAVE = 'n:usar:' + SITIO;
+  const esArchivoEsl = r => /\.(esl|ñ|n)$/i.test(r);
+  const rutaUsar = (ruta, desde) => (esArchivoEsl(ruta) ? absoluta(ruta, desde) : ruta);
+  const leerUsares = () => { try { const l = JSON.parse(localStorage.getItem(USAR_CLAVE) || '[]'); return Array.isArray(l) ? l : []; } catch (_) { return []; } };
+  const escribirUsares = l => { try { if (l.length) localStorage.setItem(USAR_CLAVE, JSON.stringify(l)); else localStorage.removeItem(USAR_CLAVE); } catch (_) { /* sin localStorage no hay herencia */ } };
+  const olvidarUsar = ruta => escribirUsares(leerUsares().filter(e => e.ruta !== ruta));
+  function astDe(fuente) { try { return EL.parser(EL.lexer(fuente)); } catch (_) { return null; } }
+  // Apunta los «usar» de este programa para las demás páginas.
+  function apuntarUsares(ast, desde) {
+    const lista = leerUsares();
+    let cambio = false;
+    for (const s of ast.cuerpo) {
+      if (s.tipo !== 'Usar' || /["\\\n]/.test(s.ruta)) continue;
+      const ruta = rutaUsar(s.ruta, desde);
+      let e = lista.find(x => x.ruta === ruta);
+      if (!e) { e = { ruta, nombres: [], alias: [], todo: false }; lista.push(e); cambio = true; }
+      if (s.todo && !e.todo) { e.todo = true; cambio = true; }
+      if (s.alias && !e.alias.includes(s.alias)) { e.alias.push(s.alias); cambio = true; }
+      for (const nm of (s.nombres || [])) if (!e.nombres.includes(nm.nombre)) { e.nombres.push(nm.nombre); cambio = true; }
+    }
+    if (cambio) escribirUsares(lista);
+  }
+  // El código con los «usar» heredados que le falten, añadidos al final; «n»
+  // es cuántas líneas tenía, y «rutas» de qué módulo sale cada línea añadida
+  // (para saber cuál olvidar si falla).
+  function heredarUsares(fuente, ast, desde) {
+    const n = fuente.replace(/\n$/, '').split('\n').length;
+    const lista = leerUsares();
+    if (!lista.length) return { texto: fuente, n, rutas: [] };
+    const ocupados = new Set(), todos = new Set();
+    for (const s of ast.cuerpo) {
+      if (s.tipo === 'DeclVar' || s.tipo === 'DeclFuncion' || s.tipo === 'DeclTipo') ocupados.add(s.nombre);
+      else if (s.tipo === 'Usar') {
+        if (s.alias) ocupados.add(s.alias);
+        for (const nm of (s.nombres || [])) ocupados.add(nm.nombre);
+        if (s.todo) todos.add(rutaUsar(s.ruta, desde));
+      }
+    }
+    const lineas = [], rutas = [];
+    for (const e of lista) {
+      if (e.todo && !todos.has(e.ruta)) { lineas.push(`usar "${e.ruta}"`); rutas.push(e.ruta); }
+      for (const al of (e.alias || [])) if (!ocupados.has(al)) { ocupados.add(al); lineas.push(`usar "${e.ruta}" como ${al}`); rutas.push(e.ruta); }
+      const faltan = (e.nombres || []).filter(nm => !ocupados.has(nm));
+      if (faltan.length) { faltan.forEach(nm => ocupados.add(nm)); lineas.push(`usar ${faltan.join(', ')} de "${e.ruta}"`); rutas.push(e.ruta); }
+    }
+    if (!lineas.length) return { texto: fuente, n, rutas: [] };
+    return { texto: fuente.replace(/\n?$/, '\n') + lineas.join('\n') + '\n', n, rutas };
+  }
+  // El programa listo para correr. Si no se deja analizar, va tal cual y el
+  // motor dirá su error de sintaxis con su línea.
+  function preparar(fuente, clave) {
+    const ast = astDe(fuente);
+    if (!ast) return { texto: fuente, n: Infinity, rutas: [] };
+    apuntarUsares(ast, clave);
+    return heredarUsares(fuente, ast, clave);
+  }
+
+  // ── irAPagina (motor-exp P7): dejar esta página y abrir otra ───────────────
+  // Lo guardado y los «usar» apuntados ya están en localStorage: la otra
+  // página los encuentra al llegar. Devuelve el error como texto, o null.
+  function irAPagina(ruta) {
+    let url;
+    try { url = new URL(String(ruta), location.href); } catch (_) { return `«irAPagina»: «${ruta}» no es una dirección válida`; }
+    if (!/^(https?|file):$/.test(url.protocol)) return `«irAPagina»: solo se puede ir a una página http, https o file, no a «${url.protocol}»`;
+    location.assign(url.href);
+    return null;
+  }
+
   // ── el motor ───────────────────────────────────────────────────────────────
   let motor = null, anf = null;
   function elMotor(primera) {
     if (motor) return motor;
     prepararCajas(primera);
     anf = crearAnfitrion({ linea, almacen, permisos });
+    anf.web.irAPagina = irAPagina;
     motor = EL.crearMotor({
       salida: s => linea(s),
       host: { web: anf.web, grafico: anf.grafico, almacen, tiempo: anf.tiempo, red: anf.red, modulos },
@@ -181,14 +274,29 @@
     api.anfitrion = anf;
     return motor;
   }
-  function correr(fuente, clave, etiqueta) {
+  function correr(fuente, clave, etiqueta, prep) {
     const m = elMotor(etiqueta);
+    prep = prep || preparar(fuente, clave);
     let r;
-    try { r = m.ejecutar(fuente, clave); }
+    try { r = m.ejecutar(prep.texto, clave); }
     catch (e) { r = { ok: false, errores: [e] }; }
     anf.volcar();
     for (const w of (r.avisos || [])) if (w.fase === 'seguridad') console.warn('[Ñ] aviso: ' + (w.formato ? w.formato() : w.message));
-    if (!r.ok) for (const e of (r.errores || [])) linea(`${quien(clave)}: ` + (e.formato ? e.formato() : String((e && e.message) || e)), 'err');
+    if (!r.ok) {
+      // Un error en una línea heredada no es de este programa: se dice de qué
+      // página venía el «usar», se olvida, y se vuelve a correr sin él. La
+      // lista encoge cada vez, así que esto acaba.
+      const her = (r.errores || []).filter(e => e && e.linea > prep.n && prep.rutas[e.linea - prep.n - 1]);
+      if (her.length) {
+        for (const e of her) {
+          const ruta = prep.rutas[e.linea - prep.n - 1];
+          olvidarUsar(ruta);
+          linea(`${quien(clave)}: un «usar» heredado de otra página de la carpeta ya no funciona y se olvida — ` + (e.formato ? e.formato() : String((e && e.message) || e)) + ` (${ruta})`, 'err');
+        }
+        return correr(fuente, clave, etiqueta, heredarUsares(fuente, astDe(fuente), clave));
+      }
+      for (const e of (r.errores || [])) linea(`${quien(clave)}: ` + (e.formato ? e.formato() : String((e && e.message) || e)), 'err');
+    }
     return r;
   }
   // De quién es un error: el archivo de un src, o «la etiqueta N» (las líneas
@@ -220,8 +328,9 @@
     for (const p of fuentes) {
       const f = await p;
       if (f.error) { linea(String(f.error.message || f.error), 'err'); f.s.dispatchEvent(new Event('error')); continue; }
-      await traerImportados(f.t, f.url, new Set());
-      const r = correr(f.t, f.url, f.s);
+      const prep = preparar(f.t, f.url);
+      await traerImportados(prep.texto, f.url, new Set());
+      const r = correr(f.t, f.url, f.s, prep);
       f.s.dispatchEvent(new CustomEvent(r.ok ? 'load' : 'error', { detail: r }));
     }
     resolverListo(motor);

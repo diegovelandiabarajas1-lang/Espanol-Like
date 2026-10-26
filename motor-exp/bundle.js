@@ -6379,6 +6379,19 @@ function instalarBiblioteca(vm, host) {
   const { esEstilo, fusionar, cssDe, valorPropiedad } = vm.estilos;
   const animaciones = vm.estilos.animaciones;   // los @keyframes ya declarados
   def('limpiarPagina', ' -> nulo', () => { if (!w.limpiar) sinPagina('limpiarPagina'); w.limpiar(); return null; }, 'borra todo lo escrito en la página');
+  // (motor-exp P7) Dejar esta página y abrir otra: «irAPagina("panel.html")».
+  // Solo existe donde hay páginas de verdad, es decir, cuando el motor va
+  // dentro de un HTML con n-web.js. En el IDE y en una app exportada no hay
+  // otra página a la que ir, y se dice. El anfitrión devuelve el error como
+  // texto (o null) para que el mensaje salga por vm.error, como todos.
+  def('irAPagina', 'texto -> nulo', a => {
+    const ruta = txt(a[0], 1, 'irAPagina');
+    if (!w.irAPagina) vm.error('«irAPagina» necesita una página web de verdad',
+      'existe cuando el programa va dentro de un HTML con n-web.js (<script type="text/ñ">); en el IDE no hay otra página a la que ir');
+    const mal = w.irAPagina(ruta);
+    if (mal) vm.error(mal);
+    return null;
+  }, 'irAPagina(ruta) — deja esta página y abre otra: un .html de al lado o una dirección completa');
 
   // ================================================== MEMORIA Y TIEMPO
   seccion('memoria y tiempo');
