@@ -57,12 +57,19 @@ Las tablas completas, con las condiciones de cada medida, están en
 **Lo que el AOT todavía no hace** (por eso el JIT sigue siendo el que corre
 «todo Ñ», y por eso se dice aquí y no se esconde):
 
-- **Biblioteca.** El ejecutable lleva 295 de los 1166 nombres del motor. Faltan
-  el tipo `arreglo` y casi todo `numerico`, las tablas de `datos`, `estilo`, el
-  lienzo y la página (esas viven en el navegador por naturaleza), NEÑ y varias
-  funciones de `sistema`. Un programa que usa algo que falta no compila y lo dice
-  con su nombre, nunca falla a medias.
-- **Generadores y funciones asíncronas**, y los hilos.
+- **Biblioteca.** El ejecutable lleva 392 de los 1166 nombres del motor y
+  compila 391 de los 608 programas de ejemplo: el núcleo, `texto`, `fecha`,
+  `formato`, `probar`, `corrutinas`, todo `sistema` (rutas, archivos, procesos,
+  servidor y cliente HTTP, JSON, temporizadores) y las tablas de `datos`.
+  Faltan: el tipo `arreglo` y `numerico` (127 nombres; bloquea 117 ejemplos),
+  `estilo` (57), NEÑ (540), el código nativo en tiempo de ejecución (12) y la
+  página y el lienzo (33; en la consola la máquina virtual tampoco los tiene y
+  falla con «necesita un anfitrión con página»; en un navegador haría falta
+  compilar a WebAssembly, que aquí no está). Un programa que usa algo que falta
+  no compila y lo dice con su nombre, nunca falla a medias.
+- **Hilos** (`paralelo`, de NEÑ). Los generadores y las funciones asíncronas ya
+  van (cada uno con su pila de C; `pedir` usa `curl` del sistema; la parte de
+  Windows compila pero no se ha podido ejecutar).
 - **Recursión:** hasta 900 llamadas anidadas, igual que la máquina virtual.
 - **Necesita un compilador de C** (gcc o clang, o uno portátil en la carpeta
   `compilador/` junto al motor). Compilar un programa normal tarda del orden de
