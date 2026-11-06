@@ -12,6 +12,29 @@ servidor HTTP, rutas y entrada interactiva. Qué cambió y qué puede notar un
 programa de la 4.0: [`docs/CAMBIOS-4.1.md`](docs/CAMBIOS-4.1.md). Los `.elb` de la
 4.0 siguen valiendo.
 
+## Qué motor es el oficial
+
+**El motor oficial de Ñ es el AOT**: `motor-exp/util/n-compilar.js` traduce el
+programa a C y lo deja como un ejecutable nativo. Los motores **secundarios** son
+el **JIT** (máquina virtual + traducción a JavaScript, `motor/util/n-node.js`) y el
+**navegador** (`espanol-like-v4.html`). El AOT vive todavía en `motor-exp/` y se
+mudará a `motor/` cuando cubra toda la biblioteca.
+
+Reparto de trabajo, mientras el AOT no cubra todo:
+
+| necesitas… | usa |
+|---|---|
+| velocidad, un ejecutable que entregar | AOT |
+| arrancar ya, depurar, o algo que el AOT todavía no tiene (generadores, hilos, `arreglo`, tablas, NEÑ…) | JIT |
+| probar sin instalar, o una página con interfaz (lienzo, estilo, eventos) | navegador |
+
+Cifras y límites del AOT, con la misma honestidad que el resto de este manual:
+[README](README.md#los-motores-de-ñ). El detalle técnico y la bitácora de cada etapa
+(A1–A4: tipos, funciones puras, nivel tipado con enteros e intervalos, registros
+como estructuras de C, análisis de escape) están en
+[`motor-exp/EXPERIMENTAL.md`](motor-exp/EXPERIMENTAL.md); las medidas, en
+[`velocidad/`](velocidad/).
+
 ## Para usarlo ahora mismo
 
 Abre **`espanol-like-v4.html`** en el navegador. Es un solo archivo, sin

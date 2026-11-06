@@ -1,0 +1,9 @@
+fib(38) = 39088169 en 71 ms
+criba(20000000) = 1270607 en 185 ms
+mandelbrot(1200x900x400) = 234068 en 324 ms
+fib(38) = 39088169 en 55 ms
+criba(20000000) = 1270607 en 161 ms
+mandelbrot(1200x900x400) = 234068 en 325 ms
+fib(38) = 39088169 en 55 ms
+criba(20000000) = 1270607 en 162 ms
+mandelbrot(1200x900x400) = 234068 en 324 ms

@@ -36,8 +36,15 @@
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
+#include <setjmp.h>
+#include <stdlib.h>          /* free() de la biblioteca generada: gcc 15 (C23) ya no deja usarla sin declarar */
 
-#if defined(_MSC_VER)
+#if defined(N_SIN_TLS)
+/* (motor-exp A3) un ejecutable de un solo hilo (n-compilar lo pide): el estado del hilo es un global normal. En Windows, y con
+   el gcc de w64devkit, cada acceso al estado por hilo es mucho más caro que uno normal. Las bibliotecas NO lo piden: las puede
+   llamar el anfitrión desde varios hilos a la vez. */
+#define N_HILO_LOCAL
+#elif defined(_MSC_VER)
 #define N_HILO_LOCAL __declspec(thread)
 #else
 #define N_HILO_LOCAL _Thread_local
@@ -53,7 +60,7 @@ typedef enum {
   NC_TEXTO = 1, NC_LISTA, NC_DIC, NC_CIERRE, NC_NATIVA, NC_ERROR, NC_UP, NC_REGDESC, NC_FALTANTE, NC_FECHA,
 } NClase;
 
-typedef struct NObj { int64_t rc; uint8_t clase; uint8_t inmortal; } NObj;
+typedef struct NObj { int64_t rc; uint8_t clase; uint8_t inmortal; uint8_t bloque; } NObj;   /* bloque: los arreglos de este diccionario están dentro de su propia reserva */
 typedef struct NV { uint8_t t; union { double n; int b; NObj* o; } u; } NV;
 
 #define N_INMORTAL_RC ((int64_t)1 << 60)
@@ -88,8 +95,10 @@ typedef struct { NObj h; int64_t n; uint32_t hash; uint16_t s[]; } NTexto;
    no 32. Todo el runtime llega a los elementos por n_lv() (que convierte a NV
    si hace falta, una vez) o por n_lista_leer/n_lista_poner/n_lista_agregar,
    que respetan la clase. Nadie toca nv_ ni d a mano. */
-typedef struct { NObj h; int64_t n, cap; NV* nv_; uint8_t el; void* d; } NLista;
-enum { NL_NV = 0, NL_NUM = 1, NL_BOOL = 2, NL_VACIA = 3 };
+typedef struct { NObj h; int64_t n, cap; NV* nv_; uint8_t el; void* d; void (*dec)(void*); } NLista;   /* dec: con NL_PTR, cómo soltar cada elemento */
+/* 4 = solo enteros con |x| <= 2^53 (int64_t, 8 bytes): lo crea el código tipado (aot/tipado.js) en las listas que no salen de él; el resto del runtime
+   los ve como números por n_lista_leer/n_lv (que convierte), y una escritura que no es un entero los pasa a NV. */
+enum { NL_NV = 0, NL_NUM = 1, NL_BOOL = 2, NL_VACIA = 3, NL_INT = 4, NL_PTR = 5 };   /* 5 = punteros a objetos del código tipado (nunca salen de él) */
 typedef struct NRegDesc NRegDesc;
 /* Diccionario con orden de inserción (como el Map de JavaScript). */
 typedef struct { NV k, v; int vivo; } NEntrada;
@@ -104,12 +113,15 @@ typedef struct { NObj h; const char* nombre; int aridad; NNatC f; void* extra; N
 typedef struct { NObj h; NV tipo, mensaje; double linea; } NError;
 /* Una fecha: milisegundos desde 1970 que SIEMPRE se leen en UTC (sin zona horaria, como en la VM). */
 typedef struct { NObj h; double ms; } NFecha;
-struct NRegDesc { NObj h; NV nombre; NV campos; NV metodos; };
+struct NRegDesc { NObj h; NV nombre; NV campos; NV metodos; void* plantilla; };   /* plantilla: un NDic con las claves de los campos, para crear objetos de un golpe */
 
 /* ── errores ─────────────────────────────────────────────────────────────── */
 typedef struct { const char* nombre; int linea; } NMarco;
 #define N_MAX_MARCOS 900
 #define N_MAX_TRAZA 64
+/* (motor-exp A3) las funciones numéricas puras no miran el error tras cada llamada: si pasan de N_MAX_MARCOS, bajan de golpe con
+   longjmp hasta la versión numérica por la que se entró desde fuera (que puso aquí su salto), y esa le pone el rastro. */
+typedef struct NPuraSalto { jmp_buf jb; struct NPuraSalto* prev; const char* nombre; int linea; } NPuraSalto;
 typedef struct {
   int hay;              /* hay un error pendiente */
   int lanzado;          /* vino de «lanzar» (valor) o del motor (mensaje) */
@@ -122,6 +134,21 @@ typedef struct {
   int linea_puesta;     /* (A2) ya se apuntó la línea del error (la primera función que lo vio) */
 } NHilo;
 extern N_HILO_LOCAL NHilo n_hilo;
+extern N_HILO_LOCAL NPuraSalto* n_pura_tope;
+#if defined(__GNUC__)
+#define N_FRIA_NORETURN __attribute__((noreturn, cold))
+#else
+#define N_FRIA_NORETURN
+#endif
+/* (motor-exp A3) las funciones puras se compilan con -O3 aunque el resto vaya con -O2: con O3 gcc inlina la recursión muchas veces
+   más hondo (fib(38): 161 → 36 ms con la comprobación de profundidad puesta). Solo gcc; con clang no se pide nada. */
+#if defined(__GNUC__) && !defined(__clang__)
+#define N_PURA __attribute__((optimize("O3")))
+#else
+#define N_PURA
+#endif
+void n_pura_desborde(const char* nombre, int linea) N_FRIA_NORETURN;
+void n_pura_traza(NPuraSalto* s);
 #define N_ERR (n_err_valor())
 static inline NV n_err_valor(void) { NV v; v.t = 255; v.u.o = NULL; return v; }
 #define N_FALLO(v) ((v).t == 255)
@@ -191,14 +218,81 @@ const char* n_tipo_de(NV v);
 
 /* ── diccionarios y listas, para la biblioteca ──────────────────────────── */
 NV n_lista_nueva(int64_t cap);
-void n_lista_agregar(NLista* l, NV v);   /* toma la referencia; respeta la clase de la lista */
+void n_lista_agregar_lento(NLista* l, NV v);
+/* (motor-exp A3) toma la referencia; respeta la clase de la lista. El camino común (hay sitio y el valor es de la clase de la lista) va
+   en línea, sin llamada: en la criba era una llamada a función por cada elemento. */
+static inline void n_lista_agregar(NLista* l, NV v) {
+  if (l->n < l->cap) {
+    if (l->el == NL_NUM && v.t == N_NUM) { ((double*)l->d)[l->n++] = v.u.n; return; }
+    if (l->el == NL_BOOL && v.t == N_BOOL) { ((uint8_t*)l->d)[l->n++] = (uint8_t)v.u.b; return; }
+  }
+  n_lista_agregar_lento(l, v);
+}
 NV* n_lista_materializar(NLista* l);     /* pasa la lista a NV (una vez) y devuelve los elementos */
 static inline NV* n_lv(NLista* l) { return l->el ? n_lista_materializar(l) : l->nv_; }
-void n_lista_poner(NLista* l, int64_t k, NV v);   /* l[k] = v (0 <= k < n), como n_asignar */
+void n_lista_poner_lento(NLista* l, int64_t k, NV v);
+/* l[k] = v (0 <= k < n), como n_asignar. (motor-exp A3) el camino común, en línea. */
+static inline void n_lista_poner(NLista* l, int64_t k, NV v) {
+  if (l->el == NL_NUM && v.t == N_NUM) { ((double*)l->d)[k] = v.u.n; return; }
+  if (l->el == NL_BOOL && v.t == N_BOOL) { ((uint8_t*)l->d)[k] = (uint8_t)v.u.b; return; }
+  n_lista_poner_lento(l, k, v);
+}
 static inline NV n_lista_leer(NLista* l, int64_t k) {   /* l[k] (0 <= k < n), referencia nueva */
   if (l->el == NL_NUM) return n_num(((double*)l->d)[k]);
   if (l->el == NL_BOOL) return n_bool(((uint8_t*)l->d)[k]);
+  if (l->el == NL_INT) return n_num((double)((int64_t*)l->d)[k]);
   return n_inc(l->nv_[k]);
+}
+/* ── (motor-exp A4) lo que usa el C tipado (ver aot/tipado.js) ───────────── */
+#define NT_RC_PILA ((int64_t)1 << 60)   /* conteo de un objeto que vive en la pila de C: nunca llega a 0 */
+void nt_agregar_p_lento(NLista* l, void* p, void (*dec)(void*));
+static inline void nt_agregar_p(NLista* l, void* p, void (*dec)(void*)) {
+  if (__builtin_expect(l->el == NL_PTR && l->n < l->cap, 1)) { ((void**)l->d)[l->n++] = p; return; }
+  nt_agregar_p_lento(l, p, dec);
+}
+void nt_agregar_i_lento(NLista* l, int64_t x);
+/* (motor-exp) n copias de una constante al final de la lista, de una vez */
+double nt_reloj(void);   /* «reloj()» para el código tipado */
+void nt_rep_i(NLista* l, int64_t n, int64_t x);
+void nt_rep_d(NLista* l, int64_t n, double x);
+void nt_rep_b(NLista* l, int64_t n, int x);
+static inline void nt_agregar_i(NLista* l, int64_t x) {
+  if (__builtin_expect(l->el == NL_INT && l->n < l->cap, 1)) { ((int64_t*)l->d)[l->n++] = x; return; }
+  nt_agregar_i_lento(l, x);
+}
+/* una lista de enteros que sale al código general pasa a ser de doubles (en el mismo sitio: ocupan lo mismo) */
+static inline void nt_lista_a_num(NLista* l) {
+  if (l->el != NL_INT) return;
+  for (int64_t i = 0; i < l->n; i++) ((double*)l->d)[i] = (double)((int64_t*)l->d)[i];
+  l->el = NL_NUM;
+}
+extern int n_tdeopt;   /* algo se salió de lo esperado: la función tipada baja de golpe y quien entró desde fuera repite con la general */
+#define NT_FAIL() do { n_tdeopt = 1; goto Ltdeopt; } while (0)
+static inline void nt_inc(NLista* l) { N_RC_MAS(&l->h); }
+static inline void nt_dec(NLista* l) { if (N_RC_MENOS(&l->h) == 0) n_liberar(&l->h); }
+/* ¿es una lista de la clase que el compilador infirió (números o bool)? Una vacía vale para las dos. */
+static inline int nt_lista_ok(NV v, int el) {
+  return v.t == N_OBJ && v.u.o->clase == NC_LISTA && (((NLista*)v.u.o)->el == el || ((NLista*)v.u.o)->el == NL_VACIA);
+}
+/* a % b (b distinto de 0) como n_mod: fmod(fmod(a, b) + b, b). Para enteros no negativos pequeños es el % de enteros, que da lo mismo. */
+/* a % b con enteros (b > 0): lo mismo que nt_mod, sin pasar por double */
+/* ¿es x un entero con |x| <= 2^53 y no es -0? Entonces cabe en un int64_t sin perder nada (la entrada tipada lo pide a los argumentos que lleva como enteros). */
+static inline int nt_esent(double x) {
+  return x >= -9007199254740992.0 && x <= 9007199254740992.0 && x == (double)(int64_t)x && !(x == 0 && __builtin_signbit(x));
+}
+/* floor(a / b) con enteros (b != 0): lo mismo que floor((double)a / (double)b) mientras |a| <= 2^52 (el cociente en double no llega a redondear a un entero
+   que no es); fuera de ahí, la cuenta en double de siempre. */
+static inline int64_t nt_idivi(int64_t a, int64_t b) {
+  if ((uint64_t)(a + 4503599627370496LL) <= 9007199254740992ULL) { int64_t q = a / b; if ((a % b != 0) && ((a < 0) != (b < 0))) q--; return q; }
+  return (int64_t)floor((double)a / (double)b);
+}
+static inline int64_t nt_modi(int64_t a, int64_t b) { int64_t r = a % b; return r < 0 ? r + b : r; }
+static inline double nt_mod(double a, double b) {
+  if (a >= 0 && b > 0 && a < 9007199254740992.0 && b < 4503599627370496.0) {
+    int64_t ia = (int64_t)a, ib = (int64_t)b;
+    if ((double)ia == a && (double)ib == b) return (double)(ia % ib);
+  }
+  return fmod(fmod(a, b) + b, b);
 }
 NV n_dic_nuevo(void);
 int n_dic_poner(NDic* d, NV k, NV v);    /* inc a los dos */

@@ -2216,6 +2216,42 @@ restantes son dinámicos de verdad) y contra `analizar()` en los 79 `.esl` del p
 tabla de firmas va embebida (`FIRMAS_JSON`) y se vuelca del motor con el script de su cabecera; si cambia la
 gramática o un mensaje, hay que traerlo a mano. Detalle en `ContextoD/trabajo-en-curso/2026-10-26-…/LEEME.md`.
 
+## Herramienta · `util/py-a-n.py`: de Python a Ñ comprobado, para el corpus de fine-tuning (27-oct-2026)
+
+Un solo archivo de Python 3 (v0.2, ~2.600 líneas) que traduce un programa de Python a Ñ **por reglas** sobre el
+`ast` de Python, sin ningún modelo, y no da nada por bueno hasta que lo confirman el analizador y el motor.
+Nació para el corpus de fine-tuning de Diego: los ejemplos escritos por agentes repetían plantillas y confundían
+Ñ con Python; MBPP y HumanEval son 1.138 programas reales con pruebas, y traducirlos con un juez de ejecución da
+ejemplos de lógica pura que seguro corren.
+
+- **Qué traduce**: funciones (con anotaciones de tipo y parámetros por defecto, argumentos con nombre a funciones
+  propias), `si/elif/else`, `while` y `for` con su `else`, comprensiones (lista, dic, set → función anónima
+  llamada en el acto), lambdas, f-strings, `try/except/finally`, `assert`, `global`, builtins y métodos
+  corrientes de texto, lista y diccionario, `math`, `string`, `functools.reduce`, `set` (lista sin repetidos en
+  orden canónico, para que `==` funcione), `collections.Counter/defaultdict/deque/OrderedDict`, `heapq` (lista
+  ordenada), `itertools.groupby/combinations/permutations/product/chain/accumulate/zip_longest`, `bin/hex/oct`,
+  `int(s, base)`, `next`, `zip` de 3, `map` de 2 listas, `enumerate` con inicio, `sys.maxsize`.
+- **Cómo cuida la semántica**: `var` es de bloque en Ñ, así que iza (`var x` arriba) lo que Python asigna dentro
+  de bloques o deja escapar de un `for`; renombra lo que choca con palabras o con un `usar` que la propia
+  traducción importó (dos pasadas); `no` liga fuerte y se parentiza; 67 ayudantes `_py…` escritos en Ñ (solo se
+  emiten los usados) para lo que Python hace distinto: rebanadas con negativos, `round` al par, `sorted`/`max`/`min`
+  con el orden de Python (listas de listas, textos), `sum` con booleanos, `Counter`, `most_common`, montículos…
+- **El oráculo es el analizador y luego el motor**: si `n-analizar.py` dice «x es entero y se le asigna real», se
+  vuelve a traducir con `x: real` (y si insiste, `cualquiera`); si el analizador o el motor siguen rechazando, un
+  **segundo intento en modo tolerante** cambia las formas idiomáticas (`ordenar`, `rebanar`, `unir`, `suma`) por
+  los ayudantes con la semántica exacta de Python. Primero lo idiomático, y lo tolerante solo si hace falta.
+- **El juez**: cada `assert` de la tarea se evalúa en Python aislado (`-I`, subproceso) y en el motor con
+  `aJson(expr)`; los dos tienen que dar `true`. Estados por tarea: `ok`, `no-traducible` (con motivo corto y
+  contable), `analizador`, `python`, `motor`, `distinto`, `sin-pruebas`.
+- **Resultado** (`--mbpp mbpp.jsonl` / `--humaneval HumanEval.jsonl.gz`, `--carpeta`, `--callada`, `--id`,
+  `--limite`; deja los `.esl` aceptados, `pares.jsonl` e `informe.json`): MBPP **815/974**, HumanEval **150/164**:
+  965 programas con sus pruebas pasando, en `D:\ProyectoPersonal\fine-tuning\16-logica-mbpp-humaneval\`. Fuera
+  quedan sobre todo los 78 de `re` (Ñ no tiene expresiones regulares: un `patron` en el eDSL de texto, fila D1,
+  los recuperaría), 26 «distinto» (enteros > 2^53, tuplas impresas como texto) y 2 clases.
+- **Límites**: no clases, no generadores, no `with`, no `*args`, no regex; los enteros son dobles; los enunciados
+  siguen en inglés. Un solo `.py` con `--comprobar --ejecutar` traduce, analiza y corre sin el juez.
+  Detalle en `ContextoD/trabajo-en-curso/2026-10-26-…/LEEME.md`, sección 12.
+
 ## Fase X5 · Nulos al estilo Kotlin: «texto?», el estrechamiento y «devolver» por todos los caminos (26-oct-2026)
 
 Diego preguntó qué añadir a Ñ después de A2, y la respuesta salió de portar el verificador a Python: el nulo no
@@ -2331,6 +2367,307 @@ falla y lo dice; a.html con sus `usar` pinta y guarda; `irAPagina` llega a b.htm
 olvida con aviso y la página corre; a la siguiente vez no hay aviso; sin errores de JavaScript. La suite acepta
 `N_CHROMIUM` como las demás. `util/n-analizar.py` conoce `irAPagina`.
 
+## Fase N5 · NEÑ «grafico»: gráficos como texto SVG, sin anfitrión (3-nov-2026)
+
+Pedido de Diego: «integra a Ñ lo que le corresponde al eDSL de NEÑ y numérico» de la lista de bibliotecas que faltan (la
+propuesta completa del «mega eDSL» GEÑ está en `ContextoD/trabajo-en-curso/2026-10-26-analizador-py-y-a2-hilos/PROPUESTA-GEN-mega-edsl.md`).
+`graficar`, `dispersion` y `barras` pintan en el lienzo del IDE; en consola, en C1EÑ y en Kaggle no hay dónde pintar. Esta parte
+devuelve el gráfico como **texto SVG**, que se guarda con `escribirTexto` o se mete en una página con `crudo`.
+
+**Qué se tocó**
+- `src/20-nen-grafico.js` (nuevo): `svgLineas(xs, ys | [ys…], opciones?)`, `svgFuncion(fn, desde, hasta, opciones?)`,
+  `svgDispersion(xs, ys, opciones?)`, `svgBarras(etiquetas, valores, opciones?)`, `svgHistograma(datos, cubetas?, opciones?)`,
+  `svgMapaCalor(matriz, opciones?)`. Opciones (dic): `titulo ejeX ejeY ancho alto cuadricula colores leyenda puntos`. Aceptan
+  listas o arreglos (1-D; matriz 2-D). Los mismos bits en todas partes: marcas de los ejes sin `Math.log10` ni `Math.pow`
+  (magnitud por multiplicación y división por 10), coordenadas con `toFixed(2)` sin ceros de más ni «-0», colores del mapa de
+  calor con canales enteros. Errores con el nombre de la función y pista (`vm.error`).
+- `rutas.js` (FUENTES) y `src/04-stdlib.js` (`instalarNenGrafico` dentro de `nen`, después de `instalarNenUnion`).
+- `util/ejemplos-nen-grafico.js` (6 ejemplos, en `util/referencia.js`), `util/n-analizar.py` (+6 firmas `funcion(...): texto` en
+  `FIRMAS_JSON`, **a mano**: el volcado de la cabecera renderiza hoy las firmas distinto —`funcion` a secas en vez de
+  `funcion(...): real`— y cambiaría 400 entradas; no se tocó nada más de la tabla).
+- `pruebas/exp-nen-grafico.js` (28 pruebas) y su fila en `todas.js`.
+
+**Qué se probó**
+- `exp-nen-grafico.js` 28/28: forma de cada SVG (figuras = datos), lista y arreglo dan el mismo texto, escape de `& < > "`,
+  valores no finitos se saltan, **con y sin JIT y en el perfil C1EÑ el mismo SVG byte a byte**, marcas bonitas (0,2 / 200), serie
+  constante, y 11 errores con su pista. `exp-nen.js` 37/37, `perfil-c1en.js` 13/13, `edsl.js` 116/116 siguen en verde.
+- `n-node.js` en los dos perfiles con el mismo programa: salida idéntica; el SVG es XML válido (minidom).
+- Los 6 ejemplos de la referencia corren. Ojo: `util/referencia.js` **ya no construía antes de esta fase**: le faltan ejemplos a
+  `irAPagina`, a los bits de numerico (`bitsY`…), a `nativo.cabeceraNativa` y a las colas/hilos/bloques de C1EÑ (N4.3–N4.8).
+  Los seis nuevos no están en esa lista. Pendiente escribir esos ejemplos (otra fase).
+
+**Qué se rompió**: nada. Batería completa (`todas.js`, 3-nov, Windows, 185 s): **35 de 38 suites en verde**, 3 saltadas por falta de herramientas; los tres rojos son ajenos a esta fase y ya estaban: `apps/ecosim5` (la de siempre), `fuera` → `c1en.py` (lanza el motor LTS desde Python, no el de motor-exp), y `exp-pagina` → las tres comprobaciones «(LTS, para que conste)», que miden al LTS. `exp-nen-grafico` 28/28 dentro de la batería.
+
+**Pendiente de la misma propuesta (numerico)**: `leerNpy`/`escribirNpy` y `leerCsvArreglo`/`escribirCsvArreglo`.
+
+## Fase T1 · Ñ → Python «bit-parecido», cero dependencias (Cowork, 4-nov-2026; integrado por Code)
+
+**Estado:** primera entrega, sin commits. La LTS (`motor/`) no se tocó: el traductor solo LEE el analizador del motor
+(`lexer` + `parser` del bundle de `rutas.js`).
+
+### Qué es
+
+`node motor-exp/util/n-a-python.js programa.esl [-o programa.py] [--perfil c1en] [--bundle ruta] [--json]`
+
+Toma un programa de Ñ (o un módulo con sus `usar "./otro.esl"`, que se inlinean una sola vez) y escribe **un único `.py`**
+que corre con Python 3.11+ solo con la biblioteca estándar. Lo que Ñ hace y Python no sale como funciones `_n_*` dentro del
+mismo archivo, **solo las que ese programa usa** (33 piezas en `util/preludio-py.js`, con sus dependencias). Nada de `numpy`.
+`--perfil c1en` se acepta y por ahora no cambia nada.
+
+El Python es legible: nombres de Ñ conservados, `fn` → `def` (con anotaciones `int`, `str`, `list[...]`, `X | None`…),
+`para x en l` → `for x in l`, `para i en rango(a, b, p)` → `for i in range(a, b, p)`, `si/sino si/sino` → `if/elif/else`,
+`si c entonces a sino b` → `a if c else b`, `tipo` → `@dataclass`, `var [a, b] = l` → `a, b, *_ = l`, anónimas → `lambda`
+(o `def` interno si hacen más de un `devolver`), `mapear/filtrar` → comprensiones, `agregar` → `.append`, `afirmar` → `assert`,
+interpolación → f-string, comentarios conservados. Cuando el tipo de lo que se imprime se conoce (entero/texto) sale `print(...)`
+directo; si no, `_n_imprimir(...)`, que reproduce el formato de Ñ.
+
+Lo que no tiene traducción sale como `raise NotImplementedError("Ñ: …")` (o `_n_noimpl(...)` dentro de una expresión) con un
+comentario `# Ñ: …` en la línea y el nombre de la función de Ñ; el resumen del traductor lo cuenta (código de salida 0, resumen
+por stderr; con `--json` sale por stdout). Nunca se finge: un nombre de eDSL sin tabla (`fecha`, `datos`, `nen`, `estilo`…) no
+se llama «a ver si existe».
+
+### Tabla de equivalencias (lo que ya no es un parche por programa)
+
+| Ñ | Python emitido | Por qué |
+|---|---|---|
+| `imprimir(a, b)` | `_n_imprimir(a, b)` / `print(...)` si son entero/texto | formato de Ñ: `cierto/falso/nulo`, reales con 15 cifras sin `.0`, `[1, 2]`, `{a: 1}`, `Punto{x: 1}`, `<error programa: …>` |
+| `texto(x)`, interpolación | `_n_str(x)` / `str(x)` / `{x}` si el tipo es conocido | idem |
+| `/` | `/` | real en los dos |
+| `//`, `%` | `//`, `%` | coinciden (también con negativos y reales) |
+| `**` | `**` si el exponente es un literal 0‥4; si no `_n_potencia` | Ñ calcula con doubles: desborda a `infinito`, no da complejos, y pasado `2**53` deja de ser exacto |
+| `redondear(x[, d])` | `_n_redondear` | medio hacia +∞ (`2.5→3`, `−2.5→−2`); Python redondea al par |
+| `decimales/moneda/porciento/numero` | `_n_decimales`… (`decimal.ROUND_HALF_UP`) | formato es-CO: `1.234,50`, `25,6 %` |
+| `agregar/quitar/insertar` | `.append/.remove/.insert` (sentencia) · `_n_agregar…` (expresión) | en Ñ devuelven la lista |
+| `quitarEn(l, i)` | `.pop()`, `.pop(k)` (k literal ≥ 0) o `_n_quitar_en` | Ñ rechaza índices negativos; Python los cuenta desde el final |
+| `ordenar(l[, f])` | `sorted(l[, key=f])` | `f` es una clave de un argumento; estable |
+| `obtener/borrar/claves/valores/pares` | `.get`, `.pop(k, None)`, `list(d)`, `.values()`, `[[k, v] …]` | `pares` son listas, no tuplas |
+| `d.clave` sobre un diccionario | `d["clave"]` | si el nombre no es campo de ningún `tipo` del programa |
+| `dividir(t)` | `t.split(" ")` | `split(" ")` de JS, no `split()` |
+| `unir(l, s)` | `_n_unir` (o `s.join(l)` si son textos seguros) | los no-texto se unen con el formato de Ñ |
+| `error("x")`, `lanzar v` | `_n_Error("x")`, `raise _n_lanzar(v)` | `lanzar` acepta valores que no son errores; `capturar` los desenvuelve |
+| `intentar/capturar/finalmente` | `try/except Exception as e/finally` | |
+| `var` que tapa a otra en un bloque | segunda variable `x_2` | Python tiene ámbito de función, Ñ de bloque |
+| asignar a una variable de fuera desde `fn` | `nonlocal` / `global` | |
+| cierre creado dentro de un bucle | `lambda i=i: …` | Ñ captura el valor de cada vuelta, Python la variable |
+| `fn` usada antes de su definición | las `def` suben al principio del bloque | Ñ iza las funciones |
+| valor por defecto mutable | `p=None` + `if p is None: p = …` | |
+| nombre de Ñ que es palabra de Python o que choca con lo que se emite (`sum`, `list`, `max`, `lambda`…) | sufijo `_` | |
+| `azar`, `azarEntre`, `semilla`, `reloj`, `ahora`, `leerLinea` | `random.*`, `time.*`, `input()` | el programa se marca **no comparable** (el RNG de Ñ no es el de Python) |
+
+### Diferencias conocidas (documentadas, no ocultas)
+
+1. **Enteros pasados de 2⁵³.** Ñ son doubles; Python, enteros exactos. `_n_fmt` los imprime con el formato de Ñ y `**` los pasa a
+   float, pero `a * b` o `a + b` en un bucle (factoriales, Fibonacci grandes) pueden dar otra cifra final.
+2. **Python es más permisivo que Ñ.** `3 * [1]`, sumar texto y número, etc. funcionan en Python y son error de tipos en Ñ. El
+   traductor no inventa errores que Ñ da en tiempo de ejecución por tipos.
+3. **Mensajes de error del motor** (`<error motor: …>`) no coinciden con los de Python; el comparador los trata como iguales.
+4. `desplazar`/`<<`/`>>` son de 32 bits en Ñ y de precisión arbitraria en Python. `&` no existe en Ñ.
+5. `entero(x)` de un texto usa `parseInt` (se queda con el prefijo numérico); `_n_entero` lo reproduce, `int(...)` solo se emite
+   cuando el argumento es un real conocido.
+6. Un `nulo` pasado a mano a un parámetro con valor por defecto no mutable se respeta; con uno mutable (`[]`, `{}`) se toma como «falta».
+7. `para k en dic` falla en el motor actual (itera pares); el traductor no lo cubre.
+8. **Hallazgo del motor (no del traductor):** tras capturar un «desbordamiento de pila» con `intentar`, la llamada recursiva
+   siguiente vuelve a desbordar aunque no debería (`l_mbpp_371`). Python se comporta bien; el comparador lo cuenta como fallo.
+
+### Cómo se verificó (cifras de esta entrega)
+
+* **Suite** `motor-exp/pruebas/exp-a-python.js`: **43 casos**, uno por construcción del catálogo (formato de `imprimir`,
+  `redondear`/`//`/`%`/`**`, funciones, cierres, `segun`, errores, `tipo`, desestructurar, interpolación, listas, dics, texto, formato,
+  numerico, JSON, archivos, módulos, comentarios, legibilidad, `NotImplementedError`, no comparables). Cada caso corre en Ñ y en
+  `python3 -I` y se compara línea a línea (reales con tolerancia 1e-9); varios exigen además rasgos del `.py` (`for x in`, `@dataclass`,
+  `elif`, `nonlocal`…). **43/43.** Se comprobó que no es hueca: al cambiar `_n_redondear` por `round()` el caso de `redondear` falla.
+  Sin `python3` la suite se salta con un aviso. Fila para `pruebas/todas.js`: ver `docs/todas-fila.txt`.
+* **Comparador** `motor-exp/util/comparar-python.js` (ver «Uso»): sobre el banco de esta entrega
+  (`pruebas/banco-python/`: 120 programas de Ñ escritos por el modelo ajustado —`logica` y `reparar`— con las llamadas de prueba de
+  MBPP/HumanEval, más 10 programas escritos a mano con registros, cierres, dics, textos, matrices y errores):
+  **130 programas · 15 no compilan en Ñ (se excluyen) · 0 no comparables · 112 de 115 pasan = 97,4 %**; fallos: 1 por
+  `int * lista` (Ñ lo rechaza, Python no), 1 por bucle sin fin que Ñ corta con su límite de instrucciones y Python no, 1 por el
+  hallazgo 8. Informe en `salida/comparar-python.json`.
+* **Lo que NO se pudo medir aquí:** el banco que pide el encargo (`corpus-5k/sft.jsonl`: `escribir-logica` 918, `programa-datos`
+  291, `pensar-y-programar` 436, y los `*2-out-*.json`) no estaba en la máquina donde se escribió esto, ni `n-node.js`, ni
+  `todas.js`. **La meta «≥ 80 % de `escribir-logica`» queda por medir en tu disco**: el 97,4 % de arriba es de otro banco, más fácil
+  (funciones pequeñas con un `imprimir` por caso). Tampoco se corrió la batería entera (35 de 38): no se tocó nada de la LTS ni de
+  las suites existentes, pero queda por confirmar con `pruebas/todas.js`.
+
+### Uso del comparador
+
+```
+node motor-exp/util/comparar-python.js --sft D:\ProyectoPersonal\fine-tuning\corpus-5k\sft.jsonl --categoria escribir-logica
+node motor-exp/util/comparar-python.js --sft ...\sft.jsonl --categoria programa-datos
+node motor-exp/util/comparar-python.js --sft ...\sft.jsonl --categoria pensar-y-programar     (toma el último bloque ``` de la respuesta)
+node motor-exp/util/comparar-python.js --json D:\ProyectoPersonal\fine-tuning\corpus-5k\trabajo   (los *2-out-*.json = [{prompt, programa}])
+opciones: --limite N · --python python3 · --timeout 10 · --ver "<motivo>" (muestra los diffs) · --top N · --nnode ruta · --bundle ruta
+```
+Si hay `util/n-node.js` junto al comparador lo usa para correr Ñ (con una prueba de humo previa; si no responde como se espera cae al
+motor en proceso, que no tiene anfitrión de archivos). Salida: `motor-exp/salida/comparar-python.json` con pasan / fallan por motivo
+(traducción incompleta, salida distinta, excepción en Python, tiempo) / no comparables (azar, tiempo, entrada) / Ñ no corre
+(fuera del denominador). Un programa con construcciones «sin traducción» **nunca** cuenta como que pasa. Cada motivo que pase del
+3 % merece una fila nueva en la tabla de arriba, no un parche por programa.
+
+### Pendiente / diseñado para después
+
+* **Segunda entrega:** `fecha` sobre `datetime`; `datos` sobre listas de dics / `csv`.
+* **Fuera de esta fase** (hoy `NotImplementedError("Ñ: …")`): `esperar`/funciones asíncronas, `siguiente/terminado/recoger`,
+  arreglos de `numerico`/`nen`, `estilo`/`pintar` y el resto de la interfaz web, C1EÑ, nativo.
+* **Proveedores opcionales (`--con numpy,pandas,matplotlib`):** las tablas `MAT_EDSL`, `PREL_EDSL` y el `switch` de `llamadaGlobal`
+  son el sitio: añadir un emisor por proveedor es añadir filas, no reescribir. Hoy no hay ninguna dependencia externa.
+* No se cubre aún un `tipo` con un campo sin valor por defecto detrás de uno con valor (Python lo prohíbe): se marca `# Ñ:` y se cuenta.
+
+### Integración en el PC de Diego (Code, 4-nov)
+
+- Archivos copiados tal cual desde la entrega de Cowork (`n-a-python-T1.zip`): `util/n-a-python.js`, `util/preludio-py.js`,
+  `util/comparar-python.js`, `util/cmp-salida.js`, `pruebas/exp-a-python.js`, `pruebas/banco-python/` (130). Ninguno existía antes;
+  no se tocó nada de la LTS ni de las suites existentes. Su informe original quedó en `salida/comparar-python-cowork.json`.
+- Dos arreglos de portabilidad a Windows (Cowork escribió en Linux): Python se lanza con `-X utf8` (con `-I` no se lee `PYTHONUTF8`
+  y la consola de Windows no es UTF-8: «Ñu» salía roto) en la suite y en el comparador, y el caso de archivos usa `os.tmpdir()`
+  en vez de `/tmp`. Con eso **`exp-a-python.js` 43/43** aquí; fila añadida a `pruebas/todas.js`.
+- Medición contra el banco real del encargo (`sft.jsonl`, `escribir-logica` 918) lanzada con `comparar-python.js`; cifras en el
+  LEEME del trabajo en curso cuando termine. Batería completa pendiente de repetir con la fila nueva.
+
+
+## Fase T2 + M1 · metadatos y arreglos del traductor Ñ → Python (Cowork, 4-nov-2026; integrado por Code)
+
+**Estado:** entrega M1, sin commits, LTS intacta.
+
+### Qué se añadió
+- `util/n-metadatos.js` — metadatos estáticos (secciones 3.1, 3.4 estática, 3.7, 3.8). Esquema en `docs/metadatos.md`.
+- `util/n-a-python.js` — ahora carga los programas con `n-metadatos.js` (orden topológico, ciclos = error claro), lee los tipos **por ámbito** de
+  los metadatos y acepta `--meta programa.esl.meta.json`. Se borró la inferencia propia (`tiposVar`, `camposTipo`, `camposAnot`).
+- `pruebas/exp-metadatos.js` — 11 casos + determinismo (dos corridas, mismo JSON). `pruebas/exp-a-python.js` — 7 casos nuevos (uno por punto A–F y el comentario de «no comparable»).
+
+### Los seis puntos de la revisión
+| | Antes | Ahora |
+|---|---|---|
+| A | `esDic` por el nombre del campo | tipo del objeto por ámbito: registro → `.campo`; dic → `["campo"]`; sin saber y con registros en el programa → `_n_prop(obj, "campo")` (decide al correr). Al **asignar** sin saber, `.campo` solo si algún `tipo` tiene ese campo |
+| B | `camposAnot` global por nombre | tipos por registro (`registros.P.campos.x`) |
+| C | `x=x` también en cierres que se consumen en el acto | solo si el cierre puede escapar: no se liga en las funciones pasadas a `mapear/filtrar/ordenar/reducir` |
+| D | `ordenarSent` con trucos | `[...tipos, ...resto]`, y solo si alguna función se usa antes de definirse suben todas las `fn` |
+| E | orden de inlineado | topológico + ciclo reportado (`ciclo de módulos: a.esl → b.esl → a.esl`) |
+| F | guarda de `sExpr` correcta por accidente | paréntesis explícitos y `e.tipo === 'Llamada'` primero |
+
+Además: `# Ñ: no comparable (azar)` en la línea que usa azar/reloj/entrada.
+
+### Cifras (aquí, con lo que había)
+- `exp-a-python.js`: **50/50**. `exp-metadatos.js`: **11/11**.
+- Banco de muestra (`pruebas/banco-python/`, 130 programas): **112/115 = 97,4 %**, igual que antes del cambio (mismos 3 fallos ajenos al traductor).
+- **No medí** los cuatro bancos grandes (`sft.jsonl`: escribir-logica, programa-datos, pensar-y-programar, `*2-out-*.json`) ni los tres `TypeError: not subscriptable`
+  (`8231770a1125#20`, `5fc4289a6229#292`, `34d6bbca6022#428`): no están en esta máquina. Por construcción los cubre el punto A, pero no está confirmado.
+  Tampoco la batería (36 de 39). Corre `comparar-python.js --sft …` en tu disco.
+
+### Completado después de la primera entrega
+- `except` concreto (3.4): `ZeroDivisionError`, `IndexError/KeyError`, `(_n_Error, _n_Lanzado)` cuando todo lo del cuerpo es conocido; `Exception` si hay llamadas inciertas.
+- 3.2 estático (modo de cada parámetro) y 3.3 estático (división real, bits, literales > 2³¹/2⁵³) en `n-metadatos.js`.
+
+### Pendiente
+- **M1 punto 3:** `py-a-n.py --meta` (sección 3.9): no tengo `py-a-n.py`.
+- **M2:** 3.2 propiedad/préstamo, 3.3 rangos, 3.5 basura, 3.6 JIT, anfitrión instrumentado, y el Ñ → Rust mínimo.
+- Tipo por *nodo* del verificador del motor en vez de mi análisis por ámbito, cuando se pueda leer.
+
+### Integración en el PC de Diego (Code, 4-nov)
+
+- Copiados `util/n-metadatos.js`, `util/n-a-python.js`, `util/preludio-py.js`, `util/comparar-python.js`, `pruebas/exp-a-python.js`,
+  `pruebas/exp-metadatos.js`, `docs/metadatos.md` (la versión T1 de `n-a-python.js` queda en `util/n-a-python.T1.js.bak`).
+- Reaplicados los dos arreglos de Windows que la entrega no traía: `-X utf8` al lanzar Python (suite y comparador) y `os.tmpdir()` en el
+  caso de archivos. Con eso **`exp-a-python.js` 51/51** y **`exp-metadatos.js` 13/13**. Filas en `todas.js`.
+- Medición contra los bancos grandes (`sft.jsonl`) con el traductor T2: cifras en el LEEME del trabajo en curso.
+- Pendiente de M1 que Cowork no pudo hacer por no tener el archivo: `py-a-n.py --meta` (sección 3.9 del plan). Pendiente también:
+  leer el tipo por nodo del verificador del motor en vez del análisis propio por ámbito (Cowork no encontró cómo exponerlo).
+
+
+### M1c · esquema v2 (4-nov, tarde)
+- `util/n-metadatos-v2.js` (lo llama `n-metadatos.js`, `version: 2`): `variables.mutable`, `nulos`, `colecciones`, `tamanos`, `cierres`, `errores.lanza/capturas`,
+  `control` (cola, sin cota, grafo asíncrono), `anchoBits`, `interop`, `c1en`, y `valores` (nace/muere/escapa/alias/ciclos/hilos/estrategia). Detalle en `docs/metadatos.md`.
+- El traductor a Python elige el `except` leyendo `errores.capturas` (antes tenía su propio análisis).
+- `pruebas/exp-metadatos.js`: **31/31** (un caso por campo nuevo + determinismo). `exp-a-python.js`: **51/51**. Banco de muestra: **112/115 (97,4 %)**, sin cambio.
+  Los 130 programas del banco dan el mismo JSON en dos corridas (los 15 que no parsean en Ñ fallan igual, sin excepción).
+- **Sigue sin hacerse (necesita el motor corriendo):** `alias`/`ciclos`/`hilos` dinámicos, `rango` observado, `textos`, `profundidadMax`, `memoria`, `perfil`, `tiposValidadosJit`;
+  tipo por nodo (M1b); `py-a-n.py --meta`; `interop.nativo` con firmas C; `c1en` con tipos y atómicos. La propiedad que pide el plan «lo dinámico nunca contradice lo estático
+  seguro» no se pudo probar: no hay dinámico todavía.
+
+### Integración de M1c en el PC de Diego (Code, 4-nov)
+
+- Copiados `util/n-metadatos-v2.js` (nuevo), `util/n-metadatos.js`, `util/n-a-python.js`, `util/comparar-python.js`, `pruebas/exp-metadatos.js`,
+  `pruebas/exp-a-python.js`, `docs/metadatos.md`, `docs/ejemplo-metadatos-v2.esl(.meta.json)`. Reaplicados por tercera vez los dos arreglos
+  de Windows (`-X utf8`, `os.tmpdir()`): la entrega vuelve a traer `/tmp` y Python sin `-X utf8`. **`exp-metadatos.js` 31/31**,
+  **`exp-a-python.js` 51/51**. Medición de los tres bancos lanzada (cifras en el LEEME del trabajo en curso).
+- Lo que sigue necesitando el motor instrumentado (M2): `alias`/`ciclos`/`hilos` dinámicos, `rango`, `textos`, `profundidadMax`, `memoria`,
+  `perfil`, `tiposValidadosJit`; y M1b (Code): tipo por nodo del verificador y `py-a-n.py --meta`.
+
+
+## Fase N6 · C1EÑ: funciones de dispositivo y constantes globales (4-nov-2026)
+
+Pedido por El Cofre: el simulador (50 funciones que se llaman entre sí) tenía que correr como núcleo, y un núcleo no podía
+llamar a ninguna función de Ñ («en la v1 de C1EÑ no hay llamadas entre núcleos»).
+
+**Qué se añadió**
+- **Funciones de dispositivo.** Un núcleo de `paralelo` puede llamar a otras funciones de Ñ. Cada llamada se analiza con los tipos de
+  sus argumentos (otra firma = otra copia); los arreglos se pasan por su nombre (puntero y longitud); devuelven un número, un
+  bool o nada (y entonces se llaman como sentencia); pueden llamarse unas a otras. Sin recursión (directa o mutua: se rechaza al
+  compilar) y, por ahora, solo en `paralelo` (no en bloques ni en hilos).
+- **Constantes globales.** Un número o bool de nivel superior cuyo nombre va en MAYÚSCULAS (`fijo N_CELDAS = 2500`) vale dentro de un
+  núcleo y de sus funciones; se congela al compilar, como un #define. En minúsculas sigue siendo «variable de fuera del núcleo».
+- Los fallos dentro de una función se informan con la línea DE ESA FUNCIÓN y el índice del hilo; el tope de vueltas es del hilo entero.
+
+**Cómo se emite.** jit: las funciones de dispositivo son funciones de JavaScript en el mismo cierre que el núcleo y comparten sus
+contadores `f` y `vueltas` (que suben al cierre). C y CUDA: funciones `static` (`__device__` en CUDA) que reciben los dos contadores
+por puntero; dentro, `f` y `vueltas` son macros que los nombran, así el cuerpo se emite igual que el de un núcleo. Después de cada
+sentencia con una llamada se mira `f` (la misma maquinaria de siempre). Ningún opcode nuevo.
+
+**Qué se comprobó y qué NO**
+- `pruebas/exp-dispositivo.js` (14 pruebas en jit): cuentas con números, bool, funciones anidadas, bucles y salidas tempranas;
+  arreglos leídos y escritos dentro; fallo con línea y hilo; recursión directa y mutua; número de argumentos; devolver con y sin
+  valor; paraleloBloques; constantes; y el texto C y CUDA generado.
+- La suite C1EÑ pasa a 77/77 (una prueba que exigía *rechazar* las llamadas a funciones de usuario se cambió por otra que rechaza lo
+  que sigue sin valer). Batería completa de motor-exp: **37 de 38** (la roja de siempre, ecosim5).
+- **Verificado en los tres destinos (4-nov, con gcc 15.2 del WSL; el WSL no tiene node, así que con un arnés a mano: ver cofre-bots/verif-c/README.md):** diez núcleos con funciones de dispositivo, compilados con gcc -O2 -fopenmp -ffp-contract=off -Wall -Wextra -Werror y el CUDA con g++ y la cabecera de simulación, dan LOS MISMOS 1014 valores que jit, bit a bit, y el mismo fallo (hilo 2, sitio de la división). **Sigue sin verificar:** que NVRTC acepte el CUDA en una GPU de verdad, y las suites de motor-exp que cargan C con koffi (el WSL no tiene node).
+- Se añadió también **si … entonces … sino como expresión dentro de un núcleo** (faltaba: "SiExpr no está en el subconjunto"); prueba 4c.
+- Primer uso de verdad: `cofre-bots/cofre-plano.esl` (el simulador de El Cofre como núcleo plano) contra `cofre.esl`:
+  160 partidas aleatorias con circuitos de plantilla, comparadas casilla a casilla cada 5–35 operaciones, idénticas; 8 de 8 mutaciones
+  detectadas. En jit va ~15 veces más rápido que la VM (84 000 contra 5 600 ticks por segundo).
+
+**El tope de un arreglo, configurable (5-nov-2026).** Era un 50e6 fijo en `VM.arrNuevo` (desde la 4.0, sin motivo escrito: protege al IDE del navegador, que comparte hilo con la interfaz). Ahora es `maxArreglo` (opción de `crearMotor`; por defecto 50 millones); `util/n-node.js` lo sube a mil millones y lo toma de la variable de entorno `N_MAX_ARREGLO`; y si el sistema no da la memoria, el error es de Ñ («no hay memoria para un arreglo…») y no un RangeError. Suite `pruebas/exp-limite-arreglo.js` (8). **Otro tope que apareció y NO se ha tocado:** `rango` no construye más de 5 millones de elementos en una función que el JIT aún no compiló (mensaje «el tope son 5 millones»).
+
+**gcc 15 y `n-compilar --biblioteca`.** El C de la biblioteca usaba `free()` sin `#include <stdlib.h>`: con gcc 15 (C23) es un error. Añadido a `aot/nrt.h` en `motor-exp` y en `motor/aot/nrt.h` (LTS 4.2). Con eso pasan `lengua franca` e `interop` en WSL.
+
+## Fase A3 · El ejecutable más rápido: funciones numéricas puras y sin TLS (5-nov-2026)
+
+Diego pidió hacer más rápido el AOT. Medido en su PC (i3-1115G4, gcc 16.2 de w64devkit) con `velocidad/bench-g.esl` (fib(38), criba 20·10⁶,
+Mandelbrot 1200×900×400): **fib 306 → 107 ms** (C: 52), criba 556 → 487, Mandelbrot 331 → 318 (ya iba a la velocidad de C).
+
+**Qué se hizo**
+1. **Sin TLS en los ejecutables** (`-DN_SIN_TLS`, puesto por `n-compilar` si no es una biblioteca): el estado del hilo `n_hilo` deja de ser
+   `_Thread_local` (en Windows cada acceso cuesta más). fib 306 → 247 ms. Las bibliotecas (`--biblioteca`) siguen con TLS: el anfitrión las
+   puede llamar desde varios hilos.
+2. **Funciones numéricas puras** (`aot/compilador.js`, «PURA»). Una función cuyos parámetros son todos números, que devuelve un número y que
+   solo hace cuentas (+ − ×, comparaciones, lógica, saltos y bucles con variables locales) y llamadas a otras puras, se emite además como
+   `static double F<j>p(int prof_, double p0, …)`: doubles de C, sin cajas `NV`, sin cierre y sin mirar el error tras cada llamada.
+   Solo puede fallar por la profundidad (más de `N_MAX_MARCOS` = 900): `n_pura_desborde` baja de golpe con `longjmp` hasta la versión numérica
+   `F<j>n` por la que se entró desde fuera, que le pone el rastro (`n_pura_traza`: el nombre de la función y la línea de su primera llamada,
+   `N_MAX_TRAZA` veces). Si la pura no llega a ningún ciclo de llamadas, `F<j>n` solo mira que quepan sus marcos y entra directo. Las puras se
+   compilan con `__attribute__((optimize("O3")))` (macro `N_PURA`): con O3 gcc inlina la recursión mucho más hondo (fib en Windows: 170 → 108 ms).
+3. **Parámetros numéricos por herencia:** un parámetro que se pasa tal cual a la posición numérica de otra función conocida cuenta como
+   «usado en una cuenta» (`media(x) = base(x) + 1` recibe un número, igual que `base`); se itera hasta que no cambie. Afecta a la versión
+   numérica de todas las funciones, no solo a las puras.
+
+**Lo que se midió y NO ayudó** (WSL, gcc 15): `-O3` global, `-march=native` y `-flto` rinden ≤ 5 % (LTO no existe en el gcc de w64devkit);
+quitar el TLS ayuda sobre todo en Windows. Una medida mía inicial (85 ms de «techo» para una fib pura) era engañosa: gcc había eliminado la
+comprobación de profundidad porque nadie leía la variable; con la comprobación puesta cuesta 160–200 ms (cualquier forma: llamada fría, bandera
+a la entrada, mirar solo cada 8 niveles), y lo que lo baja es el `O3` por función.
+
+**Límites** (una función que los incumpla sigue por el camino de siempre, sin error): no puede dividir, usar `%`, `//`, `**`, listas, texto,
+cierres ni globales que no sean funciones conocidas; una llamada hacia una función definida más abajo no cuenta (no se puede garantizar que ya
+exista); el rastro de un desbordamiento dentro de una pura repite el nombre de la función que lo causó. `N_AOT_SIN_PURAS=1` las apaga.
+Antes de A3 el ejecutable ya difería de la VM en el borde de la profundidad (899 contra 897 marcos) y en el primer marco del rastro de una
+recursión mutua (h contra g): no es de A3, y con y sin puras da exactamente lo mismo.
+
+**Qué se probó**
+- `pruebas/exp-aot-puras.js` (31 pruebas, Linux): reconoce lo puro y lo que no; el ejecutable da la salida y el código de la VM; con y sin puras
+  da EXACTAMENTE lo mismo (también el borde de la profundidad y la recursión infinita simple y mutua).
+- `pruebas/exp-aot.js` completa, con `N_AOT_COMPROBAR=1` (cada tipo supuesto, comprobado en caliente), Linux/WSL: **307 iguales · 1 distinto
+  (`ref:nativa`, el de siempre) · 0 no compilan · 311 sin soporte** de 619; **0** «el compilador supuso». Igual que antes de A3.
+- En Windows, las pruebas que ejecutan un `.exe` recién compilado pueden toparse con el Control de aplicaciones de Windows (bloquea ejecutables
+  nuevos de forma errática): no se esquiva; esas partes se saltan o se miden en WSL.
+
 ## Lo que viene (en este clon, en este orden)
 
 | fase | qué | toca | estado |
@@ -2343,6 +2680,7 @@ olvida con aviso y la página corre; a la siguiente vez no hay aviso; sin errore
 | X4 | corrutinas al estilo Lua: generadores (`producir`) y asincronía (`esperar`) | VM | **hecha** |
 | X5 | nulos al estilo Kotlin: `texto?`, estrechamiento por flujo, `??`/`?.` tipados, `var x` sin valor, `devolver` por todos los caminos | parser, verificador (la VM, el JIT y el AOT no cambian) | **hecha** |
 | R2 | `a[i]` de arreglo dentro del JIT; JIT para los bucles del nivel superior | JIT | pendiente |
+| T1 | **`util/py-a-n.py`**: Python → Ñ por reglas con juez (analizador + motor), para el corpus de fine-tuning; MBPP 815/974, HumanEval 150/164 | util | **hecha** |
 | D1 | `bytes`, `conjunto`, `patron`, archivos grandes línea a línea, `unir`/`pivotar` | VM, eDSL | pendiente |
 | S1–S2 | FFI con firmas de C, arreglos sin copiar, salidas, retrollamadas, memoria, en fondo; reloj en consola, `servir`, archivos, rutas, procesos, entrada interactiva | VM, biblioteca, anfitrión de Node | **hecha** |
 | S3 | puente a npm (`usar x de "npm:paquete"`), FFI en QuickJS, variádicas | anfitrión | pendiente |
@@ -2368,3 +2706,25 @@ olvida con aviso y la página corre; a la siguiente vez no hay aviso; sin errore
 | A1 | **El ejecutable con tipos**: tipos por casilla en el IR-Ñ, versión numérica de cada función (guardas exactas, `double` de C), llamadas derechas a funciones conocidas, `rango` sin lista, listas por dentro; después (A2) la traza al deshacer, la profundidad como parámetro y listas con clase de elementos; fib 23→6, criba 261→≈40, mandelbrot 75→18 ms (la VM: 15 / 107 / 27; C: 1–2 / 3 / 19); `N_AOT_COMPROBAR=1` lo verifica en caliente | aot, pruebas | **hecha** (A1 y A2 confirmados en Linux, Kaggle 26-oct: exp-aot 307 iguales · 1 (`ref:nativa`), lengua franca 14/0, sinComprobar 14/0, interop 23/0; en Windows lengua franca 15/0, sinComprobar 14/0, interop 15/0) |
 
 Cada fase deja su sección en este archivo: qué se tocó, qué se probó, qué se rompió.
+
+## A4 · El nivel tipado (5 nov 2026)
+
+Qué se tocó: `aot/tipado.js` (nuevo: inferencia por unificación, propiedad de las listas, enteros de 64 bits con constantes y no-negativos, instancias por sitio de
+las constructoras de listas, emisión de C sin cajas), `aot/compilador.js` (conexión: análisis tras las puras, prototipos, entrada desde la versión general, llamadas
+directas), `aot/nrt.h`/`nrt.c` (`NL_INT`, `nt_*`, `n_tdeopt`), `util/n-compilar.js` (`--sin-comprobar`), `pruebas/exp-aot-tipado.js` (50 pruebas, registrada en todas.js).
+Banderas: `N_AOT_SIN_TIPADO=1` lo apaga; `N_AOT_TIPADO=1` dice qué funciones entran y por qué no las demás; `N_AOT_SIN_COMPROBAR=1` / `--sin-comprobar`.
+Resultado: media ×7.4 → ×1.31 frente a C (22 benchmarks, WSL); sin comprobar ×1.10. Informe: `velocidad/RESULTADOS-A4-5-nov-2026.md`.
+Probado y descartado: `union`→`struct` en NV; `__builtin_longjmp` para los fallos (gcc deja de integrar). Pendiente: análisis de intervalos con refinamiento por
+comparación para quitar las comprobaciones de rango, y saber qué hacer con lcs/mochila/hanoi/matmul por encima de ×1.5 en modo seguro.
+
+## A5 · Objetos, listas y escape: el nivel tipado también para la memoria (6 nov 2026)
+
+Qué se tocó (`aot/tipado.js`, `aot/compilador.js`, `aot/nrt.c|h`, `pruebas/exp-aot-tipado.js`):
+- **Registros (`tipo`) como estructuras de C** con conteo de referencias y destructor iterativo; **listas de objetos** (`NL_PTR`); liberación iterativa de cadenas largas en el runtime (antes reventaba la pila).
+- **Pool por tipo** de registro (lista libre + trozos de 1024) y **pool de listas** (cabeceras y datos ≤ 1 KB), en vez de `malloc/free` por objeto.
+- **Análisis de escape**: el objeto que no sale de la función vive en la pila de C (con resúmenes entre funciones: captura y modificación de parámetros; solape en bucles). `N_AOT_SIN_ESCAPE=1` lo apaga.
+- **Recursión mutua** en el nivel tipado y puras (`definidaSeguro` en el tramo recto), **llamada de cola** sin comprobación de `n_tdeopt`, **idioma de relleno** (`mientras s < N { agregar(a, K) … }` → `memset`), `reloj()` tipado.
+- Arreglo de solidez: la guarda de las precondiciones de bucle (`== null`, no `=== null`) — una `var` declarada dentro del cuerpo provocaba una bajada a la versión general en ejecución.
+Resultado (WSL, 61 programas de estrés frente a C, media geométrica): objetos y memoria ×17.3 → ×0.98, recursión ×3.2 → ×1.81, listas indexadas ×1.26, memoria/caché ×1.95 → ×1.31; **todos ×1.31**. Los cinco peores (a04 a06 a14 a20 b33) pasaron de ×6–×19 a ×1–×2.
+Pruebas: `exp-aot-tipado.js` 159, `exp-aot-puras.js` 31, batería 307 iguales a la VM · 1 distinto (`ref:nativa`, ya lo era) · 311 sin soporte (nombres de biblioteca que faltan, no el lenguaje).
+Medidas y condiciones: `velocidad/RESULTADOS-6-nov-2026.md`. Pendiente: cobertura de biblioteca (`arreglo`, tablas), generadores/asíncronas, hilos, compilador de C incluido, arranque híbrido (JIT al instante + AOT en segundo plano), límite de 900 marcos.

@@ -49,6 +49,8 @@ const SUITES = [
   ['exp: NEÑ gpu', 'exp-nen-gpu.js', 'motor-exp N2: NEÑ igual en jit, nativo y GPU (simulada), y residente en la GPU'],
   ['exp: precisión', 'exp-precision.js', 'motor-exp N4.2: real32 y real16 contra float, _Float16 y fmaf de C, NumPy, y el SGEMM igual en jit, nativo y GPU'],
   ['exp: colas GPU', 'exp-asincrono.js', 'motor-exp N4.3: colas, eventos y lanzar sin esperar, con la GPU simulada perezosa (nada corre hasta que hace falta)'],
+  ['exp: AOT puras', 'exp-aot-puras.js', 'motor-exp A3: las funciones numéricas puras del ejecutable (doubles de C, sin cajas, -O3): se reconocen bien, dan lo mismo que la VM y lo mismo con y sin ellas, también en el borde de la profundidad y en el rastro del desbordamiento'],
+  ['exp: AOT tipado', 'exp-aot-tipado.js', 'motor-exp A4: el nivel tipado del ejecutable (listas de números y de bool, división y resto, sin cajas): se reconoce bien, da lo mismo que la VM y lo mismo con y sin él, también cuando algo raro lo hace bajar (índice fuera de rango, división por cero, lista de otra clase, profundidad)'],
   ['exp: bloques', 'exp-bloques.js', 'motor-exp N4.4: paraleloBloques — bloques, hilos, memoria compartida y barreras, igual en jit, nativo y GPU (simulada)'],
   ['exp: tipos de máquina', 'exp-tipos.js', 'motor-exp N4.5: i8 u8 i16 u16 u32 i64 u64 — aritmética y bits al bit contra NumPy, 64 bits exactos, y en los núcleos de jit, nativo y GPU (simulada)'],
   ['exp: lengua franca', 'exp-lengua-franca.js', 'motor-exp N4.6: Ñ como biblioteca de C (n-compilar --biblioteca), llamada desde C, C++, Python, Rust y Go; tres a la vez; valgrind; la DLL de Windows'],

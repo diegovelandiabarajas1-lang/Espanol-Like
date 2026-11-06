@@ -22,6 +22,14 @@
 #endif
 
 N_HILO_LOCAL NHilo n_hilo;
+N_HILO_LOCAL NPuraSalto* n_pura_tope = NULL;
+/* (motor-exp A3) una función pura se pasó de profundidad: el error de siempre y salto a quien entró desde fuera */
+void n_pura_desborde(const char* nombre, int linea) {
+  N_ERROR_PROFUNDIDAD();
+  if (n_pura_tope) { n_pura_tope->nombre = nombre; n_pura_tope->linea = linea; longjmp(n_pura_tope->jb, 1); }
+  abort();   /* no puede pasar: una pura solo se llama desde su versión numérica, que pone el salto */
+}
+void n_pura_traza(NPuraSalto* s) { for (int i = 0; i < N_MAX_TRAZA; i++) n_traza(s->nombre, s->linea); }
 static int n_argc; static char** n_argv;
 
 /* ════════════════════════════════════════════════════════════ memoria */
@@ -35,20 +43,86 @@ static void* n_remem(void* p, size_t b) {
   if (!q) { fputs("[ejecución] no queda memoria\n", stdout); fflush(stdout); exit(1); }
   return q;
 }
+/* (motor-exp) Reserva propia para las listas: miles de listas pequeñas que nacen y mueren (b33, a06) pagaban 2 o 3 malloc/free cada una.
+   · la cabecera (NLista, tamaño fijo) y los datos hasta 1024 bytes salen de listas libres por clase (32, 64 … 1024 bytes) y vuelven a ellas;
+   · más grande, malloc de siempre. El tamaño de lo que se devuelve se deduce de cap · tamaño del elemento, que es lo que se pidió. */
+#define LD_CLASES 6
+static N_HILO_LOCAL void* ld_libre[LD_CLASES];
+static N_HILO_LOCAL void* nl_libre;
+static inline int ld_clase(size_t b, size_t* t) { size_t x = 32; int c = 0; while (x < b) { x <<= 1; c++; } *t = x; return c; }
+static void* ld_trocear(void** cab, size_t t) {   /* un trozo de 64 bloques: uno se entrega y el resto va a la lista libre */
+  char* z = (char*)n_mem(t * 64);
+  for (int i = 1; i < 63; i++) *(void**)(z + t * (size_t)i) = z + t * (size_t)(i + 1);
+  *(void**)(z + t * 63) = NULL;
+  *cab = z + t;
+  return z;
+}
+static void* ld_alloc(size_t b) {
+  if (b > 1024) return n_mem(b);
+  size_t t; int c = ld_clase(b, &t);
+  void* p = ld_libre[c];
+  if (p) { ld_libre[c] = *(void**)p; return p; }
+  return ld_trocear(&ld_libre[c], t);
+}
+static void ld_free(void* p, size_t b) {
+  if (!p) return;
+  if (b > 1024) { free(p); return; }
+  size_t t; int c = ld_clase(b, &t);
+  *(void**)p = ld_libre[c]; ld_libre[c] = p;
+}
+static void* ld_realloc(void* p, size_t ob, size_t nb) {
+  if (ob > 1024 && nb > 1024) return n_remem(p, nb);
+  void* q = ld_alloc(nb);
+  memcpy(q, p, ob < nb ? ob : nb);
+  ld_free(p, ob);
+  return q;
+}
+static void* nl_alloc(void) {
+  void* p = nl_libre;
+  if (p) { nl_libre = *(void**)p; return p; }
+  return ld_trocear(&nl_libre, sizeof(NLista) < 32 ? 32 : sizeof(NLista));
+}
+static void nl_free(void* p) { *(void**)p = nl_libre; nl_libre = p; }
 static void* n_objeto(size_t b, NClase c) {
   NObj* o = (NObj*)n_mem(b);
-  o->rc = 1; o->clase = (uint8_t)c; o->inmortal = 0;
+  o->rc = 1; o->clase = (uint8_t)c; o->inmortal = 0; o->bloque = 0;
   return o;
 }
+/* Soltar una estructura enlazada larga (una lista de 300 mil nodos) no puede recursar: cada hijo que llega a 0 volvería a entrar aquí y la pila de C
+   (8 MB) se acaba. La llamada de fuera libera un objeto tras otro; las de dentro (las que vienen de soltar a los hijos) solo apuntan el objeto en
+   una cola de pendientes, que la de fuera vacía. */
+static N_HILO_LOCAL int n_liberando = 0;
+static N_HILO_LOCAL NObj** n_pend = NULL;
+static N_HILO_LOCAL size_t n_pend_n = 0, n_pend_cap = 0;
+static void liberar_uno(NObj* o);
+static size_t el_tam(int el);
 void n_liberar(NObj* o) {
   if (o->inmortal) { o->rc = N_INMORTAL_RC; return; }
+  if (n_liberando) {
+    if (n_pend_n == n_pend_cap) { n_pend_cap = n_pend_cap ? n_pend_cap * 2 : 1024; n_pend = (NObj**)n_remem(n_pend, n_pend_cap * sizeof(NObj*)); }
+    n_pend[n_pend_n++] = o;
+    return;
+  }
+  n_liberando = 1;
+  liberar_uno(o);
+  while (n_pend_n) liberar_uno(n_pend[--n_pend_n]);
+  n_liberando = 0;
+}
+static void liberar_uno(NObj* o) {
   switch (o->clase) {
     case NC_TEXTO: break;
-    case NC_LISTA: { NLista* l = (NLista*)o; if (l->el == NL_NV) { for (int64_t i = 0; i < l->n; i++) n_dec(l->nv_[i]); free(l->nv_); } else free(l->d); break; }
+    case NC_LISTA: {
+      NLista* l = (NLista*)o;
+      if (l->el == NL_NV) { for (int64_t i = 0; i < l->n; i++) n_dec(l->nv_[i]); ld_free(l->nv_, sizeof(NV) * (size_t)l->cap); }
+      else if (l->el == NL_PTR) { if (l->dec) for (int64_t i = 0; i < l->n; i++) if (((void**)l->d)[i]) l->dec(((void**)l->d)[i]); ld_free(l->d, sizeof(void*) * (size_t)l->cap); }
+      else ld_free(l->d, el_tam(l->el) * (size_t)l->cap);
+      nl_free(o);
+      return;
+    }
     case NC_DIC: {
       NDic* d = (NDic*)o;
       for (int64_t i = 0; i < d->usados; i++) if (d->e[i].vivo) { n_dec(d->e[i].k); n_dec(d->e[i].v); }
-      free(d->e); free(d->tabla);
+      if (!d->h.bloque) { free(d->e); free(d->tabla); }
       if (d->reg) n_dec(n_obj(d->reg));
       break;
     }
@@ -312,41 +386,94 @@ int n_verdad(NV v) {
 }
 
 /* ════════════════════════════════════════════════════════════ listas */
+int n_tdeopt = 0;
 NV n_lista_nueva(int64_t cap) {
-  NLista* l = (NLista*)n_objeto(sizeof(NLista), NC_LISTA);
+  NLista* l = (NLista*)nl_alloc();
+  l->h.rc = 1; l->h.clase = NC_LISTA; l->h.inmortal = 0; l->h.bloque = 0;
   l->n = 0; l->cap = cap > 4 ? cap : 4;
-  l->nv_ = NULL; l->d = NULL; l->el = NL_VACIA;
+  l->nv_ = NULL; l->d = NULL; l->el = NL_VACIA; l->dec = NULL;
   return n_obj(l);
 }
-static size_t el_tam(int el) { return el == NL_NUM ? sizeof(double) : el == NL_BOOL ? 1 : sizeof(NV); }
+static size_t el_tam(int el) { return el == NL_NUM ? sizeof(double) : el == NL_BOOL ? 1 : el == NL_INT ? sizeof(int64_t) : el == NL_PTR ? sizeof(void*) : sizeof(NV); }
 NV* n_lista_materializar(NLista* l) {
   if (l->el == NL_NV) return l->nv_;
-  NV* nv = (NV*)n_mem(sizeof(NV) * (size_t)l->cap);
+  NV* nv = (NV*)ld_alloc(sizeof(NV) * (size_t)l->cap);
   if (l->el == NL_NUM) for (int64_t i = 0; i < l->n; i++) nv[i] = n_num(((double*)l->d)[i]);
   else if (l->el == NL_BOOL) for (int64_t i = 0; i < l->n; i++) nv[i] = n_bool(((uint8_t*)l->d)[i]);
-  free(l->d); l->d = NULL; l->nv_ = nv; l->el = NL_NV;
+  else if (l->el == NL_INT) for (int64_t i = 0; i < l->n; i++) nv[i] = n_num((double)((int64_t*)l->d)[i]);
+  if (l->el != NL_VACIA) ld_free(l->d, el_tam(l->el) * (size_t)l->cap); l->d = NULL; l->nv_ = nv; l->el = NL_NV;
   return nv;
 }
 static void lista_crecer(NLista* l) {
   if (l->n < l->cap) return;
+  int64_t vieja = l->cap;
   l->cap *= 2;
-  if (l->el == NL_NV) l->nv_ = (NV*)n_remem(l->nv_, sizeof(NV) * (size_t)l->cap);
-  else l->d = n_remem(l->d, el_tam(l->el) * (size_t)l->cap);
+  if (l->el == NL_NV) l->nv_ = (NV*)ld_realloc(l->nv_, sizeof(NV) * (size_t)vieja, sizeof(NV) * (size_t)l->cap);
+  else l->d = ld_realloc(l->d, el_tam(l->el) * (size_t)vieja, el_tam(l->el) * (size_t)l->cap);
 }
-void n_lista_agregar(NLista* l, NV v) {
+void n_lista_agregar_lento(NLista* l, NV v) {
   if (l->el == NL_VACIA) {
     l->el = v.t == N_NUM ? NL_NUM : v.t == N_BOOL ? NL_BOOL : NL_NV;
-    if (l->el == NL_NV) l->nv_ = (NV*)n_mem(sizeof(NV) * (size_t)l->cap); else l->d = n_mem(el_tam(l->el) * (size_t)l->cap);
+    if (l->el == NL_NV) l->nv_ = (NV*)ld_alloc(sizeof(NV) * (size_t)l->cap); else l->d = ld_alloc(el_tam(l->el) * (size_t)l->cap);
   }
   if (l->el == NL_NUM && v.t == N_NUM) { lista_crecer(l); ((double*)l->d)[l->n++] = v.u.n; return; }
   if (l->el == NL_BOOL && v.t == N_BOOL) { lista_crecer(l); ((uint8_t*)l->d)[l->n++] = (uint8_t)v.u.b; return; }
+  if (l->el == NL_INT && v.t == N_NUM && nt_esent(v.u.n)) { lista_crecer(l); ((int64_t*)l->d)[l->n++] = (int64_t)v.u.n; return; }
   n_lv(l); lista_crecer(l);
   l->nv_[l->n++] = v;
 }
-void n_lista_poner(NLista* l, int64_t k, NV v) {
+void n_lista_poner_lento(NLista* l, int64_t k, NV v) {
   if (l->el == NL_NUM && v.t == N_NUM) { ((double*)l->d)[k] = v.u.n; return; }
   if (l->el == NL_BOOL && v.t == N_BOOL) { ((uint8_t*)l->d)[k] = (uint8_t)v.u.b; return; }
+  if (l->el == NL_INT && v.t == N_NUM && nt_esent(v.u.n)) { ((int64_t*)l->d)[k] = (int64_t)v.u.n; return; }
   n_asignar(&n_lv(l)[k], v);
+}
+/* (motor-exp A4) agregar un entero a una lista de enteros (la primera vez decide: vacía → de enteros) */
+void nt_agregar_i_lento(NLista* l, int64_t x) {
+  if (l->el == NL_VACIA) { l->el = NL_INT; l->d = ld_alloc(el_tam(NL_INT) * (size_t)l->cap); }
+  if (l->el == NL_INT) { lista_crecer(l); ((int64_t*)l->d)[l->n++] = x; return; }
+  n_lista_agregar_lento(l, n_num((double)x));
+}
+/* (motor-exp A4) agregar un puntero a una lista de objetos del código tipado (la primera vez decide la clase y cómo soltar cada uno) */
+void nt_agregar_p_lento(NLista* l, void* p, void (*dec)(void*)) {
+  if (l->el == NL_VACIA) { l->el = NL_PTR; l->dec = dec; l->d = ld_alloc(el_tam(NL_PTR) * (size_t)l->cap); }
+  lista_crecer(l);
+  ((void**)l->d)[l->n++] = p;
+}
+/* (motor-exp) «mientras s < N { agregar(a, K)  s = s + 1 }»: N - s copias de K de una vez (la clase de la lista ya la fija el código tipado) */
+static void lista_reservar(NLista* l, int64_t mas) {
+  if (l->n + mas <= l->cap) return;
+  int64_t c = l->cap, vieja = l->cap;
+  while (c < l->n + mas) c *= 2;
+  l->cap = c;
+  if (l->el == NL_NV) l->nv_ = (NV*)ld_realloc(l->nv_, sizeof(NV) * (size_t)vieja, sizeof(NV) * (size_t)c);
+  else l->d = ld_realloc(l->d, el_tam(l->el) * (size_t)vieja, el_tam(l->el) * (size_t)c);
+}
+void nt_rep_i(NLista* l, int64_t n, int64_t x) {
+  if (n <= 0) return;
+  if (l->el == NL_VACIA) { l->el = NL_INT; l->d = ld_alloc(el_tam(NL_INT) * (size_t)l->cap); }
+  if (l->el != NL_INT) { for (int64_t i = 0; i < n; i++) nt_agregar_i_lento(l, x); return; }
+  lista_reservar(l, n);
+  int64_t* d = (int64_t*)l->d + l->n;
+  if (x == 0) memset(d, 0, sizeof(int64_t) * (size_t)n); else for (int64_t i = 0; i < n; i++) d[i] = x;
+  l->n += n;
+}
+void nt_rep_d(NLista* l, int64_t n, double x) {
+  if (n <= 0) return;
+  if (l->el == NL_VACIA) { l->el = NL_NUM; l->d = ld_alloc(el_tam(NL_NUM) * (size_t)l->cap); }
+  if (l->el != NL_NUM) { for (int64_t i = 0; i < n; i++) n_lista_agregar_lento(l, n_num(x)); return; }
+  lista_reservar(l, n);
+  double* d = (double*)l->d + l->n;
+  for (int64_t i = 0; i < n; i++) d[i] = x;
+  l->n += n;
+}
+void nt_rep_b(NLista* l, int64_t n, int x) {
+  if (n <= 0) return;
+  if (l->el == NL_VACIA) { l->el = NL_BOOL; l->d = ld_alloc(el_tam(NL_BOOL) * (size_t)l->cap); }
+  if (l->el != NL_BOOL) { for (int64_t i = 0; i < n; i++) n_lista_agregar_lento(l, n_bool(x)); return; }
+  lista_reservar(l, n);
+  memset((uint8_t*)l->d + l->n, x ? 1 : 0, (size_t)n);
+  l->n += n;
 }
 NV n_lista_de(NV* v, int n) {
   NV r = n_lista_nueva(n);
@@ -413,7 +540,16 @@ static int64_t dic_hueco(NDic* d, NV k) {
     i = (i + 1) & m;
   }
 }
+/* Un objeto de un «tipo» nace con sus entradas y su tabla dentro de la misma reserva (una sola llamada a malloc). Si luego el diccionario tiene que crecer,
+   los arreglos se pasan al heap para poder reasignarlos. */
+static void dic_despegar(NDic* d) {
+  if (!d->h.bloque) return;
+  NEntrada* e = (NEntrada*)n_mem(sizeof(NEntrada) * (size_t)d->cap); memcpy(e, d->e, sizeof(NEntrada) * (size_t)d->usados);
+  int64_t* t = (int64_t*)n_mem(sizeof(int64_t) * (size_t)d->ntabla); memcpy(t, d->tabla, sizeof(int64_t) * (size_t)d->ntabla);
+  d->e = e; d->tabla = t; d->h.bloque = 0;
+}
 static void dic_rehacer(NDic* d) {
+  dic_despegar(d);
   /* compacta las entradas (sin las borradas) y rehace la tabla */
   int64_t o = 0;
   for (int64_t i = 0; i < d->usados; i++) if (d->e[i].vivo) d->e[o++] = d->e[i];
@@ -437,7 +573,7 @@ int n_dic_buscar(NDic* d, NV k, NV* v) {
 int n_dic_poner(NDic* d, NV k, NV v) {
   int64_t j = dic_hueco(d, k);
   if (j >= 0) { n_asignar(&d->e[j].v, v); return 0; }
-  if (d->usados == d->cap) { d->cap *= 2; d->e = (NEntrada*)n_remem(d->e, sizeof(NEntrada) * (size_t)d->cap); }
+  if (d->usados == d->cap) { dic_despegar(d); d->cap *= 2; d->e = (NEntrada*)n_remem(d->e, sizeof(NEntrada) * (size_t)d->cap); }
   if ((d->usados + 1) * 2 > d->ntabla) { dic_rehacer(d); j = dic_hueco(d, k); }
   int64_t slot = -j - 1;
   d->e[d->usados].k = n_inc(k); d->e[d->usados].v = n_inc(v); d->e[d->usados].vivo = 1;
@@ -658,6 +794,11 @@ NV n_idiv(NV a, NV b) {
 NV n_mod(NV a, NV b) {
   if (a.t != N_NUM || b.t != N_NUM) return otro_op(a, b, "%");
   if (b.u.n == 0) return n_error("módulo entre cero", NULL);
+  { double x = a.u.n, y = b.u.n;   /* enteros no negativos pequeños: el % de enteros da lo mismo que fmod(fmod(x, y) + y, y) y es mucho más barato */
+    if (x >= 0 && y > 0 && x < 9007199254740992.0 && y < 4503599627370496.0) {
+      int64_t ix = (int64_t)x, iy = (int64_t)y;
+      if ((double)ix == x && (double)iy == y) return n_num((double)(ix % iy));
+    } }
   return n_num(fmod(fmod(a.u.n, b.u.n) + b.u.n, b.u.n));
 }
 /* Math.pow: (±1)^±∞ y x^NaN dan NaN; lo demás depende de la plataforma, porque V8 también:
@@ -896,6 +1037,26 @@ static NV nat_metodo_atado(NV* a, int n, void* extra) {
 /* ════════════════════════════════════════════════════════════ registros */
 static NV nat_hacer_registro(NV* a, int n, void* extra) {
   NNativa* yo = (NNativa*)extra; NRegDesc* r = yo->registro;
+  NLista* cc = LS(r->campos);
+  if (n == cc->n && n > 0 && n <= 64) {
+    /* camino rápido: se copia la plantilla (las claves ya puestas y la tabla ya hecha) y se ponen los valores */
+    if (!r->plantilla) {
+      NV t = n_dic_nuevo();
+      for (int i = 0; i < n; i++) n_dic_poner(DC(t), n_lv(cc)[i], n_nulo());
+      r->plantilla = DC(t);   /* vive tanto como el programa */
+    }
+    NDic* T = (NDic*)r->plantilla;
+    size_t tam = sizeof(NDic) + sizeof(NEntrada) * (size_t)n + sizeof(int64_t) * (size_t)T->ntabla;
+    NDic* d = (NDic*)n_objeto(tam, NC_DIC);
+    d->h.bloque = 1;
+    d->n = d->usados = n; d->cap = n; d->ntabla = T->ntabla;
+    d->e = (NEntrada*)(d + 1);
+    d->tabla = (int64_t*)(d->e + n);
+    memcpy(d->tabla, T->tabla, sizeof(int64_t) * (size_t)T->ntabla);
+    for (int i = 0; i < n; i++) { d->e[i].k = n_inc(T->e[i].k); d->e[i].v = n_inc(a[i]); d->e[i].vivo = 1; }
+    d->reg = r; N_RC_MAS(&r->h);
+    return n_obj(d);
+  }
   NV d = n_dic_nuevo();
   DC(d)->reg = r; N_RC_MAS(&r->h);
   NLista* c = LS(r->campos);
@@ -908,6 +1069,7 @@ static NV nat_registro(NV* a, int n, void* extra) {
   r->nombre = n_inc(a[0]);
   r->campos = n_lista_de(n_lv(LS(a[1])), (int)LS(a[1])->n);
   r->metodos = n_dic_nuevo();
+  r->plantilla = NULL;
   NDic* m = DC(a[2]);
   for (int64_t i = 0; i < m->usados; i++) if (m->e[i].vivo) n_dic_poner(DC(r->metodos), m->e[i].k, m->e[i].v);
   char* nm = n_a_utf8(r->nombre, NULL);
@@ -1289,6 +1451,7 @@ static double reloj_ms(void) {
 static double reloj_0;
 NAT(nat_ahora) { SIN_USO; return n_num(ms_epoca()); }
 NAT(nat_reloj) { SIN_USO; return n_num(reloj_ms() - reloj_0); }
+double nt_reloj(void) { return reloj_ms() - reloj_0; }
 NAT(nat_argumentos) {
   SIN_USO;
   NV r = n_lista_nueva(n_argc);

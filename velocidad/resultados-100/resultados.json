@@ -1,0 +1,2457 @@
+{
+ "a01_arbol_masivo": {
+  "C": {
+   "estado": "ok",
+   "valor": "6291390",
+   "ms": 108,
+   "mb": 50.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "6291390",
+   "ms": 324,
+   "mb": 255.1
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "6291390",
+   "ms": 1335,
+   "mb": 143.6
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "6291390",
+   "ms": 105,
+   "mb": 43.6
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "6291390",
+   "ms": 100,
+   "mb": 43.4
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "6291390",
+   "ms": 2785,
+   "mb": 863.6
+  }
+ },
+ "a02_ciclos": {
+  "C": {
+   "estado": "ok",
+   "valor": "74998500000",
+   "ms": 69,
+   "mb": 9.7
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "74998500000",
+   "ms": 115,
+   "mb": 106.2
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "74998500000",
+   "ms": 908,
+   "mb": 62.2
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "74998500000",
+   "ms": 57,
+   "mb": 117.8
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "74998500000",
+   "ms": 57,
+   "mb": 117.8
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "74998500000",
+   "ms": 1624,
+   "mb": 308.2
+  }
+ },
+ "a03_grafo_social": {
+  "C": {
+   "estado": "ok",
+   "valor": "908331999",
+   "ms": 304,
+   "mb": 59.2
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "908331999",
+   "ms": 402,
+   "mb": 173.0
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "908331999",
+   "ms": 1618,
+   "mb": 127.3
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "908331999",
+   "ms": 340,
+   "mb": 51.2
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "908331999",
+   "ms": 351,
+   "mb": 51.2
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "908331999",
+   "ms": 1836,
+   "mb": 406.4
+  }
+ },
+ "a04_vida_corta": {
+  "C": {
+   "estado": "ok",
+   "valor": "59999997",
+   "ms": 23,
+   "mb": 9.8
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "59999997",
+   "ms": 49,
+   "mb": 66.0
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "59999997",
+   "ms": 2444,
+   "mb": 15.6
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "59999997",
+   "ms": 46,
+   "mb": 9.8
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "59999997",
+   "ms": 45,
+   "mb": 9.8
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "59999997",
+   "ms": 4126,
+   "mb": 116.3
+  }
+ },
+ "a05_vida_larga": {
+  "C": {
+   "estado": "ok",
+   "valor": "4999999",
+   "ms": 42,
+   "mb": 55.5
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "4999999",
+   "ms": 132,
+   "mb": 155.4
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "4999999",
+   "ms": 507,
+   "mb": 114.6
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "4999999",
+   "ms": 38,
+   "mb": 48.7
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "4999999",
+   "ms": 38,
+   "mb": 49.0
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "4999999",
+   "ms": 1104,
+   "mb": 364.9
+  }
+ },
+ "a06_asignar_soltar": {
+  "C": {
+   "estado": "ok",
+   "valor": "11175000",
+   "ms": 13,
+   "mb": 9.8
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "11175000",
+   "ms": 355,
+   "mb": 118.8
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "11175000",
+   "ms": 186,
+   "mb": 15.5
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "11175000",
+   "ms": 15,
+   "mb": 9.8
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "11175000",
+   "ms": 15,
+   "mb": 9.8
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "11175000",
+   "ms": 4342,
+   "mb": 371.7
+  }
+ },
+ "a07_listas_anidadas": {
+  "C": {
+   "estado": "ok",
+   "valor": "10000000",
+   "ms": 51,
+   "mb": 13.5
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "10000000",
+   "ms": 216,
+   "mb": 166.7
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "10000000",
+   "ms": 433,
+   "mb": 38.2
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "10000000",
+   "ms": 30,
+   "mb": 13.2
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "10000000",
+   "ms": 30,
+   "mb": 13.2
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "10000000",
+   "ms": 1648,
+   "mb": 412.3
+  }
+ },
+ "a08_cache_desalojo": {
+  "C": {
+   "estado": "ok",
+   "valor": "737783",
+   "ms": 52,
+   "mb": 9.8
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "737783",
+   "ms": 337,
+   "mb": 101.4
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "737783",
+   "ms": 1244,
+   "mb": 20.0
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "737783",
+   "ms": 49,
+   "mb": 9.8
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "737783",
+   "ms": 47,
+   "mb": 9.8
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "737783",
+   "ms": 2692,
+   "mb": 217.1
+  }
+ },
+ "a10_persistente": {
+  "C": {
+   "estado": "ok",
+   "valor": "39801",
+   "ms": 32,
+   "mb": 70.7
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "39801",
+   "ms": 209,
+   "mb": 174.4
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "39801",
+   "ms": 443,
+   "mb": 153.3
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "39801",
+   "ms": 27,
+   "mb": 60.8
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "39801",
+   "ms": 28,
+   "mb": 60.7
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "39801",
+   "ms": 750,
+   "mb": 466.4
+  }
+ },
+ "a13_matriz_dispersa": {
+  "C": {
+   "estado": "ok",
+   "valor": "99425010",
+   "ms": 41,
+   "mb": 20.6
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "99425010",
+   "ms": 113,
+   "mb": 128.1
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "99425010",
+   "ms": 462,
+   "mb": 51.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "99425010",
+   "ms": 43,
+   "mb": 18.8
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "99425010",
+   "ms": 44,
+   "mb": 18.9
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "99425010",
+   "ms": 841,
+   "mb": 204.7
+  }
+ },
+ "a14_churn_puro": {
+  "C": {
+   "estado": "ok",
+   "valor": "40000000",
+   "ms": 22,
+   "mb": 9.8
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "40000000",
+   "ms": 55,
+   "mb": 66.4
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "40000000",
+   "ms": 6286,
+   "mb": 15.9
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "40000000",
+   "ms": 42,
+   "mb": 9.8
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "40000000",
+   "ms": 53,
+   "mb": 9.8
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "40000000",
+   "ms": 11588,
+   "mb": 116.8
+  }
+ },
+ "a15_ast_compilador": {
+  "C": {
+   "estado": "ok",
+   "valor": "1938824",
+   "ms": 45,
+   "mb": 14.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "1938824",
+   "ms": 133,
+   "mb": 157.8
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "1938824",
+   "ms": 565,
+   "mb": 47.3
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "1938824",
+   "ms": 40,
+   "mb": 13.4
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "1938824",
+   "ms": 39,
+   "mb": 13.6
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "1938824",
+   "ms": 990,
+   "mb": 426.0
+  }
+ },
+ "a18_heap": {
+  "C": {
+   "estado": "ok",
+   "valor": "6000000",
+   "ms": 188,
+   "mb": 139.3
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "6000000",
+   "ms": 651,
+   "mb": 413.2
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "6000000",
+   "ms": 2418,
+   "mb": 802.7
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "6000000",
+   "ms": 142,
+   "mb": 118.0
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "6000000",
+   "ms": 141,
+   "mb": 118.1
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "6000000",
+   "ms": 4859,
+   "mb": 1552.1
+  }
+ },
+ "a18_arena": {
+  "C": {
+   "estado": "ok",
+   "valor": "6000000",
+   "ms": 30,
+   "mb": 47.8
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "6000000",
+   "ms": 79,
+   "mb": 111.7
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "6000000",
+   "ms": 424,
+   "mb": 152.6
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "6000000",
+   "ms": 39,
+   "mb": 48.8
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "6000000",
+   "ms": 39,
+   "mb": 48.8
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "6000000",
+   "ms": 226,
+   "mb": 230.7
+  }
+ },
+ "a20_soltar_heap": {
+  "C": {
+   "estado": "ok",
+   "valor": "3548",
+   "ms": 10,
+   "mb": 15.7
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "2551",
+   "ms": 42,
+   "mb": 93.2
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "40268",
+   "ms": 83,
+   "mb": 102.2
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "1266",
+   "ms": 5,
+   "mb": 15.0
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "1321",
+   "ms": 5,
+   "mb": 14.7
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "16743",
+   "ms": 336,
+   "mb": 179.2
+  }
+ },
+ "b21_fib36": {
+  "C": {
+   "estado": "ok",
+   "valor": "14930352",
+   "ms": 21,
+   "mb": 9.9
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "14930352",
+   "ms": 135,
+   "mb": 64.4
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "14930352",
+   "ms": 1449,
+   "mb": 15.9
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "14930352",
+   "ms": 43,
+   "mb": 9.9
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "14930352",
+   "ms": 44,
+   "mb": 9.9
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "14930352",
+   "ms": 233,
+   "mb": 89.4
+  }
+ },
+ "b22_ackermann_6": {
+  "C": {
+   "estado": "ok",
+   "valor": "152700",
+   "ms": 32,
+   "mb": 9.9
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "152700",
+   "ms": 322,
+   "mb": 64.5
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "152700",
+   "ms": 2971,
+   "mb": 15.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "152700",
+   "ms": 69,
+   "mb": 9.9
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "152700",
+   "ms": 67,
+   "mb": 9.9
+  },
+  "JIT": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  }
+ },
+ "b22_ackermann_8": {
+  "C": {
+   "estado": "ok",
+   "valor": "2045",
+   "ms": 2,
+   "mb": 9.9
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "2045",
+   "ms": 19,
+   "mb": 64.6
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "2045",
+   "ms": 212,
+   "mb": 16.1
+  },
+  "AOT": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  },
+  "AOT-SC": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  },
+  "JIT": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  }
+ },
+ "b23_hanoi27": {
+  "C": {
+   "estado": "ok",
+   "valor": "201326591",
+   "ms": 185,
+   "mb": 9.9
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "201326591",
+   "ms": 905,
+   "mb": 64.6
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "201326591",
+   "ms": 11395,
+   "mb": 15.9
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "201326591",
+   "ms": 266,
+   "mb": 9.9
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "201326591",
+   "ms": 169,
+   "mb": 9.9
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "201326591",
+   "ms": 1541,
+   "mb": 89.7
+  }
+ },
+ "b24_arbol_perfecto": {
+  "C": {
+   "estado": "ok",
+   "valor": "20970720",
+   "ms": 55,
+   "mb": 14.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "20970720",
+   "ms": 161,
+   "mb": 93.5
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "20970720",
+   "ms": 1022,
+   "mb": 31.1
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "20970720",
+   "ms": 90,
+   "mb": 13.6
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "20970720",
+   "ms": 198,
+   "mb": 13.4
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "20970720",
+   "ms": 1675,
+   "mb": 178.1
+  }
+ },
+ "b25_quicksort_ordenado": {
+  "C": {
+   "estado": "ok",
+   "valor": "37487500",
+   "ms": 10,
+   "mb": 9.9
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "37487500",
+   "ms": 36,
+   "mb": 66.9
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "37487500",
+   "ms": 652,
+   "mb": 16.4
+  },
+  "AOT": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  },
+  "AOT-SC": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  },
+  "JIT": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  }
+ },
+ "b26_recursion_mutua": {
+  "C": {
+   "estado": "ok",
+   "valor": "150000",
+   "ms": 45,
+   "mb": 9.9
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "150000",
+   "ms": 144,
+   "mb": 66.2
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "150000",
+   "ms": 16574,
+   "mb": 15.9
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "150000",
+   "ms": 118,
+   "mb": 9.9
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "150000",
+   "ms": 76,
+   "mb": 9.9
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "150000",
+   "ms": 2420,
+   "mb": 89.5
+  }
+ },
+ "b27_nreinas": {
+  "C": {
+   "estado": "ok",
+   "valor": "2680",
+   "ms": 13,
+   "mb": 9.9
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "2680",
+   "ms": 16,
+   "mb": 66.0
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "2680",
+   "ms": 89,
+   "mb": 15.7
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "2680",
+   "ms": 10,
+   "mb": 9.9
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "2680",
+   "ms": 9,
+   "mb": 9.9
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "2680",
+   "ms": 32,
+   "mb": 90.7
+  }
+ },
+ "b28_acumulador": {
+  "C": {
+   "estado": "ok",
+   "valor": "24975000",
+   "ms": 0,
+   "mb": 9.9
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "24975000",
+   "ms": 336,
+   "mb": 64.7
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "24975000",
+   "ms": 4166,
+   "mb": 15.9
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "24975000",
+   "ms": 28,
+   "mb": 9.9
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "24975000",
+   "ms": 15,
+   "mb": 9.9
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "24975000",
+   "ms": 422,
+   "mb": 89.4
+  }
+ },
+ "b30_lista_recursiva": {
+  "C": {
+   "estado": "ok",
+   "valor": "100000",
+   "ms": 5,
+   "mb": 9.9
+  },
+  "JS": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "/mnt/d/ProyectosJS/velocidad/bench100.js:559"
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "100000",
+   "ms": 40,
+   "mb": 44.1
+  },
+  "AOT": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  },
+  "AOT-SC": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  },
+  "JIT": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  }
+ },
+ "b31_fib_recursivo30": {
+  "C": {
+   "estado": "ok",
+   "valor": "1200",
+   "ms": 54,
+   "mb": 10.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "1200",
+   "ms": 227,
+   "mb": 64.6
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "1200",
+   "ms": 2321,
+   "mb": 15.9
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "1200",
+   "ms": 104,
+   "mb": 10.0
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "1200",
+   "ms": 90,
+   "mb": 10.0
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "1200",
+   "ms": 401,
+   "mb": 89.6
+  }
+ },
+ "b31_fib_iterativo": {
+  "C": {
+   "estado": "ok",
+   "valor": "24000000",
+   "ms": 61,
+   "mb": 10.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "24000000",
+   "ms": 58,
+   "mb": 64.6
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "24000000",
+   "ms": 594,
+   "mb": 15.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "24000000",
+   "ms": 66,
+   "mb": 10.0
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "24000000",
+   "ms": 67,
+   "mb": 10.0
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "24000000",
+   "ms": 136,
+   "mb": 89.6
+  }
+ },
+ "b32_muchas_locales": {
+  "C": {
+   "estado": "ok",
+   "valor": "721892",
+   "ms": 70,
+   "mb": 10.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "721892",
+   "ms": 100,
+   "mb": 64.5
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "721892",
+   "ms": 1452,
+   "mb": 15.9
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "721892",
+   "ms": 102,
+   "mb": 10.0
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "721892",
+   "ms": 83,
+   "mb": 10.0
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "721892",
+   "ms": 186,
+   "mb": 89.8
+  }
+ },
+ "b33_retorna_estructuras": {
+  "C": {
+   "estado": "ok",
+   "valor": "3497256",
+   "ms": 71,
+   "mb": 10.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "3497256",
+   "ms": 253,
+   "mb": 71.2
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "3497256",
+   "ms": 2065,
+   "mb": 15.9
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "3497256",
+   "ms": 121,
+   "mb": 10.0
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "3497256",
+   "ms": 120,
+   "mb": 10.0
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "3497256",
+   "ms": 527,
+   "mb": 116.0
+  }
+ },
+ "b35_descenso_recursivo": {
+  "C": {
+   "estado": "ok",
+   "valor": "16428331",
+   "ms": 1,
+   "mb": 10.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "16428331",
+   "ms": 16,
+   "mb": 71.6
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "16428331",
+   "ms": 21,
+   "mb": 23.4
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "16428331",
+   "ms": 6,
+   "mb": 10.6
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "16428331",
+   "ms": 5,
+   "mb": 10.7
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "16428331",
+   "ms": 59,
+   "mb": 115.1
+  }
+ },
+ "b37_catalan": {
+  "C": {
+   "estado": "ok",
+   "valor": "9694845",
+   "ms": 9,
+   "mb": 10.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "9694845",
+   "ms": 24,
+   "mb": 64.6
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "9694845",
+   "ms": 369,
+   "mb": 15.7
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "9694845",
+   "ms": 10,
+   "mb": 10.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "9694845",
+   "ms": 12,
+   "mb": 10.1
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "9694845",
+   "ms": 46,
+   "mb": 89.2
+  }
+ },
+ "b38_catalan_memo": {
+  "C": {
+   "estado": "ok",
+   "valor": "77000",
+   "ms": 153,
+   "mb": 10.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "77000",
+   "ms": 412,
+   "mb": 67.8
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "77000",
+   "ms": 3980,
+   "mb": 15.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "77000",
+   "ms": 130,
+   "mb": 10.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "77000",
+   "ms": 140,
+   "mb": 10.1
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "77000",
+   "ms": 814,
+   "mb": 90.2
+  }
+ },
+ "b39_dfs_profundo": {
+  "C": {
+   "estado": "ok",
+   "valor": "958800000",
+   "ms": 30,
+   "mb": 20.3
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "958800000",
+   "ms": 40,
+   "mb": 84.0
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "958800000",
+   "ms": 410,
+   "mb": 15.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "958800000",
+   "ms": 22,
+   "mb": 10.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "958800000",
+   "ms": 13,
+   "mb": 10.1
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "958800000",
+   "ms": 87,
+   "mb": 128.6
+  }
+ },
+ "b39_dfs_cadena_larga": {
+  "C": {
+   "estado": "ok",
+   "valor": "989403",
+   "ms": 0,
+   "mb": 10.1
+  },
+  "JS": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "/mnt/d/ProyectosJS/velocidad/bench100.js:770"
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "989403",
+   "ms": 4,
+   "mb": 18.8
+  },
+  "AOT": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  },
+  "AOT-SC": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  },
+  "JIT": {
+   "estado": "error",
+   "rc": 1,
+   "msg": "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  }
+ },
+ "b40_sobrecoste_llamada": {
+  "C": {
+   "estado": "ok",
+   "valor": "396263",
+   "ms": 120,
+   "mb": 10.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "396263",
+   "ms": 127,
+   "mb": 64.7
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "396263",
+   "ms": 1811,
+   "mb": 15.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "396263",
+   "ms": 124,
+   "mb": 10.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "396263",
+   "ms": 121,
+   "mb": 10.1
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "396263",
+   "ms": 482,
+   "mb": 89.9
+  }
+ },
+ "c41_matmul500": {
+  "C": {
+   "estado": "ok",
+   "valor": "25312500000",
+   "ms": 95,
+   "mb": 10.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "25312500000",
+   "ms": 240,
+   "mb": 73.0
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "25312500000",
+   "ms": 13046,
+   "mb": 43.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "25312500000",
+   "ms": 196,
+   "mb": 10.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "25312500000",
+   "ms": 135,
+   "mb": 10.1
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "25312500000",
+   "ms": 707,
+   "mb": 108.5
+  }
+ },
+ "c42_lcs6000": {
+  "C": {
+   "estado": "ok",
+   "valor": "3910",
+   "ms": 67,
+   "mb": 10.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "3910",
+   "ms": 227,
+   "mb": 68.1
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "3910",
+   "ms": 3752,
+   "mb": 16.0
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "3910",
+   "ms": 79,
+   "mb": 10.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "3910",
+   "ms": 86,
+   "mb": 10.1
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "3910",
+   "ms": 685,
+   "mb": 95.7
+  }
+ },
+ "c43_editdist5000": {
+  "C": {
+   "estado": "ok",
+   "valor": "2603",
+   "ms": 38,
+   "mb": 10.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "2603",
+   "ms": 189,
+   "mb": 67.8
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "2603",
+   "ms": 3972,
+   "mb": 16.0
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "2603",
+   "ms": 47,
+   "mb": 10.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "2603",
+   "ms": 39,
+   "mb": 10.1
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "2603",
+   "ms": 498,
+   "mb": 103.6
+  }
+ },
+ "c44_floyd400": {
+  "C": {
+   "estado": "ok",
+   "valor": "641708",
+   "ms": 48,
+   "mb": 10.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "641708",
+   "ms": 123,
+   "mb": 68.8
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "641708",
+   "ms": 4758,
+   "mb": 16.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "641708",
+   "ms": 64,
+   "mb": 10.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "641708",
+   "ms": 49,
+   "mb": 10.1
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "641708",
+   "ms": 320,
+   "mb": 96.3
+  }
+ },
+ "c45_mochila3000": {
+  "C": {
+   "estado": "ok",
+   "valor": "86260",
+   "ms": 27,
+   "mb": 10.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "86260",
+   "ms": 141,
+   "mb": 67.5
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "86260",
+   "ms": 4771,
+   "mb": 16.1
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "86260",
+   "ms": 48,
+   "mb": 10.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "86260",
+   "ms": 41,
+   "mb": 10.1
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "86260",
+   "ms": 567,
+   "mb": 95.8
+  }
+ },
+ "c46_columnas": {
+  "C": {
+   "estado": "ok",
+   "valor": "287999896",
+   "ms": 215,
+   "mb": 70.7
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "287999896",
+   "ms": 286,
+   "mb": 135.8
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "287999896",
+   "ms": 2102,
+   "mb": 84.4
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "287999896",
+   "ms": 329,
+   "mb": 71.7
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "287999896",
+   "ms": 64,
+   "mb": 71.8
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "287999896",
+   "ms": 515,
+   "mb": 308.9
+  }
+ },
+ "c47_acceso_aleatorio": {
+  "C": {
+   "estado": "ok",
+   "valor": "3997522601",
+   "ms": 174,
+   "mb": 130.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "3997522601",
+   "ms": 425,
+   "mb": 192.9
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "3997522601",
+   "ms": 4559,
+   "mb": 524.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "3997522601",
+   "ms": 248,
+   "mb": 131.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "3997522601",
+   "ms": 223,
+   "mb": 131.0
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "3997522601",
+   "ms": 1724,
+   "mb": 473.3
+  }
+ },
+ "c48_busqueda_binaria": {
+  "C": {
+   "estado": "ok",
+   "valor": "99718",
+   "ms": 209,
+   "mb": 34.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "99718",
+   "ms": 228,
+   "mb": 97.4
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "99718",
+   "ms": 1300,
+   "mb": 175.6
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "99718",
+   "ms": 226,
+   "mb": 35.2
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "99718",
+   "ms": 200,
+   "mb": 35.2
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "99718",
+   "ms": 385,
+   "mb": 183.2
+  }
+ },
+ "c49_ventana": {
+  "C": {
+   "estado": "ok",
+   "valor": "15092",
+   "ms": 43,
+   "mb": 78.3
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "15092",
+   "ms": 69,
+   "mb": 143.8
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "15092",
+   "ms": 714,
+   "mb": 92.1
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "15092",
+   "ms": 56,
+   "mb": 79.3
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "15092",
+   "ms": 60,
+   "mb": 79.3
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "15092",
+   "ms": 468,
+   "mb": 422.6
+  }
+ },
+ "c50_spmv": {
+  "C": {
+   "estado": "ok",
+   "valor": "551",
+   "ms": 57,
+   "mb": 35.6
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "551",
+   "ms": 122,
+   "mb": 100.9
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "551",
+   "ms": 1841,
+   "mb": 109.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "551",
+   "ms": 83,
+   "mb": 36.6
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "551",
+   "ms": 69,
+   "mb": 36.6
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "551",
+   "ms": 528,
+   "mb": 248.1
+  }
+ },
+ "c51_aos": {
+  "C": {
+   "estado": "ok",
+   "valor": "205999995",
+   "ms": 116,
+   "mb": 63.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "205999995",
+   "ms": 376,
+   "mb": 128.1
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "205999995",
+   "ms": 2914,
+   "mb": 76.7
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "205999995",
+   "ms": 141,
+   "mb": 64.2
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "205999995",
+   "ms": 108,
+   "mb": 64.1
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "205999995",
+   "ms": 444,
+   "mb": 310.1
+  }
+ },
+ "c51_soa": {
+  "C": {
+   "estado": "ok",
+   "valor": "205999995",
+   "ms": 92,
+   "mb": 63.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "205999995",
+   "ms": 358,
+   "mb": 126.4
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "205999995",
+   "ms": 1295,
+   "mb": 76.6
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "205999995",
+   "ms": 105,
+   "mb": 64.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "205999995",
+   "ms": 108,
+   "mb": 64.2
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "205999995",
+   "ms": 518,
+   "mb": 250.4
+  }
+ },
+ "c52_indices_calculados": {
+  "C": {
+   "estado": "ok",
+   "valor": "1188000000",
+   "ms": 307,
+   "mb": 63.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "1188000000",
+   "ms": 524,
+   "mb": 128.2
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "1188000000",
+   "ms": 3354,
+   "mb": 76.6
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "1188000000",
+   "ms": 360,
+   "mb": 64.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "1188000000",
+   "ms": 380,
+   "mb": 64.0
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "1188000000",
+   "ms": 1170,
+   "mb": 309.5
+  }
+ },
+ "c53_sin_comprobar_a": {
+  "C": {
+   "estado": "ok",
+   "valor": "80000000",
+   "ms": 70,
+   "mb": 32.3
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "80000000",
+   "ms": 116,
+   "mb": 97.4
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "80000000",
+   "ms": 1240,
+   "mb": 46.1
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "80000000",
+   "ms": 34,
+   "mb": 33.4
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "80000000",
+   "ms": 20,
+   "mb": 33.6
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "80000000",
+   "ms": 312,
+   "mb": 183.5
+  }
+ },
+ "c53_sin_comprobar_b": {
+  "C": {
+   "estado": "ok",
+   "valor": "64007588",
+   "ms": 192,
+   "mb": 63.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "64007588",
+   "ms": 262,
+   "mb": 128.1
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "64007588",
+   "ms": 2656,
+   "mb": 198.4
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "64007588",
+   "ms": 219,
+   "mb": 64.2
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "64007588",
+   "ms": 213,
+   "mb": 64.2
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "64007588",
+   "ms": 1193,
+   "mb": 230.6
+  }
+ },
+ "c55_aritmetica_saturada": {
+  "C": {
+   "estado": "ok",
+   "valor": "3999999999999092",
+   "ms": 77,
+   "mb": 10.2
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "3999999999999092",
+   "ms": 119,
+   "mb": 65.9
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "3999999999999092",
+   "ms": 1994,
+   "mb": 15.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "3999999999999092",
+   "ms": 78,
+   "mb": 10.2
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "3999999999999092",
+   "ms": 75,
+   "mb": 10.2
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "3999999999999092",
+   "ms": 367,
+   "mb": 98.8
+  }
+ },
+ "c56_div_mod": {
+  "C": {
+   "estado": "ok",
+   "valor": "571412451721",
+   "ms": 43,
+   "mb": 10.2
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "571412451721",
+   "ms": 58,
+   "mb": 66.1
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "571412451721",
+   "ms": 713,
+   "mb": 15.9
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "571412451721",
+   "ms": 43,
+   "mb": 10.2
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "571412451721",
+   "ms": 39,
+   "mb": 10.2
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "571412451721",
+   "ms": 123,
+   "mb": 98.1
+  }
+ },
+ "c57_conversiones": {
+  "C": {
+   "estado": "ok",
+   "valor": "30000000",
+   "ms": 42,
+   "mb": 10.2
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "30000000",
+   "ms": 87,
+   "mb": 64.9
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "30000000",
+   "ms": 2143,
+   "mb": 15.9
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "30000000",
+   "ms": 118,
+   "mb": 10.3
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "30000000",
+   "ms": 114,
+   "mb": 10.3
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "30000000",
+   "ms": 248,
+   "mb": 98.9
+  }
+ },
+ "c59_criba10M": {
+  "C": {
+   "estado": "ok",
+   "valor": "664579",
+   "ms": 200,
+   "mb": 78.3
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "664579",
+   "ms": 203,
+   "mb": 142.5
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "664579",
+   "ms": 1405,
+   "mb": 91.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "664579",
+   "ms": 217,
+   "mb": 79.3
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "664579",
+   "ms": 213,
+   "mb": 79.3
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "664579",
+   "ms": 656,
+   "mb": 422.6
+  }
+ },
+ "c60_alias": {
+  "C": {
+   "estado": "ok",
+   "valor": "319999970",
+   "ms": 237,
+   "mb": 154.6
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "319999970",
+   "ms": 1062,
+   "mb": 219.7
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "319999970",
+   "ms": 4594,
+   "mb": 168.1
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "319999970",
+   "ms": 259,
+   "mb": 155.6
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "319999970",
+   "ms": 277,
+   "mb": 155.5
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "319999970",
+   "ms": 1376,
+   "mb": 553.0
+  }
+ },
+ "e76_directo": {
+  "C": {
+   "estado": "ok",
+   "valor": "287999970",
+   "ms": 121,
+   "mb": 124.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "287999970",
+   "ms": 178,
+   "mb": 189.1
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "287999970",
+   "ms": 2826,
+   "mb": 137.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "287999970",
+   "ms": 146,
+   "mb": 125.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "287999970",
+   "ms": 78,
+   "mb": 124.9
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "287999970",
+   "ms": 889,
+   "mb": 450.6
+  }
+ },
+ "e76_inverso": {
+  "C": {
+   "estado": "ok",
+   "valor": "287999970",
+   "ms": 83,
+   "mb": 124.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "287999970",
+   "ms": 210,
+   "mb": 189.4
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "287999970",
+   "ms": 4298,
+   "mb": 137.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "287999970",
+   "ms": 140,
+   "mb": 125.2
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "287999970",
+   "ms": 79,
+   "mb": 125.2
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "287999970",
+   "ms": 941,
+   "mb": 450.1
+  }
+ },
+ "e77_matmul_bloques": {
+  "C": {
+   "estado": "ok",
+   "valor": "22394880000",
+   "ms": 38,
+   "mb": 10.3
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "22394880000",
+   "ms": 213,
+   "mb": 74.5
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "22394880000",
+   "ms": 9428,
+   "mb": 41.4
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "22394880000",
+   "ms": 103,
+   "mb": 10.3
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "22394880000",
+   "ms": 26,
+   "mb": 10.3
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "22394880000",
+   "ms": 714,
+   "mb": 127.0
+  }
+ },
+ "e78_lista_nodos": {
+  "C": {
+   "estado": "ok",
+   "valor": "99999940",
+   "ms": 253,
+   "mb": 230.8
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "99999940",
+   "ms": 599,
+   "mb": 353.0
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "99999940",
+   "ms": 2211,
+   "mb": 833.4
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "99999940",
+   "ms": 210,
+   "mb": 194.2
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "99999940",
+   "ms": 206,
+   "mb": 194.3
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "99999940",
+   "ms": 5592,
+   "mb": 1313.2
+  }
+ },
+ "e78_array": {
+  "C": {
+   "estado": "ok",
+   "valor": "99999940",
+   "ms": 20,
+   "mb": 40.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "99999940",
+   "ms": 60,
+   "mb": 105.1
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "99999940",
+   "ms": 866,
+   "mb": 53.7
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "99999940",
+   "ms": 32,
+   "mb": 41.3
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "99999940",
+   "ms": 22,
+   "mb": 41.3
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "99999940",
+   "ms": 238,
+   "mb": 234.1
+  }
+ },
+ "e80_hash_colisiones": {
+  "C": {
+   "estado": "ok",
+   "valor": "5999995",
+   "ms": 175,
+   "mb": 66.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "5999995",
+   "ms": 445,
+   "mb": 130.8
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "5999995",
+   "ms": 2577,
+   "mb": 216.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "5999995",
+   "ms": 166,
+   "mb": 67.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "5999995",
+   "ms": 162,
+   "mb": 67.1
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "5999995",
+   "ms": 1013,
+   "mb": 229.8
+  }
+ },
+ "e81_copia_memoria": {
+  "C": {
+   "estado": "ok",
+   "valor": "47999986",
+   "ms": 172,
+   "mb": 124.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "47999986",
+   "ms": 277,
+   "mb": 189.0
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "47999986",
+   "ms": 3179,
+   "mb": 137.8
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "47999986",
+   "ms": 260,
+   "mb": 125.1
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "47999986",
+   "ms": 256,
+   "mb": 125.2
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "47999986",
+   "ms": 1392,
+   "mb": 349.0
+  }
+ },
+ "e82_pointer_chasing": {
+  "C": {
+   "estado": "ok",
+   "valor": "2999972",
+   "ms": 379,
+   "mb": 34.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "2999972",
+   "ms": 481,
+   "mb": 98.1
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "2999972",
+   "ms": 2991,
+   "mb": 175.5
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "2999972",
+   "ms": 366,
+   "mb": 35.0
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "2999972",
+   "ms": 376,
+   "mb": 35.0
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "2999972",
+   "ms": 884,
+   "mb": 183.5
+  }
+ },
+ "e82_pointer_chasing_nodos": {
+  "C": {
+   "estado": "ok",
+   "valor": "1999998",
+   "ms": 290,
+   "mb": 63.1
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "1999998",
+   "ms": 489,
+   "mb": 163.8
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "1999998",
+   "ms": 1568,
+   "mb": 153.0
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "1999998",
+   "ms": 282,
+   "mb": 56.7
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "1999998",
+   "ms": 285,
+   "mb": 56.6
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "1999998",
+   "ms": 2246,
+   "mb": 387.7
+  }
+ },
+ "e85_primer_acceso": {
+  "C": {
+   "estado": "ok",
+   "valor": "67108861",
+   "ms": 113,
+   "mb": 258.0
+  },
+  "JS": {
+   "estado": "ok",
+   "valor": "67108861",
+   "ms": 367,
+   "mb": 321.3
+  },
+  "Python": {
+   "estado": "ok",
+   "valor": "67108861",
+   "ms": 2405,
+   "mb": 1299.0
+  },
+  "AOT": {
+   "estado": "ok",
+   "valor": "67108861",
+   "ms": 174,
+   "mb": 259.2
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "valor": "67108861",
+   "ms": 172,
+   "mb": 259.2
+  },
+  "JIT": {
+   "estado": "ok",
+   "valor": "67108861",
+   "ms": 1016,
+   "mb": 1088.1
+  }
+ }
+}

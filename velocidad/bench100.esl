@@ -1,0 +1,2318 @@
+# bench100.esl — generado por gen100/gen.js: no editar a mano. Uso: bench100 [nombre]
+usar raiz, redondear de "numerico"
+
+tipo Nodo {
+  v: real
+  w: real
+  i = nulo
+  d = nulo
+}
+fn nueva(n) {
+  var a = []
+  var i = 0
+  mientras i < n { agregar(a, 0)  i = i + 1 }
+  devolver a
+}
+fn nueva_nulos(n) {
+  var a = []
+  var i = 0
+  mientras i < n { agregar(a, nulo)  i = i + 1 }
+  devolver a
+}
+fn a01_arbol_masivo_construir(d) {
+  si d == 0 {
+    devolver nulo
+  }
+  devolver Nodo(d, 0, a01_arbol_masivo_construir((d - 1)), a01_arbol_masivo_construir((d - 1)))
+}
+fn a01_arbol_masivo_suma(n) {
+  si n == nulo {
+    devolver 0
+  }
+  devolver ((n.v + a01_arbol_masivo_suma(n.i)) + a01_arbol_masivo_suma(n.d))
+}
+fn a01_arbol_masivo_soltar(n) {
+  si n == nulo {
+    devolver
+  }
+  a01_arbol_masivo_soltar(n.i)
+  a01_arbol_masivo_soltar(n.d)
+  nulo
+}
+fn a01_arbol_masivo_run() {
+  var t = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 3
+    mientras r < fin_r {
+      var a: cualquiera = a01_arbol_masivo_construir(20)
+      t = (t + a01_arbol_masivo_suma(a))
+      a01_arbol_masivo_soltar(a)
+      r = r + 1
+    }
+  }
+  devolver t
+}
+fn a02_ciclos_anillo(n) {
+  var h: cualquiera = Nodo(0, 0, nulo, nulo)
+  var c: cualquiera = h
+  {
+    var k = 1.0
+    fijo fin_k = n
+    mientras k < fin_k {
+      var x: cualquiera = Nodo(k, 0, nulo, nulo)
+      c.i = x
+      c = x
+      k = k + 1
+    }
+  }
+  c.i = h
+  devolver h
+}
+fn a02_ciclos_suma(h, n) {
+  var s = 0.0
+  var c: cualquiera = h
+  {
+    var k = 0.0
+    fijo fin_k = n
+    mientras k < fin_k {
+      s = (s + c.v)
+      c = c.i
+      k = k + 1
+    }
+  }
+  devolver s
+}
+fn a02_ciclos_libera(h, n) {
+  var c: cualquiera = h
+  {
+    var k = 0.0
+    fijo fin_k = n
+    mientras k < fin_k {
+      var sig: cualquiera = c.i
+      nulo
+      c = sig
+      k = k + 1
+    }
+  }
+}
+fn a02_ciclos_run() {
+  var t = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 60
+    mientras r < fin_r {
+      var h: cualquiera = a02_ciclos_anillo(50000)
+      t = (t + a02_ciclos_suma(h, 50000))
+      a02_ciclos_libera(h, 50000)
+      r = r + 1
+    }
+  }
+  devolver t
+}
+fn a03_grafo_social_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn a03_grafo_social_run() {
+  var n = 100000.0
+  var m = 600000.0
+  var ady: cualquiera = nueva_nulos(n)
+  var x = 12345.0
+  {
+    var e = 0.0
+    fijo fin_e = m
+    mientras e < fin_e {
+      x = a03_grafo_social_lcg(x)
+      var a = (x % n) + 0.0
+      x = a03_grafo_social_lcg(x)
+      var b = (x % n) + 0.0
+      ady[a] = Nodo(b, 0, ady[a], nulo)
+      ady[b] = Nodo(a, 0, ady[b], nulo)
+      e = e + 1
+    }
+  }
+  var vis = nueva(n)
+  var cola = nueva(n)
+  var h = 0.0
+  var t = 1.0
+  cola[0] = 0
+  vis[0] = 1
+  var suma = 0.0
+  mientras h < t {
+    var u = cola[h] + 0.0
+    h = (h + 1)
+    suma = (suma + u)
+    var ed: cualquiera = ady[u]
+    mientras ed != nulo {
+      var w = ed.v + 0.0
+      si vis[w] == 0 {
+        vis[w] = 1
+        cola[t] = w
+        t = (t + 1)
+      }
+      ed = ed.i
+    }
+  }
+  {
+    var u = 0.0
+    fijo fin_u = n
+    mientras u < fin_u {
+      var ed2: cualquiera = ady[u]
+      mientras ed2 != nulo {
+        var sig: cualquiera = ed2.i
+        nulo
+        ed2 = sig
+      }
+      u = u + 1
+    }
+  }
+  devolver (((suma % 1000003) * 1000) + (t % 1000))
+}
+fn a04_vida_corta_run() {
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = 20000000
+    mientras i < fin_i {
+      var ob: cualquiera = Nodo(i, 0, nulo, nulo)
+      s = (s + (ob.v % 7))
+      nulo
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn a05_vida_larga_run() {
+  var n = 1000000.0
+  var g: cualquiera = nueva_nulos(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      g[i] = Nodo(i, 0, nulo, nulo)
+      i = i + 1
+    }
+  }
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 2000000
+    mientras r < fin_r {
+      var ob: cualquiera = Nodo(r, 0, g[(r % n)], nulo)
+      s = (s + (ob.i.v % 5))
+      nulo
+      r = r + 1
+    }
+  }
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      s = (s + (g[i].v % 3))
+      nulo
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn a06_asignar_soltar_run() {
+  var a = nueva(2000)
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = 150000
+    mientras i < fin_i {
+      nulo
+      a = nueva(2000)
+      a[(i % 2000)] = i
+      s = (s + a[((i * 7) % 2000)])
+      i = i + 1
+    }
+  }
+  nulo
+  devolver s
+}
+fn a07_listas_anidadas_fila(n, base) {
+  var h: cualquiera = nulo
+  {
+    var k = 0.0
+    fijo fin_k = n
+    mientras k < fin_k {
+      h = Nodo((base + k), 0, h, nulo)
+      k = k + 1
+    }
+  }
+  devolver h
+}
+fn a07_listas_anidadas_suelta(h) {
+  var c: cualquiera = h
+  mientras c != nulo {
+    var sig: cualquiera = c.i
+    nulo
+    c = sig
+  }
+}
+fn a07_listas_anidadas_suma(h) {
+  var s = 0.0
+  var c: cualquiera = h
+  mientras c != nulo {
+    s = (s + (c.v % 11))
+    c = c.i
+  }
+  devolver s
+}
+fn a07_listas_anidadas_run() {
+  var filas: cualquiera = nueva_nulos(500)
+  var t = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 4000
+    mientras r < fin_r {
+      var j = (r % 500) + 0.0
+      a07_listas_anidadas_suelta(filas[j])
+      filas[j] = a07_listas_anidadas_fila(500, r)
+      t = (t + a07_listas_anidadas_suma(filas[j]))
+      r = r + 1
+    }
+  }
+  {
+    var j = 0.0
+    fijo fin_j = 500
+    mientras j < fin_j {
+      a07_listas_anidadas_suelta(filas[j])
+      j = j + 1
+    }
+  }
+  devolver t
+}
+fn a08_cache_desalojo_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn a08_cache_desalojo_run() {
+  var tam = 50000.0
+  var c: cualquiera = nueva_nulos(tam)
+  var x = 777.0
+  var ac = 0.0
+  {
+    var op = 0.0
+    fijo fin_op = 3000000
+    mientras op < fin_op {
+      x = a08_cache_desalojo_lcg(x)
+      var k = (x % 200000) + 0.0
+      var slot = (k % tam) + 0.0
+      var e: cualquiera = c[slot]
+      si (e != nulo) y (e.v == k) {
+        ac = (ac + 1)
+      } sino {
+        si e != nulo {
+          nulo
+        }
+        c[slot] = Nodo(k, 0, nulo, nulo)
+      }
+      op = op + 1
+    }
+  }
+  devolver ac
+}
+fn a10_persistente_run() {
+  var n = 1500000.0
+  var vers: cualquiera = nueva_nulos(800)
+  var cur: cualquiera = nulo
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      cur = Nodo(i, 0, cur, nulo)
+      si (i % 2000) == 0 {
+        vers[((i) // (2000))] = cur
+      }
+      i = i + 1
+    }
+  }
+  {
+    var k = 0.0
+    fijo fin_k = 200
+    mientras k < fin_k {
+      var c: cualquiera = vers[k]
+      var m = 0.0
+      mientras (c != nulo) y (m < 200) {
+        s = (s + (c.v % 3))
+        c = c.i
+        m = (m + 1)
+      }
+      k = k + 1
+    }
+  }
+  devolver s
+}
+fn a13_matriz_dispersa_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn a13_matriz_dispersa_run() {
+  var n = 20000.0
+  var filas: cualquiera = nueva_nulos(n)
+  var x = 99.0
+  {
+    var r = 0.0
+    fijo fin_r = n
+    mientras r < fin_r {
+      {
+        var k = 0.0
+        fijo fin_k = 20
+        mientras k < fin_k {
+          x = a13_matriz_dispersa_lcg(x)
+          filas[r] = Nodo((x % n), (x % 100), filas[r], nulo)
+          k = k + 1
+        }
+      }
+      r = r + 1
+    }
+  }
+  var vec = nueva(n)
+  {
+    var j = 0.0
+    fijo fin_j = n
+    mientras j < fin_j {
+      vec[j] = (j % 13)
+      j = j + 1
+    }
+  }
+  var t = 0.0
+  {
+    var rep = 0.0
+    fijo fin_rep = 10
+    mientras rep < fin_rep {
+      {
+        var r = 0.0
+        fijo fin_r = n
+        mientras r < fin_r {
+          var c: cualquiera = filas[r]
+          var s = 0.0
+          mientras c != nulo {
+            s = (s + (c.w * vec[c.v]))
+            c = c.i
+          }
+          t = (t + (s % 1000))
+          r = r + 1
+        }
+      }
+      rep = rep + 1
+    }
+  }
+  {
+    var r = 0.0
+    fijo fin_r = n
+    mientras r < fin_r {
+      var c2: cualquiera = filas[r]
+      mientras c2 != nulo {
+        var sig: cualquiera = c2.i
+        nulo
+        c2 = sig
+      }
+      r = r + 1
+    }
+  }
+  devolver t
+}
+fn a14_churn_puro_run() {
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = 20000000
+    mientras i < fin_i {
+      var a: cualquiera = Nodo(i, 0, nulo, nulo)
+      var b: cualquiera = Nodo((i + 1), 0, a, nulo)
+      var c: cualquiera = Nodo((i + 2), 0, b, nulo)
+      s = (s + (c.i.i.v % 5))
+      nulo
+      nulo
+      nulo
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn a15_ast_compilador_construir(d, s) {
+  si d == 0 {
+    devolver Nodo(0, (s % 10), nulo, nulo)
+  }
+  devolver Nodo((1 + (s % 3)), 0, a15_ast_compilador_construir((d - 1), (((s * 7) + 1) % 1000003)), a15_ast_compilador_construir((d - 1), (((s * 13) + 5) % 1000003)))
+}
+fn a15_ast_compilador_evalua(n) {
+  si n.v == 0 {
+    devolver n.w
+  }
+  var a = a15_ast_compilador_evalua(n.i) + 0.0
+  var b = a15_ast_compilador_evalua(n.d) + 0.0
+  si n.v == 1 {
+    devolver ((a + b) % 1000003)
+  }
+  si n.v == 2 {
+    devolver ((a * b) % 1000003)
+  }
+  devolver (((a + 1000003) - b) % 1000003)
+}
+fn a15_ast_compilador_soltar(n) {
+  si n == nulo {
+    devolver
+  }
+  a15_ast_compilador_soltar(n.i)
+  a15_ast_compilador_soltar(n.d)
+  nulo
+}
+fn a15_ast_compilador_run() {
+  var t = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 5
+    mientras r < fin_r {
+      var a: cualquiera = a15_ast_compilador_construir(17, (r + 1))
+      t = (t + a15_ast_compilador_evalua(a))
+      a15_ast_compilador_soltar(a)
+      r = r + 1
+    }
+  }
+  devolver t
+}
+fn a18_heap_suelta(h) {
+  var c: cualquiera = h
+  mientras c != nulo {
+    var sig: cualquiera = c.i
+    nulo
+    c = sig
+  }
+}
+fn a18_heap_run() {
+  var t = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 2
+    mientras r < fin_r {
+      var h: cualquiera = nulo
+      {
+        var i = 0.0
+        fijo fin_i = 3000000
+        mientras i < fin_i {
+          h = Nodo(i, 0, h, nulo)
+          i = i + 1
+        }
+      }
+      var c: cualquiera = h
+      mientras c != nulo {
+        t = (t + (c.v % 3))
+        c = c.i
+      }
+      a18_heap_suelta(h)
+      r = r + 1
+    }
+  }
+  devolver t
+}
+fn a18_arena_run() {
+  var n = 3000000.0
+  var val = nueva(n)
+  var nxt = nueva(n)
+  var t = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 2
+    mientras r < fin_r {
+      var h = (0 - 1) + 0.0
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          val[i] = i
+          nxt[i] = h
+          h = i
+          i = i + 1
+        }
+      }
+      var c = h + 0.0
+      mientras c >= 0 {
+        t = (t + (val[c] % 3))
+        c = nxt[c]
+      }
+      r = r + 1
+    }
+  }
+  devolver t
+}
+fn a20_soltar_heap_suelta(h) {
+  var c: cualquiera = h
+  mientras c != nulo {
+    var sig: cualquiera = c.i
+    nulo
+    c = sig
+  }
+}
+fn a20_soltar_heap_run() {
+  var h: cualquiera = nulo
+  {
+    var i = 0.0
+    fijo fin_i = 300000
+    mientras i < fin_i {
+      h = Nodo(i, 0, h, nulo)
+      i = i + 1
+    }
+  }
+  var t0 = entero(reloj() * 1000.0) + 0.0
+  a20_soltar_heap_suelta(h)
+  h = nulo
+  devolver (entero(reloj() * 1000.0) - t0)
+}
+fn b21_fib36_fib(n) {
+  si n < 2 {
+    devolver n
+  }
+  devolver (b21_fib36_fib((n - 1)) + b21_fib36_fib((n - 2)))
+}
+fn b21_fib36_run() {
+  devolver b21_fib36_fib(36)
+}
+fn b22_ackermann_6_ack(m, n) {
+  si m == 0 {
+    devolver (n + 1)
+  }
+  si n == 0 {
+    devolver b22_ackermann_6_ack((m - 1), 1)
+  }
+  devolver b22_ackermann_6_ack((m - 1), b22_ackermann_6_ack(m, (n - 1)))
+}
+fn b22_ackermann_6_run() {
+  var t = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 300
+    mientras r < fin_r {
+      t = (t + b22_ackermann_6_ack(3, 6))
+      r = r + 1
+    }
+  }
+  devolver t
+}
+fn b22_ackermann_8_ack(m, n) {
+  si m == 0 {
+    devolver (n + 1)
+  }
+  si n == 0 {
+    devolver b22_ackermann_8_ack((m - 1), 1)
+  }
+  devolver b22_ackermann_8_ack((m - 1), b22_ackermann_8_ack(m, (n - 1)))
+}
+fn b22_ackermann_8_run() {
+  devolver b22_ackermann_8_ack(3, 8)
+}
+fn b23_hanoi27_mueve(n, a) {
+  si n == 0 {
+    devolver (a % 2)
+  }
+  devolver ((b23_hanoi27_mueve((n - 1), (a + 1)) + b23_hanoi27_mueve((n - 1), (a + 2))) + 1)
+}
+fn b23_hanoi27_run() {
+  devolver b23_hanoi27_mueve(27, 0)
+}
+fn b24_arbol_perfecto_construir(d) {
+  si d == 0 {
+    devolver nulo
+  }
+  devolver Nodo(d, 0, b24_arbol_perfecto_construir((d - 1)), b24_arbol_perfecto_construir((d - 1)))
+}
+fn b24_arbol_perfecto_suma(n) {
+  si n == nulo {
+    devolver 0
+  }
+  devolver ((n.v + b24_arbol_perfecto_suma(n.i)) + b24_arbol_perfecto_suma(n.d))
+}
+fn b24_arbol_perfecto_soltar(n) {
+  si n == nulo {
+    devolver
+  }
+  b24_arbol_perfecto_soltar(n.i)
+  b24_arbol_perfecto_soltar(n.d)
+  nulo
+}
+fn b24_arbol_perfecto_run() {
+  var a: cualquiera = b24_arbol_perfecto_construir(18)
+  var t = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 40
+    mientras r < fin_r {
+      t = (t + b24_arbol_perfecto_suma(a))
+      r = r + 1
+    }
+  }
+  b24_arbol_perfecto_soltar(a)
+  devolver t
+}
+fn b25_quicksort_ordenado_part(a, lo, hi) {
+  var p = a[hi] + 0.0
+  var i = lo + 0.0
+  {
+    var j = lo + 0.0
+    fijo fin_j = hi
+    mientras j < fin_j {
+      si a[j] < p {
+        var t = a[i] + 0.0
+        a[i] = a[j]
+        a[j] = t
+        i = (i + 1)
+      }
+      j = j + 1
+    }
+  }
+  var t2 = a[i] + 0.0
+  a[i] = a[hi]
+  a[hi] = t2
+  devolver i
+}
+fn b25_quicksort_ordenado_qs(a, lo, hi) {
+  si lo < hi {
+    var p = b25_quicksort_ordenado_part(a, lo, hi) + 0.0
+    b25_quicksort_ordenado_qs(a, lo, (p - 1))
+    b25_quicksort_ordenado_qs(a, (p + 1), hi)
+  }
+}
+fn b25_quicksort_ordenado_run() {
+  var n = 5000.0
+  var a = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      a[i] = i
+      i = i + 1
+    }
+  }
+  b25_quicksort_ordenado_qs(a, 0, (n - 1))
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      s = (s + (a[i] * (i % 7)))
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn b26_recursion_mutua_par(n) {
+  si n == 0 {
+    devolver 1
+  }
+  devolver b26_recursion_mutua_impar((n - 1))
+}
+fn b26_recursion_mutua_impar(n) {
+  si n == 0 {
+    devolver 0
+  }
+  devolver b26_recursion_mutua_par((n - 1))
+}
+fn b26_recursion_mutua_run() {
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 300000
+    mientras r < fin_r {
+      s = (s + b26_recursion_mutua_par((700 + (r % 2))))
+      r = r + 1
+    }
+  }
+  devolver s
+}
+fn b27_nreinas_pon(f, n, cols, d1, d2) {
+  si f == n {
+    devolver 1
+  }
+  var c = 0.0
+  {
+    var k = 0.0
+    fijo fin_k = n
+    mientras k < fin_k {
+      si ((cols[k] == 0) y (d1[(f + k)] == 0)) y (d2[((f + n) - k)] == 0) {
+        cols[k] = 1
+        d1[(f + k)] = 1
+        d2[((f + n) - k)] = 1
+        c = (c + b27_nreinas_pon((f + 1), n, cols, d1, d2))
+        cols[k] = 0
+        d1[(f + k)] = 0
+        d2[((f + n) - k)] = 0
+      }
+      k = k + 1
+    }
+  }
+  devolver c
+}
+fn b27_nreinas_run() {
+  var n = 11.0
+  devolver b27_nreinas_pon(0, n, nueva(n), nueva((2 * n)), nueva(((2 * n) + 1)))
+}
+fn b28_acumulador_suma(n, acc) {
+  si n == 0 {
+    devolver acc
+  }
+  devolver b28_acumulador_suma((n - 1), (acc + n))
+}
+fn b28_acumulador_run() {
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 50000
+    mientras r < fin_r {
+      s = (s + (b28_acumulador_suma(800, r) % 1000))
+      r = r + 1
+    }
+  }
+  devolver s
+}
+fn b30_lista_recursiva_largo(n) {
+  si n == nulo {
+    devolver 0
+  }
+  devolver (1 + b30_lista_recursiva_largo(n.i))
+}
+fn b30_lista_recursiva_suelta(h) {
+  var c: cualquiera = h
+  mientras c != nulo {
+    var sig: cualquiera = c.i
+    nulo
+    c = sig
+  }
+}
+fn b30_lista_recursiva_run() {
+  var h: cualquiera = nulo
+  {
+    var i = 0.0
+    fijo fin_i = 100000
+    mientras i < fin_i {
+      h = Nodo(i, 0, h, nulo)
+      i = i + 1
+    }
+  }
+  var t = b30_lista_recursiva_largo(h) + 0.0
+  b30_lista_recursiva_suelta(h)
+  devolver t
+}
+fn b31_fib_recursivo30_fib(n) {
+  si n < 2 {
+    devolver n
+  }
+  devolver (b31_fib_recursivo30_fib((n - 1)) + b31_fib_recursivo30_fib((n - 2)))
+}
+fn b31_fib_recursivo30_run() {
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 30
+    mientras r < fin_r {
+      s = (s + (b31_fib_recursivo30_fib(30) % 1000))
+      r = r + 1
+    }
+  }
+  devolver s
+}
+fn b31_fib_iterativo_fib(n) {
+  var a = 0.0
+  var b = 1.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      var t = ((a + b) % 1000003) + 0.0
+      a = b
+      b = t
+      i = i + 1
+    }
+  }
+  devolver a
+}
+fn b31_fib_iterativo_run() {
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 600000
+    mientras r < fin_r {
+      s = (s + (b31_fib_iterativo_fib(30) % 1000))
+      r = r + 1
+    }
+  }
+  devolver s
+}
+fn b32_muchas_locales_f(n, a) {
+  si n == 0 {
+    devolver a
+  }
+  var b1 = (a + 1) + 0.0
+  var b2 = ((b1 * 3) % 1009) + 0.0
+  var b3 = (b2 + b1) + 0.0
+  var b4 = ((b3 * 5) % 1013) + 0.0
+  var b5 = (b4 + b2) + 0.0
+  var b6 = ((b5 * 7) % 1019) + 0.0
+  var b7 = (b6 + b3) + 0.0
+  var b8 = ((b7 * 11) % 1021) + 0.0
+  var b9 = (b8 + b5) + 0.0
+  var b10 = ((b9 * 13) % 1031) + 0.0
+  devolver ((b32_muchas_locales_f((n - 1), b10) + b32_muchas_locales_f((n - 1), (b7 + b4))) % 1000003)
+}
+fn b32_muchas_locales_run() {
+  devolver b32_muchas_locales_f(22, 5)
+}
+fn b33_retorna_estructuras_gen(d) {
+  si d == 0 {
+    var a = nueva(8)
+    {
+      var k = 0.0
+      fijo fin_k = 8
+      mientras k < fin_k {
+        a[k] = (k + 1)
+        k = k + 1
+      }
+    }
+    devolver a
+  }
+  var x = b33_retorna_estructuras_gen((d - 1))
+  var ys = b33_retorna_estructuras_gen((d - 1))
+  var r = nueva(8)
+  {
+    var k = 0.0
+    fijo fin_k = 8
+    mientras k < fin_k {
+      r[k] = ((x[k] + ys[((k + 1) % 8)]) % 1000003)
+      k = k + 1
+    }
+  }
+  nulo
+  nulo
+  devolver r
+}
+fn b33_retorna_estructuras_run() {
+  var a = b33_retorna_estructuras_gen(21)
+  var s = 0.0
+  {
+    var k = 0.0
+    fijo fin_k = 8
+    mientras k < fin_k {
+      s = (s + a[k])
+      k = k + 1
+    }
+  }
+  devolver s
+}
+fn b35_descenso_recursivo_gen(t, p, d, s) {
+  si d == 0 {
+    t[p[0]] = ((s % 9) + 1)
+    p[0] = (p[0] + 1)
+    devolver
+  }
+  si (s % 3) == 0 {
+    t[p[0]] = (0 - 1)
+    p[0] = (p[0] + 1)
+    b35_descenso_recursivo_gen(t, p, (d - 1), (((s * 7) + 1) % 10007))
+    t[p[0]] = (0 - 2)
+    p[0] = (p[0] + 1)
+    devolver
+  }
+  b35_descenso_recursivo_gen(t, p, (d - 1), (((s * 13) + 5) % 10007))
+  si (s % 2) == 0 {
+    t[p[0]] = (0 - 3)
+  } sino {
+    t[p[0]] = (0 - 4)
+  }
+  p[0] = (p[0] + 1)
+  b35_descenso_recursivo_gen(t, p, (d - 1), (((s * 11) + 3) % 10007))
+}
+fn b35_descenso_recursivo_factor(t, p) {
+  var k = t[p[0]] + 0.0
+  si k == (0 - 1) {
+    p[0] = (p[0] + 1)
+    var v = b35_descenso_recursivo_expr(t, p) + 0.0
+    p[0] = (p[0] + 1)
+    devolver v
+  }
+  p[0] = (p[0] + 1)
+  devolver k
+}
+fn b35_descenso_recursivo_term(t, p) {
+  var v = b35_descenso_recursivo_factor(t, p) + 0.0
+  mientras t[p[0]] == (0 - 4) {
+    p[0] = (p[0] + 1)
+    v = ((v * b35_descenso_recursivo_factor(t, p)) % 1000003)
+  }
+  devolver v
+}
+fn b35_descenso_recursivo_expr(t, p) {
+  var v = b35_descenso_recursivo_term(t, p) + 0.0
+  mientras t[p[0]] == (0 - 3) {
+    p[0] = (p[0] + 1)
+    v = ((v + b35_descenso_recursivo_term(t, p)) % 1000003)
+  }
+  devolver v
+}
+fn b35_descenso_recursivo_run() {
+  var t = nueva(1000000)
+  var p = nueva(1)
+  b35_descenso_recursivo_gen(t, p, 15, 5)
+  t[p[0]] = (0 - 9)
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 20
+    mientras r < fin_r {
+      p[0] = 0
+      s = (s + b35_descenso_recursivo_expr(t, p))
+      r = r + 1
+    }
+  }
+  devolver (s + p[0])
+}
+fn b37_catalan_cat(n) {
+  si n <= 1 {
+    devolver 1
+  }
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      s = (s + (b37_catalan_cat(i) * b37_catalan_cat(((n - 1) - i))))
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn b37_catalan_run() {
+  devolver b37_catalan_cat(15)
+}
+fn b38_catalan_memo_cat(n, m) {
+  si n <= 1 {
+    devolver 1
+  }
+  si m[n] != 0 {
+    devolver m[n]
+  }
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      s = ((s + (b38_catalan_memo_cat(i, m) * b38_catalan_memo_cat(((n - 1) - i), m))) % 1000003)
+      i = i + 1
+    }
+  }
+  m[n] = (s + 1)
+  devolver m[n]
+}
+fn b38_catalan_memo_run() {
+  var t = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 100
+    mientras r < fin_r {
+      var m = nueva(701)
+      t = (t + (b38_catalan_memo_cat(700, m) % 1000))
+      r = r + 1
+    }
+  }
+  devolver t
+}
+fn b39_dfs_profundo_dfs(u, n, vis) {
+  vis[u] = 1
+  var s = u + 0.0
+  si ((u + 1) < n) y (vis[(u + 1)] == 0) {
+    s = (s + b39_dfs_profundo_dfs((u + 1), n, vis))
+  }
+  devolver (s % 1000003)
+}
+fn b39_dfs_profundo_run() {
+  var t = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 3000
+    mientras r < fin_r {
+      var vis = nueva(800)
+      t = (t + b39_dfs_profundo_dfs(0, 800, vis))
+      r = r + 1
+    }
+  }
+  devolver t
+}
+fn b39_dfs_cadena_larga_dfs(u, n, vis) {
+  vis[u] = 1
+  var s = u + 0.0
+  si ((u + 1) < n) y (vis[(u + 1)] == 0) {
+    s = (s + b39_dfs_cadena_larga_dfs((u + 1), n, vis))
+  }
+  devolver (s % 1000003)
+}
+fn b39_dfs_cadena_larga_run() {
+  var vis = nueva(20000)
+  devolver b39_dfs_cadena_larga_dfs(0, 20000, vis)
+}
+fn b40_sobrecoste_llamada_f1(x) {
+  devolver (x + 1)
+}
+fn b40_sobrecoste_llamada_f2(x) {
+  devolver ((b40_sobrecoste_llamada_f1(x) * 3) % 1000003)
+}
+fn b40_sobrecoste_llamada_f3(x) {
+  devolver (b40_sobrecoste_llamada_f2(x) + b40_sobrecoste_llamada_f1(x))
+}
+fn b40_sobrecoste_llamada_run() {
+  var a = 1.0
+  {
+    var i = 0.0
+    fijo fin_i = 15000000
+    mientras i < fin_i {
+      a = (b40_sobrecoste_llamada_f3(a) % 1000003)
+      i = i + 1
+    }
+  }
+  devolver a
+}
+fn c41_matmul500_run() {
+  var n = 500.0
+  var a = nueva((n * n))
+  var b = nueva((n * n))
+  var c = nueva((n * n))
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      {
+        var j = 0.0
+        fijo fin_j = n
+        mientras j < fin_j {
+          a[((i * n) + j)] = (((((i * 7) + (j * 3)) % 10)) / 10.0)
+          b[((i * n) + j)] = (((((i * 5) + (j * 11)) % 10)) / 10.0)
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      {
+        var j = 0.0
+        fijo fin_j = n
+        mientras j < fin_j {
+          var s = 0.0
+          {
+            var k = 0.0
+            fijo fin_k = n
+            mientras k < fin_k {
+              s = (s + (a[((i * n) + k)] * b[((k * n) + j)]))
+              k = k + 1
+            }
+          }
+          c[((i * n) + j)] = s
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  var t = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = (n * n)
+    mientras i < fin_i {
+      t = (t + c[i])
+      i = i + 1
+    }
+  }
+  devolver entero((t * 1000.0))
+}
+fn c42_lcs6000_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn c42_lcs6000_run() {
+  var n = 6000.0
+  var s = nueva(n)
+  var t = nueva(n)
+  var x = 777.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x = c42_lcs6000_lcg(x)
+      s[i] = (x % 4)
+      x = c42_lcs6000_lcg(x)
+      t[i] = (x % 4)
+      i = i + 1
+    }
+  }
+  var prev = nueva((n + 1))
+  var cur = nueva((n + 1))
+  {
+    var i = 1.0
+    fijo fin_i = (n + 1)
+    mientras i < fin_i {
+      {
+        var j = 1.0
+        fijo fin_j = (n + 1)
+        mientras j < fin_j {
+          si s[(i - 1)] == t[(j - 1)] {
+            cur[j] = (prev[(j - 1)] + 1)
+          } sino {
+            si prev[j] > cur[(j - 1)] {
+              cur[j] = prev[j]
+            } sino {
+              cur[j] = cur[(j - 1)]
+            }
+          }
+          j = j + 1
+        }
+      }
+      {
+        var j = 0.0
+        fijo fin_j = (n + 1)
+        mientras j < fin_j {
+          prev[j] = cur[j]
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  devolver prev[n]
+}
+fn c43_editdist5000_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn c43_editdist5000_run() {
+  var n = 5000.0
+  var s = nueva(n)
+  var t = nueva(n)
+  var x = 31.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x = c43_editdist5000_lcg(x)
+      s[i] = (x % 4)
+      x = c43_editdist5000_lcg(x)
+      t[i] = (x % 4)
+      i = i + 1
+    }
+  }
+  var prev = nueva((n + 1))
+  var cur = nueva((n + 1))
+  {
+    var j = 0.0
+    fijo fin_j = (n + 1)
+    mientras j < fin_j {
+      prev[j] = j
+      j = j + 1
+    }
+  }
+  {
+    var i = 1.0
+    fijo fin_i = (n + 1)
+    mientras i < fin_i {
+      cur[0] = i
+      {
+        var j = 1.0
+        fijo fin_j = (n + 1)
+        mientras j < fin_j {
+          var costo = 1.0
+          si s[(i - 1)] == t[(j - 1)] {
+            costo = 0
+          }
+          var mejor = (prev[(j - 1)] + costo) + 0.0
+          si (prev[j] + 1) < mejor {
+            mejor = (prev[j] + 1)
+          }
+          si (cur[(j - 1)] + 1) < mejor {
+            mejor = (cur[(j - 1)] + 1)
+          }
+          cur[j] = mejor
+          j = j + 1
+        }
+      }
+      {
+        var j = 0.0
+        fijo fin_j = (n + 1)
+        mientras j < fin_j {
+          prev[j] = cur[j]
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  devolver prev[n]
+}
+fn c44_floyd400_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn c44_floyd400_run() {
+  var n = 400.0
+  var d = nueva((n * n))
+  var x = 5.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      {
+        var j = 0.0
+        fijo fin_j = n
+        mientras j < fin_j {
+          x = c44_floyd400_lcg(x)
+          d[((i * n) + j)] = ((x % 100) + 1)
+          j = j + 1
+        }
+      }
+      d[((i * n) + i)] = 0
+      i = i + 1
+    }
+  }
+  {
+    var k = 0.0
+    fijo fin_k = n
+    mientras k < fin_k {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          {
+            var j = 0.0
+            fijo fin_j = n
+            mientras j < fin_j {
+              var v = (d[((i * n) + k)] + d[((k * n) + j)]) + 0.0
+              si v < d[((i * n) + j)] {
+                d[((i * n) + j)] = v
+              }
+              j = j + 1
+            }
+          }
+          i = i + 1
+        }
+      }
+      k = k + 1
+    }
+  }
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = (n * n)
+    mientras i < fin_i {
+      s = (s + d[i])
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn c45_mochila3000_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn c45_mochila3000_run() {
+  var n = 3000.0
+  var cap = 20000.0
+  var w = nueva(n)
+  var v = nueva(n)
+  var x = 31.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x = c45_mochila3000_lcg(x)
+      w[i] = (1 + (x % 50))
+      x = c45_mochila3000_lcg(x)
+      v[i] = (x % 100)
+      i = i + 1
+    }
+  }
+  var dp = nueva((cap + 1))
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      var c = cap + 0.0
+      mientras c >= w[i] {
+        var cand = (dp[(c - w[i])] + v[i]) + 0.0
+        si cand > dp[c] {
+          dp[c] = cand
+        }
+        c = (c - 1)
+      }
+      i = i + 1
+    }
+  }
+  devolver dp[cap]
+}
+fn c46_columnas_run() {
+  var n = 3000.0
+  var a = nueva((n * n))
+  {
+    var i = 0.0
+    fijo fin_i = (n * n)
+    mientras i < fin_i {
+      a[i] = (i % 17)
+      i = i + 1
+    }
+  }
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 4
+    mientras r < fin_r {
+      {
+        var j = 0.0
+        fijo fin_j = n
+        mientras j < fin_j {
+          {
+            var i = 0.0
+            fijo fin_i = n
+            mientras i < fin_i {
+              s = (s + a[((i * n) + j)])
+              i = i + 1
+            }
+          }
+          j = j + 1
+        }
+      }
+      r = r + 1
+    }
+  }
+  devolver s
+}
+fn c47_acceso_aleatorio_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn c47_acceso_aleatorio_run() {
+  var n = 16777216.0
+  var a = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      a[i] = (i % 1000)
+      i = i + 1
+    }
+  }
+  var x = 1.0
+  var s = 0.0
+  {
+    var k = 0.0
+    fijo fin_k = 8000000
+    mientras k < fin_k {
+      x = c47_acceso_aleatorio_lcg(x)
+      s = (s + a[(x % n)])
+      k = k + 1
+    }
+  }
+  devolver s
+}
+fn c48_busqueda_binaria_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn c48_busqueda_binaria_run() {
+  var n = 4194304.0
+  var a = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      a[i] = (i * 3)
+      i = i + 1
+    }
+  }
+  var x = 9.0
+  var hallados = 0.0
+  {
+    var q = 0.0
+    fijo fin_q = 300000
+    mientras q < fin_q {
+      x = c48_busqueda_binaria_lcg(x)
+      var clave = (x % (n * 3)) + 0.0
+      var lo = 0.0
+      var hi = (n - 1) + 0.0
+      mientras lo <= hi {
+        var mid = (((lo + hi)) // (2)) + 0.0
+        si a[mid] == clave {
+          hallados = (hallados + 1)
+          lo = (hi + 1)
+        } sino {
+          si a[mid] < clave {
+            lo = (mid + 1)
+          } sino {
+            hi = (mid - 1)
+          }
+        }
+      }
+      q = q + 1
+    }
+  }
+  devolver hallados
+}
+fn c49_ventana_run() {
+  var n = 10000000.0
+  var w = 1000.0
+  var a = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      a[i] = (i % 31)
+      i = i + 1
+    }
+  }
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = w
+    mientras i < fin_i {
+      s = (s + a[i])
+      i = i + 1
+    }
+  }
+  var mx = s + 0.0
+  {
+    var i = w + 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      s = ((s + a[i]) - a[(i - w)])
+      si s > mx {
+        mx = s
+      }
+      i = i + 1
+    }
+  }
+  devolver mx
+}
+fn c50_spmv_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn c50_spmv_run() {
+  var n = 200000.0
+  var k = 10.0
+  var col = nueva((n * k))
+  var val = nueva((n * k))
+  var x = 3.0
+  {
+    var i = 0.0
+    fijo fin_i = (n * k)
+    mientras i < fin_i {
+      x = c50_spmv_lcg(x)
+      col[i] = (x % n)
+      val[i] = (x % 7)
+      i = i + 1
+    }
+  }
+  var v = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      v[i] = (i % 5)
+      i = i + 1
+    }
+  }
+  var ys = nueva(n)
+  var t = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 10
+    mientras r < fin_r {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          var s = 0.0
+          {
+            var j = 0.0
+            fijo fin_j = k
+            mientras j < fin_j {
+              s = (s + (val[((i * k) + j)] * v[col[((i * k) + j)]]))
+              j = j + 1
+            }
+          }
+          ys[i] = s
+          i = i + 1
+        }
+      }
+      t = (t + ys[(r * 7)])
+      r = r + 1
+    }
+  }
+  devolver t
+}
+fn c51_aos_run() {
+  var n = 2000000.0
+  var p = nueva((n * 4))
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      p[(i * 4)] = (i % 10)
+      p[((i * 4) + 1)] = (i % 7)
+      p[((i * 4) + 2)] = (i % 5)
+      p[((i * 4) + 3)] = 1
+      i = i + 1
+    }
+  }
+  {
+    var r = 0.0
+    fijo fin_r = 10
+    mientras r < fin_r {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          p[(i * 4)] = ((p[(i * 4)] + p[((i * 4) + 3)]) % 1000)
+          p[((i * 4) + 1)] = ((p[((i * 4) + 1)] + p[(i * 4)]) % 1000)
+          i = i + 1
+        }
+      }
+      r = r + 1
+    }
+  }
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      s = (s + p[((i * 4) + 1)])
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn c51_soa_run() {
+  var n = 2000000.0
+  var x = nueva(n)
+  var ys = nueva(n)
+  var z = nueva(n)
+  var m = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x[i] = (i % 10)
+      ys[i] = (i % 7)
+      z[i] = (i % 5)
+      m[i] = 1
+      i = i + 1
+    }
+  }
+  {
+    var r = 0.0
+    fijo fin_r = 10
+    mientras r < fin_r {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          x[i] = ((x[i] + m[i]) % 1000)
+          ys[i] = ((ys[i] + x[i]) % 1000)
+          i = i + 1
+        }
+      }
+      r = r + 1
+    }
+  }
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      s = (s + ys[i])
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn c52_indices_calculados_run() {
+  var n = 8000000.0
+  var a = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      a[i] = (i % 100)
+      i = i + 1
+    }
+  }
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 3
+    mientras r < fin_r {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          s = (s + a[(((i * 7919) + 13) % n)])
+          i = i + 1
+        }
+      }
+      r = r + 1
+    }
+  }
+  devolver s
+}
+fn c53_sin_comprobar_a_run() {
+  var n = 4000000.0
+  var a = nueva(n)
+  {
+    var r = 0.0
+    fijo fin_r = 10
+    mientras r < fin_r {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          a[i] = (a[i] + (i % 5))
+          i = i + 1
+        }
+      }
+      r = r + 1
+    }
+  }
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      s = (s + a[i])
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn c53_sin_comprobar_b_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn c53_sin_comprobar_b_run() {
+  var n = 4000000.0
+  var a = nueva(n)
+  var b = nueva(n)
+  var x = 4.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x = c53_sin_comprobar_b_lcg(x)
+      b[i] = (x % n)
+      a[i] = (i % 9)
+      i = i + 1
+    }
+  }
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 4
+    mientras r < fin_r {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          s = (s + a[b[i]])
+          i = i + 1
+        }
+      }
+      r = r + 1
+    }
+  }
+  devolver s
+}
+fn c55_aritmetica_saturada_run() {
+  var tope = 4000000000000000.0
+  var s = 3999999999000000.0
+  {
+    var i = 0.0
+    fijo fin_i = 40000000
+    mientras i < fin_i {
+      s = (s + (i % 97))
+      si s > tope {
+        s = (tope - (i % 1000))
+      }
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn c56_div_mod_run() {
+  var m = 1000003.0
+  var s = 0.0
+  var b = 2.0
+  {
+    var i = 1.0
+    fijo fin_i = 8000000
+    mientras i < fin_i {
+      b = (((b * 31) + i) % m)
+      s = ((s + ((b) // (7))) + (b % 13))
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn c57_conversiones_run() {
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = 30000000
+    mientras i < fin_i {
+      var r = ((i) * 0.5)
+      s = (s + (entero(r) % 3))
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn c59_criba10M_run() {
+  var n = 10000000.0
+  var m = nueva((n + 1))
+  {
+    var i = 2.0
+    fijo fin_i = (n + 1)
+    mientras i < fin_i {
+      m[i] = 1
+      i = i + 1
+    }
+  }
+  var i = 2.0
+  mientras (i * i) <= n {
+    si m[i] == 1 {
+      var j = (i * i) + 0.0
+      mientras j <= n {
+        m[j] = 0
+        j = (j + i)
+      }
+    }
+    i = (i + 1)
+  }
+  var c = 0.0
+  {
+    var k = 2.0
+    fijo fin_k = (n + 1)
+    mientras k < fin_k {
+      c = (c + m[k])
+      k = k + 1
+    }
+  }
+  devolver c
+}
+fn c60_alias_run() {
+  var n = 10000000.0
+  var a = nueva(n)
+  var b = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      a[i] = (i % 5)
+      b[i] = (i % 3)
+      i = i + 1
+    }
+  }
+  {
+    var r = 0.0
+    fijo fin_r = 10
+    mientras r < fin_r {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          a[i] = ((a[i] + (3 * b[i])) % 1000)
+          i = i + 1
+        }
+      }
+      r = r + 1
+    }
+  }
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      s = (s + a[i])
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn e76_directo_run() {
+  var n = 16000000.0
+  var a = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      a[i] = (i % 7)
+      i = i + 1
+    }
+  }
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 6
+    mientras r < fin_r {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          s = (s + a[i])
+          i = i + 1
+        }
+      }
+      r = r + 1
+    }
+  }
+  devolver s
+}
+fn e76_inverso_run() {
+  var n = 16000000.0
+  var a = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      a[i] = (i % 7)
+      i = i + 1
+    }
+  }
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 6
+    mientras r < fin_r {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          s = (s + a[((n - 1) - i)])
+          i = i + 1
+        }
+      }
+      r = r + 1
+    }
+  }
+  devolver s
+}
+fn e77_matmul_bloques_run() {
+  var n = 480.0
+  var bs = 48.0
+  var a = nueva((n * n))
+  var b = nueva((n * n))
+  var c = nueva((n * n))
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      {
+        var j = 0.0
+        fijo fin_j = n
+        mientras j < fin_j {
+          a[((i * n) + j)] = (((((i * 7) + (j * 3)) % 10)) / 10.0)
+          b[((i * n) + j)] = (((((i * 5) + (j * 11)) % 10)) / 10.0)
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  {
+    var ii = 0.0
+    fijo fin_ii = ((n) // (bs))
+    mientras ii < fin_ii {
+      {
+        var kk = 0.0
+        fijo fin_kk = ((n) // (bs))
+        mientras kk < fin_kk {
+          {
+            var jj = 0.0
+            fijo fin_jj = ((n) // (bs))
+            mientras jj < fin_jj {
+              {
+                var i = (ii * bs) + 0.0
+                fijo fin_i = ((ii + 1) * bs)
+                mientras i < fin_i {
+                  {
+                    var k = (kk * bs) + 0.0
+                    fijo fin_k = ((kk + 1) * bs)
+                    mientras k < fin_k {
+                      var aik = a[((i * n) + k)]
+                      {
+                        var j = (jj * bs) + 0.0
+                        fijo fin_j = ((jj + 1) * bs)
+                        mientras j < fin_j {
+                          c[((i * n) + j)] = (c[((i * n) + j)] + (aik * b[((k * n) + j)]))
+                          j = j + 1
+                        }
+                      }
+                      k = k + 1
+                    }
+                  }
+                  i = i + 1
+                }
+              }
+              jj = jj + 1
+            }
+          }
+          kk = kk + 1
+        }
+      }
+      ii = ii + 1
+    }
+  }
+  var t = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = (n * n)
+    mientras i < fin_i {
+      t = (t + c[i])
+      i = i + 1
+    }
+  }
+  devolver entero((t * 1000.0))
+}
+fn e78_lista_nodos_suelta(h) {
+  var c: cualquiera = h
+  mientras c != nulo {
+    var sig: cualquiera = c.i
+    nulo
+    c = sig
+  }
+}
+fn e78_lista_nodos_run() {
+  var h: cualquiera = nulo
+  {
+    var i = 0.0
+    fijo fin_i = 5000000
+    mientras i < fin_i {
+      h = Nodo((i % 11), 0, h, nulo)
+      i = i + 1
+    }
+  }
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 4
+    mientras r < fin_r {
+      var c: cualquiera = h
+      mientras c != nulo {
+        s = (s + c.v)
+        c = c.i
+      }
+      r = r + 1
+    }
+  }
+  e78_lista_nodos_suelta(h)
+  devolver s
+}
+fn e78_array_run() {
+  var n = 5000000.0
+  var a = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      a[((n - 1) - i)] = (i % 11)
+      i = i + 1
+    }
+  }
+  var s = 0.0
+  {
+    var r = 0.0
+    fijo fin_r = 4
+    mientras r < fin_r {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          s = (s + a[i])
+          i = i + 1
+        }
+      }
+      r = r + 1
+    }
+  }
+  devolver s
+}
+fn e80_hash_colisiones_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn e80_hash_colisiones_run() {
+  var tam = 4194304.0
+  var claves = nueva(tam)
+  var vals = nueva(tam)
+  var x = 11.0
+  var hallados = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = 2000000
+    mientras i < fin_i {
+      x = e80_hash_colisiones_lcg(x)
+      var k = (x + 1) + 0.0
+      var h = ((k * 40503) % tam) + 0.0
+      mientras (claves[h] != 0) y (claves[h] != k) {
+        h = ((h + 1) % tam)
+      }
+      claves[h] = k
+      vals[h] = i
+      i = i + 1
+    }
+  }
+  x = 11
+  {
+    var i = 0.0
+    fijo fin_i = 2000000
+    mientras i < fin_i {
+      x = e80_hash_colisiones_lcg(x)
+      var k = (x + 1) + 0.0
+      var h = ((k * 40503) % tam) + 0.0
+      mientras (claves[h] != 0) y (claves[h] != k) {
+        h = ((h + 1) % tam)
+      }
+      si claves[h] == k {
+        hallados = (hallados + (vals[h] % 7))
+      }
+      i = i + 1
+    }
+  }
+  devolver hallados
+}
+fn e81_copia_memoria_run() {
+  var n = 8000000.0
+  var a = nueva(n)
+  var b = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      a[i] = (i % 13)
+      i = i + 1
+    }
+  }
+  {
+    var r = 0.0
+    fijo fin_r = 20
+    mientras r < fin_r {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          b[i] = a[i]
+          i = i + 1
+        }
+      }
+      a[r] = b[(r + 1)]
+      r = r + 1
+    }
+  }
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      s = (s + b[i])
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn e82_pointer_chasing_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn e82_pointer_chasing_run() {
+  var n = 4194304.0
+  var p = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      p[i] = i
+      i = i + 1
+    }
+  }
+  var x = 17.0
+  {
+    var i = 1.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x = e82_pointer_chasing_lcg(x)
+      var j = (x % (i + 1)) + 0.0
+      var t = p[i] + 0.0
+      p[i] = p[j]
+      p[j] = t
+      i = i + 1
+    }
+  }
+  var c = 0.0
+  var s = 0.0
+  {
+    var k = 0.0
+    fijo fin_k = 3000000
+    mientras k < fin_k {
+      c = p[c]
+      s = (s + (c % 3))
+      k = k + 1
+    }
+  }
+  devolver s
+}
+fn e82_pointer_chasing_nodos_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn e82_pointer_chasing_nodos_run() {
+  var n = 1000000.0
+  var g: cualquiera = nueva_nulos(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      g[i] = Nodo(i, 0, nulo, nulo)
+      i = i + 1
+    }
+  }
+  var x = 17.0
+  var ord = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      ord[i] = i
+      i = i + 1
+    }
+  }
+  {
+    var i = 1.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x = e82_pointer_chasing_nodos_lcg(x)
+      var j = (x % (i + 1)) + 0.0
+      var t = ord[i] + 0.0
+      ord[i] = ord[j]
+      ord[j] = t
+      i = i + 1
+    }
+  }
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      g[ord[i]].i = g[ord[((i + 1) % n)]]
+      i = i + 1
+    }
+  }
+  var c: cualquiera = g[0]
+  var s = 0.0
+  {
+    var k = 0.0
+    fijo fin_k = 2000000
+    mientras k < fin_k {
+      c = c.i
+      s = (s + (c.v % 3))
+      k = k + 1
+    }
+  }
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      nulo
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn e85_primer_acceso_run() {
+  var n = 33554432.0
+  var a = nueva(n)
+  var s = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      a[i] = i
+      i = i + 1
+    }
+  }
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      s = (s + (a[i] % 5))
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn medir(nombre, f) {
+  fijo t0 = reloj()
+  fijo r = f()
+  imprimir(nombre + " = " + texto(r) + " en " + texto(redondear(reloj() - t0, 0)) + " ms")
+}
+fijo args = argumentos()
+fijo sel = si longitud(args) > 0 entonces args[0] sino nulo
+si sel == nulo o sel == "a01_arbol_masivo" { medir("a01_arbol_masivo", funcion() { devolver a01_arbol_masivo_run() }) }
+si sel == nulo o sel == "a02_ciclos" { medir("a02_ciclos", funcion() { devolver a02_ciclos_run() }) }
+si sel == nulo o sel == "a03_grafo_social" { medir("a03_grafo_social", funcion() { devolver a03_grafo_social_run() }) }
+si sel == nulo o sel == "a04_vida_corta" { medir("a04_vida_corta", funcion() { devolver a04_vida_corta_run() }) }
+si sel == nulo o sel == "a05_vida_larga" { medir("a05_vida_larga", funcion() { devolver a05_vida_larga_run() }) }
+si sel == nulo o sel == "a06_asignar_soltar" { medir("a06_asignar_soltar", funcion() { devolver a06_asignar_soltar_run() }) }
+si sel == nulo o sel == "a07_listas_anidadas" { medir("a07_listas_anidadas", funcion() { devolver a07_listas_anidadas_run() }) }
+si sel == nulo o sel == "a08_cache_desalojo" { medir("a08_cache_desalojo", funcion() { devolver a08_cache_desalojo_run() }) }
+si sel == nulo o sel == "a10_persistente" { medir("a10_persistente", funcion() { devolver a10_persistente_run() }) }
+si sel == nulo o sel == "a13_matriz_dispersa" { medir("a13_matriz_dispersa", funcion() { devolver a13_matriz_dispersa_run() }) }
+si sel == nulo o sel == "a14_churn_puro" { medir("a14_churn_puro", funcion() { devolver a14_churn_puro_run() }) }
+si sel == nulo o sel == "a15_ast_compilador" { medir("a15_ast_compilador", funcion() { devolver a15_ast_compilador_run() }) }
+si sel == nulo o sel == "a18_heap" { medir("a18_heap", funcion() { devolver a18_heap_run() }) }
+si sel == nulo o sel == "a18_arena" { medir("a18_arena", funcion() { devolver a18_arena_run() }) }
+si sel == nulo o sel == "a20_soltar_heap" { medir("a20_soltar_heap", funcion() { devolver a20_soltar_heap_run() }) }
+si sel == nulo o sel == "b21_fib36" { medir("b21_fib36", funcion() { devolver b21_fib36_run() }) }
+si sel == nulo o sel == "b22_ackermann_6" { medir("b22_ackermann_6", funcion() { devolver b22_ackermann_6_run() }) }
+si sel == nulo o sel == "b22_ackermann_8" { medir("b22_ackermann_8", funcion() { devolver b22_ackermann_8_run() }) }
+si sel == nulo o sel == "b23_hanoi27" { medir("b23_hanoi27", funcion() { devolver b23_hanoi27_run() }) }
+si sel == nulo o sel == "b24_arbol_perfecto" { medir("b24_arbol_perfecto", funcion() { devolver b24_arbol_perfecto_run() }) }
+si sel == nulo o sel == "b25_quicksort_ordenado" { medir("b25_quicksort_ordenado", funcion() { devolver b25_quicksort_ordenado_run() }) }
+si sel == nulo o sel == "b26_recursion_mutua" { medir("b26_recursion_mutua", funcion() { devolver b26_recursion_mutua_run() }) }
+si sel == nulo o sel == "b27_nreinas" { medir("b27_nreinas", funcion() { devolver b27_nreinas_run() }) }
+si sel == nulo o sel == "b28_acumulador" { medir("b28_acumulador", funcion() { devolver b28_acumulador_run() }) }
+si sel == nulo o sel == "b30_lista_recursiva" { medir("b30_lista_recursiva", funcion() { devolver b30_lista_recursiva_run() }) }
+si sel == nulo o sel == "b31_fib_recursivo30" { medir("b31_fib_recursivo30", funcion() { devolver b31_fib_recursivo30_run() }) }
+si sel == nulo o sel == "b31_fib_iterativo" { medir("b31_fib_iterativo", funcion() { devolver b31_fib_iterativo_run() }) }
+si sel == nulo o sel == "b32_muchas_locales" { medir("b32_muchas_locales", funcion() { devolver b32_muchas_locales_run() }) }
+si sel == nulo o sel == "b33_retorna_estructuras" { medir("b33_retorna_estructuras", funcion() { devolver b33_retorna_estructuras_run() }) }
+si sel == nulo o sel == "b35_descenso_recursivo" { medir("b35_descenso_recursivo", funcion() { devolver b35_descenso_recursivo_run() }) }
+si sel == nulo o sel == "b37_catalan" { medir("b37_catalan", funcion() { devolver b37_catalan_run() }) }
+si sel == nulo o sel == "b38_catalan_memo" { medir("b38_catalan_memo", funcion() { devolver b38_catalan_memo_run() }) }
+si sel == nulo o sel == "b39_dfs_profundo" { medir("b39_dfs_profundo", funcion() { devolver b39_dfs_profundo_run() }) }
+si sel == nulo o sel == "b39_dfs_cadena_larga" { medir("b39_dfs_cadena_larga", funcion() { devolver b39_dfs_cadena_larga_run() }) }
+si sel == nulo o sel == "b40_sobrecoste_llamada" { medir("b40_sobrecoste_llamada", funcion() { devolver b40_sobrecoste_llamada_run() }) }
+si sel == nulo o sel == "c41_matmul500" { medir("c41_matmul500", funcion() { devolver c41_matmul500_run() }) }
+si sel == nulo o sel == "c42_lcs6000" { medir("c42_lcs6000", funcion() { devolver c42_lcs6000_run() }) }
+si sel == nulo o sel == "c43_editdist5000" { medir("c43_editdist5000", funcion() { devolver c43_editdist5000_run() }) }
+si sel == nulo o sel == "c44_floyd400" { medir("c44_floyd400", funcion() { devolver c44_floyd400_run() }) }
+si sel == nulo o sel == "c45_mochila3000" { medir("c45_mochila3000", funcion() { devolver c45_mochila3000_run() }) }
+si sel == nulo o sel == "c46_columnas" { medir("c46_columnas", funcion() { devolver c46_columnas_run() }) }
+si sel == nulo o sel == "c47_acceso_aleatorio" { medir("c47_acceso_aleatorio", funcion() { devolver c47_acceso_aleatorio_run() }) }
+si sel == nulo o sel == "c48_busqueda_binaria" { medir("c48_busqueda_binaria", funcion() { devolver c48_busqueda_binaria_run() }) }
+si sel == nulo o sel == "c49_ventana" { medir("c49_ventana", funcion() { devolver c49_ventana_run() }) }
+si sel == nulo o sel == "c50_spmv" { medir("c50_spmv", funcion() { devolver c50_spmv_run() }) }
+si sel == nulo o sel == "c51_aos" { medir("c51_aos", funcion() { devolver c51_aos_run() }) }
+si sel == nulo o sel == "c51_soa" { medir("c51_soa", funcion() { devolver c51_soa_run() }) }
+si sel == nulo o sel == "c52_indices_calculados" { medir("c52_indices_calculados", funcion() { devolver c52_indices_calculados_run() }) }
+si sel == nulo o sel == "c53_sin_comprobar_a" { medir("c53_sin_comprobar_a", funcion() { devolver c53_sin_comprobar_a_run() }) }
+si sel == nulo o sel == "c53_sin_comprobar_b" { medir("c53_sin_comprobar_b", funcion() { devolver c53_sin_comprobar_b_run() }) }
+si sel == nulo o sel == "c55_aritmetica_saturada" { medir("c55_aritmetica_saturada", funcion() { devolver c55_aritmetica_saturada_run() }) }
+si sel == nulo o sel == "c56_div_mod" { medir("c56_div_mod", funcion() { devolver c56_div_mod_run() }) }
+si sel == nulo o sel == "c57_conversiones" { medir("c57_conversiones", funcion() { devolver c57_conversiones_run() }) }
+si sel == nulo o sel == "c59_criba10M" { medir("c59_criba10M", funcion() { devolver c59_criba10M_run() }) }
+si sel == nulo o sel == "c60_alias" { medir("c60_alias", funcion() { devolver c60_alias_run() }) }
+si sel == nulo o sel == "e76_directo" { medir("e76_directo", funcion() { devolver e76_directo_run() }) }
+si sel == nulo o sel == "e76_inverso" { medir("e76_inverso", funcion() { devolver e76_inverso_run() }) }
+si sel == nulo o sel == "e77_matmul_bloques" { medir("e77_matmul_bloques", funcion() { devolver e77_matmul_bloques_run() }) }
+si sel == nulo o sel == "e78_lista_nodos" { medir("e78_lista_nodos", funcion() { devolver e78_lista_nodos_run() }) }
+si sel == nulo o sel == "e78_array" { medir("e78_array", funcion() { devolver e78_array_run() }) }
+si sel == nulo o sel == "e80_hash_colisiones" { medir("e80_hash_colisiones", funcion() { devolver e80_hash_colisiones_run() }) }
+si sel == nulo o sel == "e81_copia_memoria" { medir("e81_copia_memoria", funcion() { devolver e81_copia_memoria_run() }) }
+si sel == nulo o sel == "e82_pointer_chasing" { medir("e82_pointer_chasing", funcion() { devolver e82_pointer_chasing_run() }) }
+si sel == nulo o sel == "e82_pointer_chasing_nodos" { medir("e82_pointer_chasing_nodos", funcion() { devolver e82_pointer_chasing_nodos_run() }) }
+si sel == nulo o sel == "e85_primer_acceso" { medir("e85_primer_acceso", funcion() { devolver e85_primer_acceso_run() }) }

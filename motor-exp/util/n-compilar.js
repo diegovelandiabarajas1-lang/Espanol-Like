@@ -31,7 +31,7 @@ const { compilarAOT, ErrorAOT, exportacionesBiblioteca } = require('../aot/compi
 const AOT = path.join(__dirname, '..', 'aot');
 
 function uso() {
-  console.log('uso: node motor-exp/util/n-compilar.js programa.esl [-o salida] [--c archivo.c] [--cc compilador] [--ejecutar [args…]]');
+  console.log('uso: node motor-exp/util/n-compilar.js programa.esl [-o salida] [--c archivo.c] [--cc compilador] [--sin-comprobar] [--ejecutar [args…]]');
   console.log('     node motor-exp/util/n-compilar.js biblioteca.esl --biblioteca [-o carpeta] [--prefijo p_] [--c archivo.c] [--cc compilador]');
   process.exit(2);
 }
@@ -47,6 +47,9 @@ while (args.length) {
   else if (a === '--c') archC = args.shift();
   else if (a === '--cc') cc = args.shift();
   else if (a === '--ejecutar') { ejecutar = true; argsProg = args.splice(0); }
+  // (motor-exp A4) como C: el nivel tipado no comprueba el rango de los índices ni que las cuentas de enteros quepan en ±2^53. Más rápido, pero un
+  // índice fuera de rango deja de ser un error de Ñ y se convierte en memoria ajena, y una cuenta que se pasa de 2^53 deja de redondear como un real.
+  else if (a === '--sin-comprobar') process.env.N_AOT_SIN_COMPROBAR = '1';
   else if (a === '--biblioteca') biblioteca = true;
   else if (a === '--prefijo') prefijo = args.shift();
   else if (a === '--enlazar') enlazarExtra.push(args.shift());
@@ -128,7 +131,9 @@ function buscarCC() {
 }
 const comp = buscarCC();
 if (!comp) { console.log('[ejecutable] no hay compilador de C (gcc o clang); se puede indicar con --cc o C1EN_CC'); process.exit(1); }
-const BASE = ['-std=gnu11', '-O2', '-ffp-contract=off', '-fno-fast-math', '-fwrapv', '-w', '-I', AOT].concat(banderas)
+// (motor-exp A3) un ejecutable (no una biblioteca): estado del hilo sin TLS (N_SIN_TLS). Medido en Windows, fib(38): 306 → 247 ms. La biblioteca sigue
+// como antes, porque la puede llamar el anfitrión desde varios hilos. (Se probó -flto: con las funciones puras ya no aportaba nada.)
+const BASE = ['-std=gnu11', '-O3', '-ffp-contract=off', '-fno-fast-math', '-fwrapv', '-w', '-I', AOT].concat(biblioteca ? [] : ['-DN_SIN_TLS']).concat(banderas)
   // (motor-exp N4.6) una biblioteca: código reubicable, y de nrt no se ve nada desde fuera
   .concat(biblioteca ? (win ? ['-fvisibility=hidden'] : ['-fPIC', '-fvisibility=hidden']) : []);
 // La biblioteca de apoyo se compila una vez y se guarda (por la huella de su

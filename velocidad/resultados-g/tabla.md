@@ -1,0 +1,10 @@
+| lenguaje   |                    fib(38) |            criba(20000000) |   mandelbrot(1200x900x400) |
+|------------|----------------------------|----------------------------|----------------------------|
+| C          |          52 ms (×1.0 de C) |         141 ms (×1.0 de C) |         323 ms (×1.0 de C) |
+| Rust       |          93 ms (×1.8 de C) |         144 ms (×1.0 de C) |         319 ms (×1.0 de C) |
+| JavaScript |         358 ms (×6.9 de C) |         577 ms (×4.1 de C) |         334 ms (×1.0 de C) |
+| Ñ (JIT)    |          598 ms (×12 de C) |        1090 ms (×7.7 de C) |         365 ms (×1.1 de C) |
+| Python     |         4689 ms (×90 de C) |         2710 ms (×19 de C) |        10707 ms (×33 de C) |
+| C (WSL)    |          56 ms (×1.1 de C) |         161 ms (×1.1 de C) |         324 ms (×1.0 de C) |
+| C++ (WSL)  |          55 ms (×1.1 de C) |         161 ms (×1.1 de C) |         324 ms (×1.0 de C) |
+| N-AOT      |         107 ms (×2.1 de C) |         487 ms (×3.5 de C) |         318 ms (×1.0 de C) |

@@ -1,0 +1,949 @@
+# bench22.esl — generado por gen22/gen.js: no editar a mano.
+usar raiz, redondear de "numerico"
+
+fn nueva(n) {
+  var a = []
+  var i = 0
+  mientras i < n { agregar(a, 0)  i = i + 1 }
+  devolver a
+}
+fn matmul_run() {
+  var n = 440.0
+  var a = nueva((n * n))
+  var b = nueva((n * n))
+  var c = nueva((n * n))
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      {
+        var j = 0.0
+        fijo fin_j = n
+        mientras j < fin_j {
+          a[((i * n) + j)] = (((((i * 7) + (j * 3)) % 10)) / 10.0)
+          b[((i * n) + j)] = (((((i * 5) + (j * 11)) % 10)) / 10.0)
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      {
+        var j = 0.0
+        fijo fin_j = n
+        mientras j < fin_j {
+          var s = 0.0
+          {
+            var k = 0.0
+            fijo fin_k = n
+            mientras k < fin_k {
+              s = (s + (a[((i * n) + k)] * b[((k * n) + j)]))
+              k = k + 1
+            }
+          }
+          c[((i * n) + j)] = s
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  var t = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = (n * n)
+    mientras i < fin_i {
+      t = (t + c[i])
+      i = i + 1
+    }
+  }
+  devolver entero((t * 1000.0))
+}
+fn nbody_avanza(n, xs, ys, zs, vx, vy, vz, m, dt) {
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      {
+        var j = (i + 1) + 0.0
+        fijo fin_j = n
+        mientras j < fin_j {
+          var dx = (xs[i] - xs[j])
+          var dy = (ys[i] - ys[j])
+          var dz = (zs[i] - zs[j])
+          var d2 = (((dx * dx) + (dy * dy)) + (dz * dz))
+          var mag = (dt / (d2 * raiz(d2)))
+          vx[i] = (vx[i] - ((dx * m[j]) * mag))
+          vy[i] = (vy[i] - ((dy * m[j]) * mag))
+          vz[i] = (vz[i] - ((dz * m[j]) * mag))
+          vx[j] = (vx[j] + ((dx * m[i]) * mag))
+          vy[j] = (vy[j] + ((dy * m[i]) * mag))
+          vz[j] = (vz[j] + ((dz * m[i]) * mag))
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      xs[i] = (xs[i] + (dt * vx[i]))
+      ys[i] = (ys[i] + (dt * vy[i]))
+      zs[i] = (zs[i] + (dt * vz[i]))
+      i = i + 1
+    }
+  }
+}
+fn nbody_run() {
+  var n = 5.0
+  var xs = nueva(n)
+  var ys = nueva(n)
+  var zs = nueva(n)
+  var vx = nueva(n)
+  var vy = nueva(n)
+  var vz = nueva(n)
+  var m = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      xs[i] = (((i) * 1.5) + 0.1)
+      ys[i] = ((((i * i)) * 0.7) - 1.0)
+      zs[i] = ((((i * 3) % 4)) - 0.5)
+      vx[i] = ((i) * 0.01)
+      vy[i] = (0.02 - ((i) * 0.005))
+      vz[i] = (0.001 * (i))
+      m[i] = (1.0 + ((i) * 0.5))
+      i = i + 1
+    }
+  }
+  {
+    var s = 0.0
+    fijo fin_s = 800000
+    mientras s < fin_s {
+      nbody_avanza(n, xs, ys, zs, vx, vy, vz, m, 0.001)
+      s = s + 1
+    }
+  }
+  var t = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      t = (((t + xs[i]) + ys[i]) + zs[i])
+      i = i + 1
+    }
+  }
+  devolver entero((t * 1000000.0))
+}
+fn spectral_aij(i, j) {
+  devolver (1.0 / (((((((i + j) * ((i + j) + 1))) // (2)) + i) + 1)))
+}
+fn spectral_mulAv(n, v, av) {
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      var s = 0.0
+      {
+        var j = 0.0
+        fijo fin_j = n
+        mientras j < fin_j {
+          s = (s + (spectral_aij(i, j) * v[j]))
+          j = j + 1
+        }
+      }
+      av[i] = s
+      i = i + 1
+    }
+  }
+}
+fn spectral_mulAtv(n, v, atv) {
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      var s = 0.0
+      {
+        var j = 0.0
+        fijo fin_j = n
+        mientras j < fin_j {
+          s = (s + (spectral_aij(j, i) * v[j]))
+          j = j + 1
+        }
+      }
+      atv[i] = s
+      i = i + 1
+    }
+  }
+}
+fn spectral_run() {
+  var n = 800.0
+  var u = nueva(n)
+  var v = nueva(n)
+  var tmp = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      u[i] = 1.0
+      i = i + 1
+    }
+  }
+  {
+    var it = 0.0
+    fijo fin_it = 10
+    mientras it < fin_it {
+      spectral_mulAv(n, u, tmp)
+      spectral_mulAtv(n, tmp, v)
+      spectral_mulAv(n, v, tmp)
+      spectral_mulAtv(n, tmp, u)
+      it = it + 1
+    }
+  }
+  var vbv = 0.0
+  var vv = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      vbv = (vbv + (u[i] * v[i]))
+      vv = (vv + (v[i] * v[i]))
+      i = i + 1
+    }
+  }
+  devolver entero((raiz((vbv / vv)) * 1000000000.0))
+}
+fn fannkuch_run() {
+  var n = 9.0
+  var perm1 = nueva(n)
+  var perm = nueva(n)
+  var count = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      perm1[i] = i
+      i = i + 1
+    }
+  }
+  var maxFlips = 0.0
+  var checksum = 0.0
+  var permCount = 0.0
+  var r = n + 0.0
+  mientras 1 == 1 {
+    mientras r != 1 {
+      count[(r - 1)] = r
+      r = (r - 1)
+    }
+    {
+      var i = 0.0
+      fijo fin_i = n
+      mientras i < fin_i {
+        perm[i] = perm1[i]
+        i = i + 1
+      }
+    }
+    var flips = 0.0
+    var k = perm[0] + 0.0
+    mientras k != 0 {
+      var i = 0.0
+      var j = k + 0.0
+      mientras i < j {
+        var t = perm[i] + 0.0
+        perm[i] = perm[j]
+        perm[j] = t
+        i = (i + 1)
+        j = (j - 1)
+      }
+      flips = (flips + 1)
+      k = perm[0]
+    }
+    si flips > maxFlips {
+      maxFlips = flips
+    }
+    si (permCount % 2) == 0 {
+      checksum = (checksum + flips)
+    } sino {
+      checksum = (checksum - flips)
+    }
+    var seguir = 1.0
+    mientras seguir == 1 {
+      si r == n {
+        devolver ((checksum * 1000) + maxFlips)
+      }
+      var p0 = perm1[0] + 0.0
+      var q = 0.0
+      mientras q < r {
+        perm1[q] = perm1[(q + 1)]
+        q = (q + 1)
+      }
+      perm1[r] = p0
+      count[r] = (count[r] - 1)
+      si count[r] > 0 {
+        seguir = 0
+      } sino {
+        r = (r + 1)
+      }
+    }
+    permCount = (permCount + 1)
+  }
+  devolver 0
+}
+fn collatz_run() {
+  var mejor = 0.0
+  var mejorPasos = 0.0
+  {
+    var s = 1.0
+    fijo fin_s = 400000
+    mientras s < fin_s {
+      var x = s + 0.0
+      var pasos = 1.0
+      mientras x != 1 {
+        si (x % 2) == 0 {
+          x = ((x) // (2))
+        } sino {
+          x = ((3 * x) + 1)
+        }
+        pasos = (pasos + 1)
+      }
+      si pasos > mejorPasos {
+        mejorPasos = pasos
+        mejor = s
+      }
+      s = s + 1
+    }
+  }
+  devolver ((mejor * 1000) + mejorPasos)
+}
+fn nqueens_coloca(n, fila, cols, d1, d2) {
+  si fila == n {
+    devolver 1
+  }
+  var total = 0.0
+  {
+    var c = 0.0
+    fijo fin_c = n
+    mientras c < fin_c {
+      si ((cols[c] == 0) y (d1[(fila + c)] == 0)) y (d2[(((fila - c) + n) - 1)] == 0) {
+        cols[c] = 1
+        d1[(fila + c)] = 1
+        d2[(((fila - c) + n) - 1)] = 1
+        total = (total + nqueens_coloca(n, (fila + 1), cols, d1, d2))
+        cols[c] = 0
+        d1[(fila + c)] = 0
+        d2[(((fila - c) + n) - 1)] = 0
+      }
+      c = c + 1
+    }
+  }
+  devolver total
+}
+fn nqueens_run() {
+  var n = 12.0
+  devolver nqueens_coloca(n, 0, nueva(n), nueva((2 * n)), nueva((2 * n)))
+}
+fn quicksort_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn quicksort_qsort(a, lo, hi) {
+  si lo < hi {
+    var p = a[(((lo + hi)) // (2))] + 0.0
+    var i = lo + 0.0
+    var j = hi + 0.0
+    mientras i <= j {
+      mientras a[i] < p {
+        i = (i + 1)
+      }
+      mientras a[j] > p {
+        j = (j - 1)
+      }
+      si i <= j {
+        var t = a[i] + 0.0
+        a[i] = a[j]
+        a[j] = t
+        i = (i + 1)
+        j = (j - 1)
+      }
+    }
+    quicksort_qsort(a, lo, j)
+    quicksort_qsort(a, i, hi)
+  }
+}
+fn quicksort_run() {
+  var n = 400000.0
+  var a = nueva(n)
+  var x = 42.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x = quicksort_lcg(x)
+      a[i] = x
+      i = i + 1
+    }
+  }
+  quicksort_qsort(a, 0, (n - 1))
+  var c = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      c = ((c + ((a[i] % 1000003) * ((i % 13) + 1))) % 1000000007)
+      i = i + 1
+    }
+  }
+  devolver c
+}
+fn heapsort_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn heapsort_hunde(a, ini, fin) {
+  var raiz = ini + 0.0
+  mientras ((raiz * 2) + 1) <= fin {
+    var hijo = ((raiz * 2) + 1) + 0.0
+    var cambio = raiz + 0.0
+    si a[cambio] < a[hijo] {
+      cambio = hijo
+    }
+    si ((hijo + 1) <= fin) y (a[cambio] < a[(hijo + 1)]) {
+      cambio = (hijo + 1)
+    }
+    si cambio == raiz {
+      devolver
+    }
+    var t = a[raiz] + 0.0
+    a[raiz] = a[cambio]
+    a[cambio] = t
+    raiz = cambio
+  }
+}
+fn heapsort_run() {
+  var n = 300000.0
+  var a = nueva(n)
+  var x = 7.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x = heapsort_lcg(x)
+      a[i] = x
+      i = i + 1
+    }
+  }
+  var ini = (((n - 2)) // (2)) + 0.0
+  mientras ini >= 0 {
+    heapsort_hunde(a, ini, (n - 1))
+    ini = (ini - 1)
+  }
+  var fin = (n - 1) + 0.0
+  mientras fin > 0 {
+    var t = a[fin] + 0.0
+    a[fin] = a[0]
+    a[0] = t
+    fin = (fin - 1)
+    heapsort_hunde(a, 0, fin)
+  }
+  var c = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      c = ((c + ((a[i] % 1000003) * ((i % 13) + 1))) % 1000000007)
+      i = i + 1
+    }
+  }
+  devolver c
+}
+fn bubble_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn bubble_run() {
+  var n = 9000.0
+  var a = nueva(n)
+  var x = 99.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x = bubble_lcg(x)
+      a[i] = (x % 100000)
+      i = i + 1
+    }
+  }
+  {
+    var i = 0.0
+    fijo fin_i = (n - 1)
+    mientras i < fin_i {
+      {
+        var j = 0.0
+        fijo fin_j = ((n - 1) - i)
+        mientras j < fin_j {
+          si a[j] > a[(j + 1)] {
+            var t = a[j] + 0.0
+            a[j] = a[(j + 1)]
+            a[(j + 1)] = t
+          }
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  var c = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      c = ((c + (a[i] * ((i % 7) + 1))) % 1000000007)
+      i = i + 1
+    }
+  }
+  devolver c
+}
+fn fibmod_run() {
+  var a = 0.0
+  var b = 1.0
+  {
+    var i = 0.0
+    fijo fin_i = 15000000
+    mientras i < fin_i {
+      var t = ((a + b) % 1000000007) + 0.0
+      a = b
+      b = t
+      i = i + 1
+    }
+  }
+  devolver b
+}
+fn primos_esPrimo(n) {
+  si n < 2 {
+    devolver 0
+  }
+  var d = 2.0
+  mientras (d * d) <= n {
+    si (n % d) == 0 {
+      devolver 0
+    }
+    d = (d + 1)
+  }
+  devolver 1
+}
+fn primos_run() {
+  var cuenta = 0.0
+  {
+    var n = 0.0
+    fijo fin_n = 200000
+    mientras n < fin_n {
+      cuenta = (cuenta + primos_esPrimo(n))
+      n = n + 1
+    }
+  }
+  devolver cuenta
+}
+fn mcd_mcd(a, b) {
+  mientras b != 0 {
+    var t = (a % b) + 0.0
+    a = b
+    b = t
+  }
+  devolver a
+}
+fn mcd_run() {
+  var s = 0.0
+  {
+    var i = 1.0
+    fijo fin_i = 1500
+    mientras i < fin_i {
+      {
+        var j = 1.0
+        fijo fin_j = 1500
+        mientras j < fin_j {
+          s = (s + mcd_mcd(i, j))
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  devolver s
+}
+fn leibniz_run() {
+  var s = 0.0
+  var signo = 1.0
+  {
+    var k = 0.0
+    fijo fin_k = 20000000
+    mientras k < fin_k {
+      s = (s + (signo / (((2 * k) + 1))))
+      signo = (-signo)
+      k = k + 1
+    }
+  }
+  devolver entero(((s * 4.0) * 1000000000.0))
+}
+fn montecarlo_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn montecarlo_run() {
+  var x = 2024.0
+  var dentro = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = 5000000
+    mientras i < fin_i {
+      x = montecarlo_lcg(x)
+      var u = ((x) / 2147483647.0)
+      x = montecarlo_lcg(x)
+      var v = ((x) / 2147483647.0)
+      si ((u * u) + (v * v)) <= 1.0 {
+        dentro = (dentro + 1)
+      }
+      i = i + 1
+    }
+  }
+  devolver dentro
+}
+fn saxpy_run() {
+  var n = 1000000.0
+  var xs = nueva(n)
+  var ys = nueva(n)
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      xs[i] = (((i % 100)) * 0.01)
+      ys[i] = (((i % 37)) * 0.5)
+      i = i + 1
+    }
+  }
+  {
+    var rep = 0.0
+    fijo fin_rep = 20
+    mientras rep < fin_rep {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          ys[i] = ((0.5 * xs[i]) + ys[i])
+          i = i + 1
+        }
+      }
+      rep = rep + 1
+    }
+  }
+  var t = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      t = (t + ys[i])
+      i = i + 1
+    }
+  }
+  devolver entero((t * 1000.0))
+}
+fn histograma_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn histograma_run() {
+  var h = nueva(1000)
+  var x = 5.0
+  {
+    var i = 0.0
+    fijo fin_i = 6000000
+    mientras i < fin_i {
+      x = histograma_lcg(x)
+      var b = (x % 1000) + 0.0
+      h[b] = (h[b] + 1)
+      i = i + 1
+    }
+  }
+  var c = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = 1000
+    mientras i < fin_i {
+      c = ((c + (h[i] * (i + 1))) % 1000000007)
+      i = i + 1
+    }
+  }
+  devolver c
+}
+fn editdist_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn editdist_run() {
+  var n = 5000.0
+  var s = nueva(n)
+  var t = nueva(n)
+  var x = 12345.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x = editdist_lcg(x)
+      s[i] = (x % 4)
+      x = editdist_lcg(x)
+      t[i] = (x % 4)
+      i = i + 1
+    }
+  }
+  var prev = nueva((n + 1))
+  var cur = nueva((n + 1))
+  {
+    var j = 0.0
+    fijo fin_j = (n + 1)
+    mientras j < fin_j {
+      prev[j] = j
+      j = j + 1
+    }
+  }
+  {
+    var i = 1.0
+    fijo fin_i = (n + 1)
+    mientras i < fin_i {
+      cur[0] = i
+      {
+        var j = 1.0
+        fijo fin_j = (n + 1)
+        mientras j < fin_j {
+          var costo = 1.0
+          si s[(i - 1)] == t[(j - 1)] {
+            costo = 0
+          }
+          var mejor = (prev[(j - 1)] + costo) + 0.0
+          si (prev[j] + 1) < mejor {
+            mejor = (prev[j] + 1)
+          }
+          si (cur[(j - 1)] + 1) < mejor {
+            mejor = (cur[(j - 1)] + 1)
+          }
+          cur[j] = mejor
+          j = j + 1
+        }
+      }
+      {
+        var j = 0.0
+        fijo fin_j = (n + 1)
+        mientras j < fin_j {
+          prev[j] = cur[j]
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  devolver prev[n]
+}
+fn lcs_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn lcs_run() {
+  var n = 5000.0
+  var s = nueva(n)
+  var t = nueva(n)
+  var x = 777.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x = lcs_lcg(x)
+      s[i] = (x % 4)
+      x = lcs_lcg(x)
+      t[i] = (x % 4)
+      i = i + 1
+    }
+  }
+  var prev = nueva((n + 1))
+  var cur = nueva((n + 1))
+  {
+    var i = 1.0
+    fijo fin_i = (n + 1)
+    mientras i < fin_i {
+      {
+        var j = 1.0
+        fijo fin_j = (n + 1)
+        mientras j < fin_j {
+          si s[(i - 1)] == t[(j - 1)] {
+            cur[j] = (prev[(j - 1)] + 1)
+          } sino {
+            si prev[j] > cur[(j - 1)] {
+              cur[j] = prev[j]
+            } sino {
+              cur[j] = cur[(j - 1)]
+            }
+          }
+          j = j + 1
+        }
+      }
+      {
+        var j = 0.0
+        fijo fin_j = (n + 1)
+        mientras j < fin_j {
+          prev[j] = cur[j]
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  devolver prev[n]
+}
+fn mochila_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn nuevaM(n) {
+  var a = []
+  var i = 0
+  mientras i < n { agregar(a, 0)  i = i + 1 }
+  devolver a
+}
+fn mochila_run() {
+  var n = 1500.0
+  var cap = 20000.0
+  var w = nuevaM(n)
+  var v = nuevaM(n)
+  var x = 31.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      x = mochila_lcg(x)
+      w[i] = (1 + (x % 50))
+      x = mochila_lcg(x)
+      v[i] = (x % 100)
+      i = i + 1
+    }
+  }
+  var dp = nuevaM((cap + 1))
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      var c = cap + 0.0
+      mientras c >= w[i] {
+        var cand = (dp[(c - w[i])] + v[i]) + 0.0
+        si cand > dp[c] {
+          dp[c] = cand
+        }
+        c = (c - 1)
+      }
+      i = i + 1
+    }
+  }
+  devolver dp[cap]
+}
+fn floyd_lcg(x) {
+  devolver ((x * 16807) % 2147483647)
+}
+fn floyd_run() {
+  var n = 350.0
+  var d = nueva((n * n))
+  var x = 11.0
+  {
+    var i = 0.0
+    fijo fin_i = n
+    mientras i < fin_i {
+      {
+        var j = 0.0
+        fijo fin_j = n
+        mientras j < fin_j {
+          x = floyd_lcg(x)
+          d[((i * n) + j)] = (1 + (x % 1000))
+          si i == j {
+            d[((i * n) + j)] = 0
+          }
+          j = j + 1
+        }
+      }
+      i = i + 1
+    }
+  }
+  {
+    var k = 0.0
+    fijo fin_k = n
+    mientras k < fin_k {
+      {
+        var i = 0.0
+        fijo fin_i = n
+        mientras i < fin_i {
+          {
+            var j = 0.0
+            fijo fin_j = n
+            mientras j < fin_j {
+              var cand = (d[((i * n) + k)] + d[((k * n) + j)]) + 0.0
+              si cand < d[((i * n) + j)] {
+                d[((i * n) + j)] = cand
+              }
+              j = j + 1
+            }
+          }
+          i = i + 1
+        }
+      }
+      k = k + 1
+    }
+  }
+  var c = 0.0
+  {
+    var i = 0.0
+    fijo fin_i = (n * n)
+    mientras i < fin_i {
+      c = ((c + d[i]) % 1000000007)
+      i = i + 1
+    }
+  }
+  devolver c
+}
+fn tak_tak(a, b, c) {
+  si b < a {
+    devolver tak_tak(tak_tak((a - 1), b, c), tak_tak((b - 1), c, a), tak_tak((c - 1), a, b))
+  }
+  devolver c
+}
+fn tak_run() {
+  devolver tak_tak(30, 20, 10)
+}
+fn hanoi_mueve(n, a) {
+  si n == 0 {
+    devolver (a % 2)
+  }
+  devolver ((hanoi_mueve((n - 1), (a + 1)) + hanoi_mueve((n - 1), (a + 2))) + 1)
+}
+fn hanoi_run() {
+  devolver hanoi_mueve(25, 0)
+}
+fn medir(nombre, f) {
+  fijo t0 = reloj()
+  fijo r = f()
+  imprimir(nombre + " = " + texto(r) + " en " + texto(redondear(reloj() - t0, 0)) + " ms")
+}
+medir("matmul", funcion() { devolver matmul_run() })
+medir("nbody", funcion() { devolver nbody_run() })
+medir("spectral", funcion() { devolver spectral_run() })
+medir("fannkuch", funcion() { devolver fannkuch_run() })
+medir("collatz", funcion() { devolver collatz_run() })
+medir("nqueens", funcion() { devolver nqueens_run() })
+medir("quicksort", funcion() { devolver quicksort_run() })
+medir("heapsort", funcion() { devolver heapsort_run() })
+medir("bubble", funcion() { devolver bubble_run() })
+medir("fibmod", funcion() { devolver fibmod_run() })
+medir("primos", funcion() { devolver primos_run() })
+medir("mcd", funcion() { devolver mcd_run() })
+medir("leibniz", funcion() { devolver leibniz_run() })
+medir("montecarlo", funcion() { devolver montecarlo_run() })
+medir("saxpy", funcion() { devolver saxpy_run() })
+medir("histograma", funcion() { devolver histograma_run() })
+medir("editdist", funcion() { devolver editdist_run() })
+medir("lcs", funcion() { devolver lcs_run() })
+medir("mochila", funcion() { devolver mochila_run() })
+medir("floyd", funcion() { devolver floyd_run() })
+medir("tak", funcion() { devolver tak_run() })
+medir("hanoi", funcion() { devolver hanoi_run() })

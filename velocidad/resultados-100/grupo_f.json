@@ -1,0 +1,279 @@
+{
+ "f86_hola": {
+  "C": {
+   "estado": "ok",
+   "ms": 2,
+   "mb": 10.0,
+   "valor": "hola"
+  },
+  "JS": {
+   "estado": "ok",
+   "ms": 89,
+   "mb": 57.9,
+   "valor": "hola"
+  },
+  "Python": {
+   "estado": "ok",
+   "ms": 12,
+   "mb": 10.0,
+   "valor": "hola"
+  },
+  "AOT": {
+   "estado": "ok",
+   "ms": 2,
+   "mb": 10.0,
+   "valor": "hola"
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "ms": 2,
+   "mb": 10.0,
+   "valor": "hola"
+  },
+  "JIT": {
+   "estado": "ok",
+   "ms": 182,
+   "mb": 77.0,
+   "valor": "hola"
+  }
+ },
+ "f87_arranque_estructura": {
+  "C": {
+   "estado": "ok",
+   "ms": 35,
+   "mb": 78.2,
+   "valor": "29999994"
+  },
+  "JS": {
+   "estado": "ok",
+   "ms": 210,
+   "mb": 141.3,
+   "valor": "29999994"
+  },
+  "Python": {
+   "estado": "ok",
+   "ms": 1778,
+   "mb": 391.9,
+   "valor": "29999994"
+  },
+  "AOT": {
+   "estado": "ok",
+   "ms": 54,
+   "mb": 78.8,
+   "valor": "29999994"
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "ms": 53,
+   "mb": 78.9,
+   "valor": "29999994"
+  },
+  "JIT": {
+   "estado": "ok",
+   "ms": 748,
+   "mb": 411.1,
+   "valor": "29999994"
+  }
+ },
+ "f88_escribir_archivo": {
+  "C": {
+   "estado": "ok",
+   "ms": 156,
+   "mb": 10.0,
+   "valor": "ok"
+  },
+  "JS": {
+   "estado": "ok",
+   "ms": 235,
+   "mb": 93.7,
+   "valor": "ok"
+  },
+  "Python": {
+   "estado": "ok",
+   "ms": 382,
+   "mb": 10.3,
+   "valor": "ok"
+  },
+  "AOT": {
+   "estado": "ok",
+   "ms": 4315,
+   "mb": 10.0,
+   "valor": "ok"
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "ms": 4343,
+   "mb": 10.0,
+   "valor": "ok"
+  },
+  "JIT": {
+   "estado": "ok",
+   "ms": 711,
+   "mb": 199.0,
+   "valor": "ok"
+  }
+ },
+ "f89_leer_archivo": {
+  "C": {
+   "estado": "ok",
+   "ms": 71,
+   "mb": 10.0,
+   "valor": "8999994"
+  },
+  "JS": {
+   "estado": "ok",
+   "ms": 712,
+   "mb": 236.2,
+   "valor": "8999994"
+  },
+  "Python": {
+   "estado": "ok",
+   "ms": 463,
+   "mb": 10.0,
+   "valor": "8999994"
+  },
+  "AOT": {
+   "estado": "ok",
+   "ms": 253,
+   "mb": 10.0,
+   "valor": "8999994"
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "ms": 259,
+   "mb": 10.0,
+   "valor": "8999994"
+  },
+  "JIT": {
+   "estado": "ok",
+   "ms": 1241,
+   "mb": 84.6,
+   "valor": "8999994"
+  }
+ },
+ "f90_csv": {
+  "C": {
+   "estado": "ok",
+   "ms": 28,
+   "mb": 10.0,
+   "valor": "2997000"
+  },
+  "JS": {
+   "estado": "ok",
+   "ms": 597,
+   "mb": 168.5,
+   "valor": "2997000"
+  },
+  "Python": {
+   "estado": "ok",
+   "ms": 273,
+   "mb": 10.0,
+   "valor": "2997000"
+  },
+  "AOT": {
+   "estado": "ok",
+   "ms": 237,
+   "mb": 10.0,
+   "valor": "2997000"
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "ms": 237,
+   "mb": 10.0,
+   "valor": "2997000"
+  },
+  "JIT": {
+   "estado": "ok",
+   "ms": 1004,
+   "mb": 93.4,
+   "valor": "2997000"
+  }
+ },
+ "f93_json_serializar": {
+  "C": {
+   "estado": "ok",
+   "ms": 12,
+   "mb": 10.0,
+   "valor": "2062961"
+  },
+  "JS": {
+   "estado": "ok",
+   "ms": 106,
+   "mb": 75.7,
+   "valor": "2062961"
+  },
+  "Python": {
+   "estado": "ok",
+   "ms": 41,
+   "mb": 24.5,
+   "valor": "2062961"
+  },
+  "AOT": {
+   "estado": "ok",
+   "ms": 375,
+   "mb": 33.5,
+   "valor": "2062961"
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "ms": 379,
+   "mb": 33.4,
+   "valor": "2062961"
+  },
+  "JIT": {
+   "estado": "ok",
+   "ms": 254,
+   "mb": 107.7,
+   "valor": "2062961"
+  }
+ },
+ "f100_mixto": {
+  "C": {
+   "estado": "ok",
+   "ms": 32,
+   "mb": 10.0,
+   "valor": "16757736"
+  },
+  "JS": {
+   "estado": "ok",
+   "ms": 197,
+   "mb": 84.3,
+   "valor": "16757736"
+  },
+  "Python": {
+   "estado": "ok",
+   "ms": 1700,
+   "mb": 22.8,
+   "valor": "16757736"
+  },
+  "AOT": {
+   "estado": "ok",
+   "ms": 564,
+   "mb": 19.6,
+   "valor": "16757736"
+  },
+  "AOT-SC": {
+   "estado": "ok",
+   "ms": 566,
+   "mb": 19.8,
+   "valor": "16757736"
+  },
+  "JIT": {
+   "estado": "ok",
+   "ms": 408,
+   "mb": 99.4,
+   "valor": "16757736"
+  }
+ },
+ "_compilacion_ms": {
+  "C (gcc -O2)": 397,
+  "Ñ AOT": 10247,
+  "Ñ AOT (2.ª vez, con la biblioteca ya compilada)": 10962
+ },
+ "_tamano_bytes": {
+  "C hola": 15952,
+  "Ñ AOT hola": 396096,
+  "C bench22 (22 benchmarks)": 24840,
+  "Ñ AOT bench22 (22 benchmarks)": 839800
+ }
+}

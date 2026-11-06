@@ -1,9 +1,9 @@
 # Ñ
 
 Un lenguaje de programación en español. No una capa de traducción encima de
-otro lenguaje: tiene su propio verificador de tipos, su máquina virtual de
-bytecode y un JIT que traduce a JavaScript cuando una función se calienta.
-Y en otras Medidas, en su Variante AOT tiene un Gran Rendimiento 
+otro lenguaje: tiene su propio verificador de tipos y tres formas de correr un
+programa, con un orden claro entre ellas (la siguiente sección).
+
 ```n
 usar media, desviacion, cuartiles de "numerico"
 usar moneda, tablaTexto, enNegrita de "formato"
@@ -20,6 +20,51 @@ fn clasificar(x: real) -> texto {
 }
 para v en ventas { imprimir(moneda(v) + "  " + clasificar(v)) }
 ```
+
+## Los motores de Ñ
+
+| | motor | para qué sirve | cómo se usa |
+|---|---|---|---|
+| **Oficial** | **AOT** — Ñ → C → ejecutable nativo, sin runtime aparte | la velocidad: programas, herramientas y cálculo que tienen que ir rápido | `node motor-exp/util/n-compilar.js programa.esl -o programa` |
+| Secundario | **JIT** — máquina virtual + traducción a JavaScript, sobre Node | arrancar al instante, depurar, y correr **todo** el lenguaje y toda la biblioteca | `node motor/util/n-node.js programa.esl` |
+| Secundario | **Navegador** — `espanol-like-v4.html`, un solo archivo | probar sin instalar nada, y las páginas con interfaz (lienzo, estilo, eventos) | abrir el archivo |
+
+Donde el AOT puede correr un programa, da lo mismo que la máquina virtual: se
+prueba contra ella con cada programa de la batería que puede compilar (salida y
+código de salida iguales; solo cambia el rastro de los errores, que nombra otros
+marcos intermedios). Los que no puede compilar los rechaza al compilar, no al correr.
+
+**Qué tan rápido es el AOT.** Medido en una i3-1115G4 frente a C escrito a mano
+(gcc -O3, mismos algoritmos), 61 programas de estrés —objetos, recursión,
+acceso a listas, memoria—, media geométrica del tiempo:
+
+| familia | Ñ AOT frente a C |
+|---|---|
+| objetos y memoria (crear y soltar millones de objetos) | ×1.0 |
+| acceso a listas, índices comprobados | ×1.26 |
+| memoria y caché | ×1.31 |
+| recursión | ×1.81 |
+| **los 61** | **×1.31** (42 por debajo de ×1.5, 53 por debajo de ×2) |
+
+Los 22 programas numéricos clásicos (fib, criba, mandelbrot, n-cuerpos…) salen a
+×1.3 de C con todas las comprobaciones puestas (×1.28 a ×1.31 según la corrida),
+y a ×1.05–×1.10 con `--sin-comprobar`. El programa comprueba índices, desbordes y divisiones igual
+que la máquina virtual: si algo se sale, da el mismo error con el mismo mensaje.
+Las tablas completas, con las condiciones de cada medida, están en
+[`velocidad/`](velocidad/).
+
+**Lo que el AOT todavía no hace** (por eso el JIT sigue siendo el que corre
+«todo Ñ», y por eso se dice aquí y no se esconde):
+
+- **Biblioteca.** El ejecutable lleva 295 de los 1166 nombres del motor. Faltan
+  el tipo `arreglo` y casi todo `numerico`, las tablas de `datos`, `estilo`, el
+  lienzo y la página (esas viven en el navegador por naturaleza), NEÑ y varias
+  funciones de `sistema`. Un programa que usa algo que falta no compila y lo dice
+  con su nombre, nunca falla a medias.
+- **Generadores y funciones asíncronas**, y los hilos.
+- **Recursión:** hasta 900 llamadas anidadas, igual que la máquina virtual.
+- **Necesita un compilador de C** (gcc o clang) y compilar tarda segundos, no
+  milisegundos: para escribir y probar, el JIT; para entregar, el AOT.
 
 ## Probarlo sin instalar nada
 
@@ -38,7 +83,8 @@ n programa.esl
 O sin instalar, desde el repositorio:
 
 ```
-node motor/util/n-node.js programa.esl
+node motor/util/n-node.js programa.esl                          # JIT
+node motor-exp/util/n-compilar.js programa.esl -o programa      # AOT (motor oficial)
 ```
 
 Hay también un intérprete para [QuickJS](https://bellard.org/quickjs/)

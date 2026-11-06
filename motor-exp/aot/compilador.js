@@ -25,6 +25,7 @@
 // ============================================================================
 'use strict';
 const { leerCabecera } = require('../util/cabecera-c.js');
+const TIPADO = require('./tipado.js');
 
 const OPS = ['CONST', 'NULO', 'CIERTO', 'FALSO', 'POP', 'DUP',
   'GET_LOCAL', 'SET_LOCAL', 'GET_GLOBAL', 'SET_GLOBAL', 'DEF_GLOBAL', 'GET_UP', 'SET_UP',
@@ -133,6 +134,7 @@ function analizar(fn, ins, ctx) {
   const est = new Array(ins.length).fill(null);   // { d, h: [{pos, d, destino}], t: [tipos], p: [procedencia] }
   const pendientes = [];
   const usados = new Set();                       // parámetros que entran en una operación numérica
+  const usadosL = new Set();                      // (motor-exp A3) parámetros que se usan como lista: a[i], a[i] = v, longitud(a), agregar(a, x)
   let ret = 'bot';
   const llegar = (k, d, h, t, p, desde) => {
     if (k === undefined) throw new ErrorAOT(`«${fn.nombre}»: un salto no cae en una instrucción (desde ${desde})`);
@@ -164,6 +166,7 @@ function analizar(fn, ins, ctx) {
     if (d2 + 1 > maxD) maxD = d2 + 1;
     const sig = porPos.get(it.fin);
     const usa = q => { if (p[q] >= 0) usados.add(p[q]); };
+    const usaL = q => { if (p[q] >= 0) usadosL.add(p[q]); };
     const num2 = (a, b) => (t[a] === 'bot' || t[b] === 'bot') ? 'bot' : (t[a] === 'num' && t[b] === 'num') ? 'num' : 'any';
     const pon = (q, tipo) => { t[q] = tipo; p[q] = -1; };
     switch (it.op) {
@@ -193,8 +196,10 @@ function analizar(fn, ins, ctx) {
         break;
       }
       case OP.SUB: case OP.MUL: case OP.DIV: case OP.IDIV: case OP.MOD: case OP.POW:
-        usa(d - 2); usa(d - 1); pon(d - 2, num2(d - 2, d - 1)); break;
-      case OP.NEG: usa(d - 1); pon(d - 1, t[d - 1] === 'bot' ? 'bot' : t[d - 1] === 'num' ? 'num' : 'any'); break;
+        // (motor-exp A3) «-», «*», «/», «//», «%» y «**» dan un número o un error (nunca otra cosa: n_restar & co. fallan con
+        // lo que no es número), así que lo que sigue a la operación ya es un número aunque los operandos fueran «any»
+        usa(d - 2); usa(d - 1); pon(d - 2, (t[d - 2] === 'bot' || t[d - 1] === 'bot') ? 'bot' : 'num'); break;
+      case OP.NEG: usa(d - 1); pon(d - 1, t[d - 1] === 'bot' ? 'bot' : 'num'); break;
       case OP.NOT: pon(d - 1, 'bool'); break;
       case OP.EQ: case OP.NEQ: pon(d - 2, 'bool'); break;
       case OP.LT: case OP.LE: case OP.GT: case OP.GE: usa(d - 2); usa(d - 1); pon(d - 2, 'bool'); break;
@@ -202,9 +207,15 @@ function analizar(fn, ins, ctx) {
       case OP.CALL: {
         const n = it.arg, base = d - n - 1, tc = t[base];
         let tr = 'any';
-        if (tc.startsWith('fn:')) tr = ctx.retDe(Number(tc.slice(3)), n, t.slice(base + 1, d));
+        if (tc.startsWith('fn:')) {
+          tr = ctx.retDe(Number(tc.slice(3)), n, t.slice(base + 1, d));
+          // (motor-exp A3) un parámetro que se pasa tal cual a la posición numérica de otra función conocida cuenta como usado en una cuenta:
+          // «media(x) = base(x) + 1» recibe un número, igual que «base»
+          if (ctx.guardaDe) for (let i = 0; i < n; i++) if (ctx.guardaDe(Number(tc.slice(3)), n, i)) usa(base + 1 + i);
+          if (ctx.listaDe) for (let i = 0; i < n; i++) if (ctx.listaDe(Number(tc.slice(3)), n, i)) usaL(base + 1 + i);
+        }
         else if (tc === 'nat:rango' && n >= 1 && n <= 3) tr = ctx.rango && esParaRango(ins, k, consts, base) ? `rango:${base}` : 'lista';
-        else if (esAgregar(ins, k, tc, n, t[base + 1])) tr = 'nulo';
+        else if (esAgregar(ins, k, tc, n, t[base + 1])) { tr = 'nulo'; usaL(base + 1); }
         else if (tc.startsWith('nat:')) tr = ctx.retNativa(tc.slice(4));
         pon(base, tr);
         break;
@@ -214,11 +225,11 @@ function analizar(fn, ins, ctx) {
       case OP.RET: ret = juntar(ret, prestadoG(t[d - 1]) ? 'obj' : t[d - 1], false); break;   // lo devuelto sale con su referencia
       case OP.LISTA: pon(d - it.arg, 'lista'); break;
       case OP.DIC: pon(d - 2 * it.arg, 'dic'); break;
-      case OP.IDX_GET: usa(d - 1); pon(d - 2, esRango(t[d - 2]) ? 'num' : 'any'); break;
-      case OP.IDX_SET: usa(d - 2); t[d - 3] = t[d - 1]; p[d - 3] = -1; break;
+      case OP.IDX_GET: usa(d - 1); usaL(d - 2); pon(d - 2, esRango(t[d - 2]) ? 'num' : 'any'); break;
+      case OP.IDX_SET: usa(d - 2); usaL(d - 3); t[d - 3] = t[d - 1]; p[d - 3] = -1; break;
       case OP.PROP_GET: pon(d - 1, 'any'); break;
       case OP.CONCAT: pon(d - it.arg, 'texto'); break;
-      case OP.LEN: pon(d - 1, 'num'); break;
+      case OP.LEN: usaL(d - 1); pon(d - 1, 'num'); break;
       case OP.TRY: case OP.FIN_TRY: case OP.LANZAR: break;
       default: throw new ErrorAOT('instrucción sin tipo conocido ' + it.nombre);
     }
@@ -237,7 +248,7 @@ function analizar(fn, ins, ctx) {
       default: llegar(sig, d2, h, t, p, it.pos);
     }
   }
-  return { est, maxD, porPos, ret, usados };
+  return { est, maxD, porPos, ret, usados, usadosL };
 }
 
 // ── 3. emitir C ─────────────────────────────────────────────────────────────
@@ -350,7 +361,7 @@ function compilarAOT(fnPrincipal, opciones) {
   // devuelve se sabe. Las nativas de la biblioteca que el programa no tapa
   // también se conocen; de unas pocas se sabe lo que devuelven (verificado en
   // nrt.c, no por la firma de la VM).
-  const RET_NATIVAS = { rango: 'lista', agregar: 'lista', reloj: 'num' };
+  const RET_NATIVAS = { rango: 'lista', agregar: 'lista', reloj: 'num', 'numerico/raiz': 'num', 'numerico/absoluto': 'num', 'numerico/piso': 'num', 'numerico/techo': 'num' };
   const conocidas = new Map();   // nombre del global → índice de la función
   {
     const defs = new Map(), sets = new Set();
@@ -389,7 +400,8 @@ function compilarAOT(fnPrincipal, opciones) {
     if (conocidas.get(g) === j) return true;
     if (!tramoRecto.has(g)) return false;
     if (j === 0) return pos > tramoRecto.get(g);
-    return posDefDe.has(j) && posDefDe.get(j) > tramoRecto.get(g);
+    // el tramo recto no contiene ninguna llamada: ninguna función corre antes de que todas las del tramo estén definidas (da igual el orden: recursión mutua)
+    return posDefDe.has(j);
   }
   const tipoGlobal = g => {
     if (conocidas.has(g)) return `fn:${conocidas.get(g)}`;
@@ -408,19 +420,21 @@ function compilarAOT(fnPrincipal, opciones) {
       if (it.op === OP.SET_LOCAL) escritos.add(it.arg);
       if (it.op === OP.CLOSURE) for (const [esLocal, idx] of it.ups) if (esLocal) capturados.add(idx);
     }
-    return { f, ins, escritos, capturados, guardas: [], ret: ['bot', 'bot'], res: [null, null], rango: true, prestar: true };
+    return { f, ins, escritos, capturados, guardas: [], listas: [], ret: ['bot', 'bot'], res: [null, null], rango: true, prestar: true };
   });
   const retDe = (k, n, tiposArgs) => {
     const q = plan[k];
     if (n !== q.f.aridad) return 'any';
-    if (q.guardas.length && q.guardas.every(i => tiposArgs[i] === 'num')) return q.ret[1];
+    if ((q.guardas.length || q.listas.length) && q.guardas.every(i => tiposArgs[i] === 'num') && q.listas.every(i => tiposArgs[i] === 'lista')) return q.ret[1];
     return q.ret[0];
   };
   const retNativa = nombre => RET_NATIVAS[nombre] || 'any';
   const analizarVersion = (q, v) => {
     const ctx = {
-      tipoParam: i => (v === 1 && q.guardas.includes(i) ? 'num' : 'any'),
+      tipoParam: i => (v === 1 && q.guardas.includes(i) ? 'num' : v === 1 && q.listas.includes(i) ? 'lista' : 'any'),
       retDe, retNativa, tipoGlobal, capturados: q.capturados, escritos: q.escritos, rango: q.rango, prestar: q.prestar,
+      guardaDe: (k, n, i) => plan[k].f.aridad === n && plan[k].guardas.includes(i),
+      listaDe: (k, n, i) => plan[k].f.aridad === n && plan[k].listas.includes(i),
     };
     try { return analizar(q.f, q.ins, ctx); }
     catch (e) {
@@ -429,12 +443,23 @@ function compilarAOT(fnPrincipal, opciones) {
       throw e;
     }
   };
-  // primero, qué parámetros guarda cada una (no depende de nadie más)
-  for (const q of plan) { const r = analizarVersion(q, 0); q.guardas = [...r.usados].sort((a, b) => a - b); }
+  // primero, qué parámetros guarda cada una. (motor-exp A3) Hasta que ya no cambie: lo que guarda una función depende de lo que guardan
+  // las que llama (un parámetro que solo se pasa a otra función cuenta si esa lo guarda)
+  for (let vuelta = 0, cambia = true; cambia; vuelta++) {
+    cambia = false;
+    for (const q of plan) {
+      const r = analizarVersion(q, 0), g = [...r.usados].sort((a, b) => a - b);
+      if (g.length !== q.guardas.length || g.some((x, i) => x !== q.guardas[i])) { q.guardas = g; cambia = true; }
+      // (motor-exp A3) un parámetro usado como lista (y no como número) se supone lista: la guarda de la entrada general lo comprueba
+      const gl = [...r.usadosL].filter(i => !q.guardas.includes(i)).sort((a, b) => a - b);
+      if (gl.length !== q.listas.length || gl.some((x, i) => x !== q.listas[i])) { q.listas = gl; cambia = true; }
+    }
+    if (vuelta > 40) throw new ErrorAOT('los parámetros numéricos de las funciones no convergen');
+  }
   for (let vuelta = 0; ; vuelta++) {
     let cambio = false;
     for (const q of plan) {
-      for (const v of (q.guardas.length ? [1, 0] : [0])) {
+      for (const v of (q.guardas.length || q.listas.length ? [1, 0] : [0])) {
         const r = analizarVersion(q, v);
         q.res[v] = r;
         const nr = v === 0 ? juntar(r.ret, q.ret[1], false) : r.ret;   // la general puede acabar en la numérica
@@ -445,12 +470,109 @@ function compilarAOT(fnPrincipal, opciones) {
     if (vuelta > 40) throw new ErrorAOT('los tipos de las funciones no convergen');
   }
 
+  // ── (motor-exp A3) funciones numéricas PURAS ──
+  // Una función cuyos parámetros son todos números, que devuelve un número y que solo hace cuentas (+ − ×, comparaciones, lógica,
+  // saltos) y llamadas a otras como ella no necesita cajas, ni cierre, ni mirar el error después de cada llamada: se emite como
+  // una función de C de verdad (double, int), con la profundidad en un registro. Medido a mano en fib(38): 276 → 85 ms (C con
+  // «long»: 57). No puede fallar nunca, salvo por la profundidad (más de N_MAX_MARCOS marcos): ese error baja de golpe con
+  // longjmp hasta quien llamó desde fuera (ver F<j>n). Dividir, el resto, la potencia y todo lo demás pueden fallar o necesitan
+  // objetos, así que quedan fuera por ahora: una función que los use sigue por el camino de siempre.
+  const OPS_PURAS = new Set([OP.CONST, OP.CIERTO, OP.FALSO, OP.POP, OP.DUP, OP.GET_LOCAL, OP.SET_LOCAL, OP.GET_GLOBAL, OP.ADD, OP.SUB,
+    OP.MUL, OP.NEG, OP.NOT, OP.EQ, OP.NEQ, OP.LT, OP.LE, OP.GT, OP.GE, OP.JMP, OP.JMP_FALSE, OP.JMP_TRUE, OP.LOOP, OP.CALL, OP.RET]);
+  const esNB = t => t === 'num' || t === 'bool';
+  const sinPura = process.env.N_AOT_SIN_PURAS === '1';
+  // ¿puede j ser pura, suponiendo que lo son las que llama? Devuelve el conjunto de las que llama, o null.
+  const candidataPura = (q, j) => {
+    const f = q.f;
+    if (sinPura || j === 0 || f.corrutina || f.nUpvalues || q.capturados.size || !f.aridad || f.aridad > 8) return null;
+    if (q.guardas.length !== f.aridad || q.ret[1] !== 'num' || !q.res[1]) return null;
+    const { est } = q.res[1], consts = f.chunk.consts, llama = new Set();
+    for (let k = 0; k < q.ins.length; k++) {
+      const it = q.ins[k], st = est[k];
+      if (!st) continue;
+      if (!OPS_PURAS.has(it.op)) return null;
+      const d = st.d, t = st.t;
+      switch (it.op) {
+        case OP.CONST: if (typeof consts[it.arg] !== 'number' && typeof consts[it.arg] !== 'boolean') return null; break;
+        case OP.DUP: if (!esNB(t[d - 1])) return null; break;
+        case OP.GET_LOCAL: if (it.arg < 1 || !esNB(t[it.arg])) return null; break;
+        case OP.SET_LOCAL: if (it.arg < 1 || !esNB(t[d - 1])) return null; break;
+        case OP.GET_GLOBAL: {
+          const g = consts[it.arg], tg = tipoGlobal(g);
+          if (!tg.startsWith('fn:') || !definidaSeguro(g, j, it.pos)) return null;
+          break;
+        }
+        case OP.ADD: case OP.SUB: case OP.MUL: case OP.LT: case OP.LE: case OP.GT: case OP.GE:
+          if (t[d - 2] !== 'num' || t[d - 1] !== 'num') return null; break;
+        case OP.NEG: if (t[d - 1] !== 'num') return null; break;
+        case OP.NOT: case OP.JMP_FALSE: case OP.JMP_TRUE: if (t[d - 1] !== 'bool') return null; break;
+        case OP.EQ: case OP.NEQ: if (!esNB(t[d - 1]) || t[d - 1] !== t[d - 2]) return null; break;
+        case OP.CALL: {
+          const n = it.arg, base = d - n - 1, tc = t[base];
+          if (!tc.startsWith('fn:')) return null;
+          const kf = Number(tc.slice(3)), qf = plan[kf];
+          if (kf === 0 || n !== qf.f.aridad || qf.guardas.length !== n) return null;
+          for (let i = 0; i < n; i++) if (t[base + 1 + i] !== 'num') return null;
+          llama.add(kf);
+          break;
+        }
+        case OP.RET: if (t[d - 1] !== 'num') return null; break;
+        default: break;
+      }
+    }
+    return llama;
+  };
+  const puras = new Map();   // índice de función → { llama:Set }
+  plan.forEach((q, j) => { const l = candidataPura(q, j); if (l) puras.set(j, { llama: l }); });
+  for (let cambio = true; cambio;) {
+    cambio = false;
+    for (const [j, p] of puras) if ([...p.llama].some(kf => !puras.has(kf))) { puras.delete(j); cambio = true; }
+  }
+  // por cada pura: ¿llega a un ciclo de llamadas (entonces puede pasarse de profundidad)? y, si no, el mayor número de marcos que abre
+  {
+    const estado = new Map();   // 1 = en la pila, 2 = hecha
+    const visita = j => {
+      if (estado.get(j) === 2) return;
+      const p = puras.get(j);
+      if (estado.get(j) === 1) { p.rec = true; return; }
+      estado.set(j, 1);
+      p.rec = false; p.marcos = 1;
+      for (const kf of p.llama) {
+        visita(kf);
+        const c = puras.get(kf);
+        if (estado.get(kf) === 1 || c.rec) p.rec = true;
+        else p.marcos = Math.max(p.marcos, 1 + c.marcos);
+      }
+      estado.set(j, 2);
+    };
+    for (const j of puras.keys()) visita(j);
+    // quien llama a una recursiva también puede desbordar
+    for (let cambio = true; cambio;) {
+      cambio = false;
+      for (const [j, p] of puras) if (!p.rec && [...p.llama].some(kf => puras.get(kf).rec)) { p.rec = true; cambio = true; }
+    }
+    for (const [j, p] of puras) plan[j].pura = p;
+  }
+
+  // (motor-exp A4) el nivel tipado: listas de números y de bool, división y resto, sin cajas (ver aot/tipado.js)
+  const tipInfo = process.env.N_AOT_SIN_TIPADO === '1' ? new Map() : TIPADO.analizarTipado({ plan, OP, efecto, tipoGlobal, definidaSeguro, esPura: j => !!plan[j].pura, depurar: process.env.N_AOT_TIPADO === '1' }).fns;
+  plan.forEach((q, j) => {
+    const t = tipInfo.get(j);
+    if (!t) return;
+    q.tipada = t;
+    if (process.env.N_AOT_TIPADO === '1') console.error(`[tipado] «${q.f.nombre}» (${t.params.map((p, i) => p === 'num' ? (t.ent.paramInt[i] ? 'int' : 'dbl') : p).join(',')}) → ${t.ret === 'num' ? (t.ent.retInt ? 'int' : 'dbl') : t.ret} sí${t.entrada ? ' (entrada desde fuera)' : t.seguro ? '' : ' (solo llamada desde otras tipadas: escribe listas parámetro)'}${q.pura ? ' [pura]' : ''}`);
+  });
   fns.forEach((f, j) => E(`static NV F${j}(NCierre* yo, NV* args, int nargs);`));
-  plan.forEach((q, j) => { if (q.guardas.length) E(`static ${firmaClon(q, j)};`); });
+  { const alguno = [...tipInfo.values()][0]; if (alguno && alguno.recs && alguno.recs.size) TIPADO.emitirRegistros(alguno.recs, E); }   // (A4) los objetos del nivel tipado: sus estructuras y destructores
+  for (const [id, t] of tipInfo) E(`static N_PURA ${TIPADO.firmaTipada(plan, id, t)};`);
+  plan.forEach((q, j) => { if (q.guardas.length || q.listas.length) E(`static ${firmaClon(q, j)};`); });
+  plan.forEach((q, j) => { if (q.pura) E(`static N_PURA ${firmaPura(q, j)};`); });
   fns.forEach((f, j) => E(`static const NFn FN${j} = { ${cTexto(f.nombre)}, ${f.aridad}, ${f.minimos !== undefined ? f.minimos : -1}, ${f.nUpvalues}, ${f.corrutina ? 1 : 0}, F${j} };`));
 
+  for (const [id, t] of tipInfo) TIPADO.emitirTipada({ plan, OP, cNumero, fnsInfo: tipInfo, sinComprobar: process.env.N_AOT_SIN_COMPROBAR === '1' }, id, t, E);
   plan.forEach((q, j) => {
-    if (q.guardas.length) emitirFuncion(q, j, 1);
+    if (q.pura) emitirPura(q, j);
+    if (q.guardas.length || q.listas.length) emitirFuncion(q, j, 1);
     emitirFuncion(q, j, 0);
   });
   emitirEnlaces(enl, E, cTexto, globales.has(G_NATIVA) || globales.has(G_CABECERA));
@@ -490,6 +612,65 @@ function compilarAOT(fnPrincipal, opciones) {
   E('  return 0;');
   E('}');
   return { c: out.join('\n') + '\n', funciones: fns.length, textos: textos.size, globales: globales.size, enlazar: enl.bibliotecas };
+
+  // (motor-exp A3) La versión PURA de una función: doubles y enteros de C, sin cajas, sin cierre y sin mirar el error tras cada llamada.
+  function firmaPura(q, j) {
+    const ps = Array.from({ length: q.f.aridad }, (_, i) => `double p${i}`);
+    return `double F${j}p(int prof_${ps.length ? ', ' + ps.join(', ') : ''})`;
+  }
+  function emitirPura(q, j) {
+    const f = q.f, ins = q.ins, consts = f.chunk.consts;
+    const { est, maxD } = q.res[1];
+    const destinos = new Set(ins.filter(it => it.destino !== undefined).map(it => it.destino));
+    const L = [], C = s => L.push('  ' + s), r = i => `s${i}`;
+    const lineaCall = (ins.find(it => it.op === OP.CALL) || ins[0]).linea;   // la línea de su primera llamada: la del rastro de un desbordamiento
+    for (let k = 0; k < ins.length; k++) {
+      const it = ins[k], st = est[k];
+      if (!st) continue;
+      const d = st.d;
+      if (destinos.has(it.pos)) L.push(`P${it.pos}:;`);
+      switch (it.op) {
+        case OP.CONST: { const v = consts[it.arg]; C(`${r(d)} = ${typeof v === 'number' ? cNumero(v) : v ? '1' : '0'};`); break; }
+        case OP.CIERTO: C(`${r(d)} = 1;`); break;
+        case OP.FALSO: C(`${r(d)} = 0;`); break;
+        case OP.POP: case OP.GET_GLOBAL: break;
+        case OP.DUP: C(`${r(d)} = ${r(d - 1)};`); break;
+        case OP.GET_LOCAL: C(`${r(d)} = ${r(it.arg)};`); break;
+        case OP.SET_LOCAL: if (it.arg !== d - 1) C(`${r(it.arg)} = ${r(d - 1)};`); break;
+        case OP.ADD: C(`${r(d - 2)} = ${r(d - 2)} + ${r(d - 1)};`); break;
+        case OP.SUB: C(`${r(d - 2)} = ${r(d - 2)} - ${r(d - 1)};`); break;
+        case OP.MUL: C(`${r(d - 2)} = ${r(d - 2)} * ${r(d - 1)};`); break;
+        case OP.NEG: C(`${r(d - 1)} = -${r(d - 1)};`); break;
+        case OP.NOT: C(`${r(d - 1)} = !${r(d - 1)};`); break;
+        case OP.EQ: C(`${r(d - 2)} = (${r(d - 2)} == ${r(d - 1)});`); break;
+        case OP.NEQ: C(`${r(d - 2)} = (${r(d - 2)} != ${r(d - 1)});`); break;
+        case OP.LT: C(`${r(d - 2)} = (${r(d - 2)} < ${r(d - 1)});`); break;
+        case OP.LE: C(`${r(d - 2)} = (${r(d - 2)} <= ${r(d - 1)});`); break;
+        case OP.GT: C(`${r(d - 2)} = (${r(d - 2)} > ${r(d - 1)});`); break;
+        case OP.GE: C(`${r(d - 2)} = (${r(d - 2)} >= ${r(d - 1)});`); break;
+        case OP.JMP: case OP.LOOP: C(`goto P${it.destino};`); break;
+        case OP.JMP_FALSE: C(`if (!${r(d - 1)}) goto P${it.destino};`); break;
+        case OP.JMP_TRUE: C(`if (${r(d - 1)}) goto P${it.destino};`); break;
+        case OP.CALL: {
+          const n = it.arg, base = d - n - 1, kf = Number(st.t[base].slice(3));
+          C(`${r(base)} = F${kf}p(prof_ + 1${n ? ', ' + Array.from({ length: n }, (_, i) => r(base + 1 + i)).join(', ') : ''});`);
+          break;
+        }
+        case OP.RET: C(`return ${r(d - 1)};`); break;
+        default: throw new ErrorAOT('instrucción pura sin traducir ' + it.nombre);
+      }
+    }
+    E('');
+    E(`/* ${f.nombre}/${f.aridad} (PURA: doubles de C, sin cajas${q.pura.rec ? '; puede desbordar la profundidad' : '; ' + q.pura.marcos + ' marco(s) como mucho'}) */`);
+    E(`static N_PURA ${firmaPura(q, j)} {`);
+    E(`  if (__builtin_expect(prof_ > N_MAX_MARCOS, 0)) n_pura_desborde(${cTexto(f.nombre)}, ${lineaCall});`);
+    const vars = [];
+    for (let i = 1; i <= maxD; i++) vars.push(i <= f.aridad ? `s${i} = p${i - 1}` : `s${i} = 0`);
+    E(`  double ${vars.join(', ')};`);
+    for (const l of L) E(l);
+    E('  return 0;');
+    E('}');
+  }
 
   // La versión numérica recibe sus parámetros guardados como double de C y,
   // si lo que devuelve se sabe número, devuelve double: ni caja al entrar ni
@@ -579,9 +760,11 @@ function compilarAOT(fnPrincipal, opciones) {
         typeof consts[b.arg] === 'number' && c.op === OP.CALL && c.arg === 1 && e.op === OP.POP ? consts[b.arg] : null;
     };
     // el camino rápido de un índice de lista, con el lento (que da el error) al lado
+    // (motor-exp A3) una sola conversión a entero y una comparación sin signo; lo demás (un índice negativo, uno con decimales, uno fuera de
+    // rango) lo resuelve la función general, que es la referencia de la VM y da los mismos errores
     const indiceLista = (o, i, dentro, fuera) =>
-      `{ NLista* l_ = (NLista*)${o}.u.o; double k_ = ${i}.u.n < 0 ? (double)l_->n + ${i}.u.n : ${i}.u.n; ` +
-      `if (k_ >= 0 && k_ < (double)l_->n) { ${dentro} } else { ${fuera} } }`;
+      `{ NLista* l_ = (NLista*)${o}.u.o; double kd_ = ${i}.u.n; int64_t ki_ = (int64_t)kd_; ` +
+      `if ((uint64_t)ki_ < (uint64_t)l_->n && (double)ki_ == kd_) { ${dentro} } else { ${fuera} } }`;
     for (let k = 0; k < ins.length; k++) {
       const it = ins[k], st = est[k];
       if (!st) continue;   // código al que no se llega (detrás de un «devolver»)
@@ -760,7 +943,7 @@ function compilarAOT(fnPrincipal, opciones) {
               // (motor-exp A1) una función conocida: derecho a su C (la numérica si
               // los argumentos guardados ya se saben números). Si la pila de marcos
               // está llena, n_llamar da el error de siempre.
-              const num1 = qf.guardas.length && qf.guardas.every(i => tipo(base + 1 + i) === 'num');
+              const num1 = !(qf.tipada && qf.tipada.entrada) && (qf.guardas.length || qf.listas.length) && qf.guardas.every(i => tipo(base + 1 + i) === 'num') && qf.listas.every(i => tipo(base + 1 + i) === 'lista');
               if (num1) {
                 const ps = Array.from({ length: n }, (_, i) => (qf.guardas.includes(i) ? `${r(base + 1 + i)}.u.n` : r(base + 1 + i)));
                 const llamada = `F${kf}n((NCierre*)${r(base)}.u.o, prof_ + 1${ps.length ? ', ' + ps.join(', ') : ''})`;
@@ -769,6 +952,18 @@ function compilarAOT(fnPrincipal, opciones) {
               C(`  ${soltar(base, d)}${r(base)} = t_; }`);
               break;
             }
+          }
+          // (motor-exp A3) raiz, absoluto, piso y techo con un número: la función de C, sin pasar por la nativa (los mismos bits: sqrt,
+          // fabs, floor y ceil son exactos). «raiz» de un negativo va a la nativa, que da el error de siempre.
+          const INTRIN = { 'nat:numerico/raiz': ['sqrt', '!(X < 0)'], 'nat:numerico/absoluto': ['fabs', null], 'nat:numerico/piso': ['floor', null], 'nat:numerico/techo': ['ceil', null] };
+          if (n === 1 && INTRIN[tc] && tipo(base + 1) === 'num') {
+            const [fx, cond] = INTRIN[tc], x = `${r(base + 1)}.u.n`;
+            if (!cond) { C(`${r(base)} = n_num(${fx}(${x}));`); break; }
+            C(`if (${cond.replace('X', x)}) ${r(base)} = n_num(${fx}(${x})); else {`);
+            publicar();
+            C(`{ NV t_ = n_llamar_r(${r(base)}, ${arr(base + 1, n)}, ${n}); if (N_FALLO(t_)) ${falla()}`);
+            C(`  ${soltar(base, d)}${r(base)} = t_; } }`);
+            break;
           }
           publicar();
           C(`{ NV t_ = n_llamar_r(${r(base)}, ${arr(base + 1, n)}, ${n}); if (N_FALLO(t_)) ${falla()}`);
@@ -810,7 +1005,7 @@ function compilarAOT(fnPrincipal, opciones) {
           else if (tipo(d - 2) === 'lista' && tipo(d - 1) === 'num') {
             // (motor-exp A1) una lista y un número: la casilla, sin pasar por n_idx_get
             C(`N_CK_LISTA(${o}); N_CK_NUM(${i});`);
-            C(indiceLista(o, i, `if (k_ == trunc(k_)) { NV t_ = n_lista_leer(l_, (int64_t)k_); ${dO}${o} = t_; } else { NV t_ = n_idx_get(${o}, ${i}); if (N_FALLO(t_)) ${falla()} ${dO}${o} = t_; }`,
+            C(indiceLista(o, i, `NV t_ = n_lista_leer(l_, ki_); ${dO}${o} = t_;`,
               `NV t_ = n_idx_get(${o}, ${i}); if (N_FALLO(t_)) ${falla()} ${dO}${o} = t_;`));
             break;
           }
@@ -821,10 +1016,10 @@ function compilarAOT(fnPrincipal, opciones) {
           const o = r(d - 3), i = r(d - 2), v = r(d - 1);
           linea();
           const dO = decObj(d - 3, d - 3); borrarAlias.push(d - 3);
-          if (sinCom) C(`if (${o}.t == N_OBJ && ${o}.u.o->clase == NC_LISTA && ${i}.t == N_NUM) { NLista* l_ = (NLista*)${o}.u.o; double k_ = ${i}.u.n < 0 ? (double)l_->n + ${i}.u.n : ${i}.u.n; if (k_ == trunc(k_)) n_lista_poner(l_, (int64_t)k_, ${v}); ${dO}${o} = ${v}; } else`);
+          if (sinCom) C(`if (${o}.t == N_OBJ && ${o}.u.o->clase == NC_LISTA && ${i}.t == N_NUM) { NLista* l_ = (NLista*)${o}.u.o; double k_ = ${i}.u.n < 0 ? (double)l_->n + ${i}.u.n : ${i}.u.n; if (k_ == (double)(int64_t)k_) n_lista_poner(l_, (int64_t)k_, ${v}); ${dO}${o} = ${v}; } else`);
           else if (tipo(d - 3) === 'lista' && tipo(d - 2) === 'num') {
             C(`N_CK_LISTA(${o}); N_CK_NUM(${i});`);
-            C(indiceLista(o, i, `if (k_ == trunc(k_)) n_lista_poner(l_, (int64_t)k_, ${v}); ${dO}${o} = ${v};`,
+            C(indiceLista(o, i, `n_lista_poner(l_, ki_, ${v}); ${dO}${o} = ${v};`,
               `NV t_ = n_idx_set(${o}, ${i}, ${v}); if (N_FALLO(t_)) ${falla()} ${dO}${o} = ${v};`));
             break;
           }
@@ -866,13 +1061,26 @@ function compilarAOT(fnPrincipal, opciones) {
       else pie.push(`  ${v === 0 ? 'n_hilo.profundidad = prof_ - 1; ' : ''}return ${retD ? '0' : 'N_ERR'};`);
     }
     E('');
-    E(`/* ${f.nombre}/${f.aridad}${v === 1 ? ' (numérica: ' + q.guardas.map(i => (f.nombresParams || [])[i] || '#' + i).join(', ') + ')' : ''} */`);
+    E(`/* ${f.nombre}/${f.aridad}${v === 1 ? ' (numérica: ' + q.guardas.concat(q.listas).map(i => (f.nombresParams || [])[i] || '#' + i).join(', ') + ')' : ''} */`);
     if (v === 1) E(`static ${firmaClon(q, j)} {`);
     else E(`static NV F${j}(NCierre* yo, NV* args, int nargs) {`);
-    if (v === 0 && q.guardas.length) {
+    // (motor-exp A3) una función PURA: desde aquí se entra a su versión de C de verdad. Si no puede desbordar la profundidad (no
+    // llega a ningún ciclo de llamadas) basta mirar que quepan sus marcos; si puede, un longjmp recoge el error en este mismo sitio y
+    // le pone el rastro (el mismo nombre y la línea de su primera llamada, tantas veces como cabe: lo que dejaban los marcos al subir).
+    if (v === 1 && q.pura) {
+      const args = Array.from({ length: f.aridad }, (_, i) => `p${i}`).join(', ');
+      if (!q.pura.rec) E(`  if (prof_ + ${q.pura.marcos} <= N_MAX_MARCOS) return F${j}p(prof_${args ? ', ' + args : ''});`);
+      else {
+        E('  { NPuraSalto sj_; sj_.prev = n_pura_tope; n_pura_tope = &sj_;');
+        E(`    if (setjmp(sj_.jb) == 0) { double r_ = F${j}p(prof_${args ? ', ' + args : ''}); n_pura_tope = sj_.prev; return r_; }`);
+        E('    n_pura_tope = sj_.prev; n_pura_traza(&sj_); return 0; }');
+      }
+    }
+    if (v === 0 && q.tipada && q.tipada.entrada) E(TIPADO.entradaGeneral(plan, j, q.tipada));
+    if (v === 0 && (q.guardas.length || q.listas.length)) {
       const ps = Array.from({ length: f.aridad }, (_, i) => (q.guardas.includes(i) ? `args[${i}].u.n` : `args[${i}]`));
       const llamada = `F${j}n(yo, n_hilo.profundidad + 1${ps.length ? ', ' + ps.join(', ') : ''})`;
-      E(`  if (${q.guardas.map(i => `args[${i}].t == N_NUM`).join(' && ')}) ${q.ret[1] === 'num' ? `{ double d_ = ${llamada}; return N_HAY_ERROR ? N_ERR : n_num(d_); }` : `return ${llamada};`}`);
+      E(`  if (${q.guardas.map(i => `args[${i}].t == N_NUM`).concat(q.listas.map(i => `n_es(args[${i}], NC_LISTA)`)).join(' && ')}) ${q.ret[1] === 'num' ? `{ double d_ = ${llamada}; return N_HAY_ERROR ? N_ERR : n_num(d_); }` : `return ${llamada};`}`);
     }
     // (motor-exp A2) la profundidad: la general la lee de n_hilo (quien la llamó la
     // publicó antes); la numérica la recibe. Se comprueba aquí, al entrar.

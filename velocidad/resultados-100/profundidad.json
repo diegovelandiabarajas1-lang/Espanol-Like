@@ -1,0 +1,50 @@
+{
+ "C (pila de 8 MB)": {
+  "maximo_ok": 100000,
+  "primer_fallo": [
+   500000,
+   -11,
+   "rc=-11"
+  ]
+ },
+ "JavaScript (Node 22)": {
+  "maximo_ok": 5000,
+  "primer_fallo": [
+   10000,
+   1,
+   "/home/gamer/fdat/prof/p.js:1"
+  ]
+ },
+ "Python (límite por defecto, 1000)": {
+  "maximo_ok": 900,
+  "primer_fallo": [
+   1000,
+   1,
+   "Traceback (most recent call last):"
+  ]
+ },
+ "Python (límite subido a 10M)": {
+  "maximo_ok": 5000000,
+  "primer_fallo": [
+   20000000,
+   -9,
+   "Traceback (most recent call last):"
+  ]
+ },
+ "Ñ AOT": {
+  "maximo_ok": 800,
+  "primer_fallo": [
+   900,
+   1,
+   "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  ]
+ },
+ "Ñ JIT": {
+  "maximo_ok": 900,
+  "primer_fallo": [
+   1000,
+   1,
+   "[ejecución] desbordamiento de pila: demasiadas llamadas anidadas"
+  ]
+ }
+}
