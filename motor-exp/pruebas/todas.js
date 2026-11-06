@@ -56,6 +56,7 @@ const SUITES = [
   ['exp: AOT sistema', 'exp-aot-sistema.js', 'motor-exp A6: el eDSL sistema, JSON (con los mensajes de V8), procesos (ejecutar, ejecutarEnFondo) y temporizadores en el ejecutable: lo mismo que la VM con el anfitrión de Node, mismos mensajes y mismos códigos de error'],
   ['exp: AOT red', 'exp-aot-red.js', 'motor-exp A6: servir, respuesta, detenerServidor y pedir en el ejecutable, un servidor y su cliente en el mismo programa (necesita curl)'],
   ['exp: AOT datos', 'exp-aot-datos.js', 'motor-exp A6: el eDSL datos (tablas: CSV, .ñdatos, agrupar, pivotar, cruzar…) en el ejecutable, comparado con la VM caso por caso, errores incluidos (se salta sin compilador de C)'],
+  ['exp: AOT arreglo', 'exp-aot-arreglo.js', 'motor-exp A7: el tipo arreglo de numerico (ndarray: 11 tipos, vistas, difusión, máscaras, Fourier, álgebra lineal) en el ejecutable, bit a bit igual a la VM, errores incluidos (se salta sin compilador de C)'],
   ['exp: bloques', 'exp-bloques.js', 'motor-exp N4.4: paraleloBloques — bloques, hilos, memoria compartida y barreras, igual en jit, nativo y GPU (simulada)'],
   ['exp: tipos de máquina', 'exp-tipos.js', 'motor-exp N4.5: i8 u8 i16 u16 u32 i64 u64 — aritmética y bits al bit contra NumPy, 64 bits exactos, y en los núcleos de jit, nativo y GPU (simulada)'],
   ['exp: lengua franca', 'exp-lengua-franca.js', 'motor-exp N4.6: Ñ como biblioteca de C (n-compilar --biblioteca), llamada desde C, C++, Python, Rust y Go; tres a la vez; valgrind; la DLL de Windows'],

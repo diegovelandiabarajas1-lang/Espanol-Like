@@ -198,8 +198,9 @@ function analizar(fn, ins, ctx) {
       case OP.SUB: case OP.MUL: case OP.DIV: case OP.IDIV: case OP.MOD: case OP.POW:
         // (motor-exp A3) «-», «*», «/», «//», «%» y «**» dan un número o un error (nunca otra cosa: n_restar & co. fallan con
         // lo que no es número), así que lo que sigue a la operación ya es un número aunque los operandos fueran «any»
-        usa(d - 2); usa(d - 1); pon(d - 2, (t[d - 2] === 'bot' || t[d - 1] === 'bot') ? 'bot' : 'num'); break;
-      case OP.NEG: usa(d - 1); pon(d - 1, t[d - 1] === 'bot' ? 'bot' : 'num'); break;
+        // (motor-exp A7) …salvo que el programa tenga arreglos: con ellos «a * 2» puede ser otro arreglo
+        usa(d - 2); usa(d - 1); pon(d - 2, (t[d - 2] === 'bot' || t[d - 1] === 'bot') ? 'bot' : (!ctx.hayArr || (t[d - 2] === 'num' && t[d - 1] === 'num')) ? 'num' : 'any'); break;
+      case OP.NEG: usa(d - 1); pon(d - 1, t[d - 1] === 'bot' ? 'bot' : (!ctx.hayArr || t[d - 1] === 'num') ? 'num' : 'any'); break;
       case OP.NOT: pon(d - 1, 'bool'); break;
       case OP.EQ: case OP.NEQ: pon(d - 2, 'bool'); break;
       case OP.LT: case OP.LE: case OP.GT: case OP.GE: usa(d - 2); usa(d - 1); pon(d - 2, 'bool'); break;
@@ -290,6 +291,7 @@ const NATIVAS_C = (() => {
   return s;
 })();
 const SEP = '\u0000';
+const ARR_NATIVOS = new Set(['arreglo', 'ceros', 'unos', 'lleno', 'secuencia', 'reparto', 'azarArreglo', 'vacio', 'complejo', 'desdePolar', 'aTipo', 'redimensionar', 'transpuesta', 'fila', 'copia', 'identidadA', 'uniformes', 'normales', 'enteros']);   // (A7) las que dan un arreglo
 const GEN_NATIVOS = new Set(['sistema/leerLineas']);   // (A6) nativas que devuelven un generador
 const nombreC = g => (g.startsWith('ñ:') && g.includes(SEP) ? g.slice(2).replace(SEP, '/') : g);
 const rutaCorta = c => String(c).replace(/^.*[/\\]/, '') || String(c);
@@ -428,10 +430,12 @@ function compilarAOT(fnPrincipal, opciones) {
   const retNativa = nombre => RET_NATIVAS[nombre] || 'any';
   // (A6) ¿puede haber un generador en el programa? (una función generadora, o una nativa que da uno)
   const hayGen = fns.some(f => f.corrutina === 'generador') || [...globales.keys()].some(g => GEN_NATIVOS.has(nombreC(g)));
+  // (A7) ¿puede haber un arreglo? (alguna función de numerico que lo crea o lo transforma): entonces una cuenta puede dar un arreglo, no solo un número
+  const hayArr = [...globales.keys()].some(g => /^numerico\//.test(nombreC(g)) && ARR_NATIVOS.has(nombreC(g).slice(9)));
   const analizarVersion = (q, v) => {
     const ctx = {
       tipoParam: i => (v === 1 && q.guardas.includes(i) ? 'num' : v === 1 && q.listas.includes(i) ? 'lista' : 'any'),
-      hayGen, retDe, retNativa, tipoGlobal, capturados: q.capturados, escritos: q.escritos, rango: q.rango, prestar: q.prestar,
+      hayGen, hayArr, retDe, retNativa, tipoGlobal, capturados: q.capturados, escritos: q.escritos, rango: q.rango, prestar: q.prestar,
       guardaDe: (k, n, i) => plan[k].f.aridad === n && plan[k].guardas.includes(i),
       listaDe: (k, n, i) => plan[k].f.aridad === n && plan[k].listas.includes(i),
     };

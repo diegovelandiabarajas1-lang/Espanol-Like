@@ -73,7 +73,7 @@ comprobar('si cambia el MÓDULO, la caché caduca (y sale el valor nuevo)', moto
 
 // ── 4. lo que el AOT todavía no cubre sigue corriendo con el JIT ──
 const NS = path.join(tmp, 'nosoporte.esl');
-fs.writeFileSync(NS, 'usar arreglo de "numerico"\nfijo a = arreglo([1.0, 2.0, 3.0])\nimprimir(1)\n');
+fs.writeFileSync(NS, 'usar bitsY de "numerico"\nfijo a = bitsY(6, 3)\nimprimir(1)\n');
 const n1 = correr(['--info', 'nosoporte.esl']);
 comprobar('un programa que el AOT no cubre corre con el JIT', n1.status === 0 && n1.stdout.trim() === '1' && motor(n1) === 'JIT', n1.stderr + n1.stdout);
 comprobar('…y queda anotado como «noaot» (no se reintenta)', esperarEstado('nosoporte.esl', 'noaot'));

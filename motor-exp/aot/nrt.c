@@ -98,6 +98,7 @@ static N_HILO_LOCAL NObj** n_pend = NULL;
 static N_HILO_LOCAL size_t n_pend_n = 0, n_pend_cap = 0;
 static void liberar_uno(NObj* o);
 static void co_liberar(NObj* o);   /* (A6) nrt_corrutinas.inc */
+static void ar_liberar(NObj* o);   /* (A7) nrt_arreglo.inc */
 static void rs_olvidar(NDic* d);   /* (A6) nrt_red.inc */
 static void tb_liberar(NObj* o);   /* (A6) nrt_datos.inc */
 static size_t el_tam(int el);
@@ -139,6 +140,7 @@ static void liberar_uno(NObj* o) {
     case NC_REGDESC: { NRegDesc* r = (NRegDesc*)o; n_dec(r->nombre); n_dec(r->campos); n_dec(r->metodos); break; }
     case NC_GENERADOR: case NC_PROMESA: case NC_LONGGEN: co_liberar(o); break;
     case NC_TABLA: tb_liberar(o); break;
+    case NC_ARREGLO: ar_liberar(o); break;
     default: break;
   }
   free(o);
@@ -240,6 +242,18 @@ static const char* co_tipo_de(NV v);
 static void co_repr(NBuf* b, NV v);
 static void td_repr(NBuf* b, NV v);
 static NV td_len(NV o);
+/* (A7) nrt_arreglo.inc */
+static void ar_liberar(NObj* o);
+static void ar_repr(NBuf* b, NV v, int prof);
+static NV ar_len(NV o);
+static int ar_iguales(NV a, NV b);
+static NV ar_idx_get(NV o, NV i);
+static NV ar_idx_set(NV o, NV i, NV v);
+static NV ar_arit(NV a, NV b, int op);
+static NV ar_lift(NV x, double (*fx)(double), int ret_ent, int dominio, const char* msgdom, int mod_complejo);
+static NV ar_reducir_pub(NV x, double eje, int media);
+static NV ar_traza(NV x);
+static int ar_nums_puerta(NV* slot, int k, const char* f, NV* err);
 static NV co_len(NV o);
 static NV co_actual_de(NV o);
 static NV co_cmp(NV a, NV b, int op);
@@ -395,6 +409,7 @@ const char* n_tipo_de(NV v) {
     case NC_FECHA: return "fecha";
     case NC_GENERADOR: case NC_PROMESA: return co_tipo_de(v);
     case NC_TABLA: return "tabla";
+    case NC_ARREGLO: return "arreglo";
     default: return "funcion";
   }
 }
@@ -708,6 +723,7 @@ static void repr_en(NBuf* b, NV v, int prof) {
     case NC_FECHA: iso_de_fecha(b, ((NFecha*)v.u.o)->ms); return;
     case NC_GENERADOR: case NC_PROMESA: case NC_LONGGEN: co_repr(b, v); return;
     case NC_TABLA: td_repr(b, v); return;
+    case NC_ARREGLO: ar_repr(b, v, prof); return;
     default: b_utf8(b, "<objeto>"); return;
   }
 }
@@ -758,6 +774,7 @@ static int iguales_rec(NV a, NV b, NPar* vistos, int nv) {
   /* una fecha es un valor, no una identidad: dos que marcan el mismo instante son iguales */
   if (ca == NC_FECHA || cb == NC_FECHA) return ca == cb && ((NFecha*)a.u.o)->ms == ((NFecha*)b.u.o)->ms;
   if (ca == NC_TABLA || cb == NC_TABLA) return ca == cb && td_iguales(a, b, iguales_rec, vistos, nv);
+  if (ca == NC_ARREGLO || cb == NC_ARREGLO) return ca == cb && ar_iguales(a, b);
   if (ca == NC_DIC && cb == NC_DIC && DC(a)->reg != DC(b)->reg) return 0;
   int dosListas = ca == NC_LISTA && cb == NC_LISTA, dosDics = ca == NC_DIC && cb == NC_DIC;
   if (!dosListas && !dosDics) return 0;
@@ -798,6 +815,7 @@ NV n_sumar(NV a, NV b) {
     for (int64_t i = 0; i < LS(b)->n; i++) n_lista_agregar(LS(r), n_inc(n_lv(LS(b))[i]));
     return r;
   }
+  if (n_es(a, NC_ARREGLO) || n_es(b, NC_ARREGLO)) return ar_arit(a, b, 0);
   if (n_es(a, NC_TEXTO) || n_es(b, NC_TEXTO)) {
     NV otro = n_es(a, NC_TEXTO) ? b : a;
     return ERRP(msg("convierte con texto(...): por ejemplo \"total: \" + texto(%r)", otro),
@@ -807,6 +825,10 @@ NV n_sumar(NV a, NV b) {
 }
 static NV otro_op(NV a, NV b, const char* op) {
   if (strcmp(op, "+") == 0) return n_sumar(a, b);
+  if (n_es(a, NC_ARREGLO) || n_es(b, NC_ARREGLO)) {
+    int k = !strcmp(op, "-") ? 1 : !strcmp(op, "*") ? 2 : !strcmp(op, "/") ? 3 : !strcmp(op, "//") ? 4 : !strcmp(op, "%") ? 5 : 6;
+    return ar_arit(a, b, k);
+  }
   return ERR("«%s» necesita dos números y recibió %s y %s", op, n_tipo_de(a), n_tipo_de(b));
 }
 NV n_restar(NV a, NV b) { if (a.t == N_NUM && b.t == N_NUM) return n_num(a.u.n - b.u.n); return otro_op(a, b, "-"); }
@@ -856,6 +878,7 @@ static double pow_js(double a, double b) {
 }
 NV n_pot(NV a, NV b) { if (a.t == N_NUM && b.t == N_NUM) return n_num(pow_js(a.u.n, b.u.n)); return otro_op(a, b, "**"); }
 NV n_neg(NV a) {
+  if (n_es(a, NC_ARREGLO)) return ar_arit(a, n_num(-1), 2);
   if (a.t != N_NUM) return ERR("«-» necesita un número y recibió %s", n_tipo_de(a));
   return n_num(-a.u.n);
 }
@@ -889,6 +912,7 @@ static NV nat_metodo_atado(NV* a, int n, void* extra);
 NV n_idx_get(NV o, NV i) {
   if (o.t == N_OBJ) switch (o.u.o->clase) {
     case NC_GENERADOR: return co_actual_de(o);
+    case NC_ARREGLO: return ar_idx_get(o, i);
     case NC_ERROR: {
       NError* e = (NError*)o.u.o;
       if (n_es(i, NC_TEXTO)) {
@@ -952,6 +976,7 @@ NV n_idx_get(NV o, NV i) {
   return ERR("no se puede indexar un valor de tipo %s", n_tipo_de(o));
 }
 NV n_idx_set(NV o, NV i, NV v) {
+  if (n_es(o, NC_ARREGLO)) return ar_idx_set(o, i, v);
   if (n_es(o, NC_LISTA)) {
     NLista* l = LS(o);
     if (i.t != N_NUM) return ERR("el índice de una lista debe ser un número y es %s", n_tipo_de(i));
@@ -982,6 +1007,7 @@ NV n_len(NV o) {
     case NC_DIC: return n_num((double)DC(o)->n);
     case NC_GENERADOR: return co_len(o);   /* solo lo emite «para … en» */
     case NC_TABLA: return td_len(o);
+    case NC_ARREGLO: return ar_len(o);
     default: break;
   }
   return ERR("no se puede recorrer ni medir un valor de tipo %s", n_tipo_de(o));
@@ -1579,6 +1605,11 @@ NAT(nat_borrarArchivo) {
 #include "nrt_sistema.inc"       /* (motor-exp A6) el eDSL sistema, JSON, procesos, bucle de eventos */
 #include "nrt_red.inc"           /* (motor-exp A6) servir, respuesta, detenerServidor, pedir */
 #include "nrt_datos.inc"         /* (motor-exp A6) el eDSL datos: tablas */
+#include "nrt_arreglo.inc"       /* (motor-exp A7) el tipo arreglo y su aritmética */
+#include "nrt_arreglo2.inc"      /* (motor-exp A7) arreglos: producto matricial, máscaras, estadística, acumulados */
+#include "nrt_arreglo3.inc"      /* (motor-exp A7) arreglos: pegar, rebanar, ordenar, azar */
+#include "nrt_arreglo4.inc"      /* (motor-exp A7) arreglos: Fourier, espectro, convolución */
+#include "nrt_arreglo5.inc"      /* (motor-exp A7) arreglos: álgebra lineal */
 
 /* ── «usar»: un eDSL no hace nada al ejecutarse (sus funciones ya están); un
    módulo se ejecuta UNA vez, y si está a medio cargar (un ciclo) se sigue,
@@ -1623,6 +1654,11 @@ static const NNatDef NATIVAS[] = {
   NAT_SISTEMA
   NAT_RED
   NAT_DATOS
+  NAT_ARREGLO
+  NAT_ARREGLO2
+  NAT_ARREGLO3
+  NAT_ARREGLO4
+  NAT_ARREGLO5
   { " usar", 1, nat_usar },
   { "imprimir", -1, nat_imprimir }, { "texto", 1, nat_texto }, { "entero", 1, nat_entero }, { "real", 1, nat_real },
   { "bool", 1, nat_bool }, { "tipo", 1, nat_tipo }, { "longitud", 1, nat_longitud }, { "rango", -1, nat_rango },

@@ -11,7 +11,7 @@ static int exige_nums(NV v, int k, const char* f, NV* err) {
   for (int64_t i = 0; i < l->n; i++) if (n_lv(l)[i].t != N_NUM) { *err = ERR("«%s»: la lista debe contener solo números", f); return 0; }
   return 1;
 }
-#define NUMS(k, f) do { NV e_; if (!exige_nums(a[k], (k) + 1, (f), &e_)) return e_; } while (0)
+#define NUMS(k, f) do { NV e_; if (!ar_nums_puerta(&a[k], (k) + 1, (f), &e_)) return e_; } while (0)   /* (A7) un arreglo pasa a lista de números */
 static double* nums_de(NV v) {   /* copia de los números, para ordenar */
   NLista* l = LS(v); double* x = (double*)n_mem(sizeof(double) * (size_t)(l->n + 1));
   for (int64_t i = 0; i < l->n; i++) x[i] = n_lv(l)[i].u.n;
@@ -30,13 +30,16 @@ static double round_js(double x) {   /* Math.round: el medio va hacia +∞ */
 static double sign_js(double x) { if (isnan(x)) return x; if (x > 0) return 1; if (x < 0) return -1; return x; }
 
 /* ── las de un número ── */
-static NV m1(NV* a, const char* f, double (*fx)(double)) { NUM(a[0], 1, f); return n_num(fx(a[0].u.n)); }
-#define M1(nombre, fx) NAT(nu_##nombre) { (void)n; (void)extra; return m1(a, #nombre, fx); }
-M1(absoluto, fabs) M1(piso, floor) M1(techo, ceil) M1(seno, fd_sin) M1(coseno, fd_cos) M1(tangente, fd_tan)
-M1(arcoseno, fd_asin) M1(arcocoseno, fd_acos) M1(arcotangente, fd_atan) M1(exp, fd_exp) M1(signo, sign_js)
-NAT(nu_raiz) { (void)n; (void)extra; NUM(a[0], 1, "raiz"); if (a[0].u.n < 0) return n_error("«raiz» de un número negativo", NULL); return n_num(sqrt(a[0].u.n)); }
-NAT(nu_log) { (void)n; (void)extra; NUM(a[0], 1, "log"); if (a[0].u.n <= 0) return n_error("«log» necesita un número positivo", NULL); return n_num(fd_log(a[0].u.n)); }
-NAT(nu_log10) { (void)n; (void)extra; NUM(a[0], 1, "log10"); if (a[0].u.n <= 0) return n_error("«log10» necesita un número positivo", NULL); return n_num(fd_log10(a[0].u.n)); }
+/* (A7) con un arreglo, la función se aplica a todo: entero para piso, techo y signo; el módulo para absoluto de un complejo */
+static NV m1(NV* a, const char* f, double (*fx)(double), int ret_ent, int mod_c) { if (n_es(a[0], NC_ARREGLO)) return ar_lift(a[0], fx, ret_ent, 0, NULL, mod_c); NUM(a[0], 1, f); return n_num(fx(a[0].u.n)); }
+#define M1(nombre, fx) NAT(nu_##nombre) { (void)n; (void)extra; return m1(a, #nombre, fx, 0, 0); }
+#define M1E(nombre, fx) NAT(nu_##nombre) { (void)n; (void)extra; return m1(a, #nombre, fx, 1, 0); }
+NAT(nu_absoluto) { (void)n; (void)extra; return m1(a, "absoluto", fabs, 0, 1); }
+M1E(piso, floor) M1E(techo, ceil) M1(seno, fd_sin) M1(coseno, fd_cos) M1(tangente, fd_tan)
+M1(arcoseno, fd_asin) M1(arcocoseno, fd_acos) M1(arcotangente, fd_atan) M1(exp, fd_exp) M1E(signo, sign_js)
+NAT(nu_raiz) { (void)n; (void)extra; if (n_es(a[0], NC_ARREGLO)) return ar_lift(a[0], sqrt, 0, 1, "«raiz» de un número negativo", 0); NUM(a[0], 1, "raiz"); if (a[0].u.n < 0) return n_error("«raiz» de un número negativo", NULL); return n_num(sqrt(a[0].u.n)); }
+NAT(nu_log) { (void)n; (void)extra; if (n_es(a[0], NC_ARREGLO)) return ar_lift(a[0], fd_log, 0, 2, "«log» necesita un número positivo", 0); NUM(a[0], 1, "log"); if (a[0].u.n <= 0) return n_error("«log» necesita un número positivo", NULL); return n_num(fd_log(a[0].u.n)); }
+NAT(nu_log10) { (void)n; (void)extra; if (n_es(a[0], NC_ARREGLO)) return ar_lift(a[0], fd_log10, 0, 2, "«log10» necesita un número positivo", 0); NUM(a[0], 1, "log10"); if (a[0].u.n <= 0) return n_error("«log10» necesita un número positivo", NULL); return n_num(fd_log10(a[0].u.n)); }
 NAT(nu_log2) { (void)n; (void)extra; NUM(a[0], 1, "log2"); if (a[0].u.n <= 0) return n_error("«log2» necesita un número positivo", NULL); return n_num(fd_log2(a[0].u.n)); }
 NAT(nu_redondear) {
   (void)extra; NUM(a[0], 1, "redondear"); double d = 0;
@@ -96,8 +99,8 @@ NAT(nu_hipotenusa) {
 }
 
 /* ── las de una lista ── */
-NAT(nu_suma) { (void)n; (void)extra; NUMS(0, "suma"); return n_num(suma_de(LS(a[0]))); }
-NAT(nu_media) { (void)n; (void)extra; NUMS(0, "media"); if (!LS(a[0])->n) return n_error("«media» de una lista vacía", NULL); return n_num(suma_de(LS(a[0])) / (double)LS(a[0])->n); }
+NAT(nu_suma) { (void)extra; if (n > 1 && n_es(a[0], NC_ARREGLO)) { NUM(a[1], 2, "suma"); return ar_reducir_pub(a[0], trunc(a[1].u.n), 0); } NUMS(0, "suma"); return n_num(suma_de(LS(a[0]))); }
+NAT(nu_media) { (void)extra; if (n > 1 && n_es(a[0], NC_ARREGLO)) { NUM(a[1], 2, "media"); return ar_reducir_pub(a[0], trunc(a[1].u.n), 1); } NUMS(0, "media"); if (!LS(a[0])->n) return n_error("«media» de una lista vacía", NULL); return n_num(suma_de(LS(a[0])) / (double)LS(a[0])->n); }
 NAT(nu_mediana) {
   (void)n; (void)extra; NUMS(0, "mediana"); NLista* l = LS(a[0]);
   if (!l->n) return n_error("«mediana» de una lista vacía", NULL);
@@ -484,7 +487,8 @@ NAT(nu_identidad) {
   return r;
 }
 NAT(nu_traza) {
-  (void)n; (void)extra; FILAS(0, "traza"); NLista* m = LS(a[0]);
+  (void)n; (void)extra; if (n_es(a[0], NC_ARREGLO)) return ar_traza(a[0]);
+  FILAS(0, "traza"); NLista* m = LS(a[0]);
   if (!m->n || m->n != F_(a[0], 0)->n) return n_error("«traza»: la matriz tiene que ser cuadrada", NULL);
   double t = 0; for (int64_t i = 0; i < m->n; i++) { NLista* f = F_(a[0], i); t += i < f->n ? num0(n_lv(f)[i]) : NAN; }
   return n_num(t);
