@@ -252,6 +252,18 @@ static inline void nt_agregar_p(NLista* l, void* p, void (*dec)(void*)) {
 }
 void nt_agregar_i_lento(NLista* l, int64_t x);
 /* (motor-exp) n copias de una constante al final de la lista, de una vez */
+/* base + [primera, última] cabe en 0 .. largo-1 (con la suma vigilada contra el desbordamiento) */
+static inline int nt_rango_ok(int64_t base, int64_t primera, int64_t ultima, int64_t largo) {
+  int64_t a, b;
+  if (__builtin_add_overflow(base, primera, &a) || __builtin_add_overflow(base, ultima, &b)) return 0;
+  return a >= 0 && b < largo;
+}
+/* base + k·[primera, última] (k >= 0) cabe en 0 .. largo-1: bastan los dos extremos, con producto y suma vigilados contra el desbordamiento */
+static inline int nt_rango_ek(int64_t base, int64_t k, int64_t primera, int64_t ultima, int64_t largo) {
+  int64_t p, q, a, b;
+  if (k < 0 || __builtin_mul_overflow(k, primera, &p) || __builtin_mul_overflow(k, ultima, &q) || __builtin_add_overflow(base, p, &a) || __builtin_add_overflow(base, q, &b)) return 0;
+  return a >= 0 && b < largo;
+}
 double nt_reloj(void);   /* «reloj()» para el código tipado */
 void nt_rep_i(NLista* l, int64_t n, int64_t x);
 void nt_rep_d(NLista* l, int64_t n, double x);

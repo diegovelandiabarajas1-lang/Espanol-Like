@@ -319,6 +319,58 @@ fn corre() { var h: cualquiera = nulo  var k = 0  mientras k < 1000 { h = Nodo(k
 imprimir(corre())
 `;
 
+// ── índices «base + variable del bucle» (a[i*n + j]): una comprobación antes del bucle ──
+const NV_ = `fn nueva(n) { var a = []  var i = 0  mientras i < n { agregar(a, 0)  i = i + 1 }  devolver a }\n`;
+P.idxPlano = NV_ + `fn corre() { var n = 40  var a = nueva(n * n)  var b = nueva(n * n)  var c = nueva(n * n)
+  var i = 0  mientras i < n { var j = 0  mientras j < n { a[i * n + j] = (i * 7 + j * 3) % 10  b[i * n + j] = (i * 5 + j * 11) % 10  j = j + 1 }  i = i + 1 }
+  i = 0  mientras i < n { var k = 0  mientras k < n { var aik = a[i * n + k]  var j = 0  mientras j < n { c[i * n + j] = c[i * n + j] + aik * b[k * n + j]  j = j + 1 }  k = k + 1 }  i = i + 1 }
+  var t = 0  i = 0  mientras i < n * n { t = t + c[i] * (i % 7)  i = i + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxPlanoFuera = NV_ + `fn corre() { var n = 10  var a = nueva(n * n)  var i = 0  var t = 0  mientras i < n { var j = 0  mientras j <= n { t = t + a[i * n + j]  j = j + 1 }  i = i + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxPlanoNegativo = NV_ + `fn corre() { var n = 10  var a = nueva(n * n)  var t = 0  var i = 0  mientras i < 3 { var j = 0  mientras j < 4 { t = t + a[i * n - 2 + j]  j = j + 1 }  i = i + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxPlanoCondicional = NV_ + `fn corre() { var n = 10  var a = nueva(n * n)  var t = 0  var i = 0  mientras i < n { var j = 0  mientras j < n { si j + 1 < n { t = t + a[i * n + j + 1] + 1 }  j = j + 1 }  i = i + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxPlanoUltimaFila = NV_ + `fn corre() { var n = 10  var a = nueva(n * n)  var t = 0  var i = 9  mientras i < 10 { var j = 0  mientras j < n { a[i * n + j] = j + 1  t = t + a[i * n + j]  j = j + 1 }  i = i + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxPlanoUnaMas = NV_ + `fn corre() { var n = 10  var a = nueva(n * n)  var t = 0  var i = 9  mientras i < 11 { var j = 0  mientras j < n { t = t + a[i * n + j]  j = j + 1 }  i = i + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxPlanoVacio = NV_ + `fn corre() { var n = 10  var a = nueva(n * n)  var t = 0  var i = 5  mientras i < 5 { var j = 0  mientras j < 100 { t = t + a[i * n + j + 1000]  j = j + 1 }  i = i + 1 }  devolver t + 7 }
+imprimir(corre())
+`;
+P.idxColumnas = NV_ + `fn corre() { var n = 30  var a = nueva(n * n)  var i = 0  mientras i < n * n { a[i] = (i * 7) % 13  i = i + 1 }
+  var t = 0  var c = 0  mientras c < n { var f = 0  mientras f < n { t = t + a[f * n + c] * (f + 1)  f = f + 1 }  c = c + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxColumnasFuera = NV_ + `fn corre() { var n = 30  var a = nueva(n * n)  var t = 0  var c = 0  mientras c < n { var f = 0  mientras f <= n { t = t + a[f * n + c]  f = f + 1 }  c = c + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxInverso = NV_ + `fn corre() { var n = 20  var a = nueva(n * n)  var t = 0  var i = 0  mientras i < n { var j = 0  mientras j < n { t = t + a[(n * n - 1) - (i * n + j)] + 1  j = j + 1 }  i = i + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxInversoFuera = NV_ + `fn corre() { var n = 20  var a = nueva(n * n)  var t = 0  var i = 0  mientras i < n { var j = 0  mientras j < n { t = t + a[(n * n - 1) - (i * n + j) + 1]  j = j + 1 }  i = i + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxCoefVariable = NV_ + `fn corre() { var n = 12  var a = nueva(n * n)  var t = 0  var p = 1  mientras p <= 3 { var j = 0  mientras j < 4 { a[j * p + 2] = j + p  t = t + a[j * p + 2]  j = j + 1 }  p = p + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxCoefNegativo = NV_ + `fn corre() { var n = 12  var a = nueva(n)  var t = 0  var p = 0 - 1  var j = 0  mientras j < 4 { t = t + a[j * p + 8]  j = j + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxCoefGrande = NV_ + `fn corre() { var a = nueva(4)  var t = 0  var p = 4611686018427387904  var j = 0  mientras j < 4 { t = t + a[j * p]  j = j + 1 }  devolver t }
+imprimir(corre())
+`;
+P.idxPlanoDesborde = NV_ + `fn corre() { var n = 3  var a = nueva(n)  var t = 0  var b = 4611686018427387904  var j = 0  mientras j < 3 { t = t + a[b * 4 + j]  j = j + 1 }  devolver t }
+imprimir(corre())
+`;
+
 // ── idioma «mientras s < N { agregar(a, K)  s = s + 1 }» (n copias de una constante de una vez) ──
 P.repCero = `fn nueva(n) { var a = []  var i = 0  mientras i < n { agregar(a, 0)  i = i + 1 }  devolver a }
 fn corre() { fijo a = nueva(0)  fijo b = nueva(5)  fijo c = nueva(3000)  var s = longitud(a) * 100000 + longitud(b) * 1000 + longitud(c)  b[2] = 7  c[2999] = 1  devolver s + b[2] + b[4] + c[2999] + c[0] }
@@ -425,6 +477,7 @@ const ESPERA = {
   regReasignar: ['corre'],
   regAlias: ['corre'],
   mutua: ['par', 'impar', 'corre'],
+  idxPlano: ['corre', 'nueva'],
   relojTipado: ['corre'],
   relojEntero: ['corre'],
   repCero: ['corre', 'nueva'],

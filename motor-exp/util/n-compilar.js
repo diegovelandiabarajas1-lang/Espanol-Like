@@ -118,19 +118,43 @@ catch (e) {
   if (e instanceof ErrorAOT) { console.log('[ejecutable] ' + e.message); process.exit(1); }
   throw e;
 }
+// (motor-exp) de qué archivos depende el ejecutable (el programa y sus módulos): lo usa el lanzador híbrido (n-auto.js) para saber si su caché sigue valiendo
+if (process.env.N_AOT_DEPS) fs.writeFileSync(process.env.N_AOT_DEPS, JSON.stringify([clave].concat((a.modulos || []).map(x => x.clave).filter(Boolean))));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'n-compilar-'));
 const c = archC || path.join(tmp, 'programa.c');
 fs.writeFileSync(c, res.c);
 
+// (motor-exp) El compilador de C: el que se indica (--cc, C1EN_CC); si no, el del sistema (gcc, clang, cc); si no, uno PORTÁTIL que viaje con Ñ, para no
+// pedirle a nadie que instale nada: la carpeta «compilador» junto al motor (así se empaqueta Ñ), «~/.n/compilador», o un MinGW/MSYS2/w64devkit conocido
+// en Windows. Un compilador portátil se encuentra por su carpeta bin, que se pone delante en el PATH para que halle sus propias DLL y herramientas.
+const exe = process.platform === 'win32' ? '.exe' : '';
+function carpetasPortatiles() {
+  const h = os.homedir(), r = path.join(__dirname, '..');
+  const l = [path.join(r, 'compilador'), path.join(r, '..', 'compilador'), path.join(h, '.n', 'compilador')];
+  if (win) l.push('C:/w64devkit', 'C:/msys64/ucrt64', 'C:/msys64/mingw64', 'C:/mingw64', 'C:/ProgramData/mingw64/mingw64', path.join(r, '..', 'velocidad', 'herramientas', 'w64devkit'));
+  return l;
+}
 function buscarCC() {
-  for (const x of cc ? [cc] : ['gcc', 'clang', 'cc']) {
-    const r = spawnSync(x, ['--version'], { encoding: 'utf8' });
-    if (r.status === 0) return x;
+  const prueba = x => spawnSync(x, ['--version'], { encoding: 'utf8' }).status === 0;
+  if (cc) return prueba(cc) ? cc : null;
+  for (const x of ['gcc', 'clang', 'cc']) if (prueba(x)) return x;
+  for (const d of carpetasPortatiles()) {
+    for (const x of ['gcc', 'clang', 'cc']) {
+      const bin = path.join(d, 'bin', x + exe);
+      if (fs.existsSync(bin) && prueba(bin)) { process.env.PATH = path.join(d, 'bin') + path.delimiter + process.env.PATH; return bin; }
+    }
   }
   return null;
 }
 const comp = buscarCC();
-if (!comp) { console.log('[ejecutable] no hay compilador de C (gcc o clang); se puede indicar con --cc o C1EN_CC'); process.exit(1); }
+if (!comp) {
+  console.log('[ejecutable] no hay compilador de C' + (cc ? ` (se pidió «${cc}» y no responde)` : '') + '.');
+  console.log('  Para el ejecutable nativo hace falta gcc o clang. El programa SÍ corre sin él con el motor JIT:  node motor/util/n-node.js programa.esl');
+  console.log('  Para compilar, instala uno (Windows: w64devkit o MSYS2 · Linux: apt install gcc · macOS: xcode-select --install),');
+  console.log('  o déjalo en una carpeta «compilador» junto al motor, o indícalo con --cc o C1EN_CC.');
+  process.exit(1);
+}
+if (process.env.N_AOT_DONDE_CC) { console.log(comp); process.exit(0); }
 // (motor-exp A3) un ejecutable (no una biblioteca): estado del hilo sin TLS (N_SIN_TLS). Medido en Windows, fib(38): 306 → 247 ms. La biblioteca sigue
 // como antes, porque la puede llamar el anfitrión desde varios hilos. (Se probó -flto: con las funciones puras ya no aportaba nada.)
 const BASE = ['-std=gnu11', '-O3', '-ffp-contract=off', '-fno-fast-math', '-fwrapv', '-w', '-I', AOT].concat(biblioteca ? [] : ['-DN_SIN_TLS']).concat(banderas)

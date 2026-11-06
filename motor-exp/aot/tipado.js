@@ -600,21 +600,55 @@ function analizarTipado(ctx) {
       // baja). Se recalcula cada punto como la unión de lo que de verdad le llega (con las comparaciones ya afinadas), sin ensanchar. Lo que se acumula para los
       // resúmenes (llamadas, escrituras, devoluciones) se reinicia antes de la última pasada para que solo cuente lo estrechado.
       fase = 1;
-      for (let pasada = 0; pasada < 3; pasada++) {
-        if (pasada === 2) { calls.length = 0; stores.length = 0; retAnd = true; retIv = EMPTY(); }
+      // (motor-exp A5) las pasadas que haga falta hasta que nada cambie (con bucles anidados, 3 no bastaban para llevar la cota de la variable de fuera hasta dentro);
+      // cada pasada es sonora por sí sola, así que parar en cualquier momento también lo es. Después, una última pasada que sí cuenta para los resúmenes.
+      // Un punto = la unión de lo que le llega. Cabecera de bucle: una variable que el bucle NO asigna vale lo que le llega por la entrada (por la arista de vuelta
+      // volvería ella misma, y una cota ensanchada una vez no bajaría nunca).
+      const estrechar = k => {
+        const fw = [], bk = [];
+        let asigB = null;
+        if (k === 0) fw.push(ini);
+        if (entradas[k]) for (const [clave, v] of entradas[k]) {
+          const kk = Number(clave.split(':')[0]);
+          if (kk >= k && ins[kk].op === OP.LOOP && porPos.get(ins[kk].destino) === k) {
+            bk.push(v); asigB = asigB || new Set();
+            for (let x = k; x <= kk; x++) if (ins[x].op === OP.SET_LOCAL) asigB.add(ins[x].arg);
+          } else fw.push(v);
+        }
+        const todo = fw.concat(bk);
+        if (!todo.length) return;
+        const R2 = unirEstados(todo);
+        if (bk.length && fw.length) {
+          const RF = unirEstados(fw);
+          for (let i = 0; i < R2.iv.length && i < RF.iv.length; i++) if (!asigB.has(i) && RF.iv[i] !== null && R2.iv[i] !== null) R2.iv[i] = RF.iv[i].slice();
+        }
+        Es[k] = R2;
+      };
+      const huella = () => JSON.stringify(Es.map(S => (S ? S.iv : null)));
+      let antes = huella();
+      for (let pasada = 0; pasada < 24; pasada++) {
         for (let k = 0; k < ins.length; k++) {
           if (!Es[k]) continue;
-          const lista = [];
-          if (k === 0) lista.push(ini);
-          if (entradas[k]) for (const v of entradas[k].values()) lista.push(v);
-          if (lista.length) Es[k] = unirEstados(lista);
+          estrechar(k);
           paso(k);
         }
+        const ahora = huella();
+        if (ahora === antes) break;
+        antes = ahora;
+      }
+      calls.length = 0; stores.length = 0; retAnd = true; retIv = EMPTY();
+      for (let k = 0; k < ins.length; k++) {
+        if (!Es[k]) continue;
+        estrechar(k);
+        paso(k);
       }
       const En = Es.map(S => (S ? S.iv.map(x => x !== null) : null));
       const EaB = Ea.map(S => (S ? S.iv.map(x => x !== null) : null));
       const Iv = Es.map(S => (S ? S.iv : null));
       const Cn = Es.map(S => (S ? S.iv.map(x => (x === null || vacio(x) ? null : x[0] === x[1] ? x[0] : x[0] >= 0 ? '+' : null)) : null));
+      if (process.env.N_AOT_DEBUG_IV && f.nombre === process.env.N_AOT_DEBUG_IV) {   // depuración: los intervalos de cada casilla antes de cada instrucción
+        ins.forEach((it, k) => { if (Es[k]) console.error(`[iv] ${String(k).padStart(3)} L${it.linea} ${it.nombre.padEnd(10)} ${Es[k].iv.map((v, i) => `${i}:${v === null ? '·' : v[0] + '..' + v[1]}`).join(' ')}`); });
+      }
       return { En, Ea: EaB, Cn, Iv, Es, calls, stores, retAnd, retIv };
     }
     let flujos = null;
@@ -749,6 +783,102 @@ function analizarTipado(ctx) {
           else {
             const c = cond.get(g.sv);
             cs.push(`if (${sv} ${c.le ? '<=' : '<'} ${c.N}) { if (__builtin_expect(${c.N} ${c.le ? '' : '- 1LL '}+ ${g.cmax}LL >= ${ln}${bajo}, 0)) NT_FAIL(); }`);
+          }
+        }
+        // ── (motor-exp A5) índices «base invariante + variable del bucle» (a[i*n + j], el idioma de las matrices planas) ──
+        // El índice se lee como un árbol de + − × sobre variables y constantes; si lo único que cambia en el bucle es la variable que avanza (coeficiente 1) y el
+        // acceso se hace en TODAS las vueltas (sin saltos entre la condición del bucle y el acceso), se comprueba una sola vez antes del bucle que base + [primera, última]
+        // cabe en la lista, con la base calculada con aritmética vigilada (un desbordamiento baja a la versión general). Dentro del bucle el acceso va sin comprobar,
+        // y gcc puede vectorizarlo.
+        {
+          const alvos = new Set();
+          for (const i2 of ins) if (i2.destino !== undefined) { const t2 = porPos.get(i2.destino); if (t2 !== undefined) alvos.add(t2); }
+          let condIdx = -1;
+          for (let x = m; x <= k && condIdx < 0; x++) if ((ins[x].op === OP.JMP_FALSE || ins[x].op === OP.JMP_TRUE) && porPos.get(ins[x].destino) > k) condIdx = x;
+          const hojas = (n, f) => { if (n.t === 'v' || n.t === 'c') f(n); else { hojas(n.l, f); hojas(n.r, f); } };
+          const arbolHasta = (pp, prof) => {
+            if (pp < 0 || prof > 6) return null;
+            const i3 = ins[pp];
+            if (!i3) return null;
+            if (i3.op === OP.GET_LOCAL) return { n: { t: 'v', s: i3.arg }, ini: pp };
+            if (i3.op === OP.CONST) { const v = consts[i3.arg]; return typeof v === 'number' && Number.isInteger(v) && Math.abs(v) <= 1099511627776 && !Object.is(v, -0) ? { n: { t: 'c', v }, ini: pp } : null; }
+            if (i3.op === OP.ADD || i3.op === OP.SUB || i3.op === OP.MUL) {
+              const r2 = arbolHasta(pp - 1, prof + 1); if (!r2) return null;
+              const l2 = arbolHasta(r2.ini - 1, prof + 1); if (!l2) return null;
+              return { n: { t: i3.op, l: l2.n, r: r2.n }, ini: l2.ini };
+            }
+            return null;
+          };
+          const sumaE = (a2, b2) => (a2 === null ? b2 : b2 === null ? a2 : { t: OP.ADD, l: a2, r: b2 });
+          const restaE = (a2, b2) => (b2 === null ? a2 : { t: OP.SUB, l: a2 === null ? { t: 'c', v: 0 } : a2, r: b2 });
+          const mulE = (a2, b2) => (a2 === null || b2 === null ? null : { t: OP.MUL, l: a2, r: b2 });
+          const afin = (n, sj, inv) => {   // → { K: el coeficiente de la variable que avanza (sj; null = 0), E: lo invariante (null = 0) }, con índice = K·sj + E
+            if (n.t === 'v') return n.s === sj ? { K: { t: 'c', v: 1 }, E: null } : inv(n.s) ? { K: null, E: n } : null;
+            if (n.t === 'c') return { K: null, E: n };
+            const l2 = afin(n.l, sj, inv), r2 = afin(n.r, sj, inv);
+            if (!l2 || !r2) return null;
+            if (n.t === OP.ADD) return { K: sumaE(l2.K, r2.K), E: sumaE(l2.E, r2.E) };
+            if (n.t === OP.SUB) return { K: restaE(l2.K, r2.K), E: restaE(l2.E, r2.E) };
+            if (l2.K !== null && r2.K !== null) return null;              // MUL: la variable que avanza no se multiplica por sí misma
+            if (l2.K !== null) return { K: mulE(l2.K, r2.E), E: mulE(l2.E, r2.E) };
+            if (r2.K !== null) return { K: mulE(r2.K, l2.E), E: mulE(l2.E, r2.E) };
+            return { K: null, E: mulE(l2.E, r2.E) };
+          };
+          const ivDe = n => {   // el intervalo de un árbol invariante, con los de la cabecera del bucle
+            if (n.t === 'c') return [n.v, n.v];
+            if (n.t === 'v') return Es[m].iv[n.s];
+            const a2 = ivDe(n.l), b2 = ivDe(n.r);
+            if (a2 === null || b2 === null || vacio(a2) || vacio(b2)) return null;
+            return n.t === OP.ADD ? ivAdd(a2, b2) : n.t === OP.SUB ? ivSub(a2, b2) : ivMul(a2, b2);
+          };
+          const clave2 = n => (n === null ? '0' : n.t === 'v' ? `v${n.s}` : n.t === 'c' ? `c${n.v}` : `(${n.t}${clave2(n.l)},${clave2(n.r)})`);
+          const gA = new Map();
+          if (condIdx >= 0) for (let kk = condIdx + 1; kk < k; kk++) {
+            const it = ins[kk];
+            if ((it.op !== OP.IDX_GET && it.op !== OP.IDX_SET) || !tj[kk] || !Es[kk] || !Fl[kk] || libre.has(kk)) continue;
+            let recto = true;                                               // sin saltos ni destinos de salto entre la condición y el acceso: se hace en cada vuelta
+            for (let x = condIdx + 1; x <= kk && recto; x++) if (alvos.has(x) || (x < kk && (ins[x].op === OP.JMP || ins[x].op === OP.JMP_FALSE || ins[x].op === OP.JMP_TRUE || ins[x].op === OP.LOOP))) recto = false;
+            if (!recto) continue;
+            const d = tj[kk].length, lp = it.op === OP.IDX_GET ? d - 2 : d - 3, a = Fl[kk][lp];
+            if (!(a > 0) || asig.has(a) || K(tj[kk][lp]) !== 'list' || a >= tj[m].length) continue;
+            let fin = kk - 1;
+            if (it.op === OP.IDX_SET) {                                     // el índice acaba donde empieza la expresión del valor (la primera con la pila a la altura d-1)
+              let pp = kk - 1;
+              while (pp > condIdx && !(tj[pp] && tj[pp].length === d - 1)) pp--;
+              if (pp <= condIdx) continue;
+              fin = pp - 1;
+            }
+            const ar = arbolHasta(fin, 0);
+            if (!ar) continue;
+            const hIdx = it.op === OP.IDX_GET ? d - 1 : d - 2;
+            if (!tj[ar.ini] || tj[ar.ini].length !== hIdx || ar.ini - 1 < 0 || ins[ar.ini - 1].op !== OP.GET_LOCAL || ins[ar.ini - 1].arg !== a) continue;
+            const inv = sl => sl > 0 && sl < tj[m].length && !asig.has(sl) && Es[m].iv[sl] != null;
+            const variables = new Set(); hojas(ar.n, h => { if (h.t === 'v') variables.add(h.s); });
+            const moviles = [...variables].filter(sl => asig.has(sl));
+            if (moviles.length !== 1) continue;                             // exactamente una variable que cambia: la que avanza
+            const sj = moviles[0];
+            if (!(indu.has(sj) && indu.get(sj).dir === 1 && cond.has(sj)) || sj >= tj[m].length || Es[m].iv[sj] == null) continue;
+            if (![...variables].every(sl => sl === sj || inv(sl))) continue;
+            const af = afin(ar.n, sj, inv);
+            if (!af || af.K === null) continue;
+            const kiv = ivDe(af.K);
+            if (kiv === null || vacio(kiv) || kiv[0] < 0) continue;      // monótono creciente: bastan los dos extremos
+            const ck = `${a}|${sj}|${clave2(af.K)}|${clave2(af.E)}`;
+            if (!gA.has(ck)) gA.set(ck, { a, sj, E: af.E, K: af.K });
+            libre.add(kk);
+          }
+          for (const g of gA.values()) {
+            const c = cond.get(g.sj), lineas = [];
+            let nt = 0;
+            const cg = n => {
+              if (n.t === 'v') return `i${n.s}`;
+              if (n.t === 'c') return `${n.v}LL`;
+              const x = cg(n.l), y = cg(n.r), t = `e${nt++}_`;
+              lineas.push(`int64_t ${t}; if (__builtin_${n.t === OP.ADD ? 'add' : n.t === OP.SUB ? 'sub' : 'mul'}_overflow(${x}, ${y}, &${t})) NT_FAIL();`);
+              return t;
+            };
+            const base = g.E === null ? '0LL' : cg(g.E), coef = cg(g.K);
+            cs.push(`if (i${g.sj} ${c.le ? '<=' : '<'} ${c.N}) { ${lineas.join(' ')} if (__builtin_expect(!nt_rango_ek(${base}, ${coef}, i${g.sj}, ${c.N}${c.le ? '' : ' - 1LL'}, ln${g.a}), 0)) NT_FAIL(); }`);
           }
         }
         if (cs.length) pre.set(m, (pre.get(m) || []).concat(cs));
