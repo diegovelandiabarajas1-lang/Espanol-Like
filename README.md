@@ -35,7 +35,7 @@ código de salida iguales; solo cambia el rastro de los errores, que nombra otro
 marcos intermedios). Los que no puede compilar los rechaza al compilar, no al correr.
 
 **Qué tan rápido es el AOT.** Medido en una i3-1115G4 frente a C escrito a mano
-(gcc -O3, mismos algoritmos), 61 programas de estrés —objetos, recursión,
+(gcc -O2, mismos algoritmos; el C que genera Ñ va con -O3), 61 programas de estrés —objetos, recursión,
 acceso a listas, memoria—, media geométrica del tiempo:
 
 | familia | Ñ AOT frente a C |
