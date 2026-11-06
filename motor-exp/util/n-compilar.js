@@ -210,7 +210,7 @@ function enlaces() {
 }
 const flags = biblioteca
   ? BASE.concat([mac ? '-dynamiclib' : '-shared', '-o', salida, c, objetoNrt()]).concat(enlaces(), ['-lm']).concat(win ? ['-static-libgcc'] : ['-pthread'])
-  : BASE.concat(['-o', salida, c, objetoNrt()]).concat(enlaces(), ['-lm']).concat(win ? ['-Wl,--stack,67108864'] : []);
+  : BASE.concat(['-o', salida, c, objetoNrt()]).concat(enlaces(), ['-lm']).concat(win ? ['-lws2_32', '-Wl,--stack,67108864'] : ['-pthread']);
 const r = spawnSync(comp, flags, { encoding: 'utf8' });
 if (r.status !== 0) {
   // (motor-exp N4.10) en Windows no hay enlace débil: una función que la cabecera

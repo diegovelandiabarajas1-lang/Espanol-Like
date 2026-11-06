@@ -13,6 +13,8 @@
 #include <stdarg.h>
 #include <time.h>
 #if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <io.h>
 #include <fcntl.h>
@@ -85,7 +87,7 @@ static void* nl_alloc(void) {
 static void nl_free(void* p) { *(void**)p = nl_libre; nl_libre = p; }
 static void* n_objeto(size_t b, NClase c) {
   NObj* o = (NObj*)n_mem(b);
-  o->rc = 1; o->clase = (uint8_t)c; o->inmortal = 0; o->bloque = 0;
+  o->rc = 1; o->clase = (uint8_t)c; o->inmortal = 0; o->bloque = 0; o->marca = 0;
   return o;
 }
 /* Soltar una estructura enlazada larga (una lista de 300 mil nodos) no puede recursar: cada hijo que llega a 0 volvería a entrar aquí y la pila de C
@@ -95,6 +97,8 @@ static N_HILO_LOCAL int n_liberando = 0;
 static N_HILO_LOCAL NObj** n_pend = NULL;
 static N_HILO_LOCAL size_t n_pend_n = 0, n_pend_cap = 0;
 static void liberar_uno(NObj* o);
+static void co_liberar(NObj* o);   /* (A6) nrt_corrutinas.inc */
+static void rs_olvidar(NDic* d);   /* (A6) nrt_red.inc */
 static size_t el_tam(int el);
 void n_liberar(NObj* o) {
   if (o->inmortal) { o->rc = N_INMORTAL_RC; return; }
@@ -121,6 +125,7 @@ static void liberar_uno(NObj* o) {
     }
     case NC_DIC: {
       NDic* d = (NDic*)o;
+      if (o->marca) rs_olvidar(d);
       for (int64_t i = 0; i < d->usados; i++) if (d->e[i].vivo) { n_dec(d->e[i].k); n_dec(d->e[i].v); }
       if (!d->h.bloque) { free(d->e); free(d->tabla); }
       if (d->reg) n_dec(n_obj(d->reg));
@@ -131,6 +136,7 @@ static void liberar_uno(NObj* o) {
     case NC_ERROR: { NError* e = (NError*)o; n_dec(e->tipo); n_dec(e->mensaje); break; }
     case NC_UP: { NUp* u = (NUp*)o; if (u->p == &u->cerrado) n_dec(u->cerrado); break; }
     case NC_REGDESC: { NRegDesc* r = (NRegDesc*)o; n_dec(r->nombre); n_dec(r->campos); n_dec(r->metodos); break; }
+    case NC_GENERADOR: case NC_PROMESA: case NC_LONGGEN: co_liberar(o); break;
     default: break;
   }
   free(o);
@@ -226,6 +232,14 @@ static uint32_t texto_hash(NV v) {
 
 /* Un búfer de UTF-16 que crece: con él se arman repr, texto y los mensajes. */
 typedef struct { uint16_t* s; int64_t n, cap; } NBuf;
+/* (motor-exp A6) corrutinas: lo que el resto del runtime necesita de nrt_corrutinas.inc */
+static void co_liberar(NObj* o);
+static const char* co_tipo_de(NV v);
+static void co_repr(NBuf* b, NV v);
+static NV co_len(NV o);
+static NV co_actual_de(NV o);
+static NV co_cmp(NV a, NV b, int op);
+static NV co_nueva(NCierre* c, NV* args, int n);
 static void b_crecer(NBuf* b, int64_t mas) {
   if (b->n + mas <= b->cap) return;
   int64_t c = b->cap ? b->cap * 2 : 64;
@@ -333,12 +347,17 @@ NV n_error_capturado(void) {
   err_limpiar();
   return r;
 }
+/* (A6) lo mismo que n_error_capturado pero sin limpiar: para guardar el fallo en una promesa y, si nadie la espera, dejarlo seguir */
+static NV n_error_como_valor(void) {
+  if (n_hilo.lanzado) return n_inc(n_hilo.valor);
+  return error_obj(n_hilo.tipo.t == N_NULO ? T("motor") : n_inc(n_hilo.tipo), n_inc(n_hilo.mensaje), n_hilo.linea);
+}
 void n_salida(NV t) {
   int64_t n; char* s = n_a_utf8(t, &n);
   fwrite(s, 1, (size_t)n, stdout); fputc('\n', stdout);
   free(s);
 }
-void n_fallo_final(void) {
+void n_imprimir_fallo(void) {
   NBuf b = {0};
   b_utf8(&b, "[ejecución] "); b_txt(&b, n_hilo.mensaje);
   if (n_hilo.pista.t == N_OBJ) { b_utf8(&b, "\n   \xE2\x86\xB3 "); b_txt(&b, n_hilo.pista); }
@@ -348,8 +367,8 @@ void n_fallo_final(void) {
   }
   NV t = b_texto(&b); n_salida(t); n_dec(t);
   fflush(stdout);
-  exit(1);
 }
+void n_fallo_final(void) { n_imprimir_fallo(); exit(1); }
 NV n_global_no_definida(const char* nombre) {
   /* mensajeNoDefinida de src/06-modulos.js (sin módulos todavía) */
   char b[512]; snprintf(b, sizeof b, "«%s» no está definida", nombre);
@@ -370,6 +389,7 @@ const char* n_tipo_de(NV v) {
     case NC_DIC: return "dic";
     case NC_ERROR: return "error";
     case NC_FECHA: return "fecha";
+    case NC_GENERADOR: case NC_PROMESA: return co_tipo_de(v);
     default: return "funcion";
   }
 }
@@ -681,6 +701,7 @@ static void repr_en(NBuf* b, NV v, int prof) {
     }
     case NC_NATIVA: b_utf8(b, "<nativa "); b_utf8(b, ((NNativa*)v.u.o)->nombre); b_c(b, '>'); return;
     case NC_FECHA: iso_de_fecha(b, ((NFecha*)v.u.o)->ms); return;
+    case NC_GENERADOR: case NC_PROMESA: case NC_LONGGEN: co_repr(b, v); return;
     default: b_utf8(b, "<objeto>"); return;
   }
 }
@@ -839,6 +860,7 @@ NV n_cmp(NV a, NV b, int op) {
     int c = texto_cmp(a, b);
     return n_bool(op == 0 ? c < 0 : op == 1 ? c <= 0 : op == 2 ? c > 0 : c >= 0);
   }
+  if (a.t == N_NUM && n_es(b, NC_LONGGEN)) return co_cmp(a, b, op);
   if (n_es(a, NC_FECHA) && n_es(b, NC_FECHA)) {
     double x = ((NFecha*)a.u.o)->ms, y = ((NFecha*)b.u.o)->ms;
     return n_bool(op == 0 ? x < y : op == 1 ? x <= y : op == 2 ? x > y : x >= y);
@@ -854,6 +876,7 @@ static NV nativa_con(const char* nombre, int aridad, NNatC f, NV extraV);
 static NV nat_metodo_atado(NV* a, int n, void* extra);
 NV n_idx_get(NV o, NV i) {
   if (o.t == N_OBJ) switch (o.u.o->clase) {
+    case NC_GENERADOR: return co_actual_de(o);
     case NC_ERROR: {
       NError* e = (NError*)o.u.o;
       if (n_es(i, NC_TEXTO)) {
@@ -945,6 +968,7 @@ NV n_len(NV o) {
     case NC_TEXTO: return n_num((double)TX(o)->n);
     case NC_LISTA: return n_num((double)LS(o)->n);
     case NC_DIC: return n_num((double)DC(o)->n);
+    case NC_GENERADOR: return co_len(o);   /* solo lo emite «para … en» */
     default: break;
   }
   return ERR("no se puede recorrer ni medir un valor de tipo %s", n_tipo_de(o));
@@ -1006,7 +1030,6 @@ static NV aridad_txt(const NFn* fn) {
 NV n_llamar(NV f, NV* args, int n) {
   if (n_es(f, NC_CIERRE)) {
     NCierre* c = (NCierre*)f.u.o; const NFn* fn = c->fn;
-    if (fn->corrutina) return n_error("los generadores y las funciones asíncronas todavía no están en el ejecutable nativo", "corre este programa con n-node");
     NV tmp[64];
     if (fn->aridad != n) {
       if (fn->minimos >= 0 && n >= fn->minimos && n < fn->aridad && fn->aridad <= 64) {
@@ -1015,6 +1038,7 @@ NV n_llamar(NV f, NV* args, int n) {
         args = tmp; n = fn->aridad;
       } else { NV a = aridad_txt(fn); NV r = ERR("«%s» espera %v argumento(s) y recibió %d", fn->nombre, a, (long long)n); n_dec(a); return r; }
     }
+    if (fn->corrutina) return co_nueva(c, args, n);   /* (A6) un generador no corre: se crea; una asíncrona corre hasta su primer «esperar» */
     return fn->f(c, args, n);   /* la profundidad la comprueba la función al entrar (A2) */
   }
   if (n_es(f, NC_NATIVA)) {
@@ -1170,7 +1194,11 @@ NAT(nat_tipo) {
   if (n_es(a[0], NC_DIC) && DC(a[0])->reg) return n_inc(DC(a[0])->reg->nombre);
   return n_texto_utf8(n_tipo_de(a[0]));
 }
-NAT(nat_longitud) { (void)n; (void)extra; return n_len(a[0]); }
+NAT(nat_longitud) {
+  (void)n; (void)extra;
+  if (n_es(a[0], NC_GENERADOR)) return n_errorT(n_texto_utf8("un generador no tiene longitud: sus valores salen de uno en uno"), n_texto_utf8("recórrelo con «para x en g», o pásalo a lista con recoger(g)"));
+  return n_len(a[0]);
+}
 /* (motor-exp A1) la validación de «rango», compartida con el C que emite el
    compilador para «para … en rango(…)» sin lista. «largo» es cuántos
    elementos tendría la lista: con enteros se calcula; con decimales se cuenta
@@ -1534,6 +1562,9 @@ NAT(nat_borrarArchivo) {
 #include "nrt_formato.inc"
 #include "nrt_fecha.inc"
 #include "nrt_probar.inc"
+#include "nrt_corrutinas.inc"   /* (motor-exp A6) generadores, asíncronas, promesas, temporizadores */
+#include "nrt_sistema.inc"       /* (motor-exp A6) el eDSL sistema, JSON, procesos, bucle de eventos */
+#include "nrt_red.inc"           /* (motor-exp A6) servir, respuesta, detenerServidor, pedir */
 
 /* ── «usar»: un eDSL no hace nada al ejecutarse (sus funciones ya están); un
    módulo se ejecuta UNA vez, y si está a medio cargar (un ciclo) se sigue,
@@ -1574,6 +1605,9 @@ static const NNatDef NATIVAS[] = {
   NAT_FORMATO
   NAT_PROBAR
   NAT_FECHA
+  NAT_CORRUTINAS
+  NAT_SISTEMA
+  NAT_RED
   { " usar", 1, nat_usar },
   { "imprimir", -1, nat_imprimir }, { "texto", 1, nat_texto }, { "entero", 1, nat_entero }, { "real", 1, nat_real },
   { "bool", 1, nat_bool }, { "tipo", 1, nat_tipo }, { "longitud", 1, nat_longitud }, { "rango", -1, nat_rango },

@@ -58,9 +58,10 @@ typedef enum {
 
 typedef enum {
   NC_TEXTO = 1, NC_LISTA, NC_DIC, NC_CIERRE, NC_NATIVA, NC_ERROR, NC_UP, NC_REGDESC, NC_FALTANTE, NC_FECHA,
+  NC_GENERADOR, NC_PROMESA, NC_LONGGEN,   /* (motor-exp A6) generadores y funciones asíncronas, promesas, y la «longitud» de un generador dentro de un «para» */
 } NClase;
 
-typedef struct NObj { int64_t rc; uint8_t clase; uint8_t inmortal; uint8_t bloque; } NObj;   /* bloque: los arreglos de este diccionario están dentro de su propia reserva */
+typedef struct NObj { int64_t rc; uint8_t clase; uint8_t inmortal; uint8_t bloque; uint8_t marca; } NObj;   /* marca: un diccionario hecho por respuesta() (ver nrt_red.inc) */   /* bloque: los arreglos de este diccionario están dentro de su propia reserva */
 typedef struct NV { uint8_t t; union { double n; int b; NObj* o; } u; } NV;
 
 #define N_INMORTAL_RC ((int64_t)1 << 60)
@@ -160,6 +161,8 @@ NV n_errorf(const char* fmt, ...);
 NV n_lanzar(NV v);
 NV n_error_capturado(void);                                      /* convierte lo pendiente en valor y lo limpia */
 void n_fallo_final(void);                                        /* imprime como la VM y sale con 1 */
+void n_imprimir_fallo(void);                                    /* (A6) lo mismo sin salir: un error en un turno del bucle de eventos */
+int n_bucle_eventos(void);                                       /* (A6) temporizadores y promesas pendientes; devuelve el código de salida */
 /* (motor-exp A2) La traza se construye AL DESHACER, no al entrar: una función no
    apunta nada al entrar ni al salir (eso costaba tanto como la llamada misma).
    Cuando un error sube, cada función por la que pasa añade su nombre y la línea

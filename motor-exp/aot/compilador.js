@@ -229,7 +229,8 @@ function analizar(fn, ins, ctx) {
       case OP.IDX_SET: usa(d - 2); usaL(d - 3); t[d - 3] = t[d - 1]; p[d - 3] = -1; break;
       case OP.PROP_GET: pon(d - 1, 'any'); break;
       case OP.CONCAT: pon(d - it.arg, 'texto'); break;
-      case OP.LEN: usaL(d - 1); pon(d - 1, 'num'); break;
+      // (A6) con generadores en el programa, la «longitud» de algo que no se sabe lista/texto/dic puede ser la de un generador (que no es un número: ver co_len)
+      case OP.LEN: usaL(d - 1); pon(d - 1, ctx.hayGen && !['lista', 'texto', 'dic'].includes(t[d - 1]) && !esRango(t[d - 1]) ? 'any' : 'num'); break;
       case OP.TRY: case OP.FIN_TRY: case OP.LANZAR: break;
       default: throw new ErrorAOT('instrucción sin tipo conocido ' + it.nombre);
     }
@@ -289,6 +290,7 @@ const NATIVAS_C = (() => {
   return s;
 })();
 const SEP = '\u0000';
+const GEN_NATIVOS = new Set(['sistema/leerLineas']);   // (A6) nativas que devuelven un generador
 const nombreC = g => (g.startsWith('ñ:') && g.includes(SEP) ? g.slice(2).replace(SEP, '/') : g);
 const rutaCorta = c => String(c).replace(/^.*[/\\]/, '') || String(c);
 function noDefinida(n) {   // mensajeNoDefinida de src/06-modulos.js
@@ -336,13 +338,8 @@ function compilarAOT(fnPrincipal, opciones) {
     if (NATIVAS_C.has(nombreC(g)) || VALORES_C[g]) continue;
     if (globalesMotor.has(g)) faltan.push(g.includes(SEP) ? `«${g.split(SEP)[1]}» de "${g.split(SEP)[0].slice(2)}"` : `«${g}»`);
   }
-  const corrutinas = fns.filter(f => f.corrutina).map(f => `«${f.nombre}»`);
-  if (faltan.length || corrutinas.length) {
-    const partes = [];
-    if (faltan.length) partes.push('todavía no están en el ejecutable nativo: ' + faltan.join(', '));
-    if (corrutinas.length) partes.push('los generadores y las funciones asíncronas todavía no: ' + corrutinas.join(', '));
-    throw new ErrorAOT(partes.join(' · '));
-  }
+  // (motor-exp A6) los generadores y las funciones asíncronas ya van en el ejecutable (pilas propias: aot/nrt_corrutinas.inc)
+  if (faltan.length) throw new ErrorAOT('todavía no están en el ejecutable nativo: ' + faltan.join(', '));
 
   const out = [];
   const E = s => out.push(s);
@@ -429,10 +426,12 @@ function compilarAOT(fnPrincipal, opciones) {
     return q.ret[0];
   };
   const retNativa = nombre => RET_NATIVAS[nombre] || 'any';
+  // (A6) ¿puede haber un generador en el programa? (una función generadora, o una nativa que da uno)
+  const hayGen = fns.some(f => f.corrutina === 'generador') || [...globales.keys()].some(g => GEN_NATIVOS.has(nombreC(g)));
   const analizarVersion = (q, v) => {
     const ctx = {
       tipoParam: i => (v === 1 && q.guardas.includes(i) ? 'num' : v === 1 && q.listas.includes(i) ? 'lista' : 'any'),
-      retDe, retNativa, tipoGlobal, capturados: q.capturados, escritos: q.escritos, rango: q.rango, prestar: q.prestar,
+      hayGen, retDe, retNativa, tipoGlobal, capturados: q.capturados, escritos: q.escritos, rango: q.rango, prestar: q.prestar,
       guardaDe: (k, n, i) => plan[k].f.aridad === n && plan[k].guardas.includes(i),
       listaDe: (k, n, i) => plan[k].f.aridad === n && plan[k].listas.includes(i),
     };
@@ -567,7 +566,7 @@ function compilarAOT(fnPrincipal, opciones) {
   for (const [id, t] of tipInfo) E(`static N_PURA ${TIPADO.firmaTipada(plan, id, t)};`);
   plan.forEach((q, j) => { if (q.guardas.length || q.listas.length) E(`static ${firmaClon(q, j)};`); });
   plan.forEach((q, j) => { if (q.pura) E(`static N_PURA ${firmaPura(q, j)};`); });
-  fns.forEach((f, j) => E(`static const NFn FN${j} = { ${cTexto(f.nombre)}, ${f.aridad}, ${f.minimos !== undefined ? f.minimos : -1}, ${f.nUpvalues}, ${f.corrutina ? 1 : 0}, F${j} };`));
+  fns.forEach((f, j) => E(`static const NFn FN${j} = { ${cTexto(f.nombre)}, ${f.aridad}, ${f.minimos !== undefined ? f.minimos : -1}, ${f.nUpvalues}, ${f.corrutina === 'asincrona' ? 2 : f.corrutina ? 1 : 0}, F${j} };`));
 
   for (const [id, t] of tipInfo) TIPADO.emitirTipada({ plan, OP, cNumero, fnsInfo: tipInfo, sinComprobar: process.env.N_AOT_SIN_COMPROBAR === '1' }, id, t, E);
   plan.forEach((q, j) => {
@@ -608,8 +607,9 @@ function compilarAOT(fnPrincipal, opciones) {
   E('  NV r = F0((NCierre*)c.u.o, NULL, 0);');
   E('  if (N_FALLO(r)) n_fallo_final();');
   E('  n_dec(r); n_dec(c);');
+  E('  int codigo = n_bucle_eventos();   /* (A6) temporizadores y promesas pendientes */');
   E('  fflush(stdout);');
-  E('  return 0;');
+  E('  return codigo;');
   E('}');
   return { c: out.join('\n') + '\n', funciones: fns.length, textos: textos.size, globales: globales.size, enlazar: enl.bibliotecas };
 
