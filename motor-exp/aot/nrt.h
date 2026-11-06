@@ -58,7 +58,7 @@ typedef enum {
 
 typedef enum {
   NC_TEXTO = 1, NC_LISTA, NC_DIC, NC_CIERRE, NC_NATIVA, NC_ERROR, NC_UP, NC_REGDESC, NC_FALTANTE, NC_FECHA,
-  NC_GENERADOR, NC_PROMESA, NC_LONGGEN,   /* (motor-exp A6) generadores y funciones asíncronas, promesas, y la «longitud» de un generador dentro de un «para» */
+  NC_GENERADOR, NC_PROMESA, NC_LONGGEN, NC_TABLA,   /* (motor-exp A6) generadores y funciones asíncronas, promesas, y la «longitud» de un generador dentro de un «para» */
 } NClase;
 
 typedef struct NObj { int64_t rc; uint8_t clase; uint8_t inmortal; uint8_t bloque; uint8_t marca; } NObj;   /* marca: un diccionario hecho por respuesta() (ver nrt_red.inc) */   /* bloque: los arreglos de este diccionario están dentro de su propia reserva */

@@ -99,6 +99,7 @@ static N_HILO_LOCAL size_t n_pend_n = 0, n_pend_cap = 0;
 static void liberar_uno(NObj* o);
 static void co_liberar(NObj* o);   /* (A6) nrt_corrutinas.inc */
 static void rs_olvidar(NDic* d);   /* (A6) nrt_red.inc */
+static void tb_liberar(NObj* o);   /* (A6) nrt_datos.inc */
 static size_t el_tam(int el);
 void n_liberar(NObj* o) {
   if (o->inmortal) { o->rc = N_INMORTAL_RC; return; }
@@ -137,6 +138,7 @@ static void liberar_uno(NObj* o) {
     case NC_UP: { NUp* u = (NUp*)o; if (u->p == &u->cerrado) n_dec(u->cerrado); break; }
     case NC_REGDESC: { NRegDesc* r = (NRegDesc*)o; n_dec(r->nombre); n_dec(r->campos); n_dec(r->metodos); break; }
     case NC_GENERADOR: case NC_PROMESA: case NC_LONGGEN: co_liberar(o); break;
+    case NC_TABLA: tb_liberar(o); break;
     default: break;
   }
   free(o);
@@ -236,6 +238,8 @@ typedef struct { uint16_t* s; int64_t n, cap; } NBuf;
 static void co_liberar(NObj* o);
 static const char* co_tipo_de(NV v);
 static void co_repr(NBuf* b, NV v);
+static void td_repr(NBuf* b, NV v);
+static NV td_len(NV o);
 static NV co_len(NV o);
 static NV co_actual_de(NV o);
 static NV co_cmp(NV a, NV b, int op);
@@ -390,6 +394,7 @@ const char* n_tipo_de(NV v) {
     case NC_ERROR: return "error";
     case NC_FECHA: return "fecha";
     case NC_GENERADOR: case NC_PROMESA: return co_tipo_de(v);
+    case NC_TABLA: return "tabla";
     default: return "funcion";
   }
 }
@@ -702,6 +707,7 @@ static void repr_en(NBuf* b, NV v, int prof) {
     case NC_NATIVA: b_utf8(b, "<nativa "); b_utf8(b, ((NNativa*)v.u.o)->nombre); b_c(b, '>'); return;
     case NC_FECHA: iso_de_fecha(b, ((NFecha*)v.u.o)->ms); return;
     case NC_GENERADOR: case NC_PROMESA: case NC_LONGGEN: co_repr(b, v); return;
+    case NC_TABLA: td_repr(b, v); return;
     default: b_utf8(b, "<objeto>"); return;
   }
 }
@@ -736,6 +742,8 @@ static NV msg(const char* fmt, ...) {
 
 /* ════════════════════════════════════════════════════════════ iguales */
 typedef struct { NObj *a, *b; } NPar;
+static int iguales_rec(NV a, NV b, NPar* vistos, int nv);
+static int td_iguales(NV a, NV b, int (*eq)(NV, NV, NPar*, int), NPar* v, int nv);
 static int iguales_rec(NV a, NV b, NPar* vistos, int nv) {
   if (a.t != b.t) return 0;
   switch (a.t) {
@@ -749,6 +757,7 @@ static int iguales_rec(NV a, NV b, NPar* vistos, int nv) {
   if (ca == NC_TEXTO && cb == NC_TEXTO) return texto_igual(a, b);
   /* una fecha es un valor, no una identidad: dos que marcan el mismo instante son iguales */
   if (ca == NC_FECHA || cb == NC_FECHA) return ca == cb && ((NFecha*)a.u.o)->ms == ((NFecha*)b.u.o)->ms;
+  if (ca == NC_TABLA || cb == NC_TABLA) return ca == cb && td_iguales(a, b, iguales_rec, vistos, nv);
   if (ca == NC_DIC && cb == NC_DIC && DC(a)->reg != DC(b)->reg) return 0;
   int dosListas = ca == NC_LISTA && cb == NC_LISTA, dosDics = ca == NC_DIC && cb == NC_DIC;
   if (!dosListas && !dosDics) return 0;
@@ -865,6 +874,9 @@ NV n_cmp(NV a, NV b, int op) {
     double x = ((NFecha*)a.u.o)->ms, y = ((NFecha*)b.u.o)->ms;
     return n_bool(op == 0 ? x < y : op == 1 ? x <= y : op == 2 ? x > y : x >= y);
   }
+  if (n_es(a, NC_TABLA) || n_es(b, NC_TABLA))
+    return ERRP(T("una tabla no tiene orden; para ordenar sus filas usa ordenarPor(t, \"columna\")"),
+      "no se pueden comparar %s y %s con «%s»", n_tipo_de(a), n_tipo_de(b), ops[op]);
   if (n_es(a, NC_FECHA) || n_es(b, NC_FECHA))
     return ERRP(T("una fecha solo se compara con otra fecha; para sacar el número usa aMarca(f)"),
       "no se pueden comparar %s y %s con «%s»", n_tipo_de(a), n_tipo_de(b), ops[op]);
@@ -969,6 +981,7 @@ NV n_len(NV o) {
     case NC_LISTA: return n_num((double)LS(o)->n);
     case NC_DIC: return n_num((double)DC(o)->n);
     case NC_GENERADOR: return co_len(o);   /* solo lo emite «para … en» */
+    case NC_TABLA: return td_len(o);
     default: break;
   }
   return ERR("no se puede recorrer ni medir un valor de tipo %s", n_tipo_de(o));
@@ -1565,6 +1578,7 @@ NAT(nat_borrarArchivo) {
 #include "nrt_corrutinas.inc"   /* (motor-exp A6) generadores, asíncronas, promesas, temporizadores */
 #include "nrt_sistema.inc"       /* (motor-exp A6) el eDSL sistema, JSON, procesos, bucle de eventos */
 #include "nrt_red.inc"           /* (motor-exp A6) servir, respuesta, detenerServidor, pedir */
+#include "nrt_datos.inc"         /* (motor-exp A6) el eDSL datos: tablas */
 
 /* ── «usar»: un eDSL no hace nada al ejecutarse (sus funciones ya están); un
    módulo se ejecuta UNA vez, y si está a medio cargar (un ciclo) se sigue,
@@ -1608,6 +1622,7 @@ static const NNatDef NATIVAS[] = {
   NAT_CORRUTINAS
   NAT_SISTEMA
   NAT_RED
+  NAT_DATOS
   { " usar", 1, nat_usar },
   { "imprimir", -1, nat_imprimir }, { "texto", 1, nat_texto }, { "entero", 1, nat_entero }, { "real", 1, nat_real },
   { "bool", 1, nat_bool }, { "tipo", 1, nat_tipo }, { "longitud", 1, nat_longitud }, { "rango", -1, nat_rango },

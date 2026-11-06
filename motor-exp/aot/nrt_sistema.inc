@@ -889,6 +889,7 @@ int n_bucle_eventos(void) {
     }
     TRAB_LOCK(); int pend = trab_pend; TRAB_UNLOCK();
     if (!a && !b && !pend) break;
+    fflush(stdout);   /* nada que hacer hasta que algo ocurra: que lo ya impreso se vea (un servidor puede esperar horas) */
     bucle_esperar((a || b) ? due - ahora : -1);
   }
   return codigo | g_codigo_turnos;
