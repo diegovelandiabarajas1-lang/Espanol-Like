@@ -25,7 +25,7 @@ para v en ventas { imprimir(moneda(v) + "  " + clasificar(v)) }
 
 | | motor | para qué sirve | cómo se usa |
 |---|---|---|---|
-| **Oficial** | **AOT** — Ñ → C → ejecutable nativo, sin runtime aparte | la velocidad: programas, herramientas y cálculo que tienen que ir rápido | `node motor-exp/util/n-compilar.js programa.esl -o programa` (el código está en la rama [`motor-exp`](https://github.com/diegovelandiabarajas1-lang/Espanol-Like/tree/motor-exp)) |
+| **Oficial** | **AOT** — Ñ → C → ejecutable nativo, sin runtime aparte | la velocidad: programas, herramientas y cálculo que tienen que ir rápido | `node motor-exp/util/n-compilar.js programa.esl -o programa` · o `n-auto.js` (JIT al instante + AOT en segundo plano); el código está en la rama [`motor-exp`](https://github.com/diegovelandiabarajas1-lang/Espanol-Like/tree/motor-exp) |
 | Secundario | **JIT** — máquina virtual + traducción a JavaScript, sobre Node | arrancar al instante, depurar, y correr **todo** el lenguaje y toda la biblioteca | `node motor/util/n-node.js programa.esl` |
 | Secundario | **Navegador** — `espanol-like-v4.html`, un solo archivo | probar sin instalar nada, y las páginas con interfaz (lienzo, estilo, eventos) | abrir el archivo |
 
@@ -35,16 +35,17 @@ código de salida iguales; solo cambia el rastro de los errores, que nombra otro
 marcos intermedios). Los que no puede compilar los rechaza al compilar, no al correr.
 
 **Qué tan rápido es el AOT.** Medido en una i3-1115G4 frente a C escrito a mano
-(gcc -O2, mismos algoritmos; el C que genera Ñ va con -O3), 61 programas de estrés —objetos, recursión,
-acceso a listas, memoria—, media geométrica del tiempo:
+(gcc -O2, mismos algoritmos; el C que genera Ñ va con -O3), 59 programas de estrés —objetos, recursión,
+acceso a listas, memoria—, media geométrica del tiempo (se dejan fuera los que C resuelve en menos de
+3 ms, donde el compilador de C elimina el trabajo y la razón no mide nada, y los 4 que pasan de 900 llamadas):
 
 | familia | Ñ AOT frente a C |
 |---|---|
 | objetos y memoria (crear y soltar millones de objetos) | ×1.0 |
-| acceso a listas, índices comprobados | ×1.26 |
-| memoria y caché | ×1.31 |
-| recursión | ×1.81 |
-| **los 61** | **×1.31** (42 por debajo de ×1.5, 53 por debajo de ×2) |
+| acceso a listas, índices comprobados | ×1.19 |
+| memoria y caché | ×1.30 |
+| recursión | ×1.48 |
+| **los 59** | **×1.21** (41 por debajo de ×1.5, 53 por debajo de ×2, 18 más rápidos que C) |
 
 Los 22 programas numéricos clásicos (fib, criba, mandelbrot, n-cuerpos…) salen a
 ×1.3 de C con todas las comprobaciones puestas (×1.28 a ×1.31 según la corrida),
@@ -63,8 +64,16 @@ Las tablas completas, con las condiciones de cada medida, están en
   con su nombre, nunca falla a medias.
 - **Generadores y funciones asíncronas**, y los hilos.
 - **Recursión:** hasta 900 llamadas anidadas, igual que la máquina virtual.
-- **Necesita un compilador de C** (gcc o clang) y compilar tarda segundos, no
-  milisegundos: para escribir y probar, el JIT; para entregar, el AOT.
+- **Necesita un compilador de C** (gcc o clang, o uno portátil en la carpeta
+  `compilador/` junto al motor). Compilar un programa normal tarda del orden de
+  medio segundo (unos 10 s uno de 28 000 líneas de C).
+
+**El camino fácil: `n-auto.js`.** `node motor-exp/util/n-auto.js programa.esl`
+corre el programa YA con el JIT y, en segundo plano, compila el AOT y lo guarda
+en una caché; desde la segunda vez ejecuta el nativo. Si el AOT no cubre el
+programa, no hay compilador o el sistema no deja arrancar el ejecutable, sigue
+con el JIT sin que el usuario haga nada. La caché caduca sola si cambia el
+programa, uno de sus módulos o el compilador de Ñ.
 
 ## Probarlo sin instalar nada
 
@@ -86,6 +95,7 @@ O sin instalar, desde el repositorio:
 node motor/util/n-node.js programa.esl                          # JIT
 git checkout motor-exp   # el AOT vive en esa rama
 node motor-exp/util/n-compilar.js programa.esl -o programa      # AOT (motor oficial)
+node motor-exp/util/n-auto.js programa.esl                      # JIT ya + AOT en segundo plano
 ```
 
 Hay también un intérprete para [QuickJS](https://bellard.org/quickjs/)
