@@ -1610,6 +1610,8 @@ NAT(nat_borrarArchivo) {
 #include "nrt_arreglo3.inc"      /* (motor-exp A7) arreglos: pegar, rebanar, ordenar, azar */
 #include "nrt_arreglo4.inc"      /* (motor-exp A7) arreglos: Fourier, espectro, convolución */
 #include "nrt_arreglo5.inc"      /* (motor-exp A7) arreglos: álgebra lineal */
+#include "nrt_arreglo6.inc"      /* (motor-exp A7) arreglos: bits */
+#include "nrt_arreglo7.inc"      /* (motor-exp A7) arreglos: E/S binaria */
 
 /* ── «usar»: un eDSL no hace nada al ejecutarse (sus funciones ya están); un
    módulo se ejecuta UNA vez, y si está a medio cargar (un ciclo) se sigue,
@@ -1659,6 +1661,8 @@ static const NNatDef NATIVAS[] = {
   NAT_ARREGLO3
   NAT_ARREGLO4
   NAT_ARREGLO5
+  NAT_ARREGLO6
+  NAT_ARREGLO7
   { " usar", 1, nat_usar },
   { "imprimir", -1, nat_imprimir }, { "texto", 1, nat_texto }, { "entero", 1, nat_entero }, { "real", 1, nat_real },
   { "bool", 1, nat_bool }, { "tipo", 1, nat_tipo }, { "longitud", 1, nat_longitud }, { "rango", -1, nat_rango },

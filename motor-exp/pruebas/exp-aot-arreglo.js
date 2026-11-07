@@ -538,6 +538,83 @@ intentar { autovalores(arreglo([1, 2])) } capturar (e) { imprimir(e["mensaje"]) 
 intentar { autovalores(arreglo([[1, 2, 3], [4, 5, 6]])) } capturar (e) { imprimir(e["mensaje"]) }
 intentar { autovalores(q) } capturar (e) { imprimir(e["mensaje"]) }`);
 
+// ── sexta tanda: bits (con números sueltos, lo que cabe en 53 bits; lo demás es un «grande» que el ejecutable aún no trae)
+igual('bits con números sueltos', U + `imprimir(bitsY(12, 10), bitsO(12, 10), bitsXor(12, 10), bitsNo(5), bitsNo(-1), bitsNo(0), bitsY(-6, 255), bitsO(-8, 3), bitsXor(-1, 255))
+imprimir(desplazarIzq(1, 40), desplazarIzq(3, 0), desplazarIzq(0, 100), desplazarIzq(-3, 4), desplazarDer(1024, 3), desplazarDer(-1024, 3), desplazarDer(-1, 100), desplazarDer(5, 70), desplazarIzq(1, 52))
+imprimir(contarBits(255), contarBits(0), contarBits(1023), contarBits(4503599627370496))
+fijo q = [3, "a"][0]
+fijo r = [1.5, "a"][0]
+intentar { bitsY(r, 2) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { bitsY(2, r) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { bitsY(q, 2) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { bitsNo(r) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { contarBits(-1) } capturar (e) { imprimir(e["mensaje"], e["pista"]) }
+intentar { desplazarIzq(1, -1) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { desplazarIzq(1, 70000) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { desplazarDer(1, r) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { desplazarIzq(2, q) } capturar (e) { imprimir(e["mensaje"]) }`);
+igual('bits con arreglos', U + `fijo a = arreglo([12, 10, 255, 1], "u8")
+fijo b = arreglo([10, 12, 15, 3], "u8")
+imprimir(bitsY(a, b), bitsO(a, b), bitsXor(a, b), bitsNo(a), bitsY(a, 7), bitsO(a, 128), bitsXor(a, 255), tipoArreglo(bitsY(a, b)))
+imprimir(desplazarIzq(a, 1), desplazarIzq(a, 4), desplazarDer(a, 2), desplazarIzq(a, 9), desplazarDer(arreglo([-8, -1, 16], "i8"), 1), desplazarIzq(arreglo([-8, 1], "i16"), 3), tipoArreglo(desplazarIzq(a, 1)))
+fijo c = arreglo([5, -3, 100000, 7])
+imprimir(bitsNo(c), bitsY(c, 255), contarBits(a), contarBits(arreglo([-1, 255, 5], "i8")), contarBits(arreglo([-1, 65535], "i16")), contarBits(c), tipoArreglo(contarBits(a)))
+imprimir(bitsY(arreglo([1, 2, 3], "u32"), arreglo([4294967295, 4294967295, 7], "u32")), bitsO(arreglo([[1], [2]]), arreglo([4, 8, 16])), bitsXor(arreglo([200, 100], "u8"), arreglo([100, 200], "i16")), tipoArreglo(bitsXor(arreglo([200], "u8"), arreglo([100], "i16"))))
+imprimir(desplazarIzq(arreglo([1, 2, 3]), arreglo([1, 2, 3])), desplazarDer(arreglo([[64, 64]]), arreglo([[1], [2]])), desplazarIzq(arreglo([1, 2], "u32"), 31), desplazarIzq(arreglo([1], "u8"), 2000), desplazarDer(arreglo([-5], "i8"), 2000))
+imprimir(bitsY(transpuesta(redimensionar(secuencia(6), [2, 3])), 3), desplazarIzq(trozo(secuencia(10), 0, 2, 6), 2))
+fijo q = [3, "a"][0]
+intentar { bitsY(arreglo([1.5, 2]), 1) } capturar (e) { imprimir(e["mensaje"], e["pista"]) }
+intentar { bitsY(a, arreglo([1.5, 2, 3, 4])) } capturar (e) { imprimir(e["mensaje"], e["pista"]) }
+intentar { bitsY(a, 1.5) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { bitsY(5, a) } capturar (e) { imprimir(e["mensaje"], e["pista"]) }
+intentar { bitsY(a, arreglo([1, 2])) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { desplazarIzq(a, arreglo([1, -1, 1, 1])) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { desplazarIzq(a, arreglo([1, 1, 1, 70000])) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { desplazarDer(a, -2) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { desplazarDer(arreglo([1], "bool"), 1) } capturar (e) { imprimir(e["mensaje"], e["pista"]) }
+intentar { contarBits(arreglo([1.5])) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { bitsNo(arreglo([1.5])) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { bitsY(a, q) } capturar (e) { imprimir(e["mensaje"]) }`);
+
+igual('contarCiertos con eje', U + `fijo m = redimensionar(secuencia(12), [3, 4])
+fijo mk = mayorQue(m, 4)
+imprimir(contarCiertos(mk), contarCiertos(mk, 0), contarCiertos(mk, 1), contarCiertos(mk, -1), contarCiertos(mayorQue(secuencia(10), 6), 0))
+imprimir(contarCiertos(mayorQue(redimensionar(secuencia(8), [2, 2, 2]), 2), 1), contarCiertos(arreglo([0, 1, 2, 0, 3]), 0))
+intentar { contarCiertos(mk, 5) } capturar (e) { imprimir(e["mensaje"], e["pista"]) }
+intentar { contarCiertos(mk, -3) } capturar (e) { imprimir(e["mensaje"]) }`);
+// ── séptima tanda: arreglos en binario crudo
+igual('escribirArregloBinario y leerArregloBinario', U + `fijo m = redimensionar(secuencia(1, 7), [2, 3]) * 1.5
+escribirArregloBinario("a.bin", m)
+imprimir(tamanoArchivo("a.bin"), leerArregloBinario("a.bin", "real", [2, 3]), leerArregloBinario("a.bin", "f64", [6]), leerArregloBinario("a.bin", "real", [3, 2]) == transpuesta(redimensionar(aplanarA(m), [2, 3])) )
+para t en ["entero", "real32", "real16", "i8", "u8", "i16", "u16", "u32"] {
+  fijo x = aTipo(arreglo([1, 2, 3, 100, 7, 9]), t)
+  escribirArregloBinario("b.bin", x)
+  imprimir(t, tamanoArchivo("b.bin"), leerArregloBinario("b.bin", t, [2, 3]), leerArregloBinario("b.bin", t, [2, 3]) == redimensionar(x, [2, 3]))
+}
+fijo h = arreglo([0.5, -1.25, 65504, 0.000061035, 1e-7, 3.140625], "real16")
+escribirArregloBinario("h.bin", h)
+imprimir(tamanoArchivo("h.bin"), leerArregloBinario("h.bin", "real16", [6]), leerArregloBinario("h.bin", "f16", [3, 2]))
+fijo v = transpuesta(redimensionar(secuencia(6), [2, 3]))
+escribirArregloBinario("v.bin", v)
+imprimir(leerArregloBinario("v.bin", "real", [3, 2]) == v, leerArregloBinario("v.bin", "entero", [3, 4]), forma(leerArregloBinario("a.bin", "real", [0])) )
+escribirArregloBinario("c.bin", arreglo([-1, 200, 255], "u8"))
+imprimir(leerArregloBinario("c.bin", "i8", [3]), leerArregloBinario("c.bin", "u8", [3]))
+fijo q = [3, "a"][0]
+intentar { leerArregloBinario("a.bin", "real", [5]) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { leerArregloBinario("a.bin", "real16", [5]) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { leerArregloBinario("a.bin", "texto", [6]) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { leerArregloBinario("a.bin", "bool", [6]) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { leerArregloBinario("no-existe.bin", "real", [6]) } capturar (e) { imprimir(e["mensaje"], e["tipo"]) }
+intentar { leerArregloBinario("a.bin", "real", [-1]) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { leerArregloBinario("a.bin", "real", q) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { leerArregloBinario(q, "real", [6]) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { leerArregloBinario("a.bin", q, [6]) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { escribirArregloBinario("d.bin", q) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { escribirArregloBinario("d.bin", arreglo([1, 0], "bool")) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { escribirArregloBinario("d.bin", complejo(arreglo([1, 2]), arreglo([3, 4]))) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { escribirArregloBinario(q, m) } capturar (e) { imprimir(e["mensaje"]) }
+intentar { escribirArregloBinario("/no/existe/d.bin", m) } capturar (e) { imprimir(e["mensaje"], e["tipo"]) }`);
+
 try { fs.rmSync(raiz, { recursive: true, force: true }); } catch (_) { /* nada */ }
 console.log('');
 for (const f of fallos) console.log(f);

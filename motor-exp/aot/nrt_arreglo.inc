@@ -668,10 +668,11 @@ NAT(ar_esNaN) { (void)n; (void)extra; ARR_(a[0], 1, "esNaN"); return ar_unaria(A
 NAT(ar_esFinito) { (void)n; (void)extra; ARR_(a[0], 1, "esFinito"); return ar_unaria(AR(a[0]), fx_esfin, AR_BOOL); }
 NAT(ar_todos) { (void)n; (void)extra; ARR_(a[0], 1, "todos"); NArr* x = AR(a[0]); ArIt it; int64_t p; ari_ini(&it, x); while (ari_sig(&it, &p)) if (!ar_leer(x, p)) return n_bool(0); return n_bool(1); }
 NAT(ar_alguno) { (void)n; (void)extra; ARR_(a[0], 1, "alguno"); NArr* x = AR(a[0]); ArIt it; int64_t p; ari_ini(&it, x); while (ari_sig(&it, &p)) if (ar_leer(x, p)) return n_bool(1); return n_bool(0); }
+static NV ar_reducir(NArr* x, double eje_d, int media);
 NAT(ar_contarCiertos) {
   (void)extra; ARR_(a[0], 1, "contarCiertos");
   NArr* x = AR(a[0]);
-  if (n > 1) return ERR("«contarCiertos» con eje todavía no está en el ejecutable nativo");
+  if (n > 1) { NUM(a[1], 2, "contarCiertos"); if (x->tipo == AR_I64 || x->tipo == AR_U64) return ar_error_i64("contarCiertos", x->tipo); return ar_reducir(x, trunc(a[1].u.n), 2); }
   int64_t c = 0; ArIt it; int64_t p; ari_ini(&it, x); while (ari_sig(&it, &p)) if (ar_leer(x, p)) c++;
   return n_num((double)c);
 }
@@ -920,7 +921,7 @@ static NV ar_reducir(NArr* x, double eje_d, int media) {
   }
   int ee = (int)e; int64_t f[AR_MAXND]; int64_t zr[AR_MAXND]; int nf = 0;
   for (int i = 0; i < x->nd; i++) if (i != ee) { f[nf] = x->forma[i]; zr[nf] = x->zanc[i]; nf++; }
-  int tipo = media ? AR_REAL : (x->tipo == AR_ENTERO ? AR_ENTERO : AR_REAL);
+  int tipo = media == 2 ? AR_ENTERO : media ? AR_REAL : (x->tipo == AR_ENTERO ? AR_ENTERO : AR_REAL);
   int64_t uno[1] = { 1 };
   NV out = ar_nuevo(nf ? f : uno, nf ? nf : 1, tipo); if (N_FALLO(out)) return out;
   int64_t largo = x->forma[ee], zEje = x->zanc[ee], total = ar_tam(AR(out)); int64_t ix[AR_MAXND] = {0};
@@ -928,8 +929,9 @@ static NV ar_reducir(NArr* x, double eje_d, int media) {
     int64_t base = x->desp;
     if (nf) for (int q = 0; q < nf; q++) base += ix[q] * zr[q];
     double acc = 0;
-    for (int64_t j = 0; j < largo; j++) acc += ar_leer(x, base + j * zEje);
-    ar_escribir(AR(out), k, media ? acc / (double)largo : acc);
+    if (media == 2) { for (int64_t j = 0; j < largo; j++) { double v = ar_leer(x, base + j * zEje); if (v != 0 && v == v) acc += 1; } }   /* contarCiertos(mascara, eje) */
+    else for (int64_t j = 0; j < largo; j++) acc += ar_leer(x, base + j * zEje);
+    ar_escribir(AR(out), k, media == 1 ? acc / (double)largo : acc);
     for (int q = nf - 1; q >= 0; q--) { if (++ix[q] < f[q]) break; ix[q] = 0; }
   }
   if (!nf) { double r = ar_leer(AR(out), 0); n_dec(out); return n_num(r); }

@@ -57,16 +57,19 @@ Las tablas completas, con las condiciones de cada medida, están en
 **Lo que el AOT todavía no hace** (por eso el JIT sigue siendo el que corre
 «todo Ñ», y por eso se dice aquí y no se esconde):
 
-- **Biblioteca.** El ejecutable lleva 392 de los 1166 nombres del motor y
-  compila 391 de los 608 programas de ejemplo: el núcleo, `texto`, `fecha`,
+- **Biblioteca.** El ejecutable lleva 521 de los 1166 nombres del motor y
+  compila 511 de los 608 programas de ejemplo: el núcleo, `texto`, `fecha`,
   `formato`, `probar`, `corrutinas`, todo `sistema` (rutas, archivos, procesos,
-  servidor y cliente HTTP, JSON, temporizadores) y las tablas de `datos`.
-  Faltan: el tipo `arreglo` y `numerico` (127 nombres; bloquea 117 ejemplos),
-  `estilo` (57), NEÑ (540), el código nativo en tiempo de ejecución (12) y la
-  página y el lienzo (33; en la consola la máquina virtual tampoco los tiene y
-  falla con «necesita un anfitrión con página»; en un navegador haría falta
-  compilar a WebAssembly, que aquí no está). Un programa que usa algo que falta
-  no compila y lo dice con su nombre, nunca falla a medias.
+  servidor y cliente HTTP, JSON, temporizadores), las tablas de `datos` y todo
+  `numerico` (el tipo `arreglo`, Fourier, álgebra lineal, bits y E/S binaria),
+  bit a bit igual a la VM salvo dos límites: los resultados enormes de las
+  operaciones de bits (el tipo `grande`) y los arreglos `i64`/`u64`, que dan un
+  error claro.
+  Faltan: `estilo` (57), NEÑ (540), el código nativo en tiempo de ejecución
+  (12) y la página y el lienzo (31; en la consola la máquina virtual tampoco
+  los tiene y falla con «necesita un anfitrión con página»; en un navegador
+  haría falta compilar a WebAssembly, que aquí no está). Un programa que usa
+  algo que falta no compila y lo dice con su nombre, nunca falla a medias.
 - **Hilos** (`paralelo`, de NEÑ). Los generadores y las funciones asíncronas ya
   van (cada uno con su pila de C; `pedir` usa `curl` del sistema; la parte de
   Windows compila pero no se ha podido ejecutar).
